@@ -77,6 +77,7 @@ system_phase() {
 
   if hermes_step; then
     rm -f "$PENDING"
+    zouroboros_step
   else
     hermes_later
   fi
@@ -153,12 +154,45 @@ hermes_phase() {
     note installing
     if hermes_step; then
       rm -f "$PENDING"
+      zouroboros_step
       return 0
     fi
     note retrying
     echo "Hermes Agent did not install; trying again in $((RETRY_WAIT / 60)) minutes"
     sleep "$RETRY_WAIT"
   done
+}
+
+# The Zouroboros workshop (shared memory, swarm orchestration, factory intake) on top of the Hermes
+# Agent installed above. Runs only once Hermes is in and the network is up, in whichever phase got
+# there first. Same shape as the Hermes block: clone the repo as the session user, then its own
+# setup script. Soft-fails like the voice extras; opt out with HERALD_OS_ZOUROBOROS=0.
+zouroboros_step() {
+  step "Zouroboros workshop layer for $HERMES_USER"
+  if [[ "${HERALD_OS_ZOUROBOROS:-1}" == "1" ]]; then
+    as_user bash -euo pipefail -c '
+      zo="$HOME/hermes-zouroboros"
+      [[ -d "$zo/.git" ]] || git clone --depth 1 https://github.com/marlandoj/hermes-zouroboros "$zo"
+      # Reuse the Node runtime the Hermes Agent install fetched; add bun and pnpm next to it.
+      for d in "$HOME"/.hermes/tools/node-*/bin; do export PATH="$d:$PATH"; done
+      export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
+      command -v bun  >/dev/null || curl -fsSL https://bun.sh/install | bash
+      export PATH="$HOME/.bun/bin:$PATH"
+      command -v pnpm >/dev/null || { corepack prepare pnpm@8.15.0 --activate || npm i -g pnpm@8.15.0; }
+      grep -q "hermes-zouroboros toolchain" "$HOME/.bashrc" 2>/dev/null || cat >>"$HOME/.bashrc" <<'"'"'ZORC'"'"'
+
+# hermes-zouroboros toolchain
+for d in "$HOME"/.hermes/tools/node-*/bin; do export PATH="$d:$PATH"; done
+export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
+ZORC
+      cd "$zo" && bash scripts/setup.sh
+      mkdir -p "$HOME/work/hermes-projects"
+      bun integration/cli.ts init --workspace "$HOME/work/hermes-projects"
+      bun integration/cli.ts doctor
+      # Provider sign-in for the Zouroboros profile stays with the person: hermes setup is an
+      # interactive wizard and first boot has no TTY. See docs: integration/cli.ts hermes setup.
+    ' || echo "WARNING: Zouroboros did not install; run firstboot.sh hermes as root once online to retry"
+  fi
 }
 
 apps_phase() {
