@@ -196,6 +196,34 @@ describe('charts Excel made, saved again', () => {
     expect(await bytesOf(zip, pie)).toEqual(await bytesOf(original, 'xl/charts/chart2.xml'))
   })
 
+  it('writes a chart anew when a part it relates to is missing from the file', async () => {
+    const zip = await JSZip.loadAsync(await excelWorkbook())
+    zip.remove('xl/charts/style1.xml')
+    const original = await zip.generateAsync({ type: 'uint8array' })
+    const { workbook } = await readExcel(original)
+    const { bytes } = await xlsxFromWorkbook(workbook, { original })
+    const pkg = await openPackage(bytes)
+    const filed = ((await readHeraldPart(pkg))?.[HERALD_SECTION] ?? {}) as FiledCharts
+    const column = Object.values(filed['Q1 sales'])[0].part
+
+    expect(await pkg.read(column)).toContain('<a:t>Quarterly sales</a:t>')
+    expect(await pkg.read(column)).not.toContain('c:userShapes')
+    expect(pkg.files.some((path) => /chartStyle|style\d+\.xml$/.test(path))).toBe(false)
+  })
+
+  it('reads a chart from the Choice of an mc:AlternateContent around its anchor', async () => {
+    const anchor = twoCellAnchor(2, [3, 0, 1, 0], [9, 0, 15, 0], chartFrame(0, 'Chart 1'))
+    const wrapped = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">${anchor}</mc:Choice><mc:Fallback>${anchor}</mc:Fallback></mc:AlternateContent>`
+    const bytes = await chartPackage({
+      sheets: [{ name: 'Q1 sales', rows: [['Month', 'North'], ['Jan', 1]], anchors: [wrapped], related: [{ type: CHART_REL, path: 'xl/charts/chart1.xml' }] }],
+      parts: { 'xl/charts/chart1.xml': { content: COLUMN_CHART, type: CHART_TYPE } }
+    })
+    const { charts } = await readExcel(bytes)
+
+    expect(charts(SALES)).toHaveLength(1)
+    expect(charts(SALES)[0]).toMatchObject({ anchorType: '1', sheetTransform: { from: { column: 3, row: 1 }, to: { column: 9, row: 15 } }, data: { spec: { kind: 'column', title: 'Quarterly sales' } } })
+  })
+
   it('writes a chart anew when a sheet its formulas name was renamed', async () => {
     const { zip, filed } = await saved((workbook) => {
       workbook.sheets[SALES].name = 'Sales'
