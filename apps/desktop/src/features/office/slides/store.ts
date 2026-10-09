@@ -20,7 +20,7 @@ export const $presenting = computed($presentation, (state): { key: string; index
   }
 
   const id = state.shown[Math.min(state.at, state.shown.length - 1)]
-  const index = decks.get(state.key)?.history.present.slides.findIndex((slide) => slide.id === id) ?? -1
+  const index = decks.get(state.key)?.presentation.slides.findIndex((slide) => slide.id === id) ?? -1
 
   return { key: state.key, index: Math.max(0, index) }
 })

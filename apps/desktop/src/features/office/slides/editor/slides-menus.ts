@@ -175,7 +175,7 @@ export function transitionCommands(): OfficeCommand[] {
 const canPresent = () => onSlides() && !presenting()
 
 /** While presenting, show or hide the presenter view; otherwise present from the slide in front with it. */
-function presenterView(): void {
+export function presenterView(): void {
   const state = $presentation.get()
 
   if (state) {

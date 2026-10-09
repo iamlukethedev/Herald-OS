@@ -77,7 +77,8 @@ function StageMenu({ doc, at, onClose }: { doc: SlidesDocument; at: { x: number;
           label: selection.length > 1 ? 'Align' : 'Align to Slide',
           onSelect: () => {},
           submenu: (['left', 'center', 'right', 'top', 'middle', 'bottom'] as AlignEdge[]).map((edge) => ({ id: edge, label: ALIGN_LABELS[edge], onSelect: () => commands.alignSelection(edge) }))
-        }
+        },
+        ...commands.selectionMenuItems(doc)
       ]
     : [
         { id: 'text', label: 'New Text Box', onSelect: commands.insertText },

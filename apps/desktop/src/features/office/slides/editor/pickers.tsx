@@ -5,8 +5,8 @@ import { cn } from '../../../../lib/cn.ts'
 import type { Color, Deck, Fill, FontRef, LayoutId, Slide, Theme } from '../deck.ts'
 import { LAYOUTS, SLOTS } from '../deck.ts'
 import { gradientFill } from '../elements.ts'
-import { LAYOUT_NAMES, newSlide, placeholderFor } from '../layouts.ts'
-import { COMMON_FONTS, fontStack, isSlot, normalHex, resolveColor, SLOT_NAMES, THEMES } from '../themes.ts'
+import { LAYOUT_NAMES, newSlide } from '../layouts.ts'
+import { COMMON_FONTS, fontStack, isSlot, normalHex, resolveColor, SLOT_NAMES } from '../themes.ts'
 import { gradientCss } from '../view/paint.tsx'
 import { SlideView } from '../view/SlideView.tsx'
 
@@ -383,46 +383,6 @@ export function LayoutGrid({ deck, onPick, current }: { deck: Pick<Deck, 'size' 
         <button key={layout} type="button" onClick={() => onPick(layout)} className={cn('flex flex-col items-center gap-1 rounded-lg p-1.5 text-[11px] text-fg-2 hover:bg-white/8 hover:text-fg', current === layout && 'bg-white/10 text-fg')}>
           <Miniature deck={deck} slide={slides[index]} width={96} />
           <span className="w-24 truncate text-center">{LAYOUT_NAMES[layout]}</span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-/** A sample title slide in a theme: its name on its background, with its accents. */
-function themeSample(theme: Theme, size: Deck['size']): Slide {
-  const slide = newSlide('title', size)
-  const title = placeholderFor(slide, 'title')
-  const subtitle = placeholderFor(slide, 'subtitle')
-
-  return {
-    ...slide,
-    elements: slide.elements.map((element) => {
-      if ((element === title || element === subtitle) && (element.kind === 'text' || element.kind === 'shape')) {
-        const text = element === title ? theme.name : `${theme.fonts.heading} · ${theme.fonts.body}`
-
-        return { ...element, body: { ...element.body, paragraphs: [{ ...element.body.paragraphs[0], runs: [{ text }] }] } }
-      }
-
-      return element
-    })
-  }
-}
-
-export function ThemeGrid({ deck, onPick }: { deck: Pick<Deck, 'size' | 'theme'>; onPick: (theme: Theme) => void }) {
-  const choices = useMemo(() => (THEMES.some((entry) => entry.id === deck.theme.id) ? THEMES : [deck.theme, ...THEMES]), [deck.theme])
-
-  return (
-    <div className="grid w-[436px] grid-cols-3 gap-2">
-      {choices.map((theme) => (
-        <button key={theme.id} type="button" onClick={() => onPick(theme)} className={cn('flex flex-col gap-1 rounded-lg p-1.5 text-left text-[11.5px] text-fg-2 hover:bg-white/8 hover:text-fg', deck.theme.id === theme.id && 'bg-white/10 text-fg')}>
-          <Miniature deck={{ size: deck.size, theme }} slide={themeSample(theme, deck.size)} width={128} />
-          <span className="flex items-center gap-1">
-            {SLOTS.slice(4).map((slot) => (
-              <span key={slot} className="size-2.5 rounded-full" style={{ background: theme.colors[slot] }} />
-            ))}
-            <span className="ml-1 truncate">{theme.id === 'imported' ? `${theme.name} (from the file)` : theme.name}</span>
-          </span>
         </button>
       ))}
     </div>

@@ -66,7 +66,7 @@ export function startPresenting(key: string, index: number, options: PresentOpti
     closeAudienceWindow()
   }
 
-  $presentation.set(begin(doc.history.present, key, index, Date.now(), mode))
+  $presentation.set(begin(doc.presentation, key, index, Date.now(), mode))
 }
 
 /** Show or hide the presenter view while presenting; shown, it puts the slides on another display when there is one. */
@@ -148,7 +148,7 @@ export function Present() {
   const audience = useStore($audience)
   const doc = state ? decks.get(state.key) : undefined
   useDeck(doc)
-  const deck = doc?.history.present
+  const deck = doc?.presentation
   useFullScreenEnd()
 
   useEffect(

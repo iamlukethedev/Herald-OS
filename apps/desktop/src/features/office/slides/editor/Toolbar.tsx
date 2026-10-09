@@ -34,12 +34,14 @@ import {
   IconPhoto,
   IconPlayerPlay,
   IconPlus,
+  IconPresentation,
   IconRowInsertBottom,
   IconRowInsertTop,
   IconRowRemove,
   IconSquare,
   IconStrikethrough,
   IconTable,
+  IconTransitionRight,
   IconTriangle,
   IconUnderline
 } from '@tabler/icons-react'
@@ -54,8 +56,11 @@ import { $textRevision, $textSession } from './active.ts'
 import { BackgroundPanel } from './BackgroundPanel.tsx'
 import { $borderPen, BORDER_CHOICES, BORDER_LABELS, type BorderChoice } from './borders.ts'
 import * as commands from './commands.ts'
-import { ColorGrid, FillPanel, fillCss, FontList, LayoutGrid, PopoverButton, SizeList, TableGrid, ThemeGrid } from './pickers.tsx'
+import { ColorGrid, FillPanel, fillCss, FontList, LayoutGrid, PopoverButton, SizeList, TableGrid } from './pickers.tsx'
+import { presenterView } from './slides-menus.ts'
 import { useDeck } from './Stage.tsx'
+import { ThemePanel } from './ThemePanel.tsx'
+import { TransitionPanel } from './TransitionPanel.tsx'
 
 /*
  * The formatting bar over the slide: new slides with their layout, things to insert, and the tools
@@ -418,20 +423,21 @@ export function Toolbar({ doc }: { doc: SlidesDocument }) {
   const deck = doc.deck
   const selection = doc.selection
   const texty = session?.doc === doc || selection.some((element) => element.kind === 'text' || element.kind === 'shape' || element.kind === 'table')
+  const master = doc.mode === 'master'
 
   return (
     <div data-slides-keep-editing="" className="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto overflow-y-visible border-b border-line px-2 text-[12px]">
       <div className="relative flex">
-        <Tool label="New slide" className="rounded-r-none px-2" onClick={() => commands.newSlide(doc.slide.layout === 'title' ? 'title-content' : doc.slide.layout)}>
+        <Tool label="New slide" className="rounded-r-none px-2" disabled={master} onClick={() => commands.newSlide(doc.slide.layout === 'title' ? 'title-content' : doc.slide.layout)}>
           <span className="flex items-center gap-1.5">
             <IconPlus size={15} /> Slide
           </span>
         </Tool>
-        <PopoverButton label="New slide with a layout" className="rounded-l-none px-0.5" panel={(close) => <LayoutGrid deck={deck} onPick={(layout) => (commands.newSlide(layout), close())} />}>
+        <PopoverButton label="New slide with a layout" className="rounded-l-none px-0.5" disabled={master} panel={(close) => <LayoutGrid deck={deck} onPick={(layout) => (commands.newSlide(layout), close())} />}>
           <IconChevronDown size={13} />
         </PopoverButton>
       </div>
-      <PopoverButton label="Layout" panel={(close) => <LayoutGrid deck={deck} current={doc.slide.layout} onPick={(layout) => (commands.setLayout(layout), close())} />}>
+      <PopoverButton label="Layout" disabled={master} panel={(close) => <LayoutGrid deck={deck} current={doc.slide.layout} onPick={(layout) => (commands.setLayout(layout), close())} />}>
         <IconLayoutBoardSplit />
       </PopoverButton>
       <Divider />
@@ -472,7 +478,10 @@ export function Toolbar({ doc }: { doc: SlidesDocument }) {
         <PopoverButton label="Background" align="right" panel={(close) => <BackgroundPanel doc={doc} onDone={close} />}>
           <IconBackground />
         </PopoverButton>
-        <PopoverButton label="Theme" align="right" className="text-[12px]" panel={(close) => <ThemeGrid deck={deck} onPick={(theme) => (commands.applyTheme(theme), close())} />}>
+        <PopoverButton label="Transitions" align="right" disabled={master} panel={(close) => <TransitionPanel doc={doc} onDone={close} />}>
+          <IconTransitionRight />
+        </PopoverButton>
+        <PopoverButton label="Theme" align="right" className="text-[12px]" panel={(close) => <ThemePanel doc={doc} onDone={close} />}>
           <span className="flex items-center gap-1.5 pr-0.5">
             <span className="flex">
               {(['accent1', 'accent2', 'accent3'] as const).map((slot) => (
@@ -483,11 +492,15 @@ export function Toolbar({ doc }: { doc: SlidesDocument }) {
             <IconChevronDown size={12} />
           </span>
         </PopoverButton>
+        <Tool label="Presenter view" disabled={master} onClick={presenterView}>
+          <IconPresentation />
+        </Tool>
         <button
           type="button"
+          disabled={master}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => commands.present(false)}
-          className="ml-1 flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-medium text-accent-fg hover:bg-accent-strong"
+          className="ml-1 flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-medium text-accent-fg hover:bg-accent-strong disabled:opacity-40"
         >
           <IconPlayerPlay size={14} /> Present
         </button>

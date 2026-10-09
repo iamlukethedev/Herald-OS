@@ -6,11 +6,13 @@ import type { OfficeCommand } from '../shell/commands.ts'
 import { officeMenus } from '../shell/commands.ts'
 import { OfficeWindow } from '../shell/OfficeWindow.tsx'
 import type { OfficeDocument } from '../types.ts'
-import { type Deck, LAYOUTS, SLIDE_SIZES, TRANSITIONS } from './deck.ts'
+import { type Deck, LAYOUTS, SLIDE_SIZES } from './deck.ts'
 import { $textSession } from './editor/active.ts'
 import { BORDER_CHOICES, BORDER_LABELS } from './editor/borders.ts'
 import * as commands from './editor/commands.ts'
 import { chooseSheet, FromSheetDialog } from './editor/FromSheetDialog.tsx'
+import { SlidesDialogs } from './editor/MasterBar.tsx'
+import { backgroundGraphicsCommands, headerFooterCommands, masterViewCommands, presentCommands, themeCommands, transitionCommands } from './editor/slides-menus.ts'
 import { Toolbar } from './editor/Toolbar.tsx'
 import { LAYOUT_NAMES } from './layouts.ts'
 import { ALIGN_LABELS, type AlignEdge, ARRANGE_LABELS } from './model.ts'
@@ -18,47 +20,46 @@ import { Present } from './Present.tsx'
 import { SHAPE_GROUPS, SHAPE_NAMES } from './shapes.ts'
 import { SlideEditor } from './SlideEditor.tsx'
 import { decks, slidesSession } from './store.ts'
-import { THEMES } from './themes.ts'
 
 const hasDeck = () => Boolean(commands.live())
 const hasSelection = () => Boolean(commands.live()?.selected.length)
 const notTyping = () => !$textSession.get()
 const canEditSelection = () => hasSelection() && notTyping()
 const canFormat = () => commands.canFormatText()
-const TRANSITION_NAMES = { none: 'None', fade: 'Fade', push: 'Push', wipe: 'Wipe', cover: 'Cover', uncover: 'Uncover', split: 'Split', zoom: 'Zoom' } as const
+const onSlides = () => commands.live()?.mode === 'slides'
 
 function slideCommands(): OfficeCommand[] {
   return [
-    { id: 'new-slide', label: 'New Slide', shortcut: 'mod+shift+n', enabled: hasDeck, run: () => commands.newSlide() },
-    { id: 'new-slide-layout', label: 'New Slide with Layout', enabled: hasDeck, run: () => {}, submenu: LAYOUTS.map((layout) => ({ id: `new-${layout}`, label: LAYOUT_NAMES[layout], run: () => commands.newSlide(layout) })) },
-    { id: 'duplicate-slide', label: 'Duplicate Slide', enabled: hasDeck, run: commands.duplicateSlides },
-    { id: 'delete-slide', label: 'Delete Slide', enabled: hasDeck, run: commands.deleteSlides },
-    { id: 'hide-slide', label: 'Hide or Show Slide', enabled: hasDeck, run: commands.toggleHidden },
-    { id: 'slide-up', label: 'Move Slide Up', enabled: hasDeck, run: () => commands.moveSlidesBy(-1), dividerBefore: true },
-    { id: 'slide-down', label: 'Move Slide Down', enabled: hasDeck, run: () => commands.moveSlidesBy(1) },
+    { id: 'new-slide', label: 'New Slide', shortcut: 'mod+shift+n', enabled: onSlides, run: () => commands.newSlide() },
+    { id: 'new-slide-layout', label: 'New Slide with Layout', enabled: onSlides, run: () => {}, submenu: LAYOUTS.map((layout) => ({ id: `new-${layout}`, label: LAYOUT_NAMES[layout], run: () => commands.newSlide(layout) })) },
+    { id: 'duplicate-slide', label: 'Duplicate Slide', enabled: onSlides, run: commands.duplicateSlides },
+    { id: 'delete-slide', label: 'Delete Slide', enabled: onSlides, run: commands.deleteSlides },
+    { id: 'hide-slide', label: 'Hide or Show Slide', enabled: onSlides, run: commands.toggleHidden },
+    { id: 'slide-up', label: 'Move Slide Up', enabled: onSlides, run: () => commands.moveSlidesBy(-1), dividerBefore: true },
+    { id: 'slide-down', label: 'Move Slide Down', enabled: onSlides, run: () => commands.moveSlidesBy(1) },
     {
       id: 'layout',
       label: 'Layout',
-      enabled: hasDeck,
+      enabled: onSlides,
       run: () => {},
       dividerBefore: true,
       submenu: LAYOUTS.map((layout) => ({ id: `layout-${layout}`, label: LAYOUT_NAMES[layout], checked: () => commands.live()?.slide.layout === layout, run: () => commands.setLayout(layout) }))
     },
-    { id: 'theme', label: 'Theme', enabled: hasDeck, run: () => {}, submenu: THEMES.map((theme) => ({ id: `theme-${theme.id}`, label: theme.name, checked: () => commands.live()?.deck.theme.id === theme.id, run: () => commands.applyTheme(theme) })) },
-    { id: 'transition', label: 'Transition', enabled: hasDeck, run: () => {}, submenu: TRANSITIONS.map((transition) => ({ id: `transition-${transition}`, label: TRANSITION_NAMES[transition], checked: () => commands.live()?.deck.transition === transition, run: () => commands.setTransition(transition) })) },
+    ...themeCommands(),
+    ...transitionCommands(),
     {
       id: 'size',
       label: 'Slide Size',
-      enabled: hasDeck,
+      enabled: onSlides,
       run: () => {},
       submenu: [
-        { id: 'size-wide', label: 'Widescreen (16:9)', checked: () => commands.live()?.deck.size.width === SLIDE_SIZES.wide.width, run: () => commands.setSlideSize(SLIDE_SIZES.wide) },
-        { id: 'size-standard', label: 'Standard (4:3)', checked: () => commands.live()?.deck.size.width === SLIDE_SIZES.standard.width, run: () => commands.setSlideSize(SLIDE_SIZES.standard) }
+        { id: 'size-wide', label: 'Widescreen (16:9)', checked: () => commands.live()?.presentation.size.width === SLIDE_SIZES.wide.width, run: () => commands.setSlideSize(SLIDE_SIZES.wide) },
+        { id: 'size-standard', label: 'Standard (4:3)', checked: () => commands.live()?.presentation.size.width === SLIDE_SIZES.standard.width, run: () => commands.setSlideSize(SLIDE_SIZES.standard) }
       ]
     },
     { id: 'background-theme', label: 'Theme Background', enabled: hasDeck, run: () => commands.setBackground(null) },
-    { id: 'present', label: 'Present', shortcut: 'mod+shift+enter', enabled: hasDeck, run: () => commands.present(false), dividerBefore: true },
-    { id: 'present-start', label: 'Present from the Start', shortcut: 'mod+alt+enter', enabled: hasDeck, run: () => commands.present(true) }
+    ...backgroundGraphicsCommands(),
+    ...presentCommands()
   ]
 }
 
@@ -118,7 +119,8 @@ function insertCommands(): OfficeCommand[] {
       submenu: TABLE_SIZES.map(([rows, columns]) => ({ id: `table-${rows}-${columns}`, label: `${rows} rows, ${columns} columns`, run: () => commands.insertTable(rows, columns) }))
     },
     { id: 'insert-sheet-table', label: 'Table from Spreadsheet…', enabled: hasDeck, run: () => void chooseSheet().catch((error: unknown) => commands.notify(`Could not open a spreadsheet: ${messageOf(error)}`)) },
-    { id: 'insert-document-slides', label: 'Slides from Document…', enabled: hasDeck, run: () => void commands.insertSlidesFromDocument().catch((error: unknown) => commands.notify(`Could not open a document: ${messageOf(error)}`)) }
+    { id: 'insert-document-slides', label: 'Slides from Document…', enabled: onSlides, run: () => void commands.insertSlidesFromDocument().catch((error: unknown) => commands.notify(`Could not open a document: ${messageOf(error)}`)) },
+    ...headerFooterCommands().map((command, index) => ({ ...command, dividerBefore: index === 0 }))
   ]
 }
 
@@ -247,7 +249,8 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
             items: [
               { id: 'zoom-in', label: 'Zoom In', shortcut: 'mod+=', enabled: hasDeck, run: zoom('in') },
               { id: 'zoom-out', label: 'Zoom Out', shortcut: 'mod+-', enabled: hasDeck, run: zoom('out') },
-              { id: 'zoom-fit', label: 'Fit Slide', shortcut: 'mod+0', enabled: hasDeck, run: zoom('reset') }
+              { id: 'zoom-fit', label: 'Fit Slide', shortcut: 'mod+0', enabled: hasDeck, run: zoom('reset') },
+              ...masterViewCommands().map((command, index) => ({ ...command, dividerBefore: index === 0 }))
             ]
           }
         ]
@@ -304,6 +307,7 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
       />
       <FromSheetDialog />
       <Present />
+      <SlidesDialogs />
     </div>
   )
 }
