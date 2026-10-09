@@ -19,6 +19,7 @@ CATALOGUE = [
     {"id": "sheets.write", "title": "Write cells", "tier": "act", "args": []},
     {"id": "sheets.clean", "title": "Clean data", "tier": "act", "args": []},
     {"id": "sheets.removeSheet", "title": "Remove a sheet", "tier": "mutate", "args": []},
+    {"id": "sheets.edit", "title": "Make several edits in a workbook at once", "tier": "act", "args": []},
     {"id": "sheets.save", "title": "Save a workbook", "tier": "mutate", "args": []},
     {"id": "sheets.exportPdf", "title": "Export a workbook as a PDF", "tier": "act", "args": []},
 ]
@@ -166,6 +167,15 @@ def test_saving_exporting_and_closed_files_raise_the_tier(plugin, tmp_path):
     assert tier("remove_sheet", "sheets.removeSheet", {"sheet": "Old"}) == "mutate"
     assert tier("remove_sheet", "sheets.removeSheet", {"workbook": str(budget), "sheet": "Old"}, {str(budget)}) == "mutate"
     assert tier("remove_sheet", "sheets.removeSheet", {"workbook": str(budget), "sheet": "Old"}) == "destructive"
+
+
+def test_an_edit_that_removes_a_sheet_asks_as_removing_it_does(plugin):
+    tools = _mod(plugin, "tools")
+    catalogue = {entry["id"]: entry for entry in CATALOGUE}
+    _, command, args = tools.sheets_command({"action": "edit", "edits": [{"op": "write", "range": "A1", "values": [["x"]]}, {"op": "removeSheet", "sheet": "Old"}]})
+    assert tools.office_tier("edit", command, args, catalogue, ()).value == "mutate"
+    _, command, args = tools.sheets_command({"action": "edit", "edits": [{"op": "write", "range": "A1", "values": [["x"]]}, {"op": "clean", "range": "A:A", "action": "trim"}]})
+    assert tools.office_tier("edit", command, args, catalogue, ()).value == "act"
 
 
 def test_a_call_runs_in_the_shell_with_a_long_timeout(plugin, shell):

@@ -178,6 +178,15 @@ def test_changing_a_file_that_is_not_open_asks_every_time(plugin, tmp_path, monk
     assert tools.office_tier("write", "docs.unknown", {}, catalogue, ()).value == "mutate"
 
 
+def test_an_edit_batch_takes_the_tier_of_its_most_guarded_op(plugin):
+    tools = _mod(plugin, "tools")
+    catalogue = {entry["id"]: entry for entry in CATALOGUE}
+    edits = json.dumps([{"op": "write", "content": "x"}, {"op": "table", "rows": 2, "cols": 2}, {"op": "pageBreak"}])
+    assert tools.office_tier("edit", "docs.edit", {"edits": edits}, catalogue, ()).value == "act"
+    guarded = {**catalogue, "docs.write": {"id": "docs.write", "tier": "mutate"}}
+    assert tools.office_tier("edit", "docs.edit", {"edits": edits}, guarded, ()).value == "mutate"
+
+
 def test_a_call_runs_in_the_shell_with_a_long_timeout(plugin, shell):
     tools = _mod(plugin, "tools")
     calls, decisions, _ = shell
