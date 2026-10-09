@@ -93,8 +93,10 @@ describe('fidelity report', () => {
     expect(workbook.sheetOrder).toHaveLength(1)
   })
 
-  it('has nothing to say about a plain workbook', async () => {
+  it('has nothing to say about a plain workbook, nor about protection that locks nothing', async () => {
     expect(await notesOf(await handmadePackage())).toEqual([])
+    expect(await packageNotes(await handmadePackage({ workbookExtra: '<workbookProtection/>', sheetTail: '<sheetProtection sheet="0" objects="0"/>' }))).toEqual([])
+    expect(await packageNotes(await handmadePackage({ workbookExtra: '<workbookProtection lockStructure="1"/>' }))).toEqual(['Protection (locked sheets, structure or a password to open for editing) is not kept: a saved copy is unprotected.'])
     expect((await notesOf(await featureWorkbook())).filter((note) => !note.startsWith('Patterned'))).toEqual([])
   })
 

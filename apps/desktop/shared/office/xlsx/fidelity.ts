@@ -101,7 +101,11 @@ export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Pro
 
   const sheetParts = pkg.sheets.map((sheet) => `${sheet.head}${sheet.tail}`).join('\n')
 
-  if (/<(?:\w+:)?(sheetProtection|protectedRange)[\s>]/.test(sheetParts) || /<(?:\w+:)?(workbookProtection|fileSharing)[\s>]/.test(pkg.workbookXml)) {
+  // An empty protection element (openpyxl writes one in every workbook) locks nothing.
+  const lockedSheet = /<(?:\w+:)?sheetProtection\b[^>]*\ssheet="(1|true)"/.test(sheetParts) || /<(?:\w+:)?protectedRange[\s>]/.test(sheetParts)
+  const lockedBook = /<(?:\w+:)?workbookProtection\b[^>]*\slock(Structure|Windows|Revision)="(1|true)"/.test(pkg.workbookXml) || /<(?:\w+:)?fileSharing\b[^>]*\s(readOnlyRecommended="(1|true)"|reservationPassword=|hashValue=)/.test(pkg.workbookXml)
+
+  if (lockedSheet || lockedBook) {
     notes.push('Protection (locked sheets, structure or a password to open for editing) is not kept: a saved copy is unprotected.')
   }
 
