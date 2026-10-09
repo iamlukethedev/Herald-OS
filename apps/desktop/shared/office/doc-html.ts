@@ -176,8 +176,8 @@ export function contentCss(scope: string, medium: 'screen' | 'print'): string {
       : `${s('.doc-page-break, .doc-section-break')} { position: relative; height: 0; margin: 0; border: 0 }`,
     medium === 'print'
       ? `${s('.doc-section-break:not([data-section-break="continuous"])')} { break-after: page; page-break-after: always; height: 0; margin: 0 }`
-      : `${s('.ProseMirror-selectednode.doc-page-break, .ProseMirror-selectednode.doc-section-break')}::after { content: 'Page break'; position: absolute; left: 0; right: 0; top: 2pt; padding: 1px 0; border-top: 1px dashed var(--color-accent, #2f7dff); color: var(--color-accent, #2f7dff); font: 500 10px/1.4 system-ui, sans-serif; letter-spacing: 0.04em; text-align: center; text-transform: uppercase }`,
-    ...(medium === 'screen' ? [`${s('.ProseMirror-selectednode.doc-section-break')}::after { content: 'Section break' }`] : []),
+      : `${s('.ProseMirror-selectednode.doc-page-break::after, .ProseMirror-selectednode.doc-section-break::after')} { content: 'Page break'; position: absolute; left: 0; right: 0; top: 2pt; padding: 1px 0; border-top: 1px dashed var(--color-accent, #2f7dff); color: var(--color-accent, #2f7dff); font: 500 10px/1.4 system-ui, sans-serif; letter-spacing: 0.04em; text-align: center; text-transform: uppercase }`,
+    ...(medium === 'screen' ? [`${s('.ProseMirror-selectednode.doc-section-break::after')} { content: 'Section break' }`] : []),
     ...(medium === 'print' ? [`${s('tr, img, li, .doc-callout, pre')} { break-inside: avoid }`] : [])
   ].join('\n')
 }
