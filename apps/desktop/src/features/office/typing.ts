@@ -3,13 +3,14 @@ import type { OfficeApp } from '../../../shared/office/files.ts'
 import { cellName, parseRange } from '../../../shared/office/xlsx/address.ts'
 import { withLeadingSpace } from '../../lib/voice/dictation.ts'
 import type { Op } from './docs/model.ts'
+import type { TextSession } from './slides/editor/active.ts'
 
 /*
  * Dictation into the Office document in front in this window, without the clipboard: Herald Docs
  * takes the words at the caret, Herald Sheets in the active cell and on down the column, Herald
- * Slides in the text box being edited; each lands as one step to undo. Anything else (another window
- * in front, a field outside the document with the focus, a cell being edited) is left to the caller,
- * which types the usual way.
+ * Slides in the text box being edited or selected, else in a new one; each lands as one step to
+ * undo. Anything else (another window in front, a field outside the document with the focus, a
+ * cell being edited) is left to the caller, which types the usual way.
  */
 
 /** Dictated text as lines: a spoken "new line" or "new paragraph" starts the next one, and blank lines fold away as pasted text's do. */
@@ -173,27 +174,73 @@ async function typeIntoSheets(text: string, submit: boolean): Promise<string | n
   return written ? `Wrote "${quoted(text)}" in ${written.range} of ${doc.name}` : `Moved to ${place.next.name} in ${doc.name}`
 }
 
+/** How long a Slides text box may take to come up for typing once editing it starts (React mounts its editor on a later render). */
+const EDITOR_WAIT_MS = 1000
+
+async function editorUp(find: () => TextSession | null): Promise<TextSession | null> {
+  for (let waited = 0; waited < EDITOR_WAIT_MS; waited += 20) {
+    const session = find()
+
+    if (session && !session.editor.isDestroyed) {
+      return session
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  return null
+}
+
 async function typeIntoSlides(text: string, submit: boolean): Promise<string | null> {
-  const [{ decks, slidesSession }, { textSessionOf }, { applyLive }, { isEditable }] = await Promise.all([import('./slides/store.ts'), import('./slides/editor/active.ts'), import('./docs/model.ts'), import('../../store/edit-target.ts')])
+  const [{ $presenting, decks, slidesSession }, { requestEditStart, textSessionOf }, { change, editSelection }, { addText }, { applyLive }, { isEditable }] = await Promise.all([import('./slides/store.ts'), import('./slides/editor/active.ts'), import('./slides/editor/commands.ts'), import('./slides/model.ts'), import('./docs/model.ts'), import('../../store/edit-target.ts')])
   const doc = slidesSession.active()
-  const session = doc ? textSessionOf(decks.get(doc.key)) : null
+  const deck = doc ? decks.get(doc.key) : undefined
+  const editing = textSessionOf(deck)
+  const lines = dictatedLines(text).filter(Boolean)
   const focused = document.activeElement
 
-  // Only a text box being edited takes words: on the slide itself there is no caret to type at.
-  if (!doc || !session || session.editor.isDestroyed || (isEditable(focused) && !session.editor.view.dom.contains(focused))) {
+  // The notes, the find bar or a dialog takes the words itself, and a bare "press enter" outside a text box is the key itself.
+  if (!doc || !deck || $presenting.get()?.key === doc.key || (isEditable(focused) && !editing?.editor.view.dom.contains(focused)) || (!editing && !lines.length)) {
     return null
   }
 
-  // What the person typed before becomes a step of its own, so undo takes the dictation back alone.
-  session.flush()
+  // A text box, shape or table selected on the slide takes the words at the end, as Edit Text starts typing.
+  if (!editing && deck.selected.length === 1) {
+    editSelection('end')
+  }
 
-  if (!applyLive(session.editor.view, typed(text, submit))) {
+  const session = editing ?? (deck.editing ? await editorUp(() => textSessionOf(deck)) : null)
+
+  if (session) {
+    // What the person typed before becomes a step of its own, so undo takes the dictation back alone.
+    session.flush()
+
+    if (!applyLive(session.editor.view, typed(text, submit))) {
+      return null
+    }
+
+    afterwards(() => session.flush())
+
+    return typedCaption(text, submit, doc.name)
+  }
+
+  if (deck.editing) {
     return null
   }
 
-  afterwards(() => session.flush())
+  // Nothing to type into: the words make a new text box, as pasting them does, left open to carry on typing.
+  const added = change((current) => addText(current, deck.slideId, { text: lines.join('\n') }), deck)
 
-  return typedCaption(text, submit, doc.name)
+  if (!added) {
+    return null
+  }
+
+  afterwards(() => {
+    requestEditStart({ elementId: added.elementId, select: 'end' })
+    deck.edit(added.elementId)
+  })
+
+  return typedCaption(text, false, `a new text box in ${doc.name}`)
 }
 
 /**
