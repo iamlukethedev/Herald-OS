@@ -1288,7 +1288,7 @@ handle_system_os = system_os_handler
 OS_UI_SCHEMA = _schema(
     "os_ui",
     "Operate the Herald OS user interface the user is looking at: open pages (missions, memory, files, automations, connections, settings) and apps (terminal, system), focus/close windows, show or add memories, list/run/pause automations, start missions, open web pages inside the OS, change appearance and voice settings. "
-    "Use action=list once to see every command with its arguments, then action=run with command=<id> and args. action=state tells you which page and windows are on screen, on the Files page the folder it shows and the selected file (what \"this folder\" and \"this file\" mean), and in `office` the documents open in Herald Docs, Sheets and Slides, the one in front and what is selected in each (what \"this document\" and \"these cells\" mean; the docs and sheets tools work on them). "
+    "Use action=list once to see every command with its arguments, then action=run with command=<id> and args. action=state tells you which page and windows are on screen, on the Files page the folder it shows and the selected file (what \"this folder\" and \"this file\" mean), and in `office` the documents open in Herald Docs, Sheets and Slides, the one in front and what is selected in each (what \"this document\", \"these cells\" and \"this slide\" mean; the docs, sheets and slides tools work on them). "
     "Prefer this over describing where things are: when the user asks to open, show, add, find or change something in Herald OS, do it and then say what you did. "
     "After using other tools whose result lives on a page (memory, cronjob, files), run page.open so the user sees it. Destructive commands (forget, delete, trash) ask the user for approval. "
     "When the user asks you to build, create or make something new (a website, app, landing page, store, game), do not write it yourself in a scratch or temporary folder: run command=build.start with args={\"goal\": \"<what they asked for>\"}. It creates a project folder, starts a session that builds it there and opens the Studio so they watch it happen; then just tell them it has started. "
@@ -1696,11 +1696,65 @@ SHEETS_ARGS: dict[str, tuple[str, ...]] = {
     "redo": ("workbook", "steps"),
 }
 
-# Reading, rewriting and writing back a long document or a big workbook can take a while.
+SLIDES_ACTIONS: dict[str, str] = {
+    "list": "slides.list",
+    "list_all": "office.list",
+    "open": "slides.open",
+    "new": "slides.new",
+    "read": "slides.read",
+    "find": "slides.find",
+    "add_slide": "slides.addSlide",
+    "set_slide": "slides.setSlide",
+    "duplicate_slide": "slides.duplicateSlide",
+    "move_slide": "slides.moveSlide",
+    "remove_slide": "slides.removeSlide",
+    "add_text": "slides.addText",
+    "add_shape": "slides.addShape",
+    "add_image": "slides.addImage",
+    "add_table": "slides.addTable",
+    "set_theme": "slides.setTheme",
+    "replace": "slides.replace",
+    "edit": "slides.edit",
+    "from_document": "slides.fromDocument",
+    "insert_range": "slides.insertRange",
+    "save": "slides.save",
+    "export_pdf": "slides.exportPdf",
+    "undo": "slides.undo",
+    "redo": "slides.redo",
+}
+
+SLIDES_ARGS: dict[str, tuple[str, ...]] = {
+    "list": (),
+    "list_all": (),
+    "open": ("path",),
+    "new": ("name", "slides", "theme", "size", "path"),
+    "read": ("presentation", "slide"),
+    "find": ("presentation", "text", "caseSensitive"),
+    "add_slide": ("presentation", "layout", "title", "body", "notes", "after"),
+    "set_slide": ("presentation", "slide", "title", "body", "notes", "layout", "hidden", "background"),
+    "duplicate_slide": ("presentation", "slide"),
+    "move_slide": ("presentation", "slide", "to"),
+    "remove_slide": ("presentation", "slide"),
+    "add_text": ("presentation", "slide", "text", "x", "y", "width", "height", "size", "color", "bold", "align"),
+    "add_shape": ("presentation", "slide", "kind", "x", "y", "width", "height", "fill", "text"),
+    "add_image": ("presentation", "slide", "source", "x", "y", "width", "height", "fit"),
+    "add_table": ("presentation", "slide", "cells", "rows", "columns", "x", "y", "width"),
+    "set_theme": ("presentation", "theme"),
+    "replace": ("presentation", "find", "replacement", "all", "caseSensitive"),
+    "edit": ("presentation", "edits"),
+    "from_document": ("document", "presentation", "level", "notes"),
+    "insert_range": ("presentation", "slide", "workbook", "range", "sheet", "x", "y", "width"),
+    "save": ("presentation", "to", "overwrite"),
+    "export_pdf": ("presentation", "to", "overwrite"),
+    "undo": ("presentation", "steps"),
+    "redo": ("presentation", "steps"),
+}
+
+# Reading, rewriting and writing back a long document, a big workbook or a deck can take a while.
 OFFICE_TIMEOUT = 100.0
 
 _ROWS = {"type": "array", "items": {"type": "array", "items": _STR}}
-_EDITS = {"type": "array", "items": {"type": "object", "additionalProperties": True}}
+_OBJECTS = {"type": "array", "items": {"type": "object", "additionalProperties": True}}
 
 DOCS_SCHEMA = _schema(
     "docs",
@@ -1753,7 +1807,7 @@ DOCS_SCHEMA = _schema(
         "width": _desc(_NUM, "image: width in pixels (never wider than the text)"),
         "orientation": _desc(_STR, "page: portrait or landscape"),
         "margins": _desc(_STR, "page: all four margins, in points or with a unit (\"1in\", \"2cm\", \"20mm\")"),
-        "edits": _desc(_EDITS, "edit: the changes, made in order as ONE step to undo, each seeing the document as the ones before left it; each has an op and that op's arguments: write (content, format, at, heading, mode), replace (find, replacement, all, caseSensitive, wholeWord, regex), format (the format arguments), table (cells or rows and cols, header, at, heading, mode), image (source, alt, at, heading, mode), pageBreak (at, heading, mode) and page (size, orientation, margins). E.g. [{\"op\": \"write\", \"content\": \"## Summary\\n...\", \"at\": \"start\"}, {\"op\": \"replace\", \"find\": \"draft\", \"replacement\": \"final\"}]"),
+        "edits": _desc(_OBJECTS, "edit: the changes, made in order as ONE step to undo, each seeing the document as the ones before left it; each has an op and that op's arguments: write (content, format, at, heading, mode), replace (find, replacement, all, caseSensitive, wholeWord, regex), format (the format arguments), table (cells or rows and cols, header, at, heading, mode), image (source, alt, at, heading, mode), pageBreak (at, heading, mode) and page (size, orientation, margins). E.g. [{\"op\": \"write\", \"content\": \"## Summary\\n...\", \"at\": \"start\"}, {\"op\": \"replace\", \"find\": \"draft\", \"replacement\": \"final\"}]"),
         "workbook": _desc(_STR, "insert_range: the Herald Sheets workbook, a file or an open workbook's name (the one in front in Herald Sheets when left out)"),
         "range": _desc(_STR, "insert_range: the cells, like A1:D12 or 'Q1 sales'!B2:F9, or selection; the workbook's selection, or else its cells that hold something, when left out"),
         "sheet": _desc(_STR, "insert_range: the sheet, when the range does not name it"),
@@ -1813,8 +1867,66 @@ SHEETS_SCHEMA = _schema(
         "dateFormat": _desc(_STR, "clean dates: the number format the dates get (yyyy-mm-dd)"),
         "order": _desc(_STR, "clean dates: dmy (day first) or mdy (month first) for dates like 03/04/2025, when the data does not say"),
         "case": _desc(_STR, "clean case: upper, lower or title (the default)"),
-        "edits": _desc(_EDITS, "edit: the changes, made in order as ONE step to undo; each has an op and that op's arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (range and action: dedupe, trim, numbers, dates, split or case, with the clean arguments) and replace (the replace arguments). E.g. [{\"op\": \"write\", \"range\": \"A1\", \"values\": [[\"Month\", \"Sales\"]]}, {\"op\": \"format\", \"range\": \"A1:B1\", \"format\": {\"bold\": true}}]"),
+        "edits": _desc(_OBJECTS, "edit: the changes, made in order as ONE step to undo; each has an op and that op's arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (range and action: dedupe, trim, numbers, dates, split or case, with the clean arguments) and replace (the replace arguments). E.g. [{\"op\": \"write\", \"range\": \"A1\", \"values\": [[\"Month\", \"Sales\"]]}, {\"op\": \"format\", \"range\": \"A1:B1\", \"format\": {\"bold\": true}}]"),
         "to": _desc(_STR, "save: save as this new file instead (.xlsx or .csv; full path or ~/...); export_pdf: the PDF to write (a new file in ~/Documents when left out)"),
+        "steps": _desc(_NUM, "undo, redo: how many steps (1)"),
+    },
+    ["action"],
+)
+
+SLIDES_SCHEMA = _schema(
+    "slides",
+    "Herald Slides, the presentation editor built into Herald OS: decks for talks, reviews, pitches and lessons, in the Slides window the person watches or in PowerPoint (.pptx) files. "
+    "Read before you change anything: action=list shows the presentations open in Herald Slides (list_all: everything open in Herald Docs, Sheets and Slides, with what is selected in each), read gives every slide's number, layout, title, text, speaker notes and elements (slide= for one), find finds text; open shows a file. "
+    "Make a whole deck in one call: action=new with slides (you write the titles, short bullets and speaker notes from the person's brief), or from_document to turn a Herald Docs document into slides; insert_range puts a Herald Sheets range on a slide as a table. "
+    "Change it with add_slide, set_slide (title, text, speaker notes, layout, hidden, background), duplicate_slide, move_slide, remove_slide, add_text, add_shape, add_image, add_table, set_theme and replace. "
+    "Every call is one step the person can undo, so land a whole change in one call; action=edit makes several changes as ONE step. "
+    "slide is a number (1 is the first), an id or a title, the slide in front when left out; presentation is a .pptx file (~/... or /...) or an open presentation's name as its tab shows it, the one in front when left out. An open presentation changes in its window; a file that is not open is changed on disk, which asks the person first. "
+    "Never save unless the person asks: saving over a file asks them, and the first time shows what Herald cannot keep. "
+    "Before making or reworking a real deck read skill_view name=\"herald-os-bridge:herald-slides\": outlines, layouts, themes, speaker notes and saving.",
+    {
+        "action": _enum(*SLIDES_ACTIONS, description="What to do"),
+        "presentation": _desc(_STR, "The presentation: a .pptx file (full path or ~/...) or an open presentation's name as its tab shows it; the one in front in Herald Slides when left out. from_document: add the slides to the end of this one (a new presentation named after the document when left out)"),
+        "path": _desc(_STR, "open: a .pptx file to show; new: save the new presentation here at once (a new .pptx file, never one that exists)"),
+        "name": _desc(_STR, "new: the tab's name, and the file name it is offered when saved"),
+        "slides": _desc(_OBJECTS, "new: the whole deck, one object a slide with layout, title, body and notes: [{\"layout\": \"title\", \"title\": \"Q3 review\", \"body\": \"Finance team\"}, {\"title\": \"Results\", \"body\": \"Revenue up 12%\\nCosts flat\", \"notes\": \"Lead with revenue\"}]; the first is a title slide unless its layout says otherwise, the rest title-content"),
+        "theme": _desc(_STR, "new, set_theme: herald (white with navy text and blue accents; the default), midnight (dark navy with light text), paper (warm cream with serif type), graphite (dark grey with yellow accents), forest (pale with green accents), coral (warm peach and coral), mono (black and white with a red accent) or ocean (pale blue and teal)"),
+        "size": _desc(_STR, "new: wide (16:9, the default) or standard (4:3); add_text: the font size in points, e.g. \"28\" (24)"),
+        "slide": _desc(_STR, "A slide: its number (1 is the first), its id, or its title; the slide in front when left out. read: only this slide; remove_slide: the slide to remove"),
+        "text": _desc(_STR, "find: what to find; add_text: what the text box says, a paragraph a line; add_shape: text centred in the shape"),
+        "caseSensitive": _desc(_BOOL, "find, replace: match upper and lower case exactly"),
+        "layout": _desc(_STR, "add_slide, set_slide: title, title-content (the default), two-content, comparison, section, title-only, blank or picture-caption"),
+        "title": _desc(_STR, "add_slide, set_slide: the slide's title"),
+        "body": _desc(_STR, "add_slide, set_slide: the slide's text, one line a bullet (two spaces or a tab at the start go a level deeper); two-content and comparison: a JSON list of two bodies, [\"Pros\\nFast\", \"Cons\\nCostly\"]"),
+        "notes": _desc(_STR, "add_slide, set_slide: the speaker notes; from_document: true puts every paragraph in the speaker notes and keeps the bullets short (a talk with a script)"),
+        "after": _desc(_STR, "add_slide: put it after this slide (number, id or title); at the end when left out"),
+        "hidden": _desc(_BOOL, "set_slide: skip the slide when presenting (true) or show it again (false)"),
+        "background": _desc(_STR, "set_slide: the background colour: #rrggbb, a name like navy or teal, or a theme colour (accent1 to accent6, text, background); theme goes back to the theme's"),
+        "to": _desc(_STR, "move_slide: its new number (1 is the first), or first or last; save: save as this new .pptx file instead (full path or ~/...); export_pdf: the PDF to write (a new file in ~/Documents when left out)"),
+        "x": _desc(_NUM, "add_text, add_shape, add_image, add_table, insert_range: the left edge in points from the slide's left (a wide slide is 960 by 540 points, a standard one 720 by 540); centred when left out"),
+        "y": _desc(_NUM, "add_text, add_shape, add_image, add_table, insert_range: the top edge in points from the slide's top; centred when left out"),
+        "width": _desc(_NUM, "add_text (480 when left out), add_shape, add_image, add_table, insert_range: width in points"),
+        "height": _desc(_NUM, "add_text (as tall as its text when left out), add_shape, add_image: height in points"),
+        "color": _desc(_STR, "add_text: the text colour: #rrggbb, a name like navy or teal, or a theme colour (accent1 to accent6, text, background)"),
+        "bold": _desc(_BOOL, "add_text: bold"),
+        "align": _desc(_STR, "add_text: left (the default), center, right or justify"),
+        "kind": _desc(_STR, "add_shape: rect (the default), roundRect, ellipse, triangle, rtTriangle, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, plus, star5, rightArrow, leftArrow, upArrow, downArrow, leftRightArrow, chevron, homePlate, wedgeRectCallout or wedgeRoundRectCallout; words like rectangle, circle, star, arrow or callout work too"),
+        "fill": _desc(_STR, "add_shape: the fill colour: #rrggbb, a name, a theme colour or none (the theme's first accent when left out)"),
+        "source": _desc(_STR, "add_image: the picture file, PNG, JPEG, GIF, WebP or BMP (full path or ~/...)"),
+        "fit": _desc(_STR, "add_image with width and height: contain (the default: all of it, at its proportions), cover (fills the box, cut to fit) or stretch; slide fills the whole slide, cut to fit"),
+        "cells": _desc(_ROWS, "add_table: the rows of cells as text, the header row first: [[\"Item\", \"Cost\"], [\"Rent\", \"1,200\"]]"),
+        "rows": _desc(_NUM, "add_table: rows of an empty table, instead of cells"),
+        "columns": _desc(_NUM, "add_table: columns of an empty table, instead of cells"),
+        "find": _desc(_STR, "replace: the text to replace, in titles, text, shapes, tables and speaker notes"),
+        "replacement": _desc(_STR, "replace: what goes in its place (left out deletes the matches); each replacement keeps the formatting where its match starts"),
+        "all": _desc(_BOOL, "replace: every match (true, the default) or only the first (false)"),
+        "edits": _desc(_OBJECTS, "edit: the changes, made in order as ONE step to undo (if one fails, none is made); each has an op and that op's arguments: addSlide (layout, title, body, notes, after), setSlide (slide, title, body, notes, layout, hidden, background), duplicateSlide (slide), moveSlide (slide, to), removeSlide (slide), addText (slide, text, x, y, width, height, size, color, bold, align), addShape (slide, kind, x, y, width, height, fill, text), addImage (slide, source, x, y, width, height, fit), addTable (slide, cells, x, y, width), setTheme (theme) and replace (find, replacement, all, caseSensitive). A slide one edit adds can be named by its title in the next, and an edit without a slide lands where the one before went. E.g. [{\"op\": \"addSlide\", \"title\": \"Risks\", \"body\": \"Supply\\nHiring\"}, {\"op\": \"addShape\", \"slide\": \"Risks\", \"kind\": \"star\", \"x\": 820, \"y\": 40, \"width\": 80, \"height\": 80}, {\"op\": \"setTheme\", \"theme\": \"paper\"}]"),
+        "document": _desc(_STR, "from_document: the document to make slides from, a .docx, .md or .txt file or an open document's name (the one in front in Herald Docs when left out); it is only read"),
+        "level": _desc(_NUM, "from_document: the heading level that starts a slide, 1 to 6 (the document's top level below its title when left out)"),
+        "workbook": _desc(_STR, "insert_range: the Herald Sheets workbook, a file or an open workbook's name (the one in front in Herald Sheets when left out)"),
+        "range": _desc(_STR, "insert_range: the cells, like A1:D12 or 'Q1 sales'!B2:F9, or selection; the workbook's selection, or else its cells that hold something, when left out"),
+        "sheet": _desc(_STR, "insert_range: the sheet, when the range does not name it"),
+        "overwrite": _desc(_BOOL, "save, export_pdf: replace the file at to (asks the person first)"),
         "steps": _desc(_NUM, "undo, redo: how many steps (1)"),
     },
     ["action"],
@@ -1829,8 +1941,9 @@ def _office_args(args: dict[str, Any], actions: dict[str, str], names: dict[str,
 
 
 def _office_json(command_args: dict[str, Any]) -> dict[str, Any]:
-    # The shell takes table cells, edits, rows of values, cell formats and filter conditions as JSON text.
-    for key in ("cells", "edits", "values", "format", "condition"):
+    # The shell takes table cells, edits, rows of values, cell formats, filter conditions, a deck's
+    # slides and a two-column slide's bodies as JSON text.
+    for key in ("cells", "edits", "values", "format", "condition", "slides", "body"):
         if isinstance(command_args.get(key), (dict, list)):
             command_args[key] = json.dumps(command_args[key])
     return command_args
@@ -1854,21 +1967,49 @@ def sheets_command(args: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return action, SHEETS_ACTIONS[action], _office_json(command_args)
 
 
+def slides_command(args: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    """``(action, command id, command args)`` for a slides call (pure; tested)."""
+    action, command_args = _office_args(args, SLIDES_ACTIONS, SLIDES_ARGS)
+    return action, SLIDES_ACTIONS[action], _office_json(command_args)
+
+
+# The argument naming what a call changes; any other file it names (the document slides are made
+# from, the workbook a range comes from) is only read.
+_OFFICE_TARGETS = {"docs": "document", "sheets": "workbook", "slides": "presentation"}
+
+
 def _file_on_disk(action: str, command: str, command_args: dict[str, Any], catalogue: dict[str, dict[str, Any]]) -> Path | None:
     """The existing file a change names by its path: unless it is open, the change is written to it on disk."""
     if action in ("save", "export_pdf") or ui_tier_for(command, catalogue) is Tier.READ:
         return None
-    target = command_args.get("workbook" if command.startswith("sheets.") else "document")
+    target = command_args.get(_OFFICE_TARGETS.get(command.split(".")[0], ""))
     if not isinstance(target, str) or not target.strip().startswith(("/", "~")):
         return None
     file = expand(target)
     return file if file.exists() else None
 
 
+def _edit_tier(command: str, command_args: dict[str, Any], catalogue: dict[str, dict[str, Any]]) -> Tier:
+    """The most guarded tier among a batch's ops that are commands of their own, so removing a sheet
+    or a slide in an edit asks as it does alone."""
+    edits = command_args.get("edits")
+    if isinstance(edits, str):
+        try:
+            edits = json.loads(edits)
+        except json.JSONDecodeError:
+            edits = None
+    app = command.split(".")[0]
+    ops = {f"{app}.{edit.get('op')}" for edit in edits if isinstance(edit, dict)} if isinstance(edits, list) else set()
+    return max((ui_tier_for(op, catalogue) for op in ops if op in catalogue), key=_TIER_ORDER.index, default=Tier.READ)
+
+
 def office_tier(action: str, command: str, command_args: dict[str, Any], catalogue: dict[str, dict[str, Any]], open_paths: Iterable[str]) -> Tier:
-    """The registry's tier, raised to destructive when the call would write over a file: saving over
-    one, exporting over one, or changing a file that is not open, which goes straight to disk (pure; tested)."""
+    """The registry's tier (for an edit batch, at least its most guarded op's), raised to destructive
+    when the call would write over a file: saving over one, exporting over one, or changing a file
+    that is not open, which goes straight to disk (pure; tested)."""
     tier = ui_tier_for(command, catalogue)
+    if action == "edit":
+        tier = max(tier, _edit_tier(command, command_args, catalogue), key=_TIER_ORDER.index)
     target = command_args.get("to")
     named = isinstance(target, str) and bool(target.strip())
     replaces = command_args.get("overwrite") is True or (named and expand(target).exists())
@@ -1922,11 +2063,16 @@ def handle_sheets(args: dict[str, Any], **_: Any) -> str:
     return _handle_office("sheets", "Herald Sheets", sheets_command, args)
 
 
+def handle_slides(args: dict[str, Any], **_: Any) -> str:
+    return _handle_office("slides", "Herald Slides", slides_command, args)
+
+
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("os_ui", OS_UI_SCHEMA, handle_os_ui, "🪟"),
     ToolSpec("canvas", CANVAS_SCHEMA, handle_canvas, "🎨"),
     ToolSpec("docs", DOCS_SCHEMA, handle_docs, "📝"),
     ToolSpec("sheets", SHEETS_SCHEMA, handle_sheets, "📊"),
+    ToolSpec("slides", SLIDES_SCHEMA, handle_slides, "🎞️"),
     ToolSpec("system_network", SYSTEM_NETWORK_SCHEMA, handle_system_network, "📶"),
     ToolSpec("system_control", SYSTEM_CONTROL_SCHEMA, handle_system_control, "🎛️"),
     ToolSpec("system_logs", SYSTEM_LOGS_SCHEMA, handle_system_logs, "📜"),
@@ -1942,4 +2088,4 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("system_os", SYSTEM_OS_SCHEMA, system_os_handler, "🐧"),
 )
 
-__all__ = ["TOOL_SPECS", "ToolSpec", "bridge_enabled", "canvas_command", "canvas_tier", "docs_command", "drop_undo", "find_undo", "handle_canvas", "handle_docs", "handle_os_ui", "handle_sheets", "handle_system_documents", "normalise_duration", "office_tier", "plan_operations", "plan_system_os", "plan_targets", "read_one_document", "record_undo", "resolve_when", "sheets_command", "system_os_handler", "tilde", "ui_summary", "ui_tier_for", "json"]
+__all__ = ["TOOL_SPECS", "ToolSpec", "bridge_enabled", "canvas_command", "canvas_tier", "docs_command", "drop_undo", "find_undo", "handle_canvas", "handle_docs", "handle_os_ui", "handle_sheets", "handle_slides", "handle_system_documents", "normalise_duration", "office_tier", "plan_operations", "plan_system_os", "plan_targets", "read_one_document", "record_undo", "resolve_when", "sheets_command", "slides_command", "system_os_handler", "tilde", "ui_summary", "ui_tier_for", "json"]
