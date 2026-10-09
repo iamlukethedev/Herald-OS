@@ -79,6 +79,24 @@ function windowFor(sender: WebContents, fallback: () => BrowserWindow | null): B
 
 const documentsFolder = () => path.join(os.homedir(), 'Documents')
 
+/** Ask where a PDF goes, over the window that asked; null when the person cancels. */
+async function pickPdf(parent: BrowserWindow | undefined, title: string, suggestedName: string): Promise<string | null> {
+  const name = `${String(suggestedName || 'Untitled').replace(/[/\\]/g, '-').replace(/\.pdf$/i, '')}.pdf`
+  const options: Electron.SaveDialogOptions = { title, defaultPath: path.join(documentsFolder(), name), filters: [{ name: 'PDF', extensions: ['pdf'] }] }
+  const picked = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
+
+  return picked.canceled || !picked.filePath ? null : picked.filePath
+}
+
+/** Write the PDF `render` makes at `target` (.pdf added when it has none), once the place is allowed. */
+async function writePdf(target: string, render: () => Promise<Uint8Array>): Promise<string> {
+  const file = officePath(target.toLowerCase().endsWith('.pdf') ? target : `${target}.pdf`)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await atomicWrite(file, await render())
+
+  return file
+}
+
 export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
   const backups = new OfficeBackups(path.join(heraldOsDataDir(), 'office-backups'))
   registerSpellingMenus()
@@ -268,29 +286,20 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.officeExportPdf, async (event, request: OfficePdfRequest): Promise<string | null> => {
-    let target = typeof request?.path === 'string' && request.path ? request.path : null
+    const named = typeof request?.path === 'string' && request.path ? request.path : null
+    const target = named ?? (await pickPdf(windowFor(event.sender, getWindow), 'Export as PDF', String(request?.suggestedName || 'Untitled')))
 
-    if (!target) {
-      const parent = windowFor(event.sender, getWindow)
-      const name = `${String(request?.suggestedName || 'Untitled').replace(/[/\\]/g, '-').replace(/\.pdf$/i, '')}.pdf`
-      const options: Electron.SaveDialogOptions = { title: 'Export as PDF', defaultPath: path.join(documentsFolder(), name), filters: [{ name: 'PDF', extensions: ['pdf'] }] }
-      const picked = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
-
-      if (picked.canceled || !picked.filePath) {
-        return null
-      }
-
-      target = picked.filePath
-    }
-
-    const file = officePath(target.toLowerCase().endsWith('.pdf') ? target : `${target}.pdf`)
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await atomicWrite(file, await printToPdf(request))
-
-    return file
+    return target ? writePdf(target, () => printToPdf(request)) : null
   })
 
-  ipcMain.handle(IPC.officePrint, (_event, request: OfficePrintRequest): Promise<OfficePrintResult> => printOnPaper(request))
+  ipcMain.handle(IPC.officePrint, (event, request: OfficePrintRequest): Promise<OfficePrintResult> =>
+    printOnPaper(request, undefined, {
+      pick: (name) => pickPdf(windowFor(event.sender, getWindow), 'Print to File', name),
+      write: async (file, render) => {
+        await writePdf(file, render)
+      }
+    })
+  )
 
   ipcMain.handle(IPC.officeConvert, async (_event, target: string, to: string) => convertWithLibreOffice(officePath(target), String(to)))
 

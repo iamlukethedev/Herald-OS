@@ -56,6 +56,46 @@ describe('printOnPaper', () => {
     await expect(printOnPaper({ html: view, name: 'Plan' }, fakeSurface({ success: false, failureReason: '' }).surface)).resolves.toEqual({ printed: false, error: 'The print job failed' })
   })
 
+  it('prints to a PDF file the person picks when the system has no printer, which Electron shows no dialog for', async () => {
+    for (const failureReason of ['No printers available on the network', 'Failed to enumerate printers']) {
+      const { surface, seen } = fakeSurface({ success: false, failureReason })
+      const picked: string[] = []
+      const written: Array<[string, Uint8Array]> = []
+      const toFile = {
+        pick: async (name: string) => {
+          picked.push(name)
+
+          return '/tmp/Plan.pdf'
+        },
+        write: async (file: string, render: () => Promise<Uint8Array>) => {
+          expect(seen.destroyed).toBe(false)
+          written.push([file, await render()])
+        }
+      }
+
+      await expect(printOnPaper({ html: view, name: 'Q3: plan.xlsx', landscape: true }, surface, toFile)).resolves.toEqual({ printed: true })
+      expect(picked).toEqual(['Q3- plan'])
+      expect(written).toEqual([['/tmp/Plan.pdf', new Uint8Array([37, 80, 68, 70])]])
+      expect(seen.pdf).toEqual([{ printBackground: true, landscape: true, pageSize: 'A4', preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } }])
+      expect(seen.destroyed).toBe(true)
+    }
+  })
+
+  it('takes a cancelled Print to File quietly, and leaves a printer’s own failure alone', async () => {
+    const write = vi.fn()
+    const cancelled = fakeSurface({ success: false, failureReason: 'No printers available on the network' })
+
+    await expect(printOnPaper({ html: view, name: 'Plan' }, cancelled.surface, { pick: async () => null, write })).resolves.toEqual({ printed: false })
+    expect(cancelled.seen.pdf).toEqual([])
+
+    const pick = vi.fn()
+
+    await expect(printOnPaper({ html: view, name: 'Plan' }, fakeSurface({ success: false, failureReason: 'Invalid printer settings' }).surface, { pick, write })).resolves.toEqual({ printed: false, error: 'Invalid printer settings' })
+    await expect(printOnPaper({ html: view, name: 'Plan' }, fakeSurface({ success: false, failureReason: 'No printers available on the network' }).surface)).resolves.toEqual({ printed: false, error: 'No printers available on the network' })
+    expect(pick).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it('closes the hidden page and removes its file whatever happens', async () => {
     const { surface, seen } = fakeSurface()
     surface.print = async () => {
