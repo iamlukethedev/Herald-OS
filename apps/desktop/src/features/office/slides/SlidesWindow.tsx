@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
+import { refreshOpenDocuments, slidesHermesMenu } from '../hermes/actions.ts'
 import { officeAbilities } from '../session.ts'
 import type { OfficeCommand } from '../shell/commands.ts'
 import { officeMenus } from '../shell/commands.ts'
@@ -224,6 +225,15 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
     void officeAbilities().then((abilities) => setCanOpen(openFormats('slides', abilities).length > 0))
   }, [])
 
+  // The Hermes menu lists the documents open in other windows: a click is when it may open next.
+  useEffect(() => {
+    const refresh = () => void refreshOpenDocuments()
+    refresh()
+    window.addEventListener('pointerdown', refresh, true)
+
+    return () => window.removeEventListener('pointerdown', refresh, true)
+  }, [])
+
   const menus = useMemo(
     () =>
       officeMenus({
@@ -252,7 +262,8 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
               { id: 'zoom-fit', label: 'Fit Slide', shortcut: 'mod+0', enabled: hasDeck, run: zoom('reset') },
               ...masterViewCommands().map((command, index) => ({ ...command, dividerBefore: index === 0 }))
             ]
-          }
+          },
+          slidesHermesMenu({ docKey: () => (hasDeck() ? slidesSession.$activeKey.get() : null) })
         ]
       }),
     []

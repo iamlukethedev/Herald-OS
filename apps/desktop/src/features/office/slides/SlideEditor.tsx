@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { matches } from '../../../lib/shortcuts.ts'
 import { Menu, type MenuItemDef } from '../../files/Menu.tsx'
 import type { EditorHandle, OfficeDocument } from '../types.ts'
-import type { Deck } from './deck.ts'
+import { type Deck, findElement, type SlideElement } from './deck.ts'
 import { SlidesDocument } from './document.ts'
 import { describeElement } from './elements.ts'
 import { flushTyping, textSessionOf } from './editor/active.ts'
@@ -14,6 +14,8 @@ import { isTyping, Stage, stageScales, useDeck } from './editor/Stage.tsx'
 import { isEmptyPlaceholder, layoutOf, masterOf } from './layouts.ts'
 import { ALIGN_LABELS, type AlignEdge, ARRANGE_LABELS, setNotes, slideTitle } from './model.ts'
 import { decks, slidesSession } from './store.ts'
+import { tableText } from './tables.ts'
+import { plainText } from './text.ts'
 
 /*
  * One deck in its window: the slides down the side, the slide in front with its speaker notes
@@ -26,6 +28,30 @@ function masterPlace(doc: SlidesDocument): string {
   const layout = layoutInFront(doc)
 
   return layout ? `the ${layoutOf(masterOf(doc.presentation), layout).name} layout` : 'the slide master'
+}
+
+const clip = (words: string, limit: number): string => {
+  const line = words.replace(/\s+/g, ' ').trim()
+
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
+}
+
+function wordsOf(element: SlideElement): string {
+  return element.kind === 'text' || element.kind === 'shape' ? plainText(element.body) : element.kind === 'table' ? tableText(element) : element.kind === 'image' ? (element.alt ?? '') : ''
+}
+
+/** What is selected, for Hermes: the slide in front, with the text picked while typing or the elements picked on it. */
+function selectionOf(doc: SlidesDocument): string {
+  const title = slideTitle(doc.slide)
+  const typing = textSessionOf(doc)
+  const { from, to } = typing?.editor.state.selection ?? { from: 0, to: 0 }
+  const typed = typing && to > from ? typing.editor.state.doc.textBetween(from, to, '\n', ' ') : ''
+  const editing = typing ? findElement(doc.slide, typing.elementId) : undefined
+  const picked = doc.selection.map((element) => `${describeElement(element).toLowerCase()}${wordsOf(element).trim() ? ` “${clip(wordsOf(element), 60)}”` : ''}`)
+  const what = typed && editing ? `text “${clip(typed, 120)}” selected in the ${describeElement(editing).toLowerCase()}` : picked.length ? `${picked.slice(0, 3).join(', ')}${picked.length > 3 ? `, and ${picked.length - 3} more` : ''} selected` : ''
+  const place = doc.mode === 'master' ? `Editing ${masterPlace(doc)} in the master view` : `Slide ${doc.index + 1}${title ? `: “${clip(title, 60)}”` : ''}`
+
+  return `${place}${what ? `, ${what}` : ''}`
 }
 
 function Notes({ doc }: { doc: SlidesDocument }) {
@@ -151,6 +177,7 @@ export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
 
         return `slide ${doc.index + 1} of ${doc.deck.slides.length}${title ? ` (“${title}”)` : ''}${picked}`
       },
+      selection: () => selectionOf(doc),
       zoom: (step) => {
         const now = stageScales.get(doc)
 

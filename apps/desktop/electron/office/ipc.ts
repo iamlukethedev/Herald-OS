@@ -1,10 +1,10 @@
-import { BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type WebContents, webContents } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { dialogFilters, extensionOf, OFFICE_APPS, OFFICE_NOUNS, type OfficeAbilities, type OfficeApp, openFormats, saveFormats } from '../../shared/office/files.ts'
-import { IPC, type OfficeChangedEvent, type OfficeFileData, type OfficePdfRequest, type OfficePresence, type OfficeSaveTarget, type OfficeWriteResult } from '../../shared/ipc.ts'
+import { dialogFilters, extensionOf, OFFICE_APP_NAMES, OFFICE_APPS, OFFICE_NOUNS, type OfficeAbilities, type OfficeApp, openFormats, saveFormats } from '../../shared/office/files.ts'
+import { IPC, type OfficeChangedEvent, type OfficeFileData, type OfficePdfRequest, type OfficePresence, type OfficeRunReply, type OfficeRunRequest, type OfficeSaveTarget, type OfficeWriteResult } from '../../shared/ipc.ts'
 import { assertWritable } from '../ipc/fs.ts'
 import { log } from '../log.ts'
 import { heraldOsDataDir } from '../paths.ts'
@@ -49,6 +49,24 @@ const watches = new OfficeWatches()
 
 /** What each Office window has open, by web contents and app (desktop mode has all three in one window). */
 const presence = new Map<string, OfficePresence>()
+
+/** Office commands load, change and write whole files. */
+const RUN_TIMEOUT_MS = 90_000
+const runs = new Map<string, { resolve: (reply: OfficeRunReply) => void; timer: ReturnType<typeof setTimeout> }>()
+let runCounter = 0
+
+/** The window that reported `key` open in `app` (panels mode has one window per app). */
+function ownerOf(app: OfficeApp, key: string): WebContents | null {
+  for (const [id, entry] of presence) {
+    if (entry.app === app && entry.documents.some((doc) => doc.key === key)) {
+      const owner = webContents.fromId(Number(id.split(':')[0]))
+
+      return owner && !owner.isDestroyed() ? owner : null
+    }
+  }
+
+  return null
+}
 
 /** Web contents whose closing already clears their presence: one listener each, however often they report. */
 const reporting = new WeakSet<WebContents>()
@@ -232,6 +250,40 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.officePresence, () => [...presence.values()].sort((a, b) => b.at - a.at))
+
+  ipcMain.on(IPC.officeRunReply, (_event, reply: OfficeRunReply) => {
+    const pending = runs.get(String(reply?.requestId))
+
+    if (pending) {
+      clearTimeout(pending.timer)
+      runs.delete(String(reply.requestId))
+      pending.resolve(reply)
+    }
+  })
+
+  ipcMain.handle(IPC.officeRun, async (event, target: { app: OfficeApp; key: string }, command: string, args: Record<string, unknown>, source: OfficeRunRequest['source']): Promise<unknown> => {
+    const owner = isApp(target?.app) ? ownerOf(target.app, String(target.key)) : null
+
+    if (!owner || owner === event.sender) {
+      throw new Error('That document is no longer open in a Herald Office window')
+    }
+
+    const requestId = `office-run-${++runCounter}`
+    const reply = await new Promise<OfficeRunReply>((resolve) => {
+      const timer = setTimeout(() => {
+        runs.delete(requestId)
+        resolve({ requestId, error: `The ${OFFICE_APP_NAMES[target.app]} window did not answer in time` })
+      }, RUN_TIMEOUT_MS)
+      runs.set(requestId, { resolve, timer })
+      owner.send(IPC.officeRunRequest, { requestId, command: String(command), args: args && typeof args === 'object' ? args : {}, source } satisfies OfficeRunRequest)
+    })
+
+    if (reply.error) {
+      throw new Error(reply.error)
+    }
+
+    return reply.result
+  })
 
   ipcMain.handle(IPC.officeExportPdf, async (event, request: OfficePdfRequest): Promise<string | null> => {
     let target = typeof request?.path === 'string' && request.path ? request.path : null

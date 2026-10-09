@@ -51,6 +51,11 @@ export function parseDictationText(raw: string): Dictation {
   return { text, submit }
 }
 
+/** Consecutive dictations read as one sentence: the space the person did not say, when the caret follows a word. */
+export function withLeadingSpace(before: string | null, text: string): string {
+  return before && !/\s/.test(before) && /^[\p{L}\p{N}"'(]/u.test(text) ? ` ${text}` : text
+}
+
 /** The raw words after "type …" (original casing and punctuation), or null when not a dictation. */
 export function dictationRemainder(utterance: string): string | null {
   const match = DICTATION.exec(utterance.trim())

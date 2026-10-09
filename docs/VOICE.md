@@ -82,6 +82,14 @@ field you were in before clicking the mic is remembered): "type how are you ques
 "type ls -la and press enter", "new line", "press escape", "select all", "select the last word",
 "copy", "cut", "paste", "undo", "redo", "delete that", "delete the last word", "clear the field",
 "scroll down", "go to the top". Say "comma", "period", "question mark", "new line" for punctuation.
+With Herald Docs, Sheets or Slides in front in the one-window desktop shell (macOS), dictation
+(`Cmd+Ctrl+X`, or "start dictation") and "type …" go into the document itself, as one step to undo
+and without the clipboard: at the caret in a Docs page (each "new line" starts a paragraph, or a
+list's next item), into the active Sheets cell and on down the column (a number becomes a number,
+"=SUM(B2:B9)" stays a formula, and the selection moves to the cell below so dictation carries on),
+or into the Slides text box being edited. A cell being edited, the find bar or any other field takes
+the words as before; so does another app in front. In the Linux panels session the Office apps are
+windows of their own and get dictation as typed keys.
 
 **Files and apps stay inside Herald OS.** "Open hello.pdf" (or "open hello dot pdf", "open the file
 report") finds the file by name in your home folder (Spotlight on macOS, a bounded `find` on Linux;
@@ -104,6 +112,18 @@ document in the viewer in front, so "this folder" and "this file" mean what you 
 Moving or renaming files shows the approval card (see below). Right after Hermes has done
 something, "undo that" (or "take that back") goes to Hermes, which reverses its own change; at
 other times it is the text field's undo.
+
+**Herald Office work goes to Hermes too.** Asking to make or change a document, a sheet or a deck
+sends the sentence to Hermes as said; it never fills a command's slot or starts a build: "make a
+budget for my trip", "write a cover letter", "draft a report on our Q3 numbers", "create a
+presentation about volcanoes", "turn this into slides", "make this a table", "add a total row", "add
+a column for tax", "fill in the rest of this column", "sum the March sales", "sort this by date",
+"translate this paragraph into Spanish", "make the heading bold". The app commands stay instant:
+"new document", "new spreadsheet", "open Herald Docs", "open Sheets", "save the document", "undo",
+"open budget.xlsx". Every spoken request also carries what Herald Office has open, for the model
+only and before the screen line: the document in front with its file, its sheet and selection (or
+the selected text, or the slide), and the other open documents, so "this sheet", "this paragraph"
+and "the selection" mean what you are looking at.
 
 **Approvals by voice.** While one of the conversation's approval cards is up, a short answer decides
 it instead of interrupting Hermes: "yes", "yes, go ahead", "do it", "approve" or "okay" allow it
@@ -144,7 +164,8 @@ Command families: `page.open|back`, `window.focus|close|minimize|maximize|restor
 `overlay.*`, `sidebar.toggle`, `space.switch`, `help.commands`; `chat.new|open|stop|popout`; `mission.start|open|list|pause|markReviewed`;
 `memory.show|search|add|update|forget`; `file.open|openExternal`, `files.open|show|search|reveal|newFolder`; `automation.list|show|run|pause|resume|create|delete`;
 `connection.list|show|enable|disable`; `build.start`, `studio.open|preview|file|close`; `native.launch`, `web.open`; `settings.open`, `theme.set`, `accent.set`,
-`motion.reduce`, `dock.autoHide`, `voice.engine.set`, `voice.wake.set`; `agents.pauseAll`, `agents.toolSearch.set`.
+`motion.reduce`, `dock.autoHide`, `voice.engine.set`, `voice.wake.set`; `agents.pauseAll`, `agents.toolSearch.set`;
+`docs.open|new|save`, `sheets.open|new|save` and the rest of `docs.*`, `sheets.*`, `office.list` for Hermes.
 
 Tiers: `read` and `act` commands run immediately (audited when Hermes runs them); `mutate` (add a
 memory, pause an automation, change a setting) runs and is shown in the caption; `destructive`
@@ -193,6 +214,7 @@ apps/desktop/src/lib/voice/live-engine.ts     GPT-Live engine (WebRTC + delegati
 apps/desktop/src/lib/voice/speak-stream.ts    /api/audio/speak-stream player, POST /api/audio/speak fallback
 apps/desktop/src/lib/voice/speech-text.ts     sanitizer, sentence chunker, commentary chunking, stop phrases
 apps/desktop/src/features/voice/               VoiceOrb, MicButton, VoiceIndicator
+apps/desktop/src/features/office/typing.ts     dictation into the Docs page, Sheets cell or Slides text box in front
 apps/desktop/electron/ipc/voice.ts        mic permission, audio WebSocket URL, global hotkey
 ```
 

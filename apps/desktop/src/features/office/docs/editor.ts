@@ -5,6 +5,7 @@ import { dataUrl, type DocJSON, IMAGE_TYPES, imageSize } from '../../../../share
 import { openWebWindow } from '../../../store/web-windows.ts'
 import { FindHighlight } from './find.ts'
 import { WordKeys } from './keys.ts'
+import { HermesMarked } from './marked.ts'
 import { applyLive, insertImage, type Place } from './model.ts'
 import { revealInDesk } from './overlay.ts'
 import { docsExtensions } from './schema.ts'
@@ -82,7 +83,8 @@ export function createDocsEditor(element: HTMLElement, content: DocJSON, events:
       }),
       WordKeys,
       SlashCommand,
-      FindHighlight
+      FindHighlight,
+      HermesMarked
     ],
     editorProps: {
       attributes: { spellcheck: 'true', 'aria-label': 'Document', 'aria-multiline': 'true', role: 'textbox' },

@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { IconFilePlus, IconFolderOpen, IconInfoCircle, IconPlus, IconSparkles, IconX } from '@tabler/icons-react'
+import { IconFilePlus, IconFolderOpen, IconInfoCircle, IconPlus, IconX } from '@tabler/icons-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { OFFICE_APP_NAMES } from '../../../../shared/office/files.ts'
 import { AppTile } from '../../../components/app-icon.tsx'
@@ -9,12 +9,14 @@ import { keysLabel } from '../../../lib/shortcuts.ts'
 import type { AppIconId } from '../../../shell/apps.ts'
 import { messageOf } from '../../canvas/errors.ts'
 import { Menu, type MenuItemDef } from '../../files/Menu.tsx'
+import { bindOfficeRelay } from '../agent.ts'
+import { AskHermesBar } from '../hermes/AskHermesBar.tsx'
 import type { OfficeSession } from '../session.ts'
 import type { OfficeDocument } from '../types.ts'
 import { type OfficeCommand, type OfficeMenu, runShortcut } from './commands.ts'
 import { CloseDialog, FidelityDialog, NotesDialog } from './dialogs.tsx'
 
-function menuItems(commands: readonly OfficeCommand[]): MenuItemDef[] {
+export function menuItems(commands: readonly OfficeCommand[]): MenuItemDef[] {
   return commands.map((command) => ({
     id: command.id,
     label: command.label,
@@ -101,16 +103,6 @@ function ConflictBar<Model>({ session }: { session: OfficeSession<Model> }) {
   )
 }
 
-/** Where Hermes takes requests about the document; it starts working here with the Hermes tools. */
-function AskHermesBar({ noun }: { noun: string }) {
-  return (
-    <div className="flex min-w-0 items-center gap-1.5" title="Hermes works in Herald Office in a coming update">
-      <IconSparkles size={13} className="shrink-0 text-fg-4" />
-      <input disabled aria-label={`Ask Hermes about this ${noun}`} placeholder={`Ask Hermes about this ${noun}… (coming soon)`} className="glass-input h-5 w-80 min-w-0 rounded-md px-2 text-[11.5px] text-fg outline-none placeholder:text-fg-4 disabled:opacity-60" />
-    </div>
-  )
-}
-
 function StatusBar<Model>({ session, doc, noun }: { session: OfficeSession<Model>; doc: OfficeDocument<Model> | null; noun: string }) {
   const notice = useStore(session.$notice)
   const [now, setNow] = useState(Date.now())
@@ -140,7 +132,7 @@ function StatusBar<Model>({ session, doc, noun }: { session: OfficeSession<Model
         </button>
       )}
       <span className={cn('ml-auto min-w-0 truncate', fresh && notice.tone === 'error' && 'text-danger')}>{fresh ? notice.message : ''}</span>
-      {doc && <AskHermesBar noun={noun} />}
+      {doc && <AskHermesBar app={session.adapter.app} docKey={doc.key} noun={noun} focusDocument={() => doc.editor?.focus?.()} />}
     </div>
   )
 }
@@ -216,6 +208,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
     const element = root.current
     const focused = () => session.report(true)
     session.report(true)
+    bindOfficeRelay()
     element?.addEventListener('focusin', focused)
 
     return () => {

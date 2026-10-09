@@ -3,18 +3,24 @@ import type { Editor } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import { useEditorState } from '@tiptap/react'
 import { useEffect, useState } from 'react'
+import { cn } from '../../../lib/cn.ts'
+import { Menu } from '../../files/Menu.tsx'
+import { docsActions } from '../hermes/actions.ts'
+import { menuItems } from '../shell/OfficeWindow.tsx'
 import * as act from './actions.ts'
 import { anchorIn, clampLeft } from './overlay.ts'
+import { docsSession } from './store.ts'
 import { ToolButton } from './Toolbar.tsx'
 
 const WIDTH = 348
 
 /**
- * Formatting over a selection of text: the common marks, a link, colour and highlight, and the
- * place where Hermes will take requests about the selection.
+ * Formatting over a selection of text: the common marks, a link, colour and highlight, and what
+ * Hermes does with the selection.
  */
 export function BubbleBar({ editor, frame, tick }: { editor: Editor; frame: HTMLElement | null; tick: number }) {
   const [pressed, setPressed] = useState(false)
+  const [menuFor, setMenuFor] = useState<string | null>(null)
   const state = useEditorState({
     editor,
     selector: ({ editor: current }) => {
@@ -46,6 +52,8 @@ export function BubbleBar({ editor, frame, tick }: { editor: Editor; frame: HTML
   }
 
   void tick
+  const at = `${state.from}-${state.to}`
+  const menuOpen = menuFor === at
   const start = editor.view.coordsAtPos(state.from)
   const end = editor.view.coordsAtPos(state.to)
   const anchor = anchorIn(frame, { left: Math.min(start.left, end.left), right: Math.max(start.left, end.left), top: Math.min(start.top, end.top), bottom: end.bottom })
@@ -78,9 +86,28 @@ export function BubbleBar({ editor, frame, tick }: { editor: Editor; frame: HTML
         <IconHighlight className="text-warn" />
       </ToolButton>
       <span className="mx-1 h-5 w-px shrink-0 bg-line" />
-      <button type="button" disabled title="Hermes rewrites, shortens and explains selections in a coming update" className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg-3 disabled:opacity-60">
-        <IconSparkles size={14} /> Ask Hermes
-      </button>
+      <div className="relative shrink-0">
+        <button
+          type="button"
+          title="Ask Hermes about the selection"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={() => setMenuFor(menuOpen ? null : at)}
+          className={cn('flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg-2 hover:bg-white/8 hover:text-fg', menuOpen && 'bg-white/10 text-fg')}
+        >
+          <IconSparkles size={14} /> Ask Hermes
+        </button>
+        {menuOpen && (
+          // The menu stops mousedown before the bubble sees it: the page keeps the focus, and the selection, from here.
+          <div onMouseDownCapture={(event) => event.preventDefault()}>
+            <Menu align="right" className="top-full mt-2 min-w-52" onClose={() => setMenuFor(null)} items={menuItems(docsActions({ docKey: () => docsSession.$activeKey.get(), hasSelection: () => !editor.state.selection.empty }))} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -155,7 +155,8 @@ export function validateArgs(command: Pick<OsCommand, 'id' | 'args'>, raw: Recor
     } else if (spec.type === 'boolean') {
       value = typeof value === 'boolean' ? value : /^(true|yes|on|1)$/i.test(String(value).trim())
     } else {
-      value = String(value).trim()
+      // Lists and objects (rows of cells, a format) travel as JSON, the way the command reads them.
+      value = typeof value === 'object' ? JSON.stringify(value) : String(value).trim()
     }
 
     if (spec.enum) {

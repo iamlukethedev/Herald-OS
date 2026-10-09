@@ -21,8 +21,9 @@ import { log } from '../log.ts'
  */
 
 const REPLY_TIMEOUT_MS = 8_000
-/** Herald Canvas commands load, render and save whole images. */
+/** Herald Canvas and Herald Office commands load, render and save whole images and documents. */
 const CANVAS_TIMEOUT_MS = 90_000
+const LONG_COMMAND = /^(canvas|docs|sheets|slides|office)\./
 
 export class OsCommandBridge {
   private readonly pending = new Map<string, { resolve: (reply: OsControlReply) => void; timer: ReturnType<typeof setTimeout> }>()
@@ -50,7 +51,7 @@ export class OsCommandBridge {
     const requestId = `oc${++this.counter}`
     const full = { ...request, requestId } as OsControlRequest
 
-    const timeout = request.kind === 'run' && request.command.startsWith('canvas.') ? CANVAS_TIMEOUT_MS : REPLY_TIMEOUT_MS
+    const timeout = request.kind === 'run' && LONG_COMMAND.test(request.command) ? CANVAS_TIMEOUT_MS : REPLY_TIMEOUT_MS
 
     return new Promise(resolve => {
       const timer = setTimeout(() => {

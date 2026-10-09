@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applySpokenPunctuation, dictationRemainder, matchDictation, parseDictationText } from './dictation.ts'
+import { applySpokenPunctuation, dictationRemainder, matchDictation, parseDictationText, withLeadingSpace } from './dictation.ts'
 
 describe('dictation', () => {
   it('recognises type/dictate and keeps the exact words', () => {
@@ -23,5 +23,16 @@ describe('dictation', () => {
   it('turns spoken punctuation into characters', () => {
     expect(applySpokenPunctuation('hi there comma how are you question mark')).toBe('hi there, how are you?')
     expect(applySpokenPunctuation('line one new line line two')).toBe('line one\nline two')
+  })
+
+  it('adds the space between dictations only after a word', () => {
+    expect(withLeadingSpace('d', 'and then')).toBe(' and then')
+    expect(withLeadingSpace('.', '42 people')).toBe(' 42 people')
+    expect(withLeadingSpace('o', '"quoted"')).toBe(' "quoted"')
+    expect(withLeadingSpace(' ', 'and then')).toBe('and then')
+    expect(withLeadingSpace('\n', 'and then')).toBe('and then')
+    expect(withLeadingSpace('', 'and then')).toBe('and then')
+    expect(withLeadingSpace(null, 'and then')).toBe('and then')
+    expect(withLeadingSpace('d', ', and then')).toBe(', and then')
   })
 })

@@ -73,6 +73,25 @@ export async function startDictation(): Promise<void> {
   }
 }
 
+/**
+ * The Herald Docs page, Sheets cell or Slides text box in front takes the words itself, one step to
+ * undo and the clipboard untouched. Dictation goes to the app in front, so only while Herald is that
+ * app; anything that fails leaves the words to main.
+ */
+async function typedIntoOffice(text: string, submit: boolean): Promise<boolean> {
+  if (!isMainSurface || !document.hasFocus()) {
+    return false
+  }
+
+  try {
+    const { typeIntoOffice } = await import('../features/office/typing.ts')
+
+    return (await typeIntoOffice(text, { submit })) !== null
+  } catch {
+    return false
+  }
+}
+
 export async function finishDictation(): Promise<void> {
   if ($dictation.get().phase !== 'listening') {
     return
@@ -97,6 +116,10 @@ export async function finishDictation(): Promise<void> {
     if (!text && !submit) {
       notify({ title: 'Dictation', body: 'No words came through. Try again a little closer to the microphone.', level: 'info' })
 
+      return
+    }
+
+    if (await typedIntoOffice(text, submit)) {
       return
     }
 

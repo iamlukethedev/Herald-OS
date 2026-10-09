@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
+import { quoteSheet } from '../../../../shared/office/xlsx/address.ts'
 import type { EditorHandle, OfficeDocument } from '../types.ts'
 import { type Mounted, mountIn, unmount } from '../univer/mount.ts'
 import { createSheetsEngine, type SheetsEngine } from '../univer/sheets.ts'
@@ -61,6 +62,11 @@ export function SheetsEditor({ doc }: { doc: OfficeDocument<WorkbookSnapshot> })
         const position = mounted?.engine.position()
 
         return position ? `${position.sheet}${position.selection ? `!${position.selection}` : ''}` : undefined
+      },
+      selection: () => {
+        const position = mounted?.engine.position()
+
+        return position?.selection ? `${quoteSheet(position.sheet)}!${position.selection}` : undefined
       },
       dispose: () => stop(false)
     }

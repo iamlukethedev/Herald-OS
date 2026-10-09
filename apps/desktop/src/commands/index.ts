@@ -6,14 +6,18 @@ import { connectionCommands } from './connections.ts'
 import { continuityCommands } from './continuity.ts'
 import { controlCommands } from './controls.ts'
 import { crashCommands } from './crash.ts'
+import { docsCommands } from './docs.ts'
 import { editCommands } from './edit.ts'
 import { filesCommands } from './files.ts'
 import { hermesCommands } from './hermes.ts'
 import { memoryCommands } from './memory.ts'
 import { navigationCommands } from './navigation.ts'
+import { officeCommands } from './office.ts'
 import { openCommands } from './open.ts'
 import { studioCommands } from './studio.ts'
 import { screenCommands } from './screen.ts'
+import { sheetsCommands } from './sheets.ts'
+import { slidesCommands } from './slides.ts'
 import { switchCommands } from './switches.ts'
 import { systemCommands } from './system.ts'
 import { themeCommands } from './themes.ts'
@@ -47,7 +51,11 @@ export const commandGroups: Record<string, readonly OsCommand[]> = {
   plugins: pluginCommands,
   menubar: menuBarCommands,
   branding: brandingCommands,
-  canvas: canvasCommands
+  canvas: canvasCommands,
+  office: officeCommands,
+  docs: docsCommands,
+  sheets: sheetsCommands,
+  slides: slidesCommands
 }
 
 let registered = false

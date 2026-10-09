@@ -40,6 +40,8 @@ import {
   type OfficeFileData,
   type OfficePdfRequest,
   type OfficePresence,
+  type OfficeRunReply,
+  type OfficeRunRequest,
   type OfficeSaveTarget,
   type OfficeWriteResult,
   type OsControlReply,
@@ -264,6 +266,11 @@ const api = {
     report: (presence: Omit<OfficePresence, 'at'> & { focused?: boolean }): void => ipcRenderer.send(IPC.officeReport, presence),
     /** Every Office window's open documents, the most recently used first. */
     presence: (): Promise<OfficePresence[]> => ipcRenderer.invoke(IPC.officePresence),
+    /** Panels mode: run a command in the window that has `key` open in `app`; resolves with its result. */
+    run: (target: { app: OfficeApp; key: string }, command: string, args: Record<string, unknown>, source: OfficeRunRequest['source']): Promise<unknown> => ipcRenderer.invoke(IPC.officeRun, target, command, args, source),
+    /** An Office window takes commands for its documents from main, and answers each one. */
+    onRunRequest: (listener: (request: OfficeRunRequest) => void): Unsubscribe => subscribe(IPC.officeRunRequest, listener),
+    runReply: (reply: OfficeRunReply): void => ipcRenderer.send(IPC.officeRunReply, reply),
     /** Print a print view to a PDF the person names; resolves with its path (null when cancelled). */
     exportPdf: (request: OfficePdfRequest): Promise<string | null> => ipcRenderer.invoke(IPC.officeExportPdf, request),
     /** A file converted by LibreOffice to `to` (an extension without its dot), as bytes. */

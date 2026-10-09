@@ -202,6 +202,15 @@ with the formats in `shared/office` and file access in `electron/office`.
   deck API (`slides/model.ts`, applied by `slides/live.ts`). PowerPoint files are written by
   PptxGenJS with a finishing pass and read by Herald's own DrawingML reader (`slides/pptx/`), and
   each file Herald saves carries its deck for exact reopening (`slides/pptx/herald-part.ts`).
+- **Hermes** works through the `docs.*`, `sheets.*` and `office.list` commands (`src/commands/docs.ts`,
+  `sheets.ts`, `office.ts`), which find their document in `features/office/agent.ts`: open in this
+  window, the change is one transaction (Docs) or one Univer undo group (Sheets), so it is one step
+  to undo and saves the way the person's edits do; a file that is not open is changed and written
+  back only when Herald keeps everything in it. In panels mode each Office app is its own window, and
+  main relays a command from the Hermes window to the window that has the document open
+  (`officeRun`). Each window's report carries its documents' selections, which `office.list`, the
+  `os_ui` state and spoken requests pass on to Hermes. An Ask Hermes request marks the text it is
+  about (`docs/marked.ts`), so the answer lands there even after the person clicks elsewhere.
 - **Main** reads and writes files whole and atomically, watches each open file's folder with a poll
   as a safety net (`file-watch.ts`), keeps what each window has open for Hermes, prints PDFs, and
   can convert OpenDocument files through headless LibreOffice when it is installed (`convert.ts`);

@@ -14,6 +14,8 @@ export interface EditorHandle<Model> {
   status: () => string
   /** What is in front inside it, for Hermes: the sheet and selection, the slide. */
   detail?: () => string | undefined
+  /** What is selected, for Hermes: the text in a document, a range in a workbook ("Sheet1!B2:D9"), a slide. */
+  selection?: () => string | undefined
   focus?: () => void
   zoom?: (step: 'in' | 'out' | 'reset') => void
   dispose: () => void
