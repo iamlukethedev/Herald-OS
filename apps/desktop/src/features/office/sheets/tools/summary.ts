@@ -745,6 +745,12 @@ export async function refreshSummary(target: SheetsTarget, args: { sheet?: unkno
     const from = sourceSheetOf(target.workbook, definition.source)
     const sameSheet = from.getSheetId() === sheet.getSheetId()
     const old = areaAt(at.row, at.column, definition.size)
+    const corner = (row: number) => String(sheet.getRange(row, at.column).getValue() ?? '').trim().toLowerCase()
+
+    // Rows or columns put in or taken out around a summary move it: what is at its old place now is not to be cleared.
+    if (corner(old.startRow + definition.columns.length) !== String(definition.rows[0] ?? '').toLowerCase() || corner(old.endRow) !== 'grand total') {
+      throw new Error(`The summary that was at ${rangeName(old)} is not there as it was made: summarize the table again`)
+    }
 
     if (isNullCell(from.getSheet().getCellMatrix().getValue(start.row, start.column))) {
       throw new Error(`The table this summary reads started at ${definition.source.start} on ${from.getSheetName()}, which is empty now`)

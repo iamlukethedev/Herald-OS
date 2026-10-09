@@ -13,14 +13,14 @@ type Field = ReturnType<typeof summarySource>['fields'][number]
 const FUNCTION_NAMES: Record<SummaryFunction, string> = { sum: 'Sum', count: 'Count', average: 'Average', min: 'Min', max: 'Max' }
 
 /** A list to add a field to, then remove it from. */
-function FieldList({ title, fields, chosen, onChange, autoFocus, children }: { title: string; fields: Field[]; chosen: string[]; onChange: (chosen: string[]) => void; autoFocus?: boolean; children?: (name: string) => React.ReactNode }) {
+function FieldList({ title, fields, chosen, onChange }: { title: string; fields: Field[]; chosen: string[]; onChange: (chosen: string[]) => void }) {
   const free = fields.filter((field) => !chosen.includes(field.name))
 
   return (
     <section>
       <Heading
         action={
-          <Select label={`Add a field to ${title.toLowerCase()}`} value="" autoFocus={autoFocus} disabled={!free.length} onChange={(event) => event.target.value && onChange([...chosen, event.target.value])} className="h-6 w-36">
+          <Select label={`Add a field to ${title.toLowerCase()}`} value="" disabled={!free.length} onChange={(event) => event.target.value && onChange([...chosen, event.target.value])} className="h-6 w-36">
             <option value="">Add a field…</option>
             {free.map((field) => (
               <option key={field.name} value={field.name}>
@@ -37,7 +37,6 @@ function FieldList({ title, fields, chosen, onChange, autoFocus, children }: { t
           {chosen.map((name) => (
             <div key={name} className="flex min-h-7 items-center gap-2 rounded-md bg-white/4 pl-2 text-[12.5px] text-fg">
               <span className="min-w-0 flex-1 truncate">{name}</span>
-              {children?.(name)}
               <RemoveButton label={`Remove ${name} from ${title.toLowerCase()}`} onClick={() => onChange(chosen.filter((other) => other !== name))} />
             </div>
           ))}
@@ -123,6 +122,7 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
         <span className="w-12 shrink-0">Table</span>
         <TextField
           label="Table to summarize"
+          autoFocus
           value={typed}
           onChange={(event) => setTyped(event.target.value)}
           onBlur={() => setSource(typed)}
@@ -141,7 +141,7 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
         <Note tone="warn">{table.error}</Note>
       ) : (
         <div className="-mx-1 flex max-h-[min(26rem,52vh)] flex-col gap-3 overflow-y-auto px-1">
-          <FieldList title="Rows" fields={fields.filter((field) => !columns.includes(field.name))} chosen={rows} onChange={setRows} autoFocus />
+          <FieldList title="Rows" fields={fields.filter((field) => !columns.includes(field.name))} chosen={rows} onChange={setRows} />
           <FieldList title="Columns" fields={fields.filter((field) => !rows.includes(field.name))} chosen={columns} onChange={setColumns} />
           <section>
             <Heading

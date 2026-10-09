@@ -139,18 +139,20 @@ describe('cleaning and case', () => {
     expect(result.value.done).toMatchObject({ changed: 2, to: 'title' })
     expect(result.value.read).toEqual(['Ada Lovelace', 'The First. The Second', 7])
     expect(result.undone).toBe(true)
-    await withHeadlessSheets(book([['x']]), ({ univer, workbook }) => expect(() => changeCase({ univer, workbook }, { range: 'A1', to: 'shouting' })).toThrow(/to is upper, lower, title, sentence/))
+    await withHeadlessSheets(book([['x']]), ({ univer, workbook }) => expect(changeCase({ univer, workbook }, { range: 'A1', to: 'shouting' })).rejects.toThrow(/to is upper, lower, title, sentence/))
   })
 })
 
 describe('converting text', () => {
   it('turns text holding numbers into numbers with formats that show them the same, and says what it could not read', async () => {
     const rows: Value[][] = [['1,234.50'], ['$12'], ['(45)'], ['12.5%'], ['7-'], ['n/a'], [5], ['99']]
-    const result = await changeAndUndo(book(rows, { text: { n: { pattern: '@' } } }, {}), async (target) => {
-      target.workbook.getActiveSheet().getRange('A8').setNumberFormat('@')
+    const texts = book(rows, { text: { n: { pattern: '@' } } })
+    texts.sheets.data.cellData[7][0].s = 'text'
+    const result = await changeAndUndo(texts, async (target) => {
+      const preview = await convertToNumbers(target, { range: 'A1:A8', preview: true })
       const done = await convertToNumbers(target, { range: 'A1:A8' })
 
-      return { done, read: readRange(target, { range: 'A1:A8' }) }
+      return { preview, done, read: readRange(target, { range: 'A1:A8' }) }
     })
 
     expect(result.value.done).toEqual({
@@ -166,8 +168,10 @@ describe('converting text', () => {
       notConverted: [{ cell: 'A6', text: 'n/a' }],
       preview: false
     })
+    expect(result.value.preview).toMatchObject({ converted: 6, failed: 1, preview: true })
     expect(result.value.read.values.flat()).toEqual([1234.5, 12, -45, 0.125, -7, 'n/a', 5, 99])
     expect(result.value.read.text.flat()).toEqual(['1,234.50', '$12', '-45', '12.5%', '-7', 'n/a', '5', '99'])
+    expect(result.undone).toBe(true)
   })
 
   it('turns text dates into dates in the order given, with a date format', async () => {
@@ -189,9 +193,9 @@ describe('converting text', () => {
 
     expect(result.value).toMatchObject({ converted: 1, failed: 1, preview: true })
     expect(result.unchanged).toBe(true)
-    await withHeadlessSheets(book([['x']]), ({ univer, workbook }) => {
-      expect(() => convertToDates({ univer, workbook }, { range: 'A1', order: 'DM' })).toThrow(/order is DMY/)
-      expect(() => convertToDates({ univer, workbook }, { range: 'A1', order: 'DMY', format: 42 })).toThrow(/format is a date format/)
+    await withHeadlessSheets(book([['x']]), async ({ univer, workbook }) => {
+      await expect(convertToDates({ univer, workbook }, { range: 'A1', order: 'DM' })).rejects.toThrow(/order is DMY/)
+      await expect(convertToDates({ univer, workbook }, { range: 'A1', order: 'DMY', format: 42 })).rejects.toThrow(/format is a date format/)
     })
   })
 })
@@ -211,6 +215,23 @@ describe('filling down', () => {
     expect(result.value.read.formulas.map((row) => row[2])).toEqual([null, '=B2*2', '=B3*2', '=B4*2', '=B5*$B$2', '=B6*$B$2'])
     expect(result.value.read.values.map((row) => row[2])).toEqual(['Double', 20, 40, 60, 400, 500])
     expect(result.undone).toBe(true)
+  })
+
+  it('changes nothing, and adds no step to undo, where nothing is empty under a value', async () => {
+    const result = await changeAndUndo(book([[null, 'a'], [1, 'b']]), (target) => fillDown(target, { range: 'A1:B2' }))
+
+    expect(result.value.filled).toBe(0)
+    expect(result.unchanged).toBe(true)
+  })
+
+  it('says what to give instead', async () => {
+    await withHeadlessSheets(book(PEOPLE), async ({ univer, workbook }) => {
+      const target = { univer, workbook }
+
+      await expect(fillDown(target, { range: 'somewhere' })).rejects.toThrow(/“somewhere” is not a range: give cells like B2/)
+      await expect(trimText(target, { range: 'Nowhere!A1:B2' })).rejects.toThrow(/There is no sheet called “Nowhere”; the sheets are Data, Other/)
+      await expect(trimText(target, { range: 'A1:B2000' })).rejects.toThrow(/is beyond the end of Data/)
+    })
   })
 })
 

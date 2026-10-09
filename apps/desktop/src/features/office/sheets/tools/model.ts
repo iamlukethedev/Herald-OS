@@ -259,19 +259,19 @@ async function rewriteText(target: SheetsTarget, args: { range: unknown; sheet?:
 }
 
 /** Trim the text in a range, make runs of spaces inside it one, and take out characters that print nothing. */
-export function trimText(target: SheetsTarget, args: { range: unknown; sheet?: unknown }): Promise<{ sheet: string; range: string; cells: number; changed: number }> {
+export async function trimText(target: SheetsTarget, args: { range: unknown; sheet?: unknown }): Promise<{ sheet: string; range: string; cells: number; changed: number }> {
   return rewriteText(target, args, cleanText)
 }
 
 /** Put the text in a range in UPPER, lower, Title or Sentence case. */
-export function changeCase(target: SheetsTarget, args: { range: unknown; to: unknown; sheet?: unknown }): Promise<{ sheet: string; range: string; cells: number; changed: number; to: TextCase }> {
+export async function changeCase(target: SheetsTarget, args: { range: unknown; to: unknown; sheet?: unknown }): Promise<{ sheet: string; range: string; cells: number; changed: number; to: TextCase }> {
   const to = String(args.to ?? '').trim().toLowerCase() as TextCase
 
   if (!TEXT_CASES.includes(to)) {
     throw new Error(`Say which case: to is ${TEXT_CASES.join(', ')}`)
   }
 
-  return rewriteText(target, args, (text) => changeCaseOf(text, to)).then((result) => ({ ...result, to }))
+  return { ...(await rewriteText(target, args, (text) => changeCaseOf(text, to))), to }
 }
 
 export interface ConvertResult {
@@ -331,7 +331,7 @@ const isGeneral = (format: string) => !format || format.toLowerCase() === 'gener
  * and negatives in parentheses or with a trailing minus. A cell without a number format of its own
  * gets one that shows the number as the text did ("12.5%" as 0.0%).
  */
-export function convertToNumbers(target: SheetsTarget, args: { range: unknown; preview?: unknown; sheet?: unknown }): Promise<ConvertResult> {
+export async function convertToNumbers(target: SheetsTarget, args: { range: unknown; preview?: unknown; sheet?: unknown }): Promise<ConvertResult> {
   const area = areaOf(target.workbook, args.range, args.sheet)
 
   return convertText(target, area, flag(args.preview, 'preview', false), (text, format) => {
@@ -355,7 +355,7 @@ export const DATE_FORMATS = ['yyyy-mm-dd', 'd mmm yyyy', 'dd/mm/yyyy', 'mm/dd/yy
  * name; a time may follow. They get the date format `format` (yyyy-mm-dd unless given; with the
  * time when the text has one).
  */
-export function convertToDates(target: SheetsTarget, args: { range: unknown; order: unknown; format?: unknown; preview?: unknown; sheet?: unknown }): Promise<ConvertResult & { order: DateOrder }> {
+export async function convertToDates(target: SheetsTarget, args: { range: unknown; order: unknown; format?: unknown; preview?: unknown; sheet?: unknown }): Promise<ConvertResult & { order: DateOrder }> {
   const order = String(args.order ?? '').trim().toUpperCase() as DateOrder
 
   if (!DATE_ORDERS.includes(order)) {

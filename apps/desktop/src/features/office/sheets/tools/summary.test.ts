@@ -194,6 +194,11 @@ describe('summaries', () => {
       expect(readRange(target, { range: 'A1:B6', sheet: 'Summary' }).values).toEqual([['Region', 'Sum of Amount'], ['East', 7], ['Grand total', 7], [null, null], [null, null], [null, null]])
       await expect(refreshSummary(target, { sheet: 'Notes' })).rejects.toThrow(/There is no summary on Notes/)
       await expect(refreshSummary(target, { summary: 'summary-9' })).rejects.toThrow(/There is no summary “summary-9” here/)
+
+      target.workbook.getSheetByName('Summary')!.insertRowsBefore(0, 2)
+      await writeRange(target, { range: 'A1', sheet: 'Summary', values: [['A title over the summary']] })
+      await expect(refreshSummary(target, {})).rejects.toThrow(/The summary that was at A1:B3 is not there as it was made/)
+      expect(readRange(target, { range: 'A1', sheet: 'Summary' }).values).toEqual([['A title over the summary']])
     })
   })
 
