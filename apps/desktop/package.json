@@ -1,7 +1,7 @@
 {
   "name": "@herald-os/desktop",
   "productName": "Herald OS",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "private": true,
   "description": "The Herald OS shell: menu bar, dock, windows and apps for an agent-native operating system.",
   "author": "Luke The Dev",

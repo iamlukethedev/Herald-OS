@@ -9,7 +9,7 @@ on:
     inputs:
       tag:
         description: The release to install
-        default: v0.1.0-alpha.2
+        default: v0.1.0-alpha.3
 
 permissions:
   # Write, only so a draft release (visible with push access) can be tested before it is published.
