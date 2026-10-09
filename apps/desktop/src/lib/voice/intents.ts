@@ -175,8 +175,10 @@ const THING = `(?:${DOCUMENTS}|${PARTS})s?\\b`
 const OFFICE_REQUESTS: readonly RegExp[] = [
   // "Make a budget for my trip", "create a presentation about volcanoes", "put together an itinerary".
   new RegExp(`^(?:i (?:need|want) |(?:make|create|build|design|generate|prepare|produce|put together|set up|start|draft|write|do|give|get)(?: me| us| for me)? )(?:(?:an?|some|the|my|our|this|that|new) )?(?:${MODIFIER} ){0,3}?(?:${DOCUMENTS})s?(?=$|[,;:]| (?:${LINKS})\\b)`),
-  // "Turn this into slides", "make this a table", "convert the list into bullet points".
-  new RegExp(`^(?:turn|convert|change|make|format|reformat|transform|put|present|lay out|split|merge) (?:it|this|that|these|those|them|everything|(?:the|this|that|my|our) (?:${MODIFIER} ){0,3}?[\\w'-]+)(?: (?:into|in to|to|as|in))? (?:(?:an?|some|the) )?(?:${MODIFIER} ){0,2}?${THING}`),
+  // "Turn this into slides", "make this a table", "put my budget table on a slide".
+  new RegExp(`^(?:turn|convert|change|make|format|reformat|transform|put|present|lay out|split|merge) (?:it|this|that|these|those|them|everything|(?:the|this|that|my|our) (?:${MODIFIER} ){0,3}?[\\w'-]+)(?: (?:into|in to|onto|on|to|as|in))? (?:(?:an?|some|the) )?(?:${MODIFIER} ){0,2}?${THING}`),
+  // A part by its number or letter: "make slide 3 a two-column comparison", "go to cell B5", "hide column C".
+  /^(?:make|turn|change|convert|format|style|move|put|merge|split|duplicate|delete|remove|hide|unhide|show|go to|jump to|select) (?:slide|page|sheet|row|column|cell)s? (?:\d+|[a-z]{1,3}\d*)\b/,
   // "Add a total row", "add a column for tax", "insert a chart"; "add … to my memory" is memory's.
   new RegExp(`^(?:add|insert|append|include) (?!.*\\bto (?:my )?memory$)(?:(?:an?|some|the|another|one more|a new|new|two|three|four|five|\\d+) )?(?:${MODIFIER} ){0,3}?${THING}`),
   // "Sum the March sales", "sort this by date", "translate this paragraph into Spanish", "fill in the rest of this column".

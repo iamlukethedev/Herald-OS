@@ -192,6 +192,10 @@ describe('Office requests', () => {
     command('sheets.open', ['open herald sheets', 'open sheets', 'open the spreadsheet app']),
     command('sheets.new', ['new spreadsheet', 'new workbook', 'start a new spreadsheet']),
     command('sheets.save', ['save the spreadsheet', 'save the workbook']),
+    command('slides.open', ['open herald slides', 'open slides', 'open the presentation app']),
+    command('slides.new', ['new presentation', 'new deck', 'new slideshow']),
+    command('slides.addSlide', ['new slide', 'add a slide']),
+    command('slides.save', ['save the presentation']),
     command('window.maximize', ['maximize', 'make it bigger', 'maximize {name}', 'make {name} bigger'], named),
     command('software.install', ['install {name}', 'get me {name}'], named)
   ]
@@ -255,6 +259,32 @@ describe('Office requests', () => {
     expect(route('remember that I make a budget every month')).toMatchObject({ command: 'memory.add', args: { text: 'I make a budget every month' } })
     expect(route('add the meeting notes to my memory')).toMatchObject({ command: 'memory.add', args: { text: 'meeting notes' } })
     expect(route('hide the sidebar')).toMatchObject({ command: 'sidebar.toggle', args: { collapsed: true } })
+  })
+
+  it('keeps the bare Herald Slides commands on the fast path and hands work on a deck to Hermes', () => {
+    expect(route('open Herald Slides')).toMatchObject({ command: 'slides.open' })
+    expect(route('open slides')).toMatchObject({ command: 'slides.open' })
+    expect(route('open the presentation app')).toMatchObject({ command: 'slides.open' })
+    expect(route('new presentation')).toMatchObject({ command: 'slides.new' })
+    expect(route('New deck.')).toMatchObject({ command: 'slides.new' })
+    expect(route('new slideshow')).toMatchObject({ command: 'slides.new' })
+    expect(route('new slide')).toMatchObject({ command: 'slides.addSlide' })
+    expect(route('Add a slide.')).toMatchObject({ command: 'slides.addSlide' })
+    expect(route('save the presentation')).toMatchObject({ command: 'slides.save' })
+
+    for (const text of [
+      'add a new slide about pricing',
+      'make a slide deck for my app launch',
+      'Turn this into slides.',
+      'add speaker notes to every slide',
+      'make slide 3 a two-column comparison',
+      'put my budget table on a slide',
+      'go to slide 3',
+      'show slide 3',
+      'Hey Hermes, create a presentation from my report'
+    ]) {
+      expect(route(text), text).toBeNull()
+    }
   })
 
   it('still types what follows "type", word for word', () => {
