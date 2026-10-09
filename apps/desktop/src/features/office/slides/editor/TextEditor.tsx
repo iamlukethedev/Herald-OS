@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef } from 'react'
 import type { Deck, SlideElement, TextBody, Theme } from '../deck.ts'
 import { findElement, findSlide, withElements } from '../deck.ts'
 import type { SlidesDocument } from '../document.ts'
+import { routeDeck } from '../sites.ts'
 import { type CellRef, fitRow, withCell } from '../tables.ts'
 import { fitText } from '../view/fit.ts'
 import { flowCss, styleText } from '../view/text-style.ts'
@@ -58,9 +59,9 @@ export function selectWordAt(editor: Editor, x: number, y: number, word = true):
   editor.view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, $at.start() + from, $at.start() + to)))
 }
 
-/** The deck with what is typed in an element (or a table's cell), and the height it grows to: the element's, or the cell's rows' together. */
+/** The deck with what is typed in an element (or a table's cell), and the height it grows to: the element's, or the cell's rows' together, connectors glued to it following. */
 function withText(deck: Deck, slideId: string, elementId: string, cell: CellRef | null, paragraphs: TextBody['paragraphs'], height: number | null): Deck {
-  return withElements(deck, slideId, new Set([elementId]), (element): SlideElement => {
+  const next = withElements(deck, slideId, new Set([elementId]), (element): SlideElement => {
     if (element.kind === 'table' && cell) {
       const typed = withCell(element, cell, (entry) => ({ ...entry, body: { ...entry.body, paragraphs } }))
 
@@ -75,6 +76,8 @@ function withText(deck: Deck, slideId: string, elementId: string, cell: CellRef 
 
     return { ...sized, body: { ...element.body, paragraphs } }
   })
+
+  return routeDeck(next, deck)
 }
 
 export function TextEditor({ doc, slideId, elementId, cell = null, onTab, body, theme }: { doc: SlidesDocument; slideId: string; elementId: string; cell?: CellRef | null; onTab?: (by: 1 | -1) => void; body: TextBody; theme: Theme }) {

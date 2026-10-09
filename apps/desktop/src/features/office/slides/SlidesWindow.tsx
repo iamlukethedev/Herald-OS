@@ -8,12 +8,14 @@ import { OfficeWindow } from '../shell/OfficeWindow.tsx'
 import type { OfficeDocument } from '../types.ts'
 import { type Deck, LAYOUTS, SLIDE_SIZES, TRANSITIONS } from './deck.ts'
 import { $textSession } from './editor/active.ts'
+import { BORDER_CHOICES, BORDER_LABELS } from './editor/borders.ts'
 import * as commands from './editor/commands.ts'
+import { chooseSheet, FromSheetDialog } from './editor/FromSheetDialog.tsx'
 import { Toolbar } from './editor/Toolbar.tsx'
 import { LAYOUT_NAMES } from './layouts.ts'
 import { ALIGN_LABELS, type AlignEdge, ARRANGE_LABELS } from './model.ts'
 import { Present } from './Present.tsx'
-import { INSERTABLE, SHAPE_NAMES } from './shapes.ts'
+import { SHAPE_GROUPS, SHAPE_NAMES } from './shapes.ts'
 import { SlideEditor } from './SlideEditor.tsx'
 import { decks, slidesSession } from './store.ts'
 import { THEMES } from './themes.ts'
@@ -71,20 +73,52 @@ const TABLE_SIZES = [
   [6, 5]
 ] as const
 
+/** The most shapes a submenu lists, so it stays in the window; a bigger group goes on in a second submenu. */
+const SHAPES_PER_MENU = 20
+
+const titleCase = (name: string): string => name.replace(/\b(?!and\b|of\b|to\b)\w/g, (letter) => letter.toUpperCase())
+
+/** A submenu of shapes for each of the gallery's groups (a submenu's own submenus do not open, so these are the Insert menu's own). */
+function shapeCommands(): OfficeCommand[] {
+  return SHAPE_GROUPS.flatMap((group) => {
+    const name = titleCase(group.name)
+    const more = `More ${name.endsWith('Shapes') ? name : `${name} Shapes`}`
+    const parts = Math.ceil(group.kinds.length / SHAPES_PER_MENU)
+    const size = Math.ceil(group.kinds.length / parts)
+
+    return Array.from({ length: parts }, (_, part) => ({
+      id: `shapes-${group.name}-${part}`,
+      label: part ? `${more}${parts > 2 ? ` (${part})` : ''}` : name,
+      enabled: hasDeck,
+      run: () => {},
+      submenu: group.kinds.slice(part * size, (part + 1) * size).map((kind) => ({ id: `shape-${kind}`, label: SHAPE_NAMES[kind], run: () => commands.insertShape(kind) }))
+    }))
+  })
+}
+
 function insertCommands(): OfficeCommand[] {
   return [
     { id: 'insert-text', label: 'Text Box', enabled: hasDeck, run: commands.insertText },
-    { id: 'insert-shape', label: 'Shape', enabled: hasDeck, run: () => {}, submenu: INSERTABLE.map((kind) => ({ id: `shape-${kind}`, label: SHAPE_NAMES[kind], run: () => commands.insertShape(kind) })) },
-    { id: 'insert-line', label: 'Line', enabled: hasDeck, run: () => commands.insertLine('none') },
+    ...shapeCommands().map((command, index) => ({ ...command, dividerBefore: index === 0 })),
+    { id: 'insert-line', label: 'Line', enabled: hasDeck, run: () => commands.insertLine('none'), dividerBefore: true },
     { id: 'insert-arrow', label: 'Arrow', enabled: hasDeck, run: () => commands.insertLine('triangle') },
-    { id: 'insert-picture', label: 'Picture…', enabled: hasDeck, run: () => commands.pickPictures() },
+    {
+      id: 'insert-connector',
+      label: 'Connector',
+      enabled: hasDeck,
+      run: () => {},
+      submenu: (Object.keys(commands.CONNECTOR_NAMES) as (keyof typeof commands.CONNECTOR_NAMES)[]).map((preset) => ({ id: `connector-${preset}`, label: commands.CONNECTOR_NAMES[preset], run: () => commands.drawConnector(preset) }))
+    },
+    { id: 'insert-picture', label: 'Picture…', enabled: hasDeck, run: () => commands.pickPictures(), dividerBefore: true },
     {
       id: 'insert-table',
       label: 'Table',
       enabled: hasDeck,
       run: () => {},
       submenu: TABLE_SIZES.map(([rows, columns]) => ({ id: `table-${rows}-${columns}`, label: `${rows} rows, ${columns} columns`, run: () => commands.insertTable(rows, columns) }))
-    }
+    },
+    { id: 'insert-sheet-table', label: 'Table from Spreadsheet…', enabled: hasDeck, run: () => void chooseSheet().catch((error: unknown) => commands.notify(`Could not open a spreadsheet: ${messageOf(error)}`)) },
+    { id: 'insert-document-slides', label: 'Slides from Document…', enabled: hasDeck, run: () => void commands.insertSlidesFromDocument().catch((error: unknown) => commands.notify(`Could not open a document: ${messageOf(error)}`)) }
   ]
 }
 
@@ -101,7 +135,15 @@ function tableCommands(): OfficeCommand[] {
     { id: 'table-column-left', label: 'Insert Column Left', enabled: hasTable, run: () => commands.insertColumn('left') },
     { id: 'table-column-right', label: 'Insert Column Right', enabled: hasTable, run: () => commands.insertColumn('right') },
     { id: 'table-delete-row', label: 'Delete Row', enabled: () => commands.hasTableCell(), run: () => commands.deleteRows(), dividerBefore: true },
-    { id: 'table-delete-column', label: 'Delete Column', enabled: () => commands.hasTableCell(), run: () => commands.deleteColumns() }
+    { id: 'table-delete-column', label: 'Delete Column', enabled: () => commands.hasTableCell(), run: () => commands.deleteColumns() },
+    {
+      id: 'table-borders',
+      label: 'Borders',
+      enabled: hasTable,
+      run: () => {},
+      dividerBefore: true,
+      submenu: BORDER_CHOICES.map((choice) => ({ id: `borders-${choice}`, label: BORDER_LABELS[choice], run: () => commands.setBorders(choice), dividerBefore: choice === 'top' || choice === 'none' }))
+    }
   ]
 }
 
@@ -163,7 +205,10 @@ function arrangeCommands(): OfficeCommand[] {
         { id: 'distribute-h', label: 'Horizontally', run: () => commands.distributeSelection('horizontal') },
         { id: 'distribute-v', label: 'Vertically', run: () => commands.distributeSelection('vertical') }
       ]
-    }
+    },
+    { id: 'group', label: 'Group', shortcut: 'mod+alt+g', enabled: () => notTyping() && commands.canGroup(), run: () => commands.groupSelection(), dividerBefore: true },
+    { id: 'ungroup', label: 'Ungroup', shortcut: 'mod+alt+shift+g', enabled: () => notTyping() && commands.canUngroup(), run: () => commands.ungroupSelection() },
+    { id: 'convert-to-shapes', label: 'Convert to Shapes', enabled: () => notTyping() && commands.canConvert(), run: () => commands.convertSelection() }
   ]
 }
 
@@ -182,6 +227,7 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
       officeMenus({
         session: slidesSession,
         canSave: true,
+        file: [{ id: 'new-from-document', label: 'New from Document…', run: () => void commands.newFromDocument().catch((error: unknown) => commands.notify(`Could not open a document: ${messageOf(error)}`)), dividerBefore: true }],
         edit: [
           { id: 'cut', label: 'Cut', shortcut: 'mod+x', enabled: canEditSelection, run: () => commands.copyToClipboard(true), dividerBefore: true },
           { id: 'copy', label: 'Copy', shortcut: 'mod+c', enabled: canEditSelection, run: () => commands.copyToClipboard(false) },
@@ -256,6 +302,7 @@ export function SlidesWindow({ payload }: { payload?: Record<string, unknown> })
         }}
         renderEditor={(doc) => <SlideEditor doc={doc} />}
       />
+      <FromSheetDialog />
       <Present />
     </div>
   )
