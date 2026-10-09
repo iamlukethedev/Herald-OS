@@ -31,7 +31,7 @@ type Prepared =
   | { ok: true; path: string; contentType: string; override: boolean; content: Uint8Array | string; relationships: Relationship[] }
   | { ok: false; reason: Refusal['refused'] }
 
-/** The name series a part belongs to: "xl/media/image3.png" gives "xl/media/image1.png", "xl/media/image2.png", … */
+/** The name series a part belongs to: "xl/media/image3.png" gives "xl/media/image1.png", "xl/media/image2.png" and so on. */
 function series(path: string): (n: number) => string {
   const slash = path.lastIndexOf('/')
   const [, stem, extension] = /^(.*?)\d*(\.[^.]*)?$/.exec(path.slice(slash + 1)) ?? []
