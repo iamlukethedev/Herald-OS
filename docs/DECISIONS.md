@@ -417,8 +417,8 @@ Compositor lacks. What only Herald has goes in fields of its own beside a record
 ## ADR-021: Herald Office: Sheets on Univer, Docs on TipTap, Slides on a slide editor of its own
 
 **Status: Proposed.** Rewritten for what Herald Office's second phase built, and extended with
-the depth phases of Sheets and Docs; it becomes final once the three apps have been polished and
-shipped.
+the depth phases of Sheets, Docs and Slides; it becomes final once the three apps have been polished
+and shipped.
 
 Herald OS needs documents, spreadsheets and presentations that Hermes can work in while the person
 watches, and that open and save the files people already have. Herald Docs, Herald Sheets and
@@ -522,8 +522,9 @@ themselves go through the command registry (ADR-014).
   file's JSON with the same code, one transaction and one step to undo. TipTap was chosen over
   Univer Docs for native editing in the page (Chromium's spellcheck with suggestions on
   right-click, input methods, and copy and paste with other apps), a schema usable without a
-  window, a far smaller bundle (the Docs window loads 0.53 MB, 0.17 MB compressed, against 3.1 MB
-  and 0.85 MB for Univer Docs; 0.33 MB of it is TipTap and ProseMirror, shared with Slides), and
+  window, a far smaller bundle (when the engine was chosen, the Docs window's own chunks were
+  0.53 MB, 0.17 MB compressed, against 3.1 MB and 0.85 MB for Univer Docs; 0.33 MB of it is TipTap
+  and ProseMirror, shared with Slides), and
   the maintainer's good experience with a TipTap-based editor. Only TipTap's open-source packages
   are used, at 3.31.4: none of its paid extensions or cloud services.
 - **Word files through a reader of our own and the docx package.** A `.docx` (or a `.docm`,
@@ -570,55 +571,199 @@ themselves go through the command registry (ADR-014).
   Statistics count words, characters, paragraphs and sentences, with reading and speaking times
   and how easy the text is to read.
 - **Herald Slides on a DOM slide editor of its own, with PowerPoint's model.** A deck is
-  PowerPoint's model in Herald's JSON: slides in points on a fixed 16:9 or 4:3 surface, layouts
-  with placeholders, themes of ten colour slots with a heading and a body font, shapes as
-  DrawingML's presets with their adjust values, pictures, speaker notes, and tables as PowerPoint
+  PowerPoint's model in Herald's JSON: slides in points on a fixed 16:9 or 4:3 surface, a slide
+  master with a layout for each of Herald's eight (each with its placeholders, drawings and
+  background), header and footer settings, themes of ten colour slots with a heading and a body
+  font, transitions, shapes as DrawingML's presets with their adjust values or as freeform paths,
+  colour and gradient fills, lines and connectors, pictures, speaker notes, tables as PowerPoint
   builds them (a cell for every column in every row, merged cells kept whole, rows that grow with
-  their text, no rotation). The page draws it with the DOM, scaled to fit, through one view for the
-  editor, the slide list, presenting and PDF export, so a PDF keeps its text as text. Text boxes,
-  shapes and table cells edit rich text through TipTap in the element's own text area, so input
-  methods, spellcheck and the clipboard work as they do in Docs. The deck API (`slides/model.ts`)
-  makes each change one step to undo, on the deck in a window or on a file on disk, which is not
-  written over when reading it lost something.
+  their text, no rotation, each cell's own borders), groups, and the objects Herald keeps without
+  editing them; a slide may have a theme and a transition of its own. The page draws it with the
+  DOM, scaled to fit, through one view for the editor, the slide list, presenting and PDF export, so
+  a PDF keeps its text as text. Text boxes, shapes and table cells edit rich text through TipTap in
+  the element's own text area, so input methods, spellcheck and the clipboard work as they do in
+  Docs. The deck API (`slides/model.ts`) makes each change one step to undo, on the deck in a window
+  or on a file on disk, which is not written over when reading it lost something.
 - **Why not the Canvas engine or Univer Slides.** The first draft drew slides with the Herald
   Canvas engine, which composited a 1920 by 1080 slide in about 18 ms but could not edit rich text:
   the caret, selection, input methods, spellcheck and copy and paste would all have been Herald's
   to build on a canvas. Univer Slides' open-source packages are a skeleton with no Facade API: in
   1.0.3 a new slide does not appear in the slide list, moving an element does nothing, slide edits
   cannot be undone, and there is no present mode, layouts or themes.
-- **PowerPoint files through PptxGenJS and a reader of our own.** PptxGenJS (MIT) writes the
-  `.pptx`: a slide layout for each of Herald's layouts with real placeholders, text with its runs
-  and lists, preset shapes, pictures with their crops, backgrounds, the theme, transitions, notes
-  and tables. A finishing pass writes what PptxGenJS cannot say, such as table frames and grids
-  PowerPoint accepts and content types only for the parts a file has, and tests check that every
-  part has a content type and every relationship a part. Files are read with JSZip and Herald's
-  own DrawingML reader: the slide size, text with inherited placeholder formatting, shapes,
-  pictures, backgrounds, notes, positions, flips and rotation, and tables with their table styles
-  worked out into each cell.
-- **Herald's deck inside the file.** A saved file carries Herald's own copy of the deck as a part
-  of its own (`herald/deck.json`, with its content type and a package relationship), which
-  PowerPoint, Keynote and LibreOffice pass over, and a fingerprint of the slides as written. Herald
-  reopens its own files exactly from that copy, and reads a file another app has changed since
-  from its slides. Pictures are not stored twice: the copy names the media parts the slides use.
-- **What Slides costs.** The Slides window loads 0.43 MB (0.13 MB compressed), most of it the
-  TipTap chunk it shares with Docs; PptxGenJS and the finishing pass (0.29 MB) load only when a
-  deck is saved, and the reader (44 KB) and JSZip (96 KB) only when one is opened. Herald maintains
-  the reader and the finishing pass itself, and the pass depends on how PptxGenJS lays out what it
-  writes, so a PptxGenJS upgrade waits for the export tests.
+- **A master and layouts that pass their look down, as PowerPoint's do.** A deck's master (Herald's
+  own for its size unless the deck has one of its own) holds the background and drawings slides show
+  behind their own, the title and text placeholders whose look the layouts take, and the date,
+  footer and slide number placeholders; each of the eight layouts has its own placeholders,
+  drawings, background and name, and says whether the master's drawings show on its slides (a slide
+  may hide them for itself too). A slide's placeholders are copies of its layout's, so a change
+  passes down: a change to a placeholder of the master reaches the layouts' placeholders of its
+  role, and a change to a layout's placeholder reaches its slides' (the first title with the first
+  title, and so on), aspect by aspect and only where the value is still the one being changed: the
+  box (to half a point), the prompt, the text's anchor, each part of the run look (font, size,
+  colour, bold, italic, underline, strike, highlight) and the paragraph settings that pass on
+  (alignment, lists and numbering, line spacing, space before and after, margin and indent).
+  Whatever a layout or a slide made its own stays. Reading a file, the master most slides use
+  becomes the deck's, with the first of its layouts that maps to each of Herald's; the fidelity
+  report names the other masters and layouts.
+- **The header and footer in the master's places.** The date, footer and slide number show where the
+  master puts them (or a layout's own place for them) and as they look there, and the deck's header
+  and footer settings say which show and what they say: the date of the day in one of PowerPoint's
+  four date formats or a text that stays, the slide's number (hidden slides counted, as PowerPoint
+  numbers them) and a footer text, left off title slides when asked. A file gets them as
+  PowerPoint's own placeholders on the master, the layouts and the slides that show them, the date
+  of the day and the number as the fields PowerPoint keeps up to date. A file carries them slide by
+  slide, so reading one, the deck shows each where most slides carry it, with the text most of them
+  hold, and the fidelity report says where that changed a slide.
+- **The master view is the slide editor in a mode of its own.** Slide Master turns the master and
+  its layouts into the slides of a deck of their own (the master's on the Blank layout, then one for
+  each layout, the master drawn behind each as its slides show it), and the same editor edits that
+  deck, its slide list and tools included, under a bar for what only a master has (a logo,
+  backgrounds, the header and footer, the theme, a layout's name and whether it shows the master's
+  drawings, and putting Herald's master back). Each change there goes back into the deck's master,
+  passed down as above, as one step of the deck's own history: undo and redo stay the deck's while
+  the view is open and after it closes, a change Hermes makes to the slides meanwhile is a step of
+  the same history, and what is saved and presented is always the deck itself.
+- **Themes: Herald's thirteen, the person's own, and a theme for chosen slides.** Elements name
+  theme colour slots and the theme's two fonts, so a theme repaints a deck without touching what was
+  picked by hand. Herald's thirteen themes (four with a gradient between their own colours as their
+  background) keep text at 4.5:1 or better on both backgrounds and accents at 3:1 or better on the
+  first, which a test checks, in a Mac's fonts with look-alikes elsewhere. A theme for the whole
+  deck takes slides' own themes away and brings its background to the master where the master had
+  none or the old theme's; picked slides get it as a theme of their own, which a PowerPoint file
+  keeps as a master of their own (a copy of the deck's with that theme and its layouts), and which
+  reading a file gives the slides whose master's theme is not the deck's. The theme editor sets a
+  theme's name, ten colours, two fonts and, if wanted, a gradient between two of its colours as its
+  background, drawn on two sample slides as it changes, with a warning where text would read below
+  4.5:1. Saved, a theme goes onto the deck or the picked slides and among the person's own themes,
+  kept for every deck in one file, `office/slide-themes.json` in the Herald OS data folder
+  (`~/.hermes/herald-os`), written whole on every change, one save after another, and checked as a
+  deck's theme is when read; their ids (`custom-` and the name) never take a built-in theme's place.
+- **Transitions as PowerPoint names them.** A slide comes in by its own transition or by the deck's:
+  none, fade, push, wipe, cover, uncover, split or zoom, each with the way it goes (push, wipe,
+  cover and uncover from the right, left, bottom or top; split in or out, across or up and down;
+  zoom in or out) and how long it takes (500 ms unless set). Present mode plays them as Web
+  Animations keyframes on the slide coming in and the one before it, going back plays them
+  backwards, and with motion reduced each is a fade of at most 180 ms. A transition chosen for the
+  deck is every slide's, so it takes slides' own away; Apply Transition to All Slides gives every
+  slide the same one and makes its kind the deck's. A file gets each as PowerPoint's own element
+  with its duration (PowerPoint 2010's `p14:dur`) and the nearest of PowerPoint 2007's speeds for
+  apps that do not read it. Reading one, PowerPoint's other transitions become the nearest one
+  Herald plays, which the fidelity report says, and it names automatic slide timings and transition
+  sounds as not kept.
+- **Groups as tags on elements, and connectors glued to connection sites.** A grouped element stays
+  an element of its slide and names its groups by ids, outermost first, so groups nest while each
+  member draws, edits and keeps its place in the drawing order as any other; a click picks the
+  outermost group, ungrouping takes that one away, and placeholders are never grouped. A file gets
+  them as nested `p:grpSp`, each where its first member is in the drawing order, and reading one
+  turns its groups into tags again. A connector is a line with one of DrawingML's nine connector
+  presets (straight, or bent or curved through one to four turns, with their adjust values) whose
+  ends may be glued to connection sites, numbered as DrawingML numbers them for each shape, so a
+  connector read from a file lands where PowerPoint put it and one written (`p:cxnSp` with its
+  `a:stCxn` and `a:endCxn`) stays glued there. A glued end follows its shape as it moves, resizes or
+  turns, and comes loose when the shape goes or the end is dragged off its site.
+- **DrawingML's own geometry: every preset Herald keeps, gradients, freeforms and cell borders.**
+  Herald keeps 103 of DrawingML's preset shapes under their DrawingML names, all offered in seven
+  groups, each worked out from DrawingML's preset definition and written line for line in its
+  formula language (the adjust values with their defaults, the guides, the paths with the parts
+  PowerPoint shades or leaves unfilled, and the text rectangle), so a shape here and the same shape
+  in PowerPoint have one outline. A preset outside them reads as the nearest one Herald draws, which
+  the fidelity report says. Fills and backgrounds may be linear or radial gradients, whose stops,
+  like any colour, may name theme colours and so follow the theme. Freeforms come from files:
+  DrawingML's custom geometry becomes SVG path data with absolute moves, lines, curves and closes
+  only (arcs turned into cubic curves of at most a quarter turn), each written back as its DrawingML
+  counterpart. A table cell may have a line of its own on each side, none, or the table's, drawn
+  from the Table menu and the formatting bar in the pen PowerPoint's table tools use.
+- **Kept objects: what Herald does not edit, as the file had it.** A chart, a SmartArt graphic or an
+  embedded object read from a PowerPoint file becomes an element that keeps its graphic frame's XML
+  as the file wrote it (the markup choice around it included) and the tree of parts it names, each
+  with its relationship type, content type and bytes. Herald draws it from its box: the picture the
+  file keeps for it (a chart's fallback picture, an embedded object's own), SmartArt's drawing
+  placed from the box's top left and stretched with it, or a labelled box. It moves, resizes, turns,
+  copies and deletes as any element; a saved file gets its frame back in its place in the drawing
+  order, moved and sized to its box, and its parts copied in under fresh names with relationships of
+  their own, so objects copied from one file never share a part. Convert to Shapes turns SmartArt
+  into a group of its shapes to edit, and what it kept for PowerPoint goes with it. Videos and
+  sounds are not kept: a video shows as its poster frame and a sound is left out, as the fidelity
+  report says.
+- **Decks from documents and tables from sheets, by rule.** A document Herald Docs opens (a Word
+  document, Markdown or plain text) becomes a deck, or slides in one, laid out by rule: its title
+  makes a title slide, its headings section headers and slides of bullets, and its pictures, tables,
+  quotes and code slides in the layouts made for them. How much text a slide holds is estimated from
+  its placeholder's width and text size, so a long section goes on over further slides; a paragraph
+  never splits between two, and one too long for a slide of its own is shortened, with the section's
+  text in the notes. The same document always makes the same slides. A range of a sheet Herald
+  Sheets opens (an Excel workbook or CSV) becomes a table of the text its cells show, numbers in
+  their formats, on the slide in front, sized to its text, or on slides of its own after it, going
+  on over further slides under its header row when it is too tall for one. The converters load only
+  when a file is picked. Hermes's `slides.fromDocument` and `slides.insertRange` run the same code,
+  with the heading level that starts a slide and speaker notes for every paragraph as options of
+  the rules; fields read as the text they show, a note's marker stays with the note in the speaker
+  notes, and a table of contents is passed over.
+- **The presenter view, and the audience window as one named window.** The presenter view shows the
+  slide in front large and the next one, the speaker notes at the size the presenter sets, the time
+  taken, the clock and the slide counter; the keys of every window the presentation shows in move
+  the one presentation state they all draw. With one display, or when asked, it is a split view in
+  Herald's window whose slide in front is the one the audience sees. When the system reports another
+  display, the page opens one window named `herald-slides-audience` on an empty page with
+  `window.open`, and main allows only that name on that page, and only when a display other than the
+  opener's is there (else it refuses, and the split view is used): a frameless window full screen on
+  that display, with a fixed title, no preload, sandboxed, its navigation and its own windows
+  refused, closed with its opener. `electron/window.ts` and `electron/shell/panels.ts` ask
+  `audienceWindow()` first and answer every other `window.open` as before. The page draws the slides
+  into the window through a React portal, with copies of its style sheets, so no page loads there;
+  closing the window ends the presentation. On Herald OS Linux a niri rule in
+  `linux/niri/config.kdl` matches the window by its title and opens it full screen without taking
+  the focus, so the keys stay with the presenter view.
+- **PowerPoint files through PptxGenJS and a reader of our own.** PptxGenJS (MIT) writes the `.pptx`
+  package: each slide's text with its runs and lists, preset shapes, lines, pictures, tables,
+  backgrounds and notes, and, in a second package, the master's and layouts' drawings on slides of
+  their own. A finishing pass writes what PptxGenJS cannot say: the masters, layouts and themes
+  whole from the deck in place of the one master and layout PptxGenJS writes, each slide's shapes as
+  the deck has them (paragraph settings, adjust values, freeforms, gradients, crops, tables cell by
+  cell, connectors, groups and kept objects), the date, footer and slide number, each slide's
+  transition, and content types only for the parts a file has; tests check that every part has a
+  content type and every relationship a part. Files are read with JSZip and Herald's own DrawingML
+  reader, which follows parts through their relationships as PowerPoint does: the slide size, the
+  master most slides use with its layouts, text with what its placeholder, layout, master and theme
+  lend it, shapes, pictures, lines and connectors, groups, backgrounds, notes, positions, flips and
+  rotation, tables with their table styles worked out into each cell, footers, transitions and the
+  objects Herald keeps.
+- **Herald's deck inside the file.** A saved file carries Herald's own copy of the deck as a part of
+  its own (`herald/deck.json`, with its content type and a package relationship), which PowerPoint,
+  Keynote and LibreOffice pass over, and a fingerprint of the slides as written. Herald reopens its
+  own files exactly from that copy, and reads a file another app has changed since from its slides.
+  Nothing is stored twice: the copy names the media part holding each picture (a kept object's too)
+  and, since its version 2, the part each kept object's part was copied to. A version 1 copy, as the
+  second phase wrote it, still opens exactly: the reader takes every version up to its own, and what
+  such a deck never had takes its default (Herald's own master for its size, no date, footer or
+  slide number, the deck's transition on every slide). A Herald that reads only version 1 reads a
+  version 2 file from its slides.
+- **What Slides costs.** PptxGenJS and the finishing pass load only when a deck is saved, the reader
+  and JSZip only when one is opened, and the Word, Markdown and Excel readers only when slides are
+  made from such a file. As the second phase measured it, the Slides window loaded 0.43 MB (0.13 MB
+  compressed), most of it the TipTap chunk it shares with Docs, PptxGenJS and the finishing pass
+  0.29 MB, the reader 44 KB and JSZip 96 KB. Herald maintains the reader and the finishing pass
+  itself, and the pass depends on how PptxGenJS lays out what it writes, so a PptxGenJS upgrade
+  waits for the export tests.
 - **What the depth phases cost.** Measured as what a window loads beyond the shell's main chunk,
   before and after them: the Sheets window grew from 7.1 MB to 7.7 MB (1.9 MB to 2.1 MB
   compressed) with the drawing, comment and note plugins and the data tools' dialogs, ECharts adds
   0.57 MB (0.19 MB compressed) the first time a chart shows, and the `.xlsx` worker grew from
   1.09 MB to 1.19 MB; the Docs window grew from 0.86 MB to 1.02 MB (0.29 MB to 0.34 MB
-  compressed) with pagination, comments, templates and their dialogs; the shell's main chunk grew
-  by 0.04 MB.
+  compressed) with pagination, comments, templates and their dialogs; the Slides window grew from
+  0.75 MB to 0.97 MB (0.25 MB to 0.31 MB compressed) with the master view, the theme, transition
+  and header and footer panels and the presenter view, PptxGenJS with the finishing pass from
+  0.29 MB to 0.31 MB, and the reader from 44 KB to 61 KB; the shell's main chunk grew by 0.06 MB,
+  the commands for all three apps included.
 - **Hermes in the depth features.** Each depth feature is a command on its app's model API (35
-  for Sheets, 26 for Docs), so Hermes, voice, the command bar and `herald-os os` reach them alike,
-  and the bridge's `sheets` and `docs` tools have an action for each. Reading is `read`, changing
-  is `act`, and removing what the person made (a chart, a name, validation rules, a comment, a
-  note, a header or footer, a section break, a table of contents) is `mutate`, which asks. An edit
-  batch asks as its most guarded op does, its ops matched in any case as the shell takes them, and
-  a change to a file that is not open asks every time unless it only previews. Review > Review
+  for Sheets, 26 for Docs, 25 for Slides), so Hermes, voice, the command bar and `herald-os os`
+  reach them alike, and the bridge's `sheets`, `docs` and `slides` tools have an action for each.
+  Reading is `read`, changing is `act`, and removing what the person made (a chart, a name,
+  validation rules, a comment, a note, a header or footer, a section break, a table of contents, an
+  element of the master or a layout, a custom theme) or resetting the master is `mutate`, which
+  asks. An edit batch asks as its most guarded op does, its ops matched in any case as the shell
+  takes them, and a change to a file that is not open asks every time unless it only previews.
+  Slides' `fromDocument` and `insertRange` run the editor's own conversions. Review > Review
   with Hermes goes through the document's Ask Hermes bar: Hermes reads the document and leaves its
   clarity, grammar and tone comments on exact passages in one `add_comments` call, signed Hermes
   and one step to undo, without changing the text.
@@ -633,11 +778,13 @@ themselves go through the command registry (ADR-014).
   changes (shown accepted), a section's own page numbering, equations, embedded objects, charts
   and SmartArt, text in columns and macros among others; for a workbook, what its parts hold that
   Sheets neither maps nor keeps; for a presentation, each element counted as kept, approximated or
-  left out, with its charts, SmartArt, media, animations, embedded fonts, OLE objects and macros
-  named.
-  Main copies the original into `office-backups` under the Herald OS data folder the first time
-  Herald saves over it in a session, with a cap on their size and age. Herald saves a document by
-  itself only after the person has saved it once, and stops when a save would lose something new.
+  left out, with the reasons (videos shown as their poster frame and sounds not kept, among others),
+  and what of the deck Herald does not keep named: animations, automatic slide timings, transition
+  sounds, embedded fonts, comments, sections, custom shows, masters besides the one most slides use,
+  layouts Herald has no place for, and macros. Main copies the original into `office-backups` under
+  the Herald OS data folder the first time Herald saves over it in a session, with a cap on their
+  size and age. Herald saves a document by itself only after the person has saved it once, and stops
+  when a save would lose something new.
 - **OpenDocument through LibreOffice, later.** Main can convert `.odt`, `.ods` and `.odp` with
   headless LibreOffice when it is installed, but no window converts through it yet, so the three
   formats stay off in the format table (`shared/office/files.ts`).
@@ -664,6 +811,10 @@ Alternatives considered:
   pagination, what it did better, Herald Docs now has of its own.
 - **Rejected: Univer Slides or the Herald Canvas engine for Herald Slides,** for the reasons above.
   Univer Slides is worth another look once its open-source edition can present and undo.
+- **Rejected: a second Herald window for the audience,** loading the app with a preload of its own
+  and kept in step with the presenter view over IPC. The audience window is an empty page that the
+  presenter view's page draws into, so no page loads in it, it needs no preload, and both views draw
+  one presentation state.
 - **Rejected: Univer's paid tier.** Its import and export, printing, charts, pivot tables and
   collaboration are closed and licensed per deployment; Herald writes the formats and prints
   itself, draws its charts with ECharts and summarizes tables with formulas.
