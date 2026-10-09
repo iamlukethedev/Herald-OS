@@ -13,11 +13,13 @@ import { Color, FontFamily, FontSize, TextStyle } from '@tiptap/extension-text-s
 import type { Schema } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
 import { CALLOUT_KINDS, type CalloutKind, cssLineHeight, hexColor, points, round, SINGLE_LINE } from '../../../../shared/office/document.ts'
+import { CommentMark, Field, Note, SectionBreak, TableOfContents, TextBox } from './nodes.ts'
 
 /*
  * Herald Docs' document schema: TipTap's own nodes and marks, with a document that keeps its page
  * and styles, paragraphs with spacing, indents and a Title or Subtitle style, callouts, page
- * breaks, tables with borders on or off and shaded cells, and pictures in the line of text. The
+ * breaks, tables with borders on or off and shaded cells, pictures in the line of text, and the
+ * fields, notes, tables of contents, section breaks, text boxes and comments of nodes.ts. The
  * editor and the headless model build their schema from this one list. Shortcuts follow Word:
  * Strike, Code and line breaks move off the keys Word uses for other things.
  */
@@ -84,13 +86,19 @@ const ParagraphLayout = Extension.create({
   }
 })
 
-/** The document, with its page size and margins and its styles' looks. */
+/** The document, with its page size and margins, its styles' looks, headers and footers, comments, and what it keeps of a Word file. */
 const DocsDocument = Node.create({
   name: 'doc',
   topNode: true,
   content: 'block+',
   addAttributes() {
-    return { page: { default: null, rendered: false }, styles: { default: null, rendered: false } }
+    return {
+      page: { default: null, rendered: false },
+      styles: { default: null, rendered: false },
+      headers: { default: null, rendered: false },
+      comments: { default: null, rendered: false },
+      kept: { default: null, rendered: false }
+    }
   }
 })
 
@@ -261,7 +269,13 @@ export function docsExtensions(options: SchemaOptions = {}): AnyExtension[] {
     DocsTableCell,
     (image ? DocsImage.extend({ addNodeView: () => image }) : DocsImage).configure({ inline: true, allowBase64: true }),
     Callout,
-    PageBreak
+    PageBreak,
+    Field,
+    Note,
+    TableOfContents,
+    SectionBreak,
+    TextBox,
+    CommentMark
   ]
 }
 
