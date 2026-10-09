@@ -1,12 +1,10 @@
-import JSZip from 'jszip'
 import { describe, expect, it, vi } from 'vitest'
 import { withHeadlessSheets } from '../../../../src/features/office/sheets/headless.ts'
 import { newSheet, type WorkbookSnapshot } from '../../workbook.ts'
-import { parseRelationships, relsPathOf } from '../opc.ts'
 import { workbookFromXlsx } from '../read.ts'
 import { xlsxFromWorkbook } from '../write.ts'
 import { attributesOf, elementsOf, firstElement } from '../xml.ts'
-import { packageProblems } from './checks.ts'
+import { openedPackage as opened, packageProblems } from './checks.ts'
 import { DASHBOARD, keptWorkbook, PNG, THEME_ACCENTS } from './fixtures.ts'
 
 /* Other features' readers and writers are left out, so these tests see only what keeping does. */
@@ -17,20 +15,6 @@ vi.mock('../comments/index.ts', () => ({ finishComments: async () => {}, readCom
 
 async function read(bytes: Uint8Array): Promise<WorkbookSnapshot> {
   return (await workbookFromXlsx(bytes, { id: 'book', name: 'Book' })).workbook
-}
-
-/** A written package, to look into. */
-async function opened(bytes: Uint8Array) {
-  const zip = await JSZip.loadAsync(bytes)
-  const text = async (path: string) => (await zip.file(path)?.async('string')) ?? ''
-  const workbook = await text('xl/workbook.xml')
-  const workbookRels = parseRelationships('xl/workbook.xml', await text('xl/_rels/workbook.xml.rels'))
-  const sheets = elementsOf(firstElement(workbook, 'sheets')?.inner ?? '', 'sheet').map(({ attributes }) => ({ name: attributes.name ?? '', sheetId: attributes.sheetId ?? '', path: workbookRels.find((rel) => rel.id === attributes['r:id'])?.target ?? '' }))
-  const relationships = async (part: string) => parseRelationships(part, await text(relsPathOf(part)))
-  const related = async (part: string, type: string) => (await relationships(part)).filter((rel) => rel.type.endsWith(`/${type}`)).map((rel) => rel.target)
-  const files = (pattern: RegExp) => Object.keys(zip.files).filter((name) => pattern.test(name))
-
-  return { zip, text, workbook, workbookRels, sheets, relationships, related, files, sheet: (name: string) => sheets.find((sheet) => sheet.name === name)?.path ?? '' }
 }
 
 describe('keeping the parts of a file that Herald does not show', () => {

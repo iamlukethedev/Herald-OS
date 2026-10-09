@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { relsPathOf } from '../opc.ts'
 
 /*
  * Workbooks as Excel writes them, with the parts Herald keeps without showing: a pivot table on a
@@ -188,6 +189,42 @@ const SPARKLINES = `<ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14=
 
 const CHART_SHEET = `${HEAD}<chartsheet xmlns="${MAIN}" xmlns:r="${R}"><sheetPr/><sheetViews><sheetView zoomScale="118" workbookViewId="0" zoomToFit="1"/></sheetViews><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/></chartsheet>`
 const CHART_SHEET_DRAWING = drawing(`<xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="8670925" cy="6292850"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${C}"><c:chart xmlns:c="${C}" xmlns:r="${R}" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor>`)
+
+export interface ExtraParts {
+  /** Parts added or replaced, by path. */
+  files?: Record<string, string | Uint8Array>
+  /** Relationships added to parts, by the part they belong to ("" for the package): id, type, target as the .rels part writes it, external. */
+  relationships?: Record<string, [string, string, string, boolean?][]>
+  /** Content types of added parts, by path. */
+  types?: Record<string, string>
+  /** Changes to parts' XML. */
+  change?: Record<string, (xml: string) => string>
+}
+
+/** A package with parts added, related and given content types, and parts changed. */
+export async function withParts(bytes: Uint8Array, extra: ExtraParts): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const text = async (path: string) => (await zip.file(path)?.async('string')) ?? ''
+
+  for (const [path, content] of Object.entries(extra.files ?? {})) {
+    zip.file(path, content)
+  }
+
+  for (const [part, entries] of Object.entries(extra.relationships ?? {})) {
+    const path = relsPathOf(part)
+    const xml = zip.file(path) ? await text(path) : relationships([])
+    zip.file(path, xml.replace('</Relationships>', `${entries.map(([id, type, target, external]) => `<Relationship Id="${id}" Type="${type}" Target="${target}"${external ? ' TargetMode="External"' : ''}/>`).join('')}</Relationships>`))
+  }
+
+  const types = Object.entries(extra.types ?? {}).map(([path, type]) => `<Override PartName="/${path}" ContentType="${type}"/>`)
+  zip.file('[Content_Types].xml', (await text('[Content_Types].xml')).replace('</Types>', `${types.join('')}</Types>`))
+
+  for (const [path, change] of Object.entries(extra.change ?? {})) {
+    zip.file(path, change(await text(path)))
+  }
+
+  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
 
 /** A workbook as Excel writes it with the parts asked for (all of them by default). */
 export async function keptWorkbook(options: KeptWorkbookOptions = {}): Promise<Uint8Array> {
