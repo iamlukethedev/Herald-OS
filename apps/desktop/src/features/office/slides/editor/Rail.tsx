@@ -1,34 +1,127 @@
-import { IconEyeOff, IconPlus } from '@tabler/icons-react'
+import { IconEyeOff, IconPlus, IconTransitionRight } from '@tabler/icons-react'
 import { memo, useMemo, useRef, useState } from 'react'
 import { cn } from '../../../../lib/cn.ts'
 import { Menu } from '../../../files/Menu.tsx'
 import type { Deck, Slide } from '../deck.ts'
-import type { SlidesDocument } from '../document.ts'
+import type { SlidesDocument, ViewOptions } from '../document.ts'
+import { layoutOf, masterOf } from '../layouts.ts'
+import { slideLayoutId } from '../masters.ts'
+import { TRANSITION_NAMES } from '../transitions.ts'
 import { SlideView } from '../view/SlideView.tsx'
 import * as commands from './commands.ts'
+import { backgroundGraphicsHidden, showMasterView, toggleBackgroundGraphics } from './master-commands.ts'
 import { useDeck } from './Stage.tsx'
 
 /*
  * The slides down the side, each drawn by the slide view at a small scale. A click brings a slide
  * to the front (with ⇧ or ⌘ it is picked as well); dragging picked slides moves them; hidden slides
- * are dimmed. Picked slides are what Duplicate, Delete and Hide work on.
+ * are dimmed and slides with a transition of their own are marked. Picked slides are what
+ * Duplicate, Delete and Hide work on. In the master view the list is the master, then its layouts
+ * under it.
  */
 
 const THUMB = 152
 
-const Thumbnail = memo(function Thumbnail({ deck, slide }: { deck: Pick<Deck, 'size' | 'theme'>; slide: Slide }) {
-  return <SlideView deck={deck} slide={slide} scale={THUMB / deck.size.width} mode="thumb" className="pointer-events-none" />
+const LAYOUT_THUMB = 124
+
+type ThumbDeck = Pick<Deck, 'size' | 'theme'> & Partial<Pick<Deck, 'master' | 'headerFooter'>>
+
+const AS_IS: ViewOptions = {}
+
+const Thumbnail = memo(function Thumbnail({ deck, slide, index, width = THUMB, options = AS_IS }: { deck: ThumbDeck; slide: Slide; index?: number; width?: number; options?: ViewOptions }) {
+  return <SlideView deck={deck} slide={slide} scale={width / deck.size.width} mode="thumb" index={index} {...options} className="pointer-events-none" />
 })
+
+/** The master view's list: the master's own slide, then each layout under it with its name. */
+function MasterSlides({ doc, view }: { doc: SlidesDocument; view: ThumbDeck }) {
+  const deck = doc.deck
+  const list = useRef<HTMLDivElement>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const master = masterOf(doc.presentation)
+  const [own, ...layouts] = deck.slides
+  const front = doc.slide.id
+  const layoutInMenu = slideLayoutId(front)
+
+  const row = (slide: Slide) => {
+    const layout = slideLayoutId(slide.id)
+    const name = layout ? layoutOf(master, layout).name : 'Slide Master'
+
+    return (
+      <button
+        key={slide.id}
+        type="button"
+        role="option"
+        aria-selected={slide.id === front}
+        aria-label={layout ? `${name} layout` : name}
+        onClick={() => doc.goTo(slide.id)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          doc.goTo(slide.id)
+          const rect = list.current?.getBoundingClientRect()
+          setMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) + (list.current?.scrollTop ?? 0) })
+        }}
+        className="flex w-full flex-col items-start gap-1 text-left"
+      >
+        <span className={cn('overflow-hidden rounded-[3px] ring-2 ring-offset-0', slide.id === front ? 'ring-accent' : 'ring-transparent hover:ring-line-strong')}>
+          <Thumbnail deck={view} slide={slide} width={layout ? LAYOUT_THUMB : THUMB} options={doc.viewOptions(slide)} />
+        </span>
+        <span className={cn('max-w-full truncate text-[11px]', slide.id === front ? 'text-fg' : 'text-fg-3')}>{name}</span>
+      </button>
+    )
+  }
+
+  return (
+    <div
+      ref={list}
+      role="listbox"
+      aria-label="Slide master and layouts"
+      tabIndex={0}
+      className="relative flex w-[196px] shrink-0 flex-col gap-2.5 overflow-y-auto border-r border-line p-3 outline-none"
+      onKeyDown={(event) => {
+        const index = doc.index
+        const last = deck.slides.length - 1
+        const to = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? last : null
+
+        if (to === null) {
+          return
+        }
+
+        doc.goTo(deck.slides[Math.max(0, Math.min(last, to))].id)
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+    >
+      {own && row(own)}
+      <div className="ml-1.5 flex flex-col gap-2.5 border-l border-line pl-3">{layouts.map(row)}</div>
+      {menu && (
+        <div className="absolute z-40" style={{ left: Math.min(menu.x, 60), top: menu.y }}>
+          <Menu
+            align="left"
+            onClose={() => setMenu(null)}
+            items={[
+              ...(layoutInMenu ? [{ id: 'graphics', label: 'Hide Background Graphics', checked: backgroundGraphicsHidden(doc), onSelect: () => toggleBackgroundGraphics(doc) }] : []),
+              { id: 'close', label: 'Close Master View', onSelect: () => showMasterView(false, doc), dividerBefore: Boolean(layoutInMenu) }
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function Rail({ doc }: { doc: SlidesDocument }) {
   useDeck(doc)
   const deck = doc.deck
-  const view = useMemo(() => ({ size: deck.size, theme: deck.theme }), [deck.size, deck.theme])
+  const view = useMemo(() => ({ size: deck.size, theme: deck.theme, master: deck.master, headerFooter: deck.headerFooter }), [deck.size, deck.theme, deck.master, deck.headerFooter])
   const list = useRef<HTMLDivElement>(null)
   const press = useRef<{ id: string; y: number; dragging: boolean } | null>(null)
   const [drop, setDrop] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const picked = new Set(doc.picked)
+
+  if (doc.mode === 'master') {
+    return <MasterSlides doc={doc} view={view} />
+  }
 
   /** Where dragged slides would go for a pointer at `y`: before the slide whose middle is below it. */
   const dropIndex = (y: number): number => {
@@ -105,42 +198,51 @@ export function Rail({ doc }: { doc: SlidesDocument }) {
         setDrop(null)
       }}
     >
-      {deck.slides.map((slide, index) => (
-        <div key={slide.id} data-rail-slide="" className="relative">
-          {drop === index && <span className="absolute -top-[7px] right-0 left-5 h-[3px] rounded-full bg-accent" />}
-          <button
-            type="button"
-            role="option"
-            aria-selected={picked.has(slide.id)}
-            aria-label={`Slide ${index + 1}${slide.hidden ? ', hidden' : ''}`}
-            onPointerDown={(event) => {
-              if (event.button === 0) {
-                press.current = { id: slide.id, y: event.clientY, dragging: false }
-                list.current?.setPointerCapture(event.pointerId)
-              }
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault()
+      {deck.slides.map((slide, index) => {
+        const transition = slide.transition?.kind ?? 'none'
 
-              if (!picked.has(slide.id)) {
-                doc.goTo(slide.id)
-              }
+        return (
+          <div key={slide.id} data-rail-slide="" className="relative">
+            {drop === index && <span className="absolute -top-[7px] right-0 left-5 h-[3px] rounded-full bg-accent" />}
+            <button
+              type="button"
+              role="option"
+              aria-selected={picked.has(slide.id)}
+              aria-label={`Slide ${index + 1}${slide.hidden ? ', hidden' : ''}${transition === 'none' ? '' : `, ${TRANSITION_NAMES[transition]} transition`}`}
+              onPointerDown={(event) => {
+                if (event.button === 0) {
+                  press.current = { id: slide.id, y: event.clientY, dragging: false }
+                  list.current?.setPointerCapture(event.pointerId)
+                }
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
 
-              const rect = list.current?.getBoundingClientRect()
-              setMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) + (list.current?.scrollTop ?? 0) })
-            }}
-            className="flex w-full items-start gap-2 text-left"
-          >
-            <span className="flex w-4 shrink-0 flex-col items-end gap-1 pt-0.5 text-[11px] text-fg-3 tabular-nums">
-              {index + 1}
-              {slide.hidden && <IconEyeOff size={11} />}
-            </span>
-            <span className={cn('overflow-hidden rounded-[3px] ring-2 ring-offset-0', slide.id === doc.slide.id ? 'ring-accent' : picked.has(slide.id) ? 'ring-accent/50' : 'ring-transparent hover:ring-line-strong', slide.hidden && 'opacity-45')}>
-              <Thumbnail deck={view} slide={slide} />
-            </span>
-          </button>
-        </div>
-      ))}
+                if (!picked.has(slide.id)) {
+                  doc.goTo(slide.id)
+                }
+
+                const rect = list.current?.getBoundingClientRect()
+                setMenu({ x: event.clientX - (rect?.left ?? 0), y: event.clientY - (rect?.top ?? 0) + (list.current?.scrollTop ?? 0) })
+              }}
+              className="flex w-full items-start gap-2 text-left"
+            >
+              <span className="flex w-4 shrink-0 flex-col items-end gap-1 pt-0.5 text-[11px] text-fg-3 tabular-nums">
+                {index + 1}
+                {slide.hidden && <IconEyeOff size={11} />}
+                {transition !== 'none' && (
+                  <span title={`${TRANSITION_NAMES[transition]} transition`}>
+                    <IconTransitionRight size={11} />
+                  </span>
+                )}
+              </span>
+              <span className={cn('overflow-hidden rounded-[3px] ring-2 ring-offset-0', slide.id === doc.slide.id ? 'ring-accent' : picked.has(slide.id) ? 'ring-accent/50' : 'ring-transparent hover:ring-line-strong', slide.hidden && 'opacity-45')}>
+                <Thumbnail deck={view} slide={slide} index={index} />
+              </span>
+            </button>
+          </div>
+        )
+      })}
       {drop === deck.slides.length && <span className="-mt-[7px] ml-5 h-[3px] shrink-0 rounded-full bg-accent" />}
       <button
         type="button"

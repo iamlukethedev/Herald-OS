@@ -2,13 +2,17 @@ import { useRef, useState } from 'react'
 import { cn } from '../../../../lib/cn.ts'
 import type { Background, Color, Slot } from '../deck.ts'
 import type { SlidesDocument } from '../document.ts'
+import { layoutOf, masterOf } from '../layouts.ts'
+import { sameBackground } from '../themes.ts'
 import { backgroundCss } from '../view/SlideView.tsx'
 import * as commands from './commands.ts'
+import { layoutInFront, setMasterViewBackground } from './master-commands.ts'
 import { ColorGrid } from './pickers.tsx'
 
 /*
  * A slide's background: the theme's, a colour, a gradient between theme colours (so it changes
- * with the theme) or a picture, for the slides picked or for all of them.
+ * with the theme) or a picture, for the slides picked or for all of them. In the master view it is
+ * the master's (every slide's whose layout has none) or the layout's in front.
  */
 
 const GRADIENTS: [Slot, Slot, number][] = [
@@ -25,17 +29,26 @@ const GRADIENTS: [Slot, Slot, number][] = [
 export function BackgroundPanel({ doc, onDone }: { doc: SlidesDocument; onDone: () => void }) {
   const [all, setAll] = useState(false)
   const file = useRef<HTMLInputElement>(null)
+  const master = doc.mode === 'master'
+  const layout = layoutInFront(doc)
   const theme = doc.deck.theme
   const current = doc.slide.background
+  // The master's is the theme's own background (a gradient, say); a layout or a slide has none of its own.
+  const none = master && !layout ? (theme.background ?? null) : null
   const apply = (background: Background | null) => {
-    commands.setBackground(background, all)
+    if (master) {
+      setMasterViewBackground(background, doc)
+    } else {
+      commands.setBackground(background, all)
+    }
+
     onDone()
   }
 
   return (
     <div className="flex w-[248px] flex-col gap-3 text-[12px] text-fg-2">
-      <button type="button" onClick={() => apply(null)} className={cn('h-8 rounded-md border border-line text-left hover:bg-white/8', !current && 'border-accent text-fg')}>
-        <span className="px-2">The theme’s background</span>
+      <button type="button" onClick={() => apply(none)} className={cn('h-8 rounded-md border border-line text-left hover:bg-white/8', sameBackground(current, none) && 'border-accent text-fg')}>
+        <span className="px-2">{layout ? 'The master’s background' : 'The theme’s background'}</span>
       </button>
       <ColorGrid theme={theme} value={current?.kind === 'solid' ? current.color : null} onPick={(color: Color | null) => color && apply({ kind: 'solid', color })} />
       <div className="text-[11px] font-medium tracking-wide text-fg-3 uppercase">Gradient</div>
@@ -77,10 +90,16 @@ export function BackgroundPanel({ doc, onDone }: { doc: SlidesDocument; onDone: 
           }
         }}
       />
-      <label className="flex items-center gap-2">
-        <input type="checkbox" checked={all} onChange={(event) => setAll(event.target.checked)} />
-        Apply to all slides
-      </label>
+      {master ? (
+        <p className="text-[11.5px] text-fg-3">
+          {layout ? `For slides with the ${layoutOf(masterOf(doc.presentation), layout).name} layout and no background of their own.` : 'For every slide whose layout has no background of its own.'}
+        </p>
+      ) : (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={all} onChange={(event) => setAll(event.target.checked)} />
+          Apply to all slides
+        </label>
+      )}
     </div>
   )
 }
