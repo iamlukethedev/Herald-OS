@@ -135,8 +135,7 @@ function Composer({
   signs = false,
   onPost,
   onEscape,
-  onCancel,
-  onLeave
+  onCancel
 }: {
   initial?: string
   placeholder: string
@@ -149,7 +148,6 @@ function Composer({
   onEscape?: (text: string) => void
   /** A Cancel button beside the one that posts. */
   onCancel?: () => void
-  onLeave?: (text: string) => void
 }) {
   const author = useStore($author)
   const account = useAccountName()
@@ -166,8 +164,11 @@ function Composer({
   }, [asks, account])
 
   useEffect(() => {
-    if (focusRequest) {
-      area.current?.focus({ preventScroll: true })
+    const element = area.current
+
+    if (focusRequest && element) {
+      element.focus({ preventScroll: true })
+      element.setSelectionRange(element.value.length, element.value.length)
     }
   }, [focusRequest])
 
@@ -220,14 +221,7 @@ function Composer({
   }
 
   return (
-    <div
-      className="flex flex-col gap-1.5"
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          onLeave?.(text)
-        }
-      }}
-    >
+    <div className="flex flex-col gap-1.5">
       {asks && (
         <label className="flex items-center gap-2 text-[11.5px] text-fg-3">
           <span className="shrink-0">Your name</span>
@@ -435,11 +429,6 @@ function DraftCard({ editor, quote, list }: { editor: Editor; quote: string; lis
         onPost={(text, author) => postComment(view, text, author)}
         onEscape={(text) => (text.trim() ? leaveComment(view) : cancelComment(view, true))}
         onCancel={() => cancelComment(view, true)}
-        onLeave={(text) => {
-          if (!text.trim()) {
-            cancelComment(view)
-          }
-        }}
       />
     </div>
   )

@@ -10,7 +10,9 @@ import { anchorIn, clampLeft, useScrollTick } from './overlay.ts'
 import { $pages, docsSession } from './store.ts'
 import { ToolButton } from './Toolbar.tsx'
 
-const WIDTH = 252
+const WIDTH = 296
+const HEIGHT = 40
+const GAP = 6
 const LEVELS = [1, 2, 3, 4, 5, 6]
 
 const levelsLabel = (levels: number): string => (levels === 1 ? 'Heading 1 only' : `Headings 1 to ${levels}`)
@@ -44,8 +46,12 @@ export function TocBar({ editor, docKey }: { editor: Editor; docKey: string }) {
     return null
   }
 
-  // Above the table, or at the top of the desk while the table runs up past it.
-  const top = Math.max(anchor.top - 46, shown.top - frame.getBoundingClientRect().top + 8)
+  // Above the table; under it when the desk has no room above; at the top of the desk while the table runs past both.
+  const deskTop = shown.top - frame.getBoundingClientRect().top
+  const deskBottom = deskTop + shown.height
+  const above = anchor.top - HEIGHT - GAP
+  const below = anchor.bottom + GAP
+  const top = above >= deskTop + GAP ? above : below + HEIGHT <= deskBottom - GAP ? below : deskTop + GAP
 
   const update = () => {
     const pages = tocPages(headingsOf(editor.state.doc), toc.levels, $pages.get()[docKey]?.headings)
