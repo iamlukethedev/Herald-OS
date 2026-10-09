@@ -1,0 +1,66 @@
+/*
+ * Reviewing on the page: commented text and tables of contents. Nothing here takes room, so the
+ * page lays out as its PDF does: highlights are backgrounds, outlines are outlines, and the grip
+ * that selects a table of contents sits in the margin beside it.
+ */
+
+/* Commented text: soft yellow, stronger for the thread in front; overlapping comments add up. */
+.docs-sheet .tiptap .docs-comment {
+  border-radius: 1px;
+  background: rgb(255 204 0 / 0.22);
+}
+
+.docs-sheet .tiptap .docs-comment.is-active {
+  background: rgb(255 184 0 / 0.42);
+  box-shadow: inset 0 -1.5px 0 rgb(214 150 0 / 0.75);
+}
+
+/* A table of contents: shaded under the pointer, outlined while selected, its entries links to their headings. */
+.docs-sheet .docs-toc {
+  position: relative;
+  border-radius: 2px;
+  cursor: default;
+}
+
+.docs-sheet .docs-toc:hover {
+  background: rgb(0 0 0 / 0.035);
+}
+
+.docs-sheet .docs-toc.is-selected {
+  outline: 2px solid rgb(47 125 255 / 0.55);
+  outline-offset: 2px;
+}
+
+.docs-sheet .docs-toc .doc-toc-entry a {
+  cursor: pointer;
+  -webkit-user-drag: none;
+}
+
+.docs-sheet .docs-toc .doc-toc-entry a:hover .doc-toc-text {
+  text-decoration: underline;
+}
+
+.docs-sheet .docs-toc-grip {
+  position: absolute;
+  top: 0;
+  left: -26px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: transparent;
+  background-image: radial-gradient(circle, #8b93a1 1.2px, transparent 1.7px);
+  background-position: 3px 3px;
+  background-size: 6px 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.docs-sheet .docs-toc:hover .docs-toc-grip,
+.docs-sheet .docs-toc.is-selected .docs-toc-grip {
+  opacity: 1;
+}
+
+.docs-sheet .docs-toc-grip:hover {
+  background-color: rgb(0 0 0 / 0.07);
+}

@@ -19,6 +19,7 @@ import {
   IconList,
   IconListCheck,
   IconListNumbers,
+  IconMessagePlus,
   IconPageBreak,
   IconPhoto,
   IconSeparatorHorizontal,
@@ -38,8 +39,9 @@ import { keysLabel } from '../../../lib/shortcuts.ts'
 import { Menu, type MenuItemDef } from '../../files/Menu.tsx'
 import * as act from './actions.ts'
 import { CALLOUT_LABELS, FONTS, HIGHLIGHTS, LINE_SPACINGS, SIZES, TEXT_COLORS } from './choices.ts'
+import { startComment } from './comments.ts'
 import { BLOCK_STYLES, styleAt } from './model.ts'
-import { $editors } from './store.ts'
+import { $editors, docsSession } from './store.ts'
 import { tableMenu } from './table-menu.ts'
 
 export function ToolButton({ label, shortcut, onClick, active, disabled, children, className }: { label: string; shortcut?: string; onClick: () => void; active?: boolean; disabled?: boolean; children: ReactNode; className?: string }) {
@@ -268,10 +270,10 @@ const MARKS = [
 export function DocsToolbar({ docKey }: { docKey: string }) {
   const editor = useStore($editors)[docKey] ?? null
 
-  return editor ? <ToolbarFor key={editor.instanceId} editor={editor} /> : <div className="min-h-10 shrink-0 border-b border-line" />
+  return editor ? <ToolbarFor key={editor.instanceId} editor={editor} docKey={docKey} /> : <div className="min-h-10 shrink-0 border-b border-line" />
 }
 
-function ToolbarFor({ editor }: { editor: Editor }) {
+function ToolbarFor({ editor, docKey }: { editor: Editor; docKey: string }) {
   const state = useEditorState({ editor, selector: ({ editor: current }) => (current.isDestroyed ? null : readState(current)) })
   const picker = useRef<HTMLInputElement>(null)
   const off = !state
@@ -337,6 +339,9 @@ function ToolbarFor({ editor }: { editor: Editor }) {
       <Divider />
       <ToolButton label="Link" shortcut="mod+k" disabled={off} active={state?.link} onClick={act.editLink}>
         <IconLink />
+      </ToolButton>
+      <ToolButton label="Comment" shortcut="mod+alt+m" disabled={off} onClick={() => startComment(editor.view, docKey) || docsSession.notify('Select some text to comment on')}>
+        <IconMessagePlus />
       </ToolButton>
       <ToolButton label="Picture" disabled={off} onClick={() => picker.current?.click()}>
         <IconPhoto />
