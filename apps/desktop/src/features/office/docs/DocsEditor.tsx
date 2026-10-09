@@ -219,9 +219,9 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
 
   return (
     <div ref={frame} className="docs-frame relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {editor && find?.key === doc.key && <FindBar key={editor.instanceId} editor={editor} replace={find.replace} at={find.at} onClose={() => $find.set(null)} />}
+      {editor && find?.key === doc.key && <FindBar key={`find-${editor.instanceId}`} editor={editor} replace={find.replace} at={find.at} onClose={() => $find.set(null)} />}
       <div className="flex min-h-0 min-w-0 flex-1">
-        {editor && <NavigationPane key={editor.instanceId} editor={editor} docKey={doc.key} />}
+        {editor && <NavigationPane key={`navigation-${editor.instanceId}`} editor={editor} docKey={doc.key} />}
         <div
           ref={desk}
           className="docs-desk min-h-0 min-w-0 flex-1 overflow-auto"
@@ -239,9 +239,9 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
             <div ref={mount} className="docs-mount" />
           </div>
         </div>
-        {editor && <CommentsPanel key={editor.instanceId} editor={editor} docKey={doc.key} />}
+        {editor && <CommentsPanel key={`comments-${editor.instanceId}`} editor={editor} docKey={doc.key} />}
       </div>
-      {editor && <PartEditors key={editor.instanceId} editor={editor} docKey={doc.key} frame={frame.current} desk={desk.current} active={active} />}
+      {editor && <PartEditors key={`parts-${editor.instanceId}`} editor={editor} docKey={doc.key} frame={frame.current} desk={desk.current} active={active} />}
       {editor && active && (
         <Fragment key={editor.instanceId}>
           <BubbleBar editor={editor} frame={frame.current} tick={tick} />

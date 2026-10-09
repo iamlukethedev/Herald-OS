@@ -44,29 +44,24 @@ type Edit = { what: 'part'; part: PagePart; page: number; at: number } | { what:
 export function PartEditors({ editor, docKey, frame, desk, active }: PartEditorsProps): ReactNode {
   const [edit, setEdit] = useState<Edit | null>(null)
   const setup = useStore($pageSetup)
+  const partRequest = useStore($partEdit)
+  const noteRequest = useStore($noteEdit)
   const headers = useEditorState({ editor, selector: ({ editor: current }) => (current.isDestroyed ? null : ((current.state.doc.attrs.headers as PageHeaders | null) ?? null)) })
 
-  useEffect(
-    () =>
-      $partEdit.subscribe((request) => {
-        if (request?.docKey === docKey) {
-          $partEdit.set(null)
-          setEdit({ what: 'part', part: request.part, page: request.page, at: Date.now() })
-        }
-      }),
-    [docKey]
-  )
+  // Requests are taken when this document renders, not in a store listener: a listener that clears the request would keep it from the others.
+  useEffect(() => {
+    if (partRequest?.docKey === docKey) {
+      $partEdit.set(null)
+      setEdit({ what: 'part', part: partRequest.part, page: partRequest.page, at: Date.now() })
+    }
+  }, [partRequest, docKey])
 
-  useEffect(
-    () =>
-      $noteEdit.subscribe((request) => {
-        if (request?.docKey === docKey) {
-          $noteEdit.set(null)
-          setEdit({ what: 'note', kind: request.kind, pos: request.pos, at: Date.now() })
-        }
-      }),
-    [docKey]
-  )
+  useEffect(() => {
+    if (noteRequest?.docKey === docKey) {
+      $noteEdit.set(null)
+      setEdit({ what: 'note', kind: noteRequest.kind, pos: noteRequest.pos, at: Date.now() })
+    }
+  }, [noteRequest, docKey])
 
   useEffect(() => {
     if (!active) {
