@@ -11,7 +11,7 @@ import { documentFileName, fileName, freePath, stepCount, tildePath } from '../a
 import { openInOffice } from '../open.ts'
 import { docsAdapter } from './adapter.ts'
 import { batchOutcome, builtInTemplate, COMMENT_OPS, commentAuthor, CONTENT_OPS, depthEdit, extrasOf, isDepthPart, newDocumentModel, partReading, setPageChange, templateChoice, templateLabel, withBody } from './agent-depth-model.ts'
-import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, whereOf } from './agent-model.ts'
+import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, placeFor, placeLabel, readDocument, readOptions, searchOptions, styleOf, targetFor, whereOf } from './agent-model.ts'
 import { $commentsShown } from './comments.ts'
 import { pictureFrom } from './editor.ts'
 import { markedRangeOf, writeMarked } from './marked.ts'
@@ -76,7 +76,7 @@ export async function reading(target: Local<DocJSON>): Promise<Reading> {
  * Make one change: built from the document as it is (and the text marked for Hermes), it is one step
  * to undo in an open document, or the file written back.
  */
-export async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op, options: { intoMarked?: boolean } = {}): Promise<{ changed: boolean; name: string; path: string | null }> {
+export async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op, options: { intoMarked?: boolean } = {}): Promise<{ changed: boolean; name: string; path: string | null; marked?: boolean }> {
   if (target.kind === 'file') {
     const file = target.path
     const read = await readFile(file)
@@ -108,10 +108,11 @@ export async function change(target: Local<DocJSON>, build: (state: EditorState,
   const editor = editorOf(doc.key)
 
   if (editor) {
+    const marked = Boolean(markedRangeOf(editor.state))
     const make = (state: EditorState) => build(state, markedRangeOf(state), true)
     const changed = options.intoMarked ? writeMarked(editor.view, make) : applyLive(editor.view, make(editor.state))
 
-    return { changed, name: doc.name, path: doc.path }
+    return { changed, name: doc.name, path: doc.path, marked }
   }
 
   // Its window would not show it: the change goes into what the document holds, like a typed edit.
@@ -195,18 +196,6 @@ export async function contentOf(args: Args, maxWidth = TEXT_WIDTH): Promise<{ bl
 }
 
 const wordsIn = (value: string): number => value.split(/\s+/).filter(Boolean).length
-
-const placeLabel = (args: Args): string => {
-  const at = text(args.at).toLowerCase()
-
-  if (args.heading !== undefined && args.heading !== '' && (!at || at === 'heading')) {
-    const mode = text(args.mode).toLowerCase()
-
-    return mode === 'replace' ? `in place of what was under “${String(args.heading)}”` : mode === 'prepend' ? `under “${String(args.heading)}”` : `at the end of “${String(args.heading)}”`
-  }
-
-  return ({ start: 'at the start', selection: 'at the selection', marked: 'in place of the marked text', after: 'after the selection' } as Record<string, string>)[at] ?? 'at the end'
-}
 
 // Commands.
 
@@ -357,7 +346,7 @@ export async function write(args: Args): Promise<Outcome> {
   const result = await change(target, (state, marked, live) => insert(content, placeFor(live ? state : null, args, marked)), { intoMarked: whereOf(args) === 'marked' })
 
   return {
-    summary: result.changed ? `Wrote ${wordsIn(args.content).toLocaleString('en-US')} words ${placeLabel(args)} of ${result.name}` : `Nothing changed in ${result.name}`,
+    summary: result.changed ? `Wrote ${wordsIn(args.content).toLocaleString('en-US')} words ${placeLabel(args, result.marked)} of ${result.name}` : `Nothing changed in ${result.name}`,
     data: { name: result.name, path: result.path, changed: result.changed }
   }
 }
@@ -442,7 +431,7 @@ export async function table(args: Args): Promise<Outcome> {
   const target = await located(args.document)
   const result = await change(target, (state, marked, live) => tableOp(args, state, marked, live))
 
-  return { summary: result.changed ? `Put a table ${placeLabel(args)} of ${result.name}` : `Nothing changed in ${result.name}`, data: { name: result.name, path: result.path, changed: result.changed } }
+  return { summary: result.changed ? `Put a table ${placeLabel(args, result.marked)} of ${result.name}` : `Nothing changed in ${result.name}`, data: { name: result.name, path: result.path, changed: result.changed } }
 }
 
 export async function image(args: Args): Promise<Outcome> {
@@ -458,7 +447,7 @@ export async function image(args: Args): Promise<Outcome> {
   const found = await picture(source, maxWidth)
   const result = await change(target, (current, marked, live) => insertImage({ ...found, alt: text(args.alt) || undefined }, placeFor(live ? current : null, args, marked)))
 
-  return { summary: result.changed ? `Put the picture ${placeLabel(args)} of ${result.name}` : `Nothing changed in ${result.name}`, data: { name: result.name, path: result.path, width: found.width, height: found.height } }
+  return { summary: result.changed ? `Put the picture ${placeLabel(args, result.marked)} of ${result.name}` : `Nothing changed in ${result.name}`, data: { name: result.name, path: result.path, width: found.width, height: found.height } }
 }
 
 export async function page(args: Args): Promise<Outcome> {
@@ -536,7 +525,7 @@ export async function insertRange(args: Args): Promise<Outcome> {
   const result = await change(target, (state, marked, live) => insertTable({ rows: source.cells.length, cols: Math.max(...source.cells.map((row) => row.length)), cells: source.cells, header: args.header !== false }, placeFor(live ? state : null, args, marked)))
 
   return {
-    summary: result.changed ? `Put ${source.range} of ${source.name} (${source.cells.length} rows) ${placeLabel(args)} of ${result.name} as a table` : `Nothing changed in ${result.name}`,
+    summary: result.changed ? `Put ${source.range} of ${source.name} (${source.cells.length} rows) ${placeLabel(args, result.marked)} of ${result.name} as a table` : `Nothing changed in ${result.name}`,
     data: { name: result.name, path: result.path, from: { workbook: source.name, sheet: source.sheet, range: source.range }, rows: source.cells.length }
   }
 }

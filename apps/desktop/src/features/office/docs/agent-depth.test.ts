@@ -447,22 +447,31 @@ describe('tables of contents', () => {
 describe('under the marked text', () => {
   const marked = quoteMatches(stateOf(report()).doc, 'Sales grew')[0]
 
-  /** A change made at=after in the open report, with "Sales grew" marked for Hermes (or nothing) and "two people" clicked since. */
+  /** A change made at=after in the open report, with "Sales grew" marked for Hermes (or nothing) and "two people" clicked since: the document it leaves, and its answer. */
   function after(made: Change, mark: typeof marked | null = marked) {
     const view = live(report(), 'two people')
-    applyLive(view, made.build(view.state, mark, true))
+    const changed = applyLive(view, made.build(view.state, mark, true))
 
-    return jsonOf(view.state.doc)
+    return { json: jsonOf(view.state.doc), ...made.outcome({ changed, name: 'Report.docx', path: null, marked: mark !== null }) }
   }
 
   it('puts a field, a note, a section break and a table of contents under the marked text’s paragraph, wherever the person has clicked since', () => {
     const types = (json: DocJSON) => json.content.map((block) => block.type)
 
-    expect(inline(after(insertFieldChange({ field: 'page', at: 'after' })).content[4])).toEqual(['[field:page]'])
-    expect(notesList(stateOf(after(insertNoteChange({ at: 'after' }, { text: 'Source.' }))).doc)[0]).toMatchObject({ note: 'footnote 1', after: 'Sales grew in March.' })
-    expect(types(after(insertSectionBreakChange({ at: 'after' })))).toEqual(['heading', 'paragraph', 'heading', 'paragraph', 'sectionBreak', 'paragraph', 'heading', 'paragraph'])
-    expect(types(after(insertTocChange({ at: 'after' }))).indexOf('tableOfContents')).toBe(4)
-    expect(types(after(insertTocChange({ at: 'after' }), null)).indexOf('tableOfContents')).toBe(7)
+    expect(inline(after(insertFieldChange({ field: 'page', at: 'after' })).json.content[4])).toEqual(['[field:page]'])
+    expect(notesList(stateOf(after(insertNoteChange({ at: 'after' }, { text: 'Source.' })).json).doc)[0]).toMatchObject({ note: 'footnote 1', after: 'Sales grew in March.' })
+    expect(types(after(insertSectionBreakChange({ at: 'after' })).json)).toEqual(['heading', 'paragraph', 'heading', 'paragraph', 'sectionBreak', 'paragraph', 'heading', 'paragraph'])
+    expect(types(after(insertTocChange({ at: 'after' })).json).indexOf('tableOfContents')).toBe(4)
+    expect(types(after(insertTocChange({ at: 'after' }), null).json).indexOf('tableOfContents')).toBe(7)
+  })
+
+  it('says it went under the marked text’s paragraph, and under the selection’s when nothing is marked', () => {
+    expect(after(insertFieldChange({ field: 'page', at: 'after' })).summary).toBe('Put the page number in Report.docx, under the marked text’s paragraph')
+    expect(after(insertNoteChange({ at: 'after' }, { text: 'Source.' })).summary).toBe('Put footnote 1 in Report.docx, under the marked text’s paragraph')
+    expect(after(insertSectionBreakChange({ at: 'after' })).summary).toMatch(/^Put a section break in Report\.docx, under the marked text’s paragraph: section 2 starts/)
+    expect(after(insertTocChange({ at: 'after' })).summary).toMatch(/^Put a table of contents in Report\.docx, under the marked text’s paragraph: /)
+    expect(after(insertTocChange({ at: 'after' }), null).summary).toMatch(/^Put a table of contents in Report\.docx, under the selection’s paragraph: /)
+    expect(after(insertFieldChange({ field: 'page', at: 'selection' })).summary).toBe('Put the page number in Report.docx, at the selection')
   })
 })
 

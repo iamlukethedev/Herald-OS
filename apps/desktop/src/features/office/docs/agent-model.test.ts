@@ -2,7 +2,7 @@ import { history, undo, undoDepth } from '@tiptap/pm/history'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import { describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { cellsOf, chain, chainBuilt, editsOf, findWithContext, headingRef, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, sectionDocument, styleOf, targetFor, whereOf } from './agent-model.ts'
+import { cellsOf, chain, chainBuilt, editsOf, findWithContext, headingRef, markChangeOf, pageArgsOf, placeFor, placeLabel, readDocument, readOptions, sectionDocument, styleOf, targetFor, whereOf } from './agent-model.ts'
 import { markedKey, markedPlugin, markedRangeOf, writeMarked } from './marked.ts'
 import { applyLive, documentText, insert, jsonOf, replaceText, setMarks, setStyle } from './model.ts'
 import { docsSchema } from './schema.ts'
@@ -67,6 +67,15 @@ describe('where a write goes', () => {
     expect(documentText(next.doc)).toContain('Sales grew in March.\nSummary: up.\nSales fell in May.')
     expect(documentText(next.doc)).toContain('Hire two people.')
     expect(documentText(next.doc)).not.toContain('Hire two people.\nSummary: up.')
+  })
+
+  it('says where a write went, after the marked text when it went under it', () => {
+    expect(placeLabel({ at: 'after' })).toBe('after the selection')
+    expect(placeLabel({ at: 'After' }, true)).toBe('after the marked text')
+    expect(placeLabel({ at: 'marked' }, true)).toBe('in place of the marked text')
+    expect(placeLabel({ at: 'selection' }, true)).toBe('at the selection')
+    expect(placeLabel({ heading: 'Results', mode: 'prepend' }, true)).toBe('under “Results”')
+    expect(placeLabel({}, true)).toBe('at the end')
   })
 
   it('replaces the marked text even after the person typed elsewhere', () => {

@@ -94,6 +94,19 @@ export function placeFor(state: EditorState | null, args: Args, marked: Marked |
   return where === 'marked' ? { from: range.from, to: range.to } : 'selection'
 }
 
+/** Where a write put its content, in words for its answer; `marked` says text was marked for Hermes, which `after` went under. */
+export function placeLabel(args: Args, marked = false): string {
+  const at = text(args.at).toLowerCase()
+
+  if (args.heading !== undefined && args.heading !== '' && (!at || at === 'heading')) {
+    const mode = text(args.mode).toLowerCase()
+
+    return mode === 'replace' ? `in place of what was under “${String(args.heading)}”` : mode === 'prepend' ? `under “${String(args.heading)}”` : `at the end of “${String(args.heading)}”`
+  }
+
+  return ({ start: 'at the start', selection: 'at the selection', marked: 'in place of the marked text', after: marked ? 'after the marked text' : 'after the selection' } as Record<string, string>)[at] ?? 'at the end'
+}
+
 /** What a format change applies to: the selection (the default), the marked text, everything, a heading or its section, or matches of some text. */
 export function targetFor(state: EditorState | null, args: Args, marked: Marked | null): Target {
   const at = text(args.at).toLowerCase() || (args.text !== undefined && args.text !== '' ? 'text' : args.heading !== undefined && args.heading !== '' ? 'section' : 'selection')

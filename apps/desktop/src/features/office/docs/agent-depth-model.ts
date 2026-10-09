@@ -104,11 +104,12 @@ const isBlank = (blocks: readonly DocNode[]): boolean => blocks.every((block) =>
 
 // A command's change.
 
-/** What a change came to in a document: whether it changed anything, and the document's name and path. */
+/** What a change came to in a document: whether it changed anything, the document's name and path, and whether text was marked for Hermes in it. */
 export interface Changed {
   changed: boolean
   name: string
   path: string | null
+  marked?: boolean
 }
 
 /**
@@ -222,8 +223,8 @@ export function depthPlace(state: EditorState, args: Args, marked: Marked | null
 
 const AT_WORDS: Record<string, string> = { start: 'at the start', top: 'at the start', end: 'at the end', bottom: 'at the end', selection: 'at the selection', cursor: 'at the selection', caret: 'at the selection', marked: 'in place of the marked text', after: 'under the selection’s paragraph' }
 
-/** Where a command put something, in words. */
-function placeWords(args: Args, options: { block?: boolean; fallback?: string } = {}): string {
+/** Where a command put something, in words; `marked` says text was marked for Hermes, which `after` went under. */
+function placeWords(args: Args, options: { block?: boolean; fallback?: string; marked?: boolean } = {}): string {
   if (given(args.quote)) {
     return `${options.block ? 'after the paragraph with' : 'after'} ${quoted(text(args.quote), 40)}`
   }
@@ -237,7 +238,7 @@ function placeWords(args: Args, options: { block?: boolean; fallback?: string } 
     return mode === 'before' ? `before ${heading}` : mode === 'replace' ? `in place of what was under ${heading}` : mode === 'prepend' ? `under ${heading}` : `at the end of ${heading}`
   }
 
-  return AT_WORDS[at] ?? options.fallback ?? 'at the end'
+  return at === 'after' && options.marked ? 'under the marked text’s paragraph' : (AT_WORDS[at] ?? options.fallback ?? 'at the end')
 }
 
 // Headers and footers.
@@ -435,7 +436,7 @@ export function insertFieldChange(args: Args): Change {
 
       return placeRange(state, place).inline ? insertField(choice, options, place) : insertNodes((schema) => [schema.nodes.paragraph.create(null, fieldNodes(choice, schema, options, []))], place)
     },
-    outcome: ({ changed, name, path }) => ({ summary: changed ? `Put ${FIELD_WORDS[choice]} in ${name}, ${placeWords(args)}` : `Nothing changed in ${name}`, data: { name, path, changed, field: choice } })
+    outcome: ({ changed, name, path, marked }) => ({ summary: changed ? `Put ${FIELD_WORDS[choice]} in ${name}, ${placeWords(args, { marked })}` : `Nothing changed in ${name}`, data: { name, path, changed, field: choice } })
   }
 }
 
@@ -539,8 +540,8 @@ export function insertNoteChange(args: Args, content: StoryContent): Change {
         added = notes(doc).find((note) => !old.has(note.pos)) ?? null
       })
     },
-    outcome: ({ changed, name, path }) => ({
-      summary: changed && added ? `Put ${noteName(added)} in ${name}, ${placeWords(args)}` : `Nothing changed in ${name}`,
+    outcome: ({ changed, name, path, marked }) => ({
+      summary: changed && added ? `Put ${noteName(added)} in ${name}, ${placeWords(args, { marked })}` : `Nothing changed in ${name}`,
       data: { name, path, changed, ...(changed && added ? { note: noteName(added), kind: added.kind, number: added.number, label: added.label } : {}) }
     })
   }
@@ -692,8 +693,8 @@ export function insertSectionBreakChange(args: Args): Change {
         return tr
       }
     },
-    outcome: ({ changed, name, path }) => ({
-      summary: changed && made ? `Put a section break in ${name}, ${placeWords(args, { block: true })}: section ${made.index + 1} starts ${STARTS[kind]}, ${pageWords(pageInfo(made.page))}` : `Nothing changed in ${name}`,
+    outcome: ({ changed, name, path, marked }) => ({
+      summary: changed && made ? `Put a section break in ${name}, ${placeWords(args, { block: true, marked })}: section ${made.index + 1} starts ${STARTS[kind]}, ${pageWords(pageInfo(made.page))}` : `Nothing changed in ${name}`,
       data: { name, path, changed, ...(made ? { section: made.index + 1, kind, page: pageInfo(made.page) } : {}) }
     })
   }
@@ -1244,8 +1245,8 @@ export function insertTocChange(args: Args): Change {
         made = tocsList(doc)[tocPositions(doc).findIndex((pos) => !old.has(pos))] ?? null
       })
     },
-    outcome: ({ changed, name, path }) => ({
-      summary: changed && made ? `Put a table of contents in ${name}, ${placeWords(args, { block: true, fallback: 'at the start' })}: ${tocWords(made)}` : `Nothing changed in ${name}`,
+    outcome: ({ changed, name, path, marked }) => ({
+      summary: changed && made ? `Put a table of contents in ${name}, ${placeWords(args, { block: true, fallback: 'at the start', marked })}: ${tocWords(made)}` : `Nothing changed in ${name}`,
       data: { name, path, changed, ...(made ?? {}) }
     })
   }
