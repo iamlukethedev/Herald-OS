@@ -26,8 +26,8 @@ skills/
   file-documents/    how to find, read, rename and file documents such as invoices, with undo
   herald-os-tailor/  how to change Herald OS itself: themes, fonts, keybindings, settings
   herald-canvas/     how to make and edit pictures with the canvas tool: workflow, design habits, .comp format
-  herald-docs/       how to write and edit documents with the docs tool: drafts, marked text, formatting, saving
-  herald-sheets/     how to work in spreadsheets with the sheets tool: formulas, cleaning data, building workbooks
+  herald-docs/       how to write and edit documents with the docs tool: drafts, marked text, formatting, pages, comments and reviews, saving
+  herald-sheets/     how to work in spreadsheets with the sheets tool: formulas, cleaning data, charts, summaries, building workbooks
   herald-slides/     how to make presentations with the slides tool: outlines, layouts, themes, speaker notes
 tests/               pytest suite: `npm run test:bridge` from the repository root
 ```
