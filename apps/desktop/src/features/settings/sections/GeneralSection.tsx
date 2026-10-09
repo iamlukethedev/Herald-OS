@@ -177,7 +177,7 @@ function TypingGroup() {
   )
 }
 
-/** Herald Docs, Sheets and Slides: the name on the comments and notes the person adds. */
+/** Herald Docs and Sheets: the name on the comments and notes the person adds. */
 function OfficeGroup() {
   const saved = useStore($commentName)
   const [name, setName] = useState(saved)
@@ -201,7 +201,7 @@ function OfficeGroup() {
       <SettingsRow
         icon={<IconMessage />}
         label="Name on comments"
-        description="Shown on the comments and notes you add in Docs, Sheets and Slides and saved in those files; clear it to be asked again."
+        description="Shown on the comments and notes you add in Docs and Sheets and saved in those files; clear it to be asked again."
         keywords="author comments notes replies docs sheets slides office name"
       >
         {saved && (
