@@ -96,6 +96,7 @@ if [[ "$MODE" == "--image" ]]; then
   install -Dm0644 "$SHARE/app/resources/icons/herald-os.png" /usr/share/icons/hicolor/512x512/apps/herald-os.png
   install -Dm0644 "$LINUX/image/herald-os-firstboot.service" /usr/lib/systemd/system/herald-os-firstboot.service
   install -Dm0644 "$LINUX/image/herald-os-firstboot-apps.service" /usr/lib/systemd/system/herald-os-firstboot-apps.service
+  install -Dm0644 "$LINUX/image/herald-os-hermes.service" /usr/lib/systemd/system/herald-os-hermes.service
   install -Dm0755 "$LINUX/image/firstboot.sh" /usr/libexec/herald-os/firstboot.sh
   install -Dm0755 "$LINUX/image/reset-helper" /usr/libexec/herald-os/reset-helper
   install -Dm0644 "$LINUX/image/herald-os-reset.service" /usr/lib/systemd/system/herald-os-reset.service
@@ -166,7 +167,7 @@ if [[ "$MODE" == "--dev" ]]; then
 fi
 
 if [[ "$MODE" == "--image" ]]; then
-  systemctl enable herald-os-firstboot.service herald-os-firstboot-apps.service herald-os-reset.service
+  systemctl enable herald-os-firstboot.service herald-os-firstboot-apps.service herald-os-hermes.service herald-os-reset.service
   # Release images ship without SSH; the dev VM keeps it for linux/dev/.
   systemctl disable sshd.service 2>/dev/null || true
 else

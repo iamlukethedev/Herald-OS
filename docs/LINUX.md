@@ -215,7 +215,12 @@ VM's provisioner also runs, so the VM and the image cannot drift apart:
   `/usr/local`, with the build tools from `packages-dev.txt`.
 - **`linux/image/firstboot.sh`, on the first boot:** the session user, its niri config, theme and
   update timer, and Hermes Agent (`herald-os-firstboot.service`, before the login screen), then the
-  omakase Flatpaks (`herald-os-firstboot-apps.service`, while the session is up).
+  omakase Flatpaks (`herald-os-firstboot-apps.service`, while the session is up). Hermes Agent comes
+  from GitHub, so a first boot without a network (Wi-Fi is joined later, in setup) leaves it to
+  `herald-os-hermes.service`: it waits for the network, installs Hermes with its voice extras, runs
+  `herald-os setup` and tries again ten minutes after a failed install. Meanwhile the shell's boot
+  screen says how it goes, shows the Wi-Fi panel and starts Hermes once it is set up
+  (`journalctl -u herald-os-hermes` has the details).
 
 `linux/image/Containerfile` starts from `quay.io/fedora/fedora-bootc:44`; `.github/workflows/image.yml`
 builds it for x86_64 and aarch64 on matching runners, pushes it to the repository's GHCR package
@@ -279,7 +284,8 @@ not on the computer you work on. What happens on its first start:
   `herald-os password`), anyone at the keyboard has administrator rights. Your own account and its
   files stay.
 - **The first start takes a while.** It installs Hermes Agent, which needs the network, before the
-  desktop appears.
+  desktop appears. Without a network the desktop comes up first, and Hermes installs once you are
+  online.
 - **SELinux becomes permissive** (greetd and the compositors have no policy yet, ADR-012).
 - **The firewall changes.** firewalld's default zone becomes `herald-os`, which refuses every
   incoming connection except LocalSend (port 53317) and mDNS, so SSH and other ports you opened are

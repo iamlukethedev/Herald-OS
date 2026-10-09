@@ -58,8 +58,13 @@ Setup, session model and dev loop for Linux: `docs/LINUX.md`.
 ## Backend lifecycle
 
 1. Resolve a runtime through an ordered ladder (`apps/desktop/electron/backend/resolve.ts`):
-   `HERALD_OS_HERMES_ROOT` -> `$HERMES_HOME/hermes-agent` managed install (its `venv/bin/python`)
-   -> `hermes` on `PATH`. Each candidate is probed before use.
+   `HERALD_OS_HERMES_ROOT` -> `$HERMES_HOME/hermes-agent` managed install (the `.hermes/bin/hermes`
+   launcher today's installers publish, else the `venv/bin/python` of earlier ones) -> `hermes` on
+   `PATH` or in `~/.local/bin`. Each candidate is probed before use. `herald-os` looks the same way
+   (`hermes_install`; `herald-os hermes-command` for scripts such as `firstboot.sh` and
+   `herald-os-update`). With no runtime the shell waits and looks again every few seconds; on the
+   image it also waits while `/var/lib/herald-os/hermes-pending` says the first boot's Hermes install
+   is still to come (`herald-os-hermes.service`).
 2. Spawn `hermes serve --host 127.0.0.1 --port 0` with `HERMES_DASHBOARD_SESSION_TOKEN` (random per
    launch), `HERALD_OS=1`, and `HERMES_HOME`.
 3. Read `HERMES_BACKEND_READY port=N` from stdout, then poll `GET /api/status` with

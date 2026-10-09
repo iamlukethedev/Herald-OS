@@ -612,6 +612,117 @@ def test_setup_undo_leaves_tool_search_the_person_changed_since(hermes_setup, ca
     assert not (hermes_home / "herald-os" / "tool-search-before").exists()
 
 
+def hermes_checkout(root: Path, executables: list[str], serve: bool = True) -> Path:
+    """A Hermes Agent checkout with these executables in it (and its `serve` subcommand, unless not)."""
+    if serve:
+        (root / "hermes_cli" / "subcommands").mkdir(parents=True)
+        (root / "hermes_cli" / "subcommands" / "dashboard.py").write_text("")
+    for name in executables:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("#!/bin/sh\n")
+        (root / name).chmod(0o755)
+    return root
+
+
+@pytest.fixture
+def hermes_home(tmp_path, monkeypatch):
+    """An account with no Hermes yet: its home, HERMES_HOME and a PATH with nothing on it."""
+    monkeypatch.setattr(cli, "HOME", tmp_path)
+    monkeypatch.setattr(cli, "HERMES_HOME", tmp_path / ".hermes")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("HERALD_OS_HERMES_ROOT", raising=False)
+    monkeypatch.delenv("HERMES_OS_HERMES_ROOT", raising=False)
+    return tmp_path
+
+
+def test_hermes_is_found_in_today_s_layout_and_in_the_one_before(hermes_home):
+    agent = hermes_home / ".hermes" / "hermes-agent"
+    assert cli.hermes_install() is None
+    hermes_checkout(agent, ["venv/bin/python", "venv/bin/hermes"])
+    assert cli.hermes_install() == ("managed", [str(agent / "venv" / "bin" / "hermes")])
+    # Today's installers: no venv, the launcher in .hermes/bin. An update leaves the old venv behind.
+    hermes_checkout(agent, [".hermes/bin/hermes"], serve=False)
+    assert cli.hermes_install() == ("managed", [str(agent / ".hermes" / "bin" / "hermes")])
+    assert cli.hermes_command() == [str(agent / ".hermes" / "bin" / "hermes")]
+
+
+def test_hermes_is_found_where_the_shell_looks_and_nowhere_else(hermes_home, monkeypatch):
+    agent = hermes_checkout(hermes_home / ".hermes" / "hermes-agent", [".hermes/bin/hermes"], serve=False)
+    # Without the serve subcommand it is not a Hermes the shell could start either.
+    assert cli.hermes_install() is None
+    (agent / "hermes_cli" / "subcommands").mkdir(parents=True)
+    (agent / "hermes_cli" / "subcommands" / "dashboard.py").write_text("")
+    assert cli.hermes_install() == ("managed", [str(agent / ".hermes" / "bin" / "hermes")])
+    own = hermes_checkout(hermes_home / "own", [".hermes/bin/hermes"])
+    monkeypatch.setenv("HERALD_OS_HERMES_ROOT", str(own))
+    assert cli.hermes_install() == ("env", [str(own / ".hermes" / "bin" / "hermes")])
+
+
+def test_hermes_on_the_path_counts_and_so_does_the_installers_local_bin(hermes_home, monkeypatch):
+    local = hermes_home / ".local" / "bin"
+    local.mkdir(parents=True)
+    (local / "hermes").write_text("#!/bin/sh\nexec /x/.hermes/hermes-agent/.hermes/bin/hermes \"$@\"\n")
+    (local / "hermes").chmod(0o755)
+    # sudo and systemd leave ~/.local/bin off the PATH, which is where the installers put `hermes`.
+    assert cli.hermes_install() == ("path", [str(local / "hermes")])
+    other = hermes_home / "bin"
+    other.mkdir()
+    (other / "hermes").write_text("#!/bin/sh\n")
+    (other / "hermes").chmod(0o755)
+    monkeypatch.setenv("PATH", str(other))
+    assert cli.hermes_install() == ("path", [str(other / "hermes")])
+
+
+def test_hermes_command_tells_scripts_how_to_run_hermes(hermes_home, capsys):
+    assert cli.main(["hermes-command"]) == 1 and capsys.readouterr().out == ""
+    local = hermes_home / ".local" / "bin"
+    local.mkdir(parents=True)
+    (local / "hermes").write_text("#!/bin/sh\n")
+    (local / "hermes").chmod(0o755)
+    assert cli.main(["hermes-command"]) == 0 and capsys.readouterr().out == f"{local / 'hermes'}\n"
+    # `herald-os update` updates only the checkout in ~/.hermes/hermes-agent.
+    assert cli.main(["hermes-command", "--managed"]) == 1
+    agent = hermes_checkout(hermes_home / ".hermes" / "hermes-agent", [".hermes/bin/hermes"])
+    assert cli.main(["hermes-command", "--managed"]) == 0 and capsys.readouterr().out == f"{agent / '.hermes' / 'bin' / 'hermes'}\n"
+
+
+@pytest.fixture
+def no_hermes(tmp_path, monkeypatch):
+    """setup on an account without Hermes; what it tried to install with, if anything."""
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    (bridge / "plugin.yaml").write_text("name: herald-os-bridge\n")
+    monkeypatch.setattr(cli, "BRIDGE_DIRS", [bridge])
+    monkeypatch.setattr(cli, "HERMES_HOME", tmp_path / ".hermes")
+    monkeypatch.setattr(cli, "HERMES_PENDING", tmp_path / "hermes-pending")
+    monkeypatch.setattr(cli, "hermes_command", lambda: None)
+    installs: list[list[str]] = []
+    monkeypatch.setattr(cli.subprocess, "call", lambda argv, **kwargs: installs.append(argv) or 1)
+    return tmp_path, installs
+
+
+def test_setup_offers_to_install_hermes_even_without_a_terminal(no_hermes, monkeypatch, capsys):
+    _, installs = no_hermes
+    monkeypatch.setattr(cli.sys, "stdin", _Stdin(False))
+    with pytest.raises(SystemExit) as stopped:
+        cli.setup([])
+    assert stopped.value.code == 1 and installs == []
+    assert "`herald-os setup --yes` installs it and then sets it up" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.setup(["--yes"])
+    assert installs == [["bash", "-c", f"curl -fsSL {cli.HERMES_INSTALLER} | bash"]]
+
+
+def test_setup_leaves_the_image_s_install_to_the_service_already_at_it(no_hermes, monkeypatch, capsys):
+    tmp_path, installs = no_hermes
+    (tmp_path / "hermes-pending").write_text("offline\n")
+    with pytest.raises(SystemExit) as stopped:
+        cli.setup(["--yes"])
+    assert stopped.value.code == 1 and installs == []
+    err = capsys.readouterr().err
+    assert "herald-os-hermes.service installs it once this computer is online" in err and "(offline now)" in err
+
+
 def test_setup_leaves_a_foreign_plugin_folder_alone(tmp_path, monkeypatch):
     bridge = tmp_path / "bridge"
     bridge.mkdir()

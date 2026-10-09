@@ -53,12 +53,21 @@ ln -s "$ROOT/plugins/herald-os-bridge" "$link"
 echo "==> Verifying Hermes runtime"
 HERMES_CMD=()
 HERMES_PY=""
-if [[ -n "$HERALD_OS_HERMES_ROOT" && -x "$HERALD_OS_HERMES_ROOT/venv/bin/python" ]]; then
+# A checkout in either layout, as the shell looks (apps/desktop/electron/backend/resolve.ts): the
+# launcher today's installers publish, or the venv earlier ones made.
+checkout_runtime() {
+  if [[ -x "$1/.hermes/bin/hermes" ]]; then
+    HERMES_CMD=("$1/.hermes/bin/hermes")
+  elif [[ -x "$1/venv/bin/python" ]]; then
+    HERMES_PY="$1/venv/bin/python"
+  else
+    return 1
+  fi
+}
+if [[ -n "$HERALD_OS_HERMES_ROOT" ]] && checkout_runtime "$HERALD_OS_HERMES_ROOT"; then
   echo "    HERALD_OS_HERMES_ROOT=$HERALD_OS_HERMES_ROOT"
-  HERMES_PY="$HERALD_OS_HERMES_ROOT/venv/bin/python"
-elif [[ -x "$HERMES_HOME/hermes-agent/venv/bin/python" ]]; then
+elif checkout_runtime "$HERMES_HOME/hermes-agent"; then
   echo "    managed install: $HERMES_HOME/hermes-agent"
-  HERMES_PY="$HERMES_HOME/hermes-agent/venv/bin/python"
 elif command -v hermes >/dev/null 2>&1; then
   echo "    hermes on PATH: $(command -v hermes)"
   HERMES_CMD=(hermes)
@@ -142,6 +151,9 @@ for name, purpose in (("openwakeword", "wake word"), ("faster_whisper", "local S
     except Exception:
         print(f"    {name}: missing ({purpose}); install with: pip install 'hermes-agent[voice]' inside the Hermes venv")
 PY
+  else
+    # Today's layout keeps its Python dependencies out of the checkout, so its modules are not looked at here.
+    echo "    voice extras: hermes pm install --extra voice --extra edge-tts --extra wake-openwakeword adds them (local STT, free TTS, wake word)"
   fi
 fi
 

@@ -197,6 +197,9 @@ model switches between fast, accurate, multilingual and most-accurate models.
   Privacy & Security > Microphone > Herald OS.
 - `npm run bootstrap` reports the runtime version and whether `openwakeword`, `faster_whisper` and
   `edge_tts` import in the Hermes venv (`pip install 'hermes-agent[voice]'` inside the venv adds them).
+  Today's Hermes installs keep no venv in the checkout; there
+  `hermes pm install --extra voice --extra edge-tts --extra wake-openwakeword` adds them, and
+  `hermes update` keeps them. The Herald OS image adds them at its first boot either way.
 - When the model provider is signed out (expired or revoked login), Herald OS shows its sign-in
   card: one click opens the provider's page with a one-time code inside Herald OS, as a Herald OS
   window beside the card (never the system browser), and both the page and the card close

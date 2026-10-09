@@ -6,7 +6,8 @@ import type { MenuBarLayout } from './menu-bar.ts'
 import type { OfficeApp } from './office/files.ts'
 import type { ColorScheme, ThemeColors } from './theme.ts'
 
-export type BackendPhase = 'idle' | 'resolving' | 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped'
+/** `waiting`: there is no Hermes Agent to start yet; the shell starts one as soon as it is installed. */
+export type BackendPhase = 'idle' | 'resolving' | 'waiting' | 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped'
 
 export interface BackendRuntime {
   /** How the runtime was found: env override, managed install, PATH shim, or a backend already running (HERALD_OS_BACKEND_URL). */
@@ -30,6 +31,8 @@ export interface BackendState {
   sharedGateway?: number
   /** Why the system tools could not be set up in Hermes this start (a failed `hermes` step). */
   bridgeError?: string
+  /** While waiting on the Herald OS image: how installing Hermes Agent goes (offline, installing, retrying). */
+  install?: string
 }
 
 export interface RestRequest {

@@ -31,7 +31,7 @@ case "${1:-}" in
     # Flatpaks installed for everyone and saved Wi-Fi networks go too: the machine starts fresh.
     flatpak uninstall --system --all -y --noninteractive >/dev/null 2>&1 || true
     rm -f /etc/NetworkManager/system-connections/*.nmconnection
-    rm -f "$STATE/firstboot-done" "$STATE/firstboot-apps-done" "$PENDING"
+    rm -f "$STATE/firstboot-done" "$STATE/firstboot-apps-done" "$STATE/hermes-pending" "$PENDING"
     ;;
   *) echo "usage: $0 schedule <user> | apply" >&2; exit 2 ;;
 esac

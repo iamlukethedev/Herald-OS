@@ -140,6 +140,7 @@ COMMANDS: dict[str, str] = {
     "power": "Power menu (sleep, restart, shut down, log out)",
     "webapp-open": "Internal: open a web app window: webapp-open <url> <name>",
     "update-available": "Internal: tell the menu bar how many updates are pending",
+    "hermes-command": "Internal: how this account runs Hermes Agent, one argument per line, whichever way it was installed (--managed: only ~/.hermes/hermes-agent, which `herald-os update` updates); exits 1 without one",
     "channel": "Show or set the update channel: channel [stable|edge] (on the image, the image tag it follows)",
     "rollback": "Go back to the previous version: the Herald OS image's at the next start (it stays in the boot menu), a release tarball's at the next login",
     "firmware": "firmware [check|update]: device firmware through fwupd (the BIOS, the dock, the SSD)",
@@ -1945,7 +1946,8 @@ def debug() -> int:
     line("niri", ["niri", "--version"])
     line("cage", ["cage", "-h"])
     line("electron", ["sh", "-c", "pgrep -a electron | head -1"])
-    line("hermes", ["sh", "-c", f"{HOME}/.hermes/hermes-agent/venv/bin/hermes --version 2>/dev/null || echo missing"])
+    hermes = hermes_command()
+    line("hermes", [*hermes, "--version"] if hermes else ["echo", "missing"])
     print(f"{'shell socket':<14} {'up' if SOCKET.exists() else 'down'} ({SOCKET})")
     print(f"{'compositor':<14} {os.environ.get('HERALD_OS_COMPOSITOR', 'niri')} nested={os.environ.get('HERALD_OS_NIRI_NESTED', 'auto')}")
     for name in ("shell.log", "compositor.log"):
@@ -2043,14 +2045,41 @@ def keymap_cmd(args: list[str]) -> int:
 HERMES_HOME = Path(os.environ.get("HERMES_HOME") or HOME / ".hermes")
 BRIDGE_DIRS = [HOME / "Herald-OS" / "plugins" / "herald-os-bridge", Path("/usr/share/herald-os/bridge"), Path("/opt/herald-os/resources/herald-os-bridge")]
 HERMES_INSTALLER = "https://hermes-agent.nousresearch.com/install.sh"
+# On the Herald OS image: Hermes did not install at the first boot, and herald-os-hermes.service is
+# installing it (firstboot.sh). What is in it says how that goes.
+HERMES_PENDING = Path("/var/lib/herald-os/hermes-pending")
+
+
+def hermes_checkout(root: Path) -> list[str] | None:
+    """A Hermes Agent checkout's own command: the launcher today's installers publish in it
+    (.hermes/bin/hermes, which runs the Python and dependencies kept in ~/.hermes/tools and
+    ~/.hermes/installs) or the venv earlier ones made. The launcher first: an update to the new layout
+    leaves the old venv behind, unused. Only beside the `serve` subcommand the shell runs."""
+    if not (root / "hermes_cli" / "subcommands" / "dashboard.py").is_file():
+        return None
+    for command in (root / ".hermes" / "bin" / "hermes", root / "venv" / "bin" / "hermes"):
+        if command.is_file() and os.access(command, os.X_OK):
+            return [str(command)]
+    return None
+
+
+def hermes_install() -> tuple[str, list[str]] | None:
+    """How this account runs Hermes Agent, looked for the way the shell does
+    (apps/desktop/electron/backend/resolve.ts): HERALD_OS_HERMES_ROOT ("env"), then the checkout in
+    $HERMES_HOME/hermes-agent ("managed"), then `hermes` on the PATH or in ~/.local/bin ("path"),
+    where the installers put it and where the PATH of sudo and of systemd units does not look."""
+    override = (os.environ.get("HERALD_OS_HERMES_ROOT") or os.environ.get("HERMES_OS_HERMES_ROOT") or "").strip()
+    for kind, root in (("env", Path(override) if override else None), ("managed", HERMES_HOME / "hermes-agent")):
+        command = hermes_checkout(root) if root else None
+        if command:
+            return kind, command
+    found = shutil.which("hermes") or shutil.which("hermes", path=str(HOME / ".local" / "bin"))
+    return ("path", [found]) if found else None
 
 
 def hermes_command() -> list[str] | None:
-    managed = HERMES_HOME / "hermes-agent" / "venv" / "bin" / "hermes"
-    if managed.exists():
-        return [str(managed)]
-    found = shutil.which("hermes")
-    return [found] if found else None
+    install = hermes_install()
+    return install[1] if install else None
 
 
 TOOL_SEARCH = "tools.tool_search.enabled"
@@ -2158,9 +2187,16 @@ def setup(args: list[str]) -> int:
         die("the herald-os-bridge plugin is missing; reinstall Herald OS", 1)
     hermes = hermes_command()
     if not hermes:
+        if HERMES_PENDING.exists():
+            # A second installer in the same checkout would race the one already at work.
+            status = HERMES_PENDING.read_text().strip() or "pending"
+            die(f"Hermes Agent is not installed yet. herald-os-hermes.service installs it once this computer is online, then sets it up ({status} now): `journalctl -u herald-os-hermes -f` follows it, `sudo systemctl restart herald-os-hermes` tries again at once", 1)
         print(f"Hermes Agent is not installed. Herald OS runs on it; the installer is {HERMES_INSTALLER}")
-        if not assume_yes and not (sys.stdin.isatty() and input("Install Hermes Agent now? [Y/n] ").strip().lower() in ("", "y", "yes")):
-            die("run `herald-os setup` again once Hermes is installed", 1)
+        if not assume_yes:
+            if not sys.stdin.isatty():
+                die("`herald-os setup --yes` installs it and then sets it up (in a terminal, `herald-os setup` asks first)", 1)
+            if input("Install Hermes Agent now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+                die("run `herald-os setup` again once Hermes is installed", 1)
         code = subprocess.call(["bash", "-c", f"curl -fsSL {HERMES_INSTALLER} | bash"])
         hermes = hermes_command()
         if code != 0 or not hermes:
@@ -2764,6 +2800,12 @@ def main(argv: list[str]) -> int:
         return subprocess.call([tool, *(args or ["install"])])
     if cmd == "menu" and args[:1] == ["check"]:
         return menu_check()
+    if cmd == "hermes-command":
+        install = hermes_install()
+        if not install or ("--managed" in args and install[0] != "managed"):
+            return 1
+        print("\n".join(install[1]))
+        return 0
     if cmd in OVERLAY or cmd in {"page", "open", "launch", "notify", "voice", "dictate", "state", "update-available", "panel"}:
         reply = relay(cmd, args)
         if cmd == "state":

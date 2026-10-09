@@ -11,7 +11,7 @@ import { ensureBridgePlugin } from './bridge-plugin.ts'
 import { type AttachTarget, attachTarget, foreignGateway } from './coexist.ts'
 import { waitForStatus } from './probe.ts'
 import { LineBuffer, parseReadyLine, readyFileName, staleReadyFiles } from './ready.ts'
-import { resolveBackendRuntime } from './resolve.ts'
+import { pendingInstall, resolveBackendRuntime } from './resolve.ts'
 import { withoutInheritedSession } from './session-env.ts'
 import { loginShellPath } from './shell-env.ts'
 
@@ -20,6 +20,24 @@ const STATUS_TIMEOUT_MS = 60_000
 const MAX_RESTARTS = 4
 const BACKOFF_MS = [1_000, 3_000, 7_000, 15_000]
 const LOG_TAIL_LINES = 200
+/** How often the shell looks again for a Hermes Agent to start while it waits for one. */
+export const WAIT_POLL_MS = 3_000
+
+/** What the boot screen says while there is no Hermes to start (`install`: the image's note, see pendingInstall). */
+export function waitingReason(install: string | null): string {
+  switch (install) {
+    case null:
+      return 'No Hermes runtime found. Install Hermes Agent (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash) or set HERALD_OS_HERMES_ROOT; Herald OS starts it as soon as it is installed.'
+    case 'offline':
+      return 'Hermes Agent comes from the internet, and this computer was offline when it first started. Join a network and it installs by itself, which takes a few minutes; Herald OS starts it then.'
+    case 'installing':
+      return 'Installing Hermes Agent. It takes a few minutes; Herald OS starts it when it is ready.'
+    case 'retrying':
+      return 'Hermes Agent did not install, so it tries again in a few minutes (journalctl -u herald-os-hermes says why). Herald OS starts it when it is ready.'
+    default:
+      return 'Hermes Agent is not installed yet. It installs by itself once this computer is online; Herald OS starts it then.'
+  }
+}
 
 export type BackendListener = (state: BackendState) => void
 
@@ -41,6 +59,7 @@ export class BackendManager {
   private stopping = false
   private startGeneration = 0
   private restartTimer: ReturnType<typeof setTimeout> | null = null
+  private waitTimer: ReturnType<typeof setInterval> | null = null
   private readonly tail: string[] = []
 
   getState(): BackendState {
@@ -68,6 +87,7 @@ export class BackendManager {
   async restart(): Promise<void> {
     log('backend', 'restart requested')
     this.clearRestartTimer()
+    this.clearWaitTimer()
     await this.killChild()
     this.stopping = false
     await this.launch(0)
@@ -76,6 +96,7 @@ export class BackendManager {
   async stop(): Promise<void> {
     this.stopping = true
     this.clearRestartTimer()
+    this.clearWaitTimer()
     await this.killChild()
     this.update({ phase: 'stopped', wsUrl: undefined, baseUrl: undefined, port: undefined })
   }
@@ -145,7 +166,8 @@ export class BackendManager {
 
   private async launch(attempt: number): Promise<void> {
     const generation = ++this.startGeneration
-    this.update({ phase: attempt === 0 ? 'resolving' : 'restarting', attempt, error: undefined })
+    this.clearWaitTimer()
+    this.update({ phase: attempt === 0 ? 'resolving' : 'restarting', attempt, error: undefined, install: undefined })
 
     let attach: AttachTarget | null
 
@@ -163,14 +185,11 @@ export class BackendManager {
       return
     }
 
-    const runtime = resolveBackendRuntime()
+    const install = pendingInstall()
+    const runtime = install ? null : resolveBackendRuntime()
 
     if (!runtime) {
-      this.update({
-        phase: 'failed',
-        error:
-          'No Hermes runtime found. Install Hermes Agent (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash) or set HERALD_OS_HERMES_ROOT.'
-      })
+      this.wait(install, generation)
 
       return
     }
@@ -205,6 +224,31 @@ export class BackendManager {
       await this.killChild()
       this.scheduleRestart(attempt, message)
     }
+  }
+
+  /**
+   * No Hermes to start: say why, and look again every few seconds. On the image that means waiting
+   * for firstboot.sh's note to go (Hermes is installed and set up then); elsewhere, for one to resolve.
+   */
+  private wait(install: string | null, generation: number): void {
+    log('backend', install ? `waiting for Hermes Agent to be installed (${install})` : 'no Hermes runtime found; waiting for one to be installed')
+    this.update({ phase: 'waiting', runtime: undefined, install: install ?? undefined, error: waitingReason(install) })
+    this.waitTimer = setInterval(() => {
+      if (generation !== this.startGeneration) {
+        this.clearWaitTimer()
+
+        return
+      }
+
+      const now = pendingInstall()
+
+      if (!now && resolveBackendRuntime()) {
+        log('backend', 'Hermes Agent is installed; starting it')
+        void this.launch(0)
+      } else if ((now ?? undefined) !== this.state.install) {
+        this.update({ install: now ?? undefined, error: waitingReason(now) })
+      }
+    }, WAIT_POLL_MS)
   }
 
   /** Use a backend that is already running (HERALD_OS_BACKEND_URL) instead of starting a second one. */
@@ -380,6 +424,13 @@ export class BackendManager {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null
+    }
+  }
+
+  private clearWaitTimer(): void {
+    if (this.waitTimer) {
+      clearInterval(this.waitTimer)
+      this.waitTimer = null
     }
   }
 

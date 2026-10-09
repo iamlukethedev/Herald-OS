@@ -1,0 +1,18 @@
+[Unit]
+Description=Herald OS: install Hermes Agent once the computer is online (the first boot had no network)
+# firstboot.sh system leaves the note when it could not install Hermes; this removes it once Hermes is
+# installed and set up. The shell waits for that, so it never starts a Hermes still being installed.
+ConditionPathExists=/var/lib/herald-os/hermes-pending
+Wants=network-online.target
+After=network-online.target herald-os-firstboot.service
+
+[Service]
+# Waits for the network and retries a failed install itself; `exec`, so the boot never waits on it.
+Type=exec
+ExecStart=/usr/libexec/herald-os/firstboot.sh hermes
+Restart=on-failure
+RestartSec=5min
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

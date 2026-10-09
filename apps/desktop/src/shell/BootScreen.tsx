@@ -4,10 +4,12 @@ import { HeraldLogo } from '../components/herald-logo.tsx'
 import { cn } from '../lib/cn.ts'
 import { Button } from '../components/ui/button.tsx'
 import { Spinner } from '../components/ui/primitives.tsx'
+import { StatusPanel } from '../features/status/StatusPanel.tsx'
 
 const PHASE_COPY: Record<BackendState['phase'], string> = {
   idle: 'Preparing',
   resolving: 'Locating your Hermes runtime',
+  waiting: 'Waiting for Hermes Agent',
   starting: 'Starting Hermes',
   ready: 'Ready',
   restarting: 'Restarting Hermes',
@@ -18,6 +20,7 @@ const PHASE_COPY: Record<BackendState['phase'], string> = {
 export function BootScreen({ state, leaving = false }: { state: BackendState; leaving?: boolean }) {
   const [showLog, setShowLog] = useState(false)
   const failed = state.phase === 'failed'
+  const waiting = state.phase === 'waiting'
 
   return (
     <div
@@ -43,6 +46,26 @@ export function BootScreen({ state, leaving = false }: { state: BackendState; le
               <Button variant="primary" onClick={() => void window.heraldOS.backend.restart()}>
                 Try again
               </Button>
+              <Button variant="ghost" onClick={() => setShowLog(v => !v)}>
+                {showLog ? 'Hide log' : 'Show log'}
+              </Button>
+              <Button variant="ghost" onClick={() => void window.heraldOS.window.quit()}>
+                Quit
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {waiting && (
+          <div className="flex w-full flex-col gap-3">
+            <p className="selectable text-left text-[12.5px] leading-relaxed text-fg-2">{state.error}</p>
+            {/* On the image a network is what ends the wait, and first-run setup's Wi-Fi step is behind this screen. */}
+            {state.install && (
+              <div className="max-h-[260px] overflow-y-auto rounded-xl text-left">
+                <StatusPanel panel="wifi" />
+              </div>
+            )}
+            <div className="flex justify-center gap-2">
               <Button variant="ghost" onClick={() => setShowLog(v => !v)}>
                 {showLog ? 'Hide log' : 'Show log'}
               </Button>

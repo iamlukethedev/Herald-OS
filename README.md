@@ -597,10 +597,12 @@ does not change the shell's code. Moving the pin is described in [upstream/READM
 
 ## Troubleshooting
 
-- **"No Hermes runtime found", or the boot screen never finishes.** Run `hermes doctor`. If Hermes
-  lives somewhere other than `~/.hermes/hermes-agent` and is not on your PATH, start with
-  `HERALD_OS_HERMES_ROOT=/path/to/hermes-agent npm run dev`. The cause is usually in
-  `~/.hermes/logs/herald-os.log`.
+- **"No Hermes runtime found", or the boot screen never finishes.** Herald OS keeps looking and
+  starts Hermes as soon as it is installed. On the Herald OS image, a first start without a network
+  installs it once you are online (`journalctl -u herald-os-hermes` shows how that goes). Otherwise
+  run `hermes doctor`. If Hermes lives somewhere other than `~/.hermes/hermes-agent` and is not on
+  your PATH, start with `HERALD_OS_HERMES_ROOT=/path/to/hermes-agent npm run dev`. The cause is
+  usually in `~/.hermes/logs/herald-os.log`.
 - **macOS says Herald OS "is damaged" or "cannot be opened".** The build is not notarized yet: run
   `xattr -dr com.apple.quarantine "/Applications/Herald OS.app"` and open it again.
 - **Hermes uses shell commands instead of its system tools.** `hermes plugins list` should show

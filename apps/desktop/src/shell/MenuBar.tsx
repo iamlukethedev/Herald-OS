@@ -189,7 +189,7 @@ export function BackendBadge() {
     return null
   }
 
-  return <span className="ml-2 rounded-full bg-warn/20 px-2 py-0.5 text-[11px] text-warn">{backend.phase === 'failed' ? 'Hermes offline' : 'Starting Hermes'}</span>
+  return <span className="ml-2 rounded-full bg-warn/20 px-2 py-0.5 text-[11px] text-warn">{backend.phase === 'failed' ? 'Hermes offline' : backend.phase === 'waiting' ? 'Waiting for Hermes' : 'Starting Hermes'}</span>
 }
 
 export function MenuBar() {

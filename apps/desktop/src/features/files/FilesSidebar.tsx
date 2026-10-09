@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { LinkAction, ProgressBar } from '../../components/ui/glass.tsx'
 import { cn } from '../../lib/cn.ts'
 import { formatBytes } from '../../lib/format.ts'
+import { isMac } from '../../lib/shortcuts.ts'
 import { useLocalData } from '../../lib/use-async.ts'
 import { useSystemStats } from '../../store/system.ts'
 import { openApp } from '../../store/windows.ts'
@@ -27,7 +28,8 @@ async function namesIn(dir: string): Promise<Set<string>> {
 
 /** Resolve the well-known folders for this Mac; anything missing falls back sensibly or is dropped. */
 async function resolvePlaces(home: string): Promise<Place[]> {
-  const [homeNames, mobileDocs] = await Promise.all([namesIn(home), namesIn(`${home}/Library/Mobile Documents`)])
+  // Only a Mac has iCloud Drive; elsewhere the read fails every time, and main logs each failure.
+  const [homeNames, mobileDocs] = await Promise.all([namesIn(home), isMac ? namesIn(`${home}/Library/Mobile Documents`) : Promise.resolve(new Set<string>())])
   const projects = homeNames.has('Projects') ? `${home}/Projects` : homeNames.has('Apps') ? `${home}/Apps` : home
   const shared = mobileDocs.has('com~apple~CloudDocs') ? `${home}/Library/Mobile Documents/com~apple~CloudDocs` : homeNames.has('Public') ? `${home}/Public` : null
   const places: Place[] = [

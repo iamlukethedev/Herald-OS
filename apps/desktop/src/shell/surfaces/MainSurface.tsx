@@ -92,7 +92,7 @@ export function MainSurface() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const bootOnly = backend.phase === 'idle' || backend.phase === 'resolving' || (backend.phase === 'starting' && backend.attempt === 0) || backend.phase === 'failed'
+  const bootOnly = backend.phase === 'idle' || backend.phase === 'resolving' || backend.phase === 'waiting' || (backend.phase === 'starting' && backend.attempt === 0) || backend.phase === 'failed'
   const bootVisible = useExitTransition(bootOnly, motion.slow + 120)
 
   return (

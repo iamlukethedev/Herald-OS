@@ -257,10 +257,12 @@ if [[ $SYSTEM -eq 1 ]]; then
 fi
 
 if [[ $HERMES -eq 1 ]]; then
-  hermes_bin="$HOME/.hermes/hermes-agent/venv/bin/hermes"
-  if [[ -x "$hermes_bin" ]]; then
+  # The checkout in ~/.hermes/hermes-agent, in whichever layout its installer left; a Hermes that
+  # came from another installer is that installer's to update.
+  mapfile -t hermes < <(herald-os hermes-command --managed 2>/dev/null)
+  if [[ ${#hermes[@]} -gt 0 ]]; then
     echo "==> Hermes Agent"
-    "$hermes_bin" update </dev/null >/dev/null 2>&1 || echo "WARNING: hermes update did not complete (run it in a terminal)"
+    "${hermes[@]}" update </dev/null >/dev/null 2>&1 || echo "WARNING: hermes update did not complete (run it in a terminal)"
   fi
 fi
 
