@@ -1,4 +1,6 @@
-import type { CommandArg, CommandContext, OsCommand } from '../store/os-commands.ts'
+import type { CommandArg, OsCommand } from '../store/os-commands.ts'
+import { slidesDepthCommands } from './slides-depth.ts'
+import { fill, gradient, height, office, presentation, run, sheetArgs, shapeKind, slide, slides, theme, width, x, y } from './slides-shared.ts'
 
 /*
  * Herald Slides for Hermes, voice, the command bar and `herald-os slides`. A command works on the
@@ -8,30 +10,12 @@ import type { CommandArg, CommandContext, OsCommand } from '../store/os-commands
  */
 
 const agent = () => import('../features/office/slides/agent.ts')
-const office = () => import('../features/office/agent.ts')
 
-const presentation: CommandArg = { name: 'presentation', type: 'string', description: 'The presentation: a .pptx file (full path or ~/…) or the name of an open presentation as its tab shows it; the one in front in Herald Slides when left out' }
-const slide: CommandArg = { name: 'slide', type: 'string', description: 'A slide: its number (1 is the first), its id, or its title; the slide in front when left out' }
 const layout: CommandArg = { name: 'layout', type: 'string', description: 'title, title-content (the default), two-content, comparison, section, title-only, blank or picture-caption; names like “title and content”, “two columns” or “section header” work too' }
 const body: CommandArg = { name: 'body', type: 'string', description: 'The slide’s text, one line a bullet (two spaces or a tab at the start go a level deeper; “- ” and “1. ” are read as list markers); for two-content or comparison, a JSON list of two bodies: ["Pros\\nFast", "Cons\\nCostly"]' }
 const notes: CommandArg = { name: 'notes', type: 'string', description: 'Speaker notes for the slide' }
-const theme: CommandArg = {
-  name: 'theme',
-  type: 'string',
-  description: 'herald (white with navy text and blue accents; the default), midnight (dark navy with light text), paper (warm cream with serif type), graphite (dark grey with yellow accents), forest (pale with green accents), coral (warm peach and coral), mono (black and white with a red accent) or ocean (pale blue and teal)'
-}
-const x: CommandArg = { name: 'x', type: 'number', description: 'Left edge in points from the slide’s left (a wide slide is 960 by 540 points, a standard one 720 by 540); centred when left out' }
-const y: CommandArg = { name: 'y', type: 'number', description: 'Top edge in points from the slide’s top; centred when left out' }
-const width: CommandArg = { name: 'width', type: 'number', description: 'Width in points' }
-const height: CommandArg = { name: 'height', type: 'number', description: 'Height in points' }
 const to = (what: string): CommandArg => ({ name: 'to', type: 'string', description: `${what} (full path or ~/…)` })
 const overwrite: CommandArg = { name: 'overwrite', type: 'boolean', description: 'Replace a file at to' }
-
-/** Run where the presentation lives: here, or in its own window (panels mode). */
-const run =
-  (id: string, work: (args: Record<string, unknown>, context: CommandContext) => Promise<{ summary: string; data?: Record<string, unknown> }>) =>
-  async (args: Record<string, unknown>, context: CommandContext) =>
-    (await office()).inOwnWindow('slides', id, args, 'presentation', context, () => work(args, context))
 
 export const slidesCommands: readonly OsCommand[] = [
   {
@@ -71,7 +55,7 @@ export const slidesCommands: readonly OsCommand[] = [
     id: 'slides.read',
     title: 'Read a presentation',
     description:
-      'Read a presentation: its size, theme and transition, and each slide’s number, id, layout, title, text (bullets indented by level), speaker notes, whether it is hidden, and its elements (id, kind, text, box in points). An open presentation also says which slide is in front and what is selected.',
+      'Read a presentation: its size, theme and transition, its header and footer (date, slide number, footer), and each slide’s number, id, layout, title, text (bullets indented by level), speaker notes, whether it is hidden, its own theme, transition and background where it has them, whether it hides the master’s graphics, and its elements (id, kind, shape, text, box in points, rotation, group, and what a connector joins). An open presentation also says which slide is in front and what is selected. slides.readMaster reads the slide master and its layouts.',
     tier: 'read',
     args: [presentation, { ...slide, description: 'Only this slide: its number (1 is the first), its id, or its title' }],
     run: run('slides.read', async (args) => (await agent()).read(args))
@@ -157,23 +141,9 @@ export const slidesCommands: readonly OsCommand[] = [
   {
     id: 'slides.addShape',
     title: 'Add a shape to a slide',
-    description: 'Put a shape on a slide as one step to undo, filled with the theme’s first accent unless fill says otherwise, with centred text if given. Without a place it goes in the middle, 240 by 160 points.',
+    description: 'Put a shape on a slide as one step to undo, filled with the theme’s first accent unless fill or gradient says otherwise, with centred text if given. Without a place it goes in the middle, 240 by 160 points.',
     tier: 'act',
-    args: [
-      presentation,
-      slide,
-      {
-        name: 'kind',
-        type: 'string',
-        description: 'rect (the default), roundRect, ellipse, triangle, rtTriangle, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, plus, star5, rightArrow, leftArrow, upArrow, downArrow, leftRightArrow, chevron, homePlate, wedgeRectCallout or wedgeRoundRectCallout; words like rectangle, circle, star, arrow or callout work too'
-      },
-      x,
-      y,
-      width,
-      height,
-      { name: 'fill', type: 'string', description: 'Fill colour: #rrggbb, a name like navy or teal, a theme colour (accent1 to accent6, text, background), or none' },
-      { name: 'text', type: 'string', description: 'Text in the shape' }
-    ],
+    args: [presentation, slide, shapeKind, x, y, width, height, fill, ...gradient, { name: 'text', type: 'string', description: 'Text in the shape' }],
     run: run('slides.addShape', async (args) => (await agent()).addShape(args))
   },
   {
@@ -213,9 +183,10 @@ export const slidesCommands: readonly OsCommand[] = [
   {
     id: 'slides.setTheme',
     title: 'Change a presentation’s theme',
-    description: 'Give a presentation another theme as one step to undo: its colours and fonts change everywhere they come from the theme; what was picked by hand stays.',
+    description:
+      'Give a presentation another theme, Herald’s own or a custom one, as one step to undo: its colours and fonts change everywhere they come from the theme; what was picked by hand stays. With slide, only those slides take it, as a theme of their own.',
     tier: 'act',
-    args: [presentation, { ...theme, required: true }],
+    args: [presentation, { ...theme, required: true }, slides('the whole deck')],
     run: run('slides.setTheme', async (args) => (await agent()).setTheme(args))
   },
   {
@@ -236,21 +207,29 @@ export const slidesCommands: readonly OsCommand[] = [
     id: 'slides.edit',
     title: 'Make several edits in a presentation at once',
     description:
-      'Make several changes to a presentation as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: addSlide (layout, title, body, notes, after), setSlide (slide, title, body, notes, layout, hidden, background), duplicateSlide (slide), moveSlide (slide, to), removeSlide (slide), addText (slide, text, x, y, width, height, size, color, bold, align), addShape (slide, kind, x, y, width, height, fill, text), addImage (slide, source, x, y, width, height, fit), addTable (slide, cells, x, y, width), setTheme (theme) and replace (find, replacement, all, caseSensitive). Each edit sees the presentation as the ones before left it: a slide added by one can be named by its title in the next, and an edit without a slide lands on the slide the one before it went to. If one fails, none is made.',
+      'Make several changes to a presentation as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: addSlide (layout, title, body, notes, after), setSlide (slide, title, body, notes, layout, hidden, background), duplicateSlide (slide), moveSlide (slide, to), removeSlide (slide), addText (slide, text, x, y, width, height, size, color, bold, align), addShape (slide, kind, x, y, width, height, fill, gradient, angle, radial, text), addImage (slide, source, x, y, width, height, fit), addTable (slide, cells, x, y, width), setTheme (theme, slide) and replace (find, replacement, all, caseSensitive); and, each with the arguments of the command of its name: setBackground, addMasterText, addMasterShape, addMasterImage, addLogo, removeFromMaster, setPlaceholder, showMasterGraphics, renameLayout, resetMaster, setHeaderFooter, setTransition, group, ungroup, rotate, convertToShapes, addConnector, setCellBorders, setFill and addSlideFromSheet. Each edit sees the presentation as the ones before left it: a slide added by one can be named by its title in the next, and an edit without a slide lands on the slide the one before it went to. If one fails, none is made.',
     tier: 'act',
-    args: [presentation, { name: 'edits', type: 'string', description: 'JSON list: [{"op": "addSlide", "title": "Risks", "body": "Supply\\nHiring"}, {"op": "addShape", "slide": "Risks", "kind": "star", "x": 820, "y": 40, "width": 80, "height": 80}, {"op": "setTheme", "theme": "paper"}]', required: true }],
+    args: [
+      presentation,
+      {
+        name: 'edits',
+        type: 'string',
+        description: 'JSON list: [{"op": "addSlide", "title": "Risks", "body": "Supply\\nHiring"}, {"op": "addShape", "slide": "Risks", "kind": "star", "x": 820, "y": 40, "width": 80, "height": 80}, {"op": "setHeaderFooter", "number": true, "skipTitle": true}, {"op": "setTheme", "theme": "paper"}]',
+        required: true
+      }
+    ],
     run: run('slides.edit', async (args) => (await agent()).edit(args))
   },
   {
     id: 'slides.fromDocument',
     title: 'Make slides from a document',
     description:
-      'Turn a Herald Docs document (open, or a file) into slides as one step: a title slide from its title, then a slide for each heading of a level with its list items and short paragraphs as bullets (deeper headings and nested lists a level deeper), long paragraphs shortened with the whole of them in the speaker notes, tables on slides of their own, more than eight bullets continued on another slide, and section slides for the headings above that level. Into a new presentation named after the document, or added to the end of one.',
+      'Turn a Herald Docs document (open, or a file) into slides as one step, as File > New from Document does: a title slide from its title, then each heading’s slides of bullets (its paragraphs and list items, list levels kept), going on over “(continued)” slides as they need; a top heading with headings under it, or a heading with nothing under it, makes a section header; pictures go beside their text or on slides of their own, and tables, quotes and code on slides of their own. Fields read as the text they show, and notes as their numbers with their text in the speaker notes. Into a new presentation named after the document, or added to the end of one.',
     tier: 'act',
     args: [
       { name: 'document', type: 'string', description: 'The document: a .docx, .md or .txt file (full path or ~/…) or the name of an open document as its tab shows it; the one in front in Herald Docs when left out' },
       { ...presentation, description: 'Add the slides to this presentation (an open one’s name, or a .pptx file); a new presentation named after the document when left out' },
-      { name: 'level', type: 'number', description: 'The heading level that starts a slide, 1 to 6; by default the document’s top level below its title' },
+      { name: 'level', type: 'number', description: 'The heading level that starts a slide, 1 to 6: deeper headings become bullets of it and higher ones section headers; every heading starts slides when left out' },
       { name: 'notes', type: 'boolean', description: 'Put every paragraph in the speaker notes and keep the bullets short (a talk with a script)' }
     ],
     run: run('slides.fromDocument', async (args, context) => (await agent()).fromDocument(args, context))
@@ -258,18 +237,10 @@ export const slidesCommands: readonly OsCommand[] = [
   {
     id: 'slides.insertRange',
     title: 'Put a sheet range on a slide',
-    description: 'Put a range of a Herald Sheets workbook (open, or a file) on a slide as a table, as its cells show (formatted numbers and dates), as one step to undo. Without a range, the workbook’s selection, or else its sheet’s cells that hold something.',
+    description:
+      'Put a range of a Herald Sheets workbook (open, or a file) on a slide as a table, as its cells show (formatted numbers and dates), as one step to undo: in place of the slide’s empty text placeholder, else under its title, at a text size its rows fit, or in the box x, y and width give. slide=new puts it on a new slide after the one in front (slides.addSlideFromSheet makes one anywhere, with a title).',
     tier: 'act',
-    args: [
-      presentation,
-      slide,
-      { name: 'workbook', type: 'string', description: 'The workbook: a file (full path or ~/…) or an open workbook’s name; the one in front in Herald Sheets when left out' },
-      { name: 'range', type: 'string', description: 'The cells, like A1:D12 or \'Q1 sales\'!B2:F9; selection for what is selected' },
-      { name: 'sheet', type: 'string', description: 'The sheet, when the range does not name it' },
-      x,
-      y,
-      width
-    ],
+    args: [presentation, { ...slide, description: `${slide.description}; new for a new slide after it` }, ...sheetArgs, { ...x, description: 'Left edge in points from the slide’s left; centred when left out' }, { ...y, description: 'Top edge in points; under the title when left out' }, { ...width, description: 'Width in points; the slide’s text width when left out' }],
     run: run('slides.insertRange', async (args) => (await agent()).insertRange(args))
   },
   {
@@ -305,5 +276,6 @@ export const slidesCommands: readonly OsCommand[] = [
     tier: 'act',
     args: [presentation, { name: 'steps', type: 'number', description: 'How many steps (1)' }],
     run: run('slides.redo', async (args) => (await agent()).step('redo', args))
-  }
+  },
+  ...slidesDepthCommands
 ]

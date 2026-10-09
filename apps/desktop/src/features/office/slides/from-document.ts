@@ -1,4 +1,5 @@
-import { CODE_FONT, type DocJSON, type DocNode, imageSize, parseDataUrl, textOf } from '../../../../shared/office/document.ts'
+import { CODE_FONT, type DocJSON, type DocNode, imageSize, type NoteKind, noteLabel, parseDataUrl, textOf } from '../../../../shared/office/document.ts'
+import { fieldText } from '../../../../shared/office/fields.ts'
 import type { CellRange } from '../../../../shared/office/xlsx/address.ts'
 import type { Box, Deck, LayoutId, ListKind, NumberStyle, Paragraph, RunStyle, ShapeElement, Slide, SlideElement, SlideSize, TextAlign, TextElement, TextRun, Theme } from './deck.ts'
 import { coverCrop, imageElement, textElement } from './elements.ts'
@@ -14,10 +15,26 @@ import { DEFAULT_INSET, LIST_INDENT, MAX_LEVEL, textBody, tidyRuns } from './tex
  * headings make section headers and slides of bullets, and its pictures, tables, quotes and code
  * get slides in the layouts made for them. How much text a slide holds is estimated from its
  * placeholder's width and text size, so a long section goes on over further slides rather than
- * running off one. The same document always makes the same slides.
+ * running off one. Fields read as the text they show and notes as their numbers raised, each note's
+ * text in the speaker notes of the slide its number is on. The same document always makes the same
+ * slides (a date field shows the day's date).
  */
 
 type Place = Pick<Deck, 'size' | 'master'>
+
+/** Where a deck made from a document leaves the rule. */
+export interface DocumentOptions {
+  /** The heading level that starts a slide, 1 to 6: deeper headings are bullets a level deeper, and higher ones make section headers. */
+  level?: number
+  /** Every paragraph in the speaker notes and short bullets on the slides, for a talk with a script. */
+  notes?: boolean
+}
+
+/** How a section's blocks become slides: the heading level that starts a slide (headings deeper are bullets), and whether its paragraphs are said rather than shown. */
+interface Outline {
+  cut?: number
+  script?: boolean
+}
 
 /** A paragraph or list item of a section, as a bullet. */
 interface Bullet {
@@ -30,6 +47,8 @@ interface Bullet {
   order?: { list: number; n: number; numbering?: NumberStyle }
   /** A paragraph of its own rather than a list item: a picture's caption may be one. */
   plain?: boolean
+  /** The notes its text has the numbers of, as lines for the speaker notes. */
+  notes?: string[]
 }
 
 interface Picture {
@@ -42,8 +61,8 @@ interface Picture {
 type Item =
   | { kind: 'bullet'; bullet: Bullet }
   | { kind: 'picture'; picture: Picture }
-  | { kind: 'table'; cells: GridCell[][]; merges: CellRange[]; header: boolean }
-  | { kind: 'quote'; lines: string[]; by: string }
+  | { kind: 'table'; cells: GridCell[][]; merges: CellRange[]; header: boolean; notes?: string[] }
+  | { kind: 'quote'; lines: string[]; by: string; notes?: string[] }
   | { kind: 'code'; lines: string[] }
 
 type TableItem = Extract<Item, { kind: 'table' }>
@@ -54,6 +73,8 @@ interface Section {
   title: string
   level: number
   blocks: DocNode[]
+  /** The notes its heading has the numbers of. */
+  notes: string[]
 }
 
 /** The room a text placeholder gives its paragraphs, in points. */
@@ -72,6 +93,8 @@ interface Chunk {
 
 /** A paragraph this long or shorter may be a subtitle or a picture's caption. */
 const SHORT = 120
+/** A bullet's most characters in a talk with a script. */
+const BRIEF = 80
 const QUOTE_SIZES = [40, 36, 32, 28, 24]
 const CODE_SIZES = [20, 18, 16, 14, 12]
 /** How wide a character of code is, as a share of its size (a monospace face). */
@@ -83,8 +106,15 @@ const NUMBERINGS: Record<string, NumberStyle | undefined> = { a: 'alphaLcPeriod'
 const MARKS: Record<string, RunStyle | undefined> = { bold: { bold: true }, italic: { italic: true }, underline: { underline: true }, strike: { strike: true }, code: { font: CODE_FONT } }
 /** A table cell's text that reads as a number (an amount, a percentage), right-aligned. */
 const NUMERIC = /^[-+−(]?[$€£¥]?\s?\d[\d,.\s]*%?\)?$/
+/** Notes' numbers raised, as their references show them: footnotes 1, 2… and endnotes i, ii…. */
+const RAISED: Record<string, string> = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹', i: 'ⁱ', v: 'ᵛ', x: 'ˣ', l: 'ˡ', c: 'ᶜ', d: 'ᵈ', m: 'ᵐ' }
+/** The mark a note's raised number carries through the text, holding the note's line for the speaker notes. */
+const NOTE_MARK = 'slideNote'
 
 const runsText = (runs: readonly TextRun[]): string => runs.map((run) => run.text).join('')
+
+/** Speaker notes made of parts, those with something in them a paragraph each. */
+const joinNotes = (...parts: readonly string[]): string => parts.filter((part) => part.trim()).join('\n\n')
 
 const isText = (element: SlideElement | undefined): element is TextElement | ShapeElement => element?.kind === 'text' || element?.kind === 'shape'
 
@@ -93,6 +123,64 @@ const continued = (title: string): string => `${title} (continued)`.trim()
 const total = (values: readonly number[]): number => values.reduce((sum, value) => sum + value, 0)
 
 // Reading the document.
+
+const raised = (label: string): string => [...label].map((character) => RAISED[character] ?? character).join('')
+
+/**
+ * A document's blocks as its pages show them, for the rest to read as text: a field as what it
+ * shows, a note as its number raised, carrying the note's text for the speaker notes in a mark
+ * (numbered by kind in the order the notes come, as the page numbers them). Comments' marks say
+ * nothing about how text looks, and are passed over with the other marks that do not.
+ */
+function shown(doc: DocJSON): DocNode[] {
+  const counts: Record<NoteKind, number> = { footnote: 0, endnote: 0 }
+  const visit = (node: DocNode, counting: boolean): DocNode[] => {
+    if (node.type === 'field') {
+      const text = fieldText(node.attrs)
+
+      return text ? [{ type: 'text', text, ...(node.marks ? { marks: node.marks } : {}) }] : []
+    }
+
+    if (node.type === 'note') {
+      if (!counting) {
+        return []
+      }
+
+      const kind: NoteKind = node.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
+      const number = raised(noteLabel(kind, ++counts[kind]))
+      const said = ((node.attrs?.content as DocNode[] | undefined) ?? [])
+        .flatMap((block) => visit(block, false))
+        .map(textOf)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      return [{ type: 'text', text: number, marks: [...(node.marks ?? []), { type: NOTE_MARK, attrs: { line: `${number} ${said}`.trim() } }] }]
+    }
+
+    return [node.content ? { ...node, content: node.content.flatMap((child) => visit(child, counting)) } : node]
+  }
+
+  return (doc.content ?? []).flatMap((block) => visit(block, true))
+}
+
+/** The speaker-notes lines of the notes whose numbers some content holds, in order, each once. */
+function notesIn(nodes: readonly DocNode[]): string[] {
+  const lines: string[] = []
+  const visit = (node: DocNode) => {
+    const line = node.marks?.find((mark) => mark.type === NOTE_MARK)?.attrs?.line
+
+    if (typeof line === 'string' && !lines.includes(line)) {
+      lines.push(line)
+    }
+
+    node.content?.forEach(visit)
+  }
+
+  nodes.forEach(visit)
+
+  return lines
+}
 
 /** Inline content as runs: bold, italic, underline, strike and code's monospace face kept, line breaks as new lines, pictures left out. */
 function runsOf(nodes: readonly DocNode[] = []): TextRun[] {
@@ -155,15 +243,16 @@ function pictureOf(node: DocNode): Picture | null {
   return { src, natural, alt: typeof node.attrs?.alt === 'string' ? node.attrs.alt.trim() : '' }
 }
 
-/** A paragraph's text as a bullet, and its pictures, in the order they come. */
-function paragraphItems(node: DocNode): Item[] {
+/** A paragraph's text as a bullet (at `level`; a heading under the level that starts a slide is a bullet, not a paragraph of its own), and its pictures, in the order they come. */
+function paragraphItems(node: DocNode, level = 0, plain = true): Item[] {
   const items: Item[] = []
   let inline: DocNode[] = []
   const flush = () => {
     const runs = trimmed(runsOf(inline))
+    const notes = notesIn(inline)
 
     if (runsText(runs).trim()) {
-      items.push({ kind: 'bullet', bullet: { runs, level: 0, list: 'bullet', plain: true } })
+      items.push({ kind: 'bullet', bullet: { runs, level: Math.min(MAX_LEVEL, level), list: 'bullet', ...(plain ? { plain } : {}), ...(notes.length ? { notes } : {}) } })
     }
 
     inline = []
@@ -212,12 +301,14 @@ function listItems(list: DocNode, level: number, lists: { count: number }): Item
       .map((block) => (block.type === 'paragraph' || block.type === 'heading' ? runsOf(block.content) : [{ text: blockLines([block]).join('\n') }]))
       .filter((line) => runsText(line).trim())
     const runs = trimmed(lines.flatMap((line, k) => (k ? [{ text: '\n' }, ...line] : line)))
+    const notes = notesIn(blocks.filter((block) => !LISTS.has(block.type)))
     const bullet: Bullet = {
       runs,
       level: Math.min(MAX_LEVEL, level),
       list: ordered ? 'number' : 'bullet',
       ...(list.type === 'taskList' ? { glyph: item.attrs?.checked ? '☑' : '☐' } : {}),
-      ...(ordered ? { order: { list: id, n: start + index, ...(numbering ? { numbering } : {}) } } : {})
+      ...(ordered ? { order: { list: id, n: start + index, ...(numbering ? { numbering } : {}) } } : {}),
+      ...(notes.length ? { notes } : {})
     }
     const own: Item[] = runsText(runs).trim() ? [{ kind: 'bullet', bullet }] : []
 
@@ -229,8 +320,9 @@ function listItems(list: DocNode, level: number, lists: { count: number }): Item
 function quoteItems(node: DocNode): Item[] {
   const lines = blockLines(node.content ?? [])
   const by = lines.length > 1 ? /^(?:—|–|-{1,2}|~)\s*(\S.*)$/.exec(lines[lines.length - 1]) : null
+  const notes = notesIn(node.content ?? [])
 
-  return lines.length ? [{ kind: 'quote', lines: by ? lines.slice(0, -1) : lines, by: by ? by[1] : '' }] : []
+  return lines.length ? [{ kind: 'quote', lines: by ? lines.slice(0, -1) : lines, by: by ? by[1] : '', ...(notes.length ? { notes } : {}) }] : []
 }
 
 function codeItems(node: DocNode): Item[] {
@@ -289,17 +381,32 @@ function tableItems(node: DocNode): Item[] {
   const head = rows[0]?.content ?? []
   const header = head.length > 0 && head.every((cell) => cell.type === 'tableHeader')
   const kept = merges.filter((merge) => merge.startColumn < columns).map((merge) => ({ ...merge, endColumn: Math.min(columns - 1, merge.endColumn) }))
+  const notes = notesIn(rows)
 
-  return columns ? [{ kind: 'table', cells, merges: kept, header }] : []
+  return columns ? [{ kind: 'table', cells, merges: kept, header, ...(notes.length ? { notes } : {}) }] : []
 }
 
-/** A section's blocks as what its slides show, in order. */
-function itemsOf(blocks: readonly DocNode[], lists: { count: number }): Item[] {
+/**
+ * A section's blocks as what its slides show, in order. Under the level that starts a slide, a
+ * heading is a bullet as many levels in as it is deeper, and what follows it goes a level further in.
+ */
+function itemsOf(blocks: readonly DocNode[], lists: { count: number }, outline: Outline = {}, from = 0): Item[] {
+  let base = from
+
   return blocks.flatMap((block): Item[] => {
     switch (block.type) {
       case 'paragraph':
-      case 'heading':
-        return paragraphItems(block)
+        return paragraphItems(block, base)
+      case 'heading': {
+        if (outline.cut === undefined) {
+          return paragraphItems(block)
+        }
+
+        const depth = Math.max(1, levelOf(block) - outline.cut)
+        base = depth
+
+        return paragraphItems(block, depth - 1, false)
+      }
       case 'image': {
         const picture = pictureOf(block)
 
@@ -308,7 +415,7 @@ function itemsOf(blocks: readonly DocNode[], lists: { count: number }): Item[] {
       case 'bulletList':
       case 'orderedList':
       case 'taskList':
-        return listItems(block, 0, lists)
+        return listItems(block, base, lists)
       case 'blockquote':
         return quoteItems(block)
       case 'codeBlock':
@@ -316,7 +423,7 @@ function itemsOf(blocks: readonly DocNode[], lists: { count: number }): Item[] {
       case 'table':
         return tableItems(block)
       case 'callout':
-        return itemsOf(block.content ?? [], lists)
+        return itemsOf(block.content ?? [], lists, outline, base)
       default:
         return []
     }
@@ -326,20 +433,22 @@ function itemsOf(blocks: readonly DocNode[], lists: { count: number }): Item[] {
 /**
  * The document's title and subtitle, and which blocks they were: a Title paragraph before the
  * first heading, else the first heading when it heads the document (no other heading is at its
- * level or above), else `fallback`, else the first heading. The subtitle is a Subtitle paragraph
- * before the first section, else a short paragraph straight after the title.
+ * level or above, and it is above the level asked to start slides), else `fallback`, else the first
+ * heading. The subtitle is a Subtitle paragraph before the first section, else a short paragraph
+ * straight after the title (a table of contents between them passed over).
  */
-function titleOf(blocks: readonly DocNode[], fallback?: string): { title: string; subtitle: string; used: Set<number> } {
+function titleOf(blocks: readonly DocNode[], fallback?: string, level?: number): { title: string; subtitle: string; used: Set<number> } {
   const headings = blocks.flatMap((block, index) => (isHeading(block) ? [index] : []))
   const titled = blocks.findIndex((block, index) => index < (headings[0] ?? blocks.length) && styled(block, 'title'))
-  const heads = headings.length > 0 && headings.every((index) => index === headings[0] || levelOf(blocks[index]) > levelOf(blocks[headings[0]]))
+  const heads =
+    headings.length > 0 && headings.every((index) => index === headings[0] || levelOf(blocks[index]) > levelOf(blocks[headings[0]])) && !(level !== undefined && level <= levelOf(blocks[headings[0]]))
   const source = titled >= 0 ? titled : headings.length && (heads || fallback === undefined) ? headings[0] : -1
   const used = new Set(source >= 0 ? [source] : [])
   const sections = headings.find((index) => !used.has(index)) ?? blocks.length
   const subtitled = blocks.findIndex((block, index) => index < sections && !used.has(index) && styled(block, 'subtitle'))
   let next = source + 1
 
-  while (source >= 0 && next < sections && emptyParagraph(blocks[next])) {
+  while (source >= 0 && next < sections && (emptyParagraph(blocks[next]) || blocks[next].type === 'tableOfContents')) {
     next++
   }
 
@@ -418,6 +527,40 @@ function shortenRuns(runs: readonly TextRun[], width: number, fit: Fit): TextRun
   const sentence = Math.max(0, ...[...text.slice(0, end).matchAll(/[.!?…]["”’)]?(?=\s|$)/g)].map((match) => (match.index ?? 0) + match[0].length))
 
   return sentence > end / 2 ? sliceRuns(runs, sentence, ' …') : sliceRuns(runs, end, '…')
+}
+
+/** Where runs' first sentence ends: before the space after its full stop, question or exclamation mark; their end when they are one sentence. */
+function firstSentenceEnd(text: string): number {
+  const found = /^[\s\S]+?[.!?…]["”’)]?(?=\s+[\p{Lu}\d“"(]|\s*$)/u.exec(text)
+
+  return found ? found[0].length : text.length
+}
+
+/**
+ * Runs kept to `limit` characters, for a talk's short bullets: whole when they fit (only their
+ * first sentence with `lead`), else their first sentence when it fits, else cut after a word with "…".
+ */
+function briefRuns(runs: readonly TextRun[], limit: number, lead = false): TextRun[] {
+  const text = runsText(runs)
+  const sentence = firstSentenceEnd(text)
+  const wanted = lead ? sentence : text.length
+
+  if (wanted <= limit) {
+    return wanted === text.length ? [...runs] : sliceRuns(runs, wanted, '')
+  }
+
+  if (sentence <= limit) {
+    return sliceRuns(runs, sentence, '')
+  }
+
+  const space = text.slice(0, limit).lastIndexOf(' ')
+  let end = space > limit / 2 ? space : limit - 1
+
+  while (end > 1 && /[\s,;:.–-]/.test(text[end - 1])) {
+    end--
+  }
+
+  return sliceRuns(runs, end, '…')
 }
 
 /** Bullets in slides' worth, as many as each slide's placeholder holds: a paragraph never splits between slides, and one too long for a slide of its own is shortened. */
@@ -511,6 +654,12 @@ const slideOf = (place: Place, layout: LayoutId, title: string): Slide => withPl
 
 const altRuns = (picture: Picture): TextRun[] => (picture.alt ? [{ text: picture.alt }] : [])
 
+/** The lines of the notes some bullets have the numbers of, each once. */
+const bulletNotes = (bullets: readonly Bullet[]): string[] => [...new Set(bullets.flatMap((bullet) => bullet.notes ?? []))]
+
+/** A slide with some notes' lines after its speaker notes. */
+const withNotes = (slide: Slide, lines: readonly string[]): Slide => (lines.length ? { ...slide, notes: joinNotes(slide.notes, lines.join('\n')) } : slide)
+
 /** A slide's text placeholder, or a text box in its content area when its layout has none. */
 function bodyOf(place: Place, slide: Slide): { slide: Slide; body: TextElement | ShapeElement } {
   const found = placeholderFor(slide, 'body')
@@ -536,7 +685,7 @@ function textSlides(place: Place, title: string, bullets: readonly Bullet[], not
   return chunked(bullets, fitOf(first.body)).map((chunk, index) => {
     const { slide, body } = index ? slideFor(index) : first
 
-    return { ...slide, elements: slide.elements.map((element) => (element.id === body.id ? withBullets(body, chunk.bullets) : element)), notes: chunk.shortened ? notes : '' }
+    return withNotes({ ...slide, elements: slide.elements.map((element) => (element.id === body.id ? withBullets(body, chunk.bullets) : element)), notes: chunk.shortened ? notes : '' }, bulletNotes(chunk.bullets))
   })
 }
 
@@ -558,11 +707,11 @@ function twoContentSlide(place: Place, title: string, bullets: readonly Bullet[]
 
   const image = imageElement(picture.src, picture.natural, inside(picture.natural, right), picture.alt ? { alt: picture.alt } : {})
 
-  return { ...slide, elements: [...slide.elements.flatMap((element) => (element.id === right.id ? [] : [element.id === left.id ? withBullets(left, chunks[0].bullets) : element])), image] }
+  return withNotes({ ...slide, elements: [...slide.elements.flatMap((element) => (element.id === right.id ? [] : [element.id === left.id ? withBullets(left, chunks[0].bullets) : element])), image] }, bulletNotes(chunks[0].bullets))
 }
 
 /** A Picture with Caption slide: the picture cut to fill its frame, its caption beside it (shortened, with the section's text as notes, when too long). */
-function pictureSlide(place: Place, title: string, picture: Picture, caption: readonly TextRun[], notes: string): Slide {
+function pictureSlide(place: Place, title: string, picture: Picture, caption: readonly TextRun[], notes: string, captionNotes: readonly string[] = []): Slide {
   const slide = slideOf(place, 'picture-caption', title)
   const frame = placeholderFor(slide, 'picture')
   const text = placeholderFor(slide, 'caption')
@@ -581,12 +730,12 @@ function pictureSlide(place: Place, title: string, picture: Picture, caption: re
   })
   const placed = frame?.kind === 'image' ? elements : [...elements, imageElement(picture.src, picture.natural, inside(picture.natural, contentArea(place, slide).box), alt)]
 
-  return { ...slide, elements: placed, notes: shortened ? notes : '' }
+  return withNotes({ ...slide, elements: placed, notes: shortened ? notes : '' }, captionNotes)
 }
 
 /** Pictures with nothing between them but a short paragraph after each, as the pictures and their captions (that paragraph, else the alt text); null when there is other text. */
-function captionedPictures(items: readonly Item[]): { picture: Picture; caption: TextRun[] }[] | null {
-  const out: { picture: Picture; caption: TextRun[] }[] = []
+function captionedPictures(items: readonly Item[]): { picture: Picture; caption: TextRun[]; notes: string[] }[] | null {
+  const out: { picture: Picture; caption: TextRun[]; notes: string[] }[] = []
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]
@@ -596,8 +745,8 @@ function captionedPictures(items: readonly Item[]): { picture: Picture; caption:
       return null
     }
 
-    const caption = next?.kind === 'bullet' && next.bullet.plain && runsText(next.bullet.runs).length <= SHORT ? next.bullet.runs : null
-    out.push({ picture: item.picture, caption: caption ?? altRuns(item.picture) })
+    const caption = next?.kind === 'bullet' && next.bullet.plain && runsText(next.bullet.runs).length <= SHORT ? next.bullet : null
+    out.push({ picture: item.picture, caption: caption?.runs ?? altRuns(item.picture), notes: caption?.notes ?? [] })
     i += caption ? 1 : 0
   }
 
@@ -615,7 +764,7 @@ function flowSlides(place: Place, title: string, items: readonly Item[], notes: 
   const captioned = captionedPictures(items)
 
   if (captioned) {
-    return { slides: captioned.map(({ picture, caption }) => pictureSlide(place, title, picture, caption, notes)), text: false }
+    return { slides: captioned.map((entry) => pictureSlide(place, title, entry.picture, entry.caption, notes, entry.notes)), text: false }
   }
 
   const beside = pictures.length === 1 ? twoContentSlide(place, goesOn ? continued(title) : title, bullets, pictures[0]) : null
@@ -634,7 +783,7 @@ function tableSlides(place: Place, title: string, table: TableItem): Slide[] {
   return tablesFor(table.cells, table.merges, contentArea(place, first).box, { header: table.header, split: true }).map((element, index) => {
     const slide = index ? slideOf(place, 'title-only', continued(title)) : first
 
-    return { ...slide, elements: [...slide.elements, element] }
+    return withNotes({ ...slide, elements: [...slide.elements, element] }, index ? [] : (table.notes ?? []))
   })
 }
 
@@ -655,7 +804,7 @@ function quoteSlide(place: Place, title: string, quote: QuoteItem, notes: string
   const body = textBody({ font: '+body', size, color: 'tx1', italic: true }, { anchor: 'middle', fit: 'shrink' })
   const paragraphs = [...lines.map((line): Paragraph => ({ align: 'center', runs: [{ text: line }] })), ...attribution]
 
-  return { ...slide, elements: [...slide.elements, textElement(box, { ...body, paragraphs })], notes: shortened ? notes : '' }
+  return withNotes({ ...slide, elements: [...slide.elements, textElement(box, { ...body, paragraphs })], notes: shortened ? notes : '' }, quote.notes ?? [])
 }
 
 /** Code in a monospace box on Title Only slides, a paragraph a line, at the largest size from 20 points down to 12 that it fits; code too long for a slide at 12 points goes on over further ones. */
@@ -696,16 +845,53 @@ function codeSlides(place: Place, title: string, code: CodeItem): Slide[] {
 }
 
 /**
+ * A section's items for a talk with a script: its paragraphs are said in the speaker notes and its
+ * list items kept short (the whole of one shortened said too); a section with no list keeps each
+ * paragraph's first sentence as a bullet. A short paragraph after a picture stays its caption.
+ */
+function spoken(items: readonly Item[]): { items: Item[]; said: string } {
+  const listed = items.some((item) => item.kind === 'bullet' && !item.bullet.plain)
+  const said: string[] = []
+  const kept = items.flatMap((item, index): Item[] => {
+    if (item.kind !== 'bullet') {
+      return [item]
+    }
+
+    const { bullet } = item
+    const words = runsText(bullet.runs)
+
+    if (bullet.plain && items[index - 1]?.kind === 'picture' && words.length <= SHORT) {
+      return [item]
+    }
+
+    const brief = briefRuns(bullet.runs, BRIEF, bullet.plain)
+
+    if (bullet.plain || runsText(brief) !== words) {
+      said.push(words)
+    }
+
+    return bullet.plain && listed ? [] : [{ kind: 'bullet', bullet: { ...bullet, runs: brief } }]
+  })
+
+  return { items: kept, said: said.join('\n\n') }
+}
+
+/**
  * A section's slides: its text as bullets, with its pictures beside it or on slides of their own,
  * then each table, quote and code block on a slide of its own, in the order the document has them.
- * Slides that go on with the section's text, a table or code are titled "… (continued)".
+ * Slides that go on with the section's text, a table or code are titled "… (continued)". In a talk
+ * with a script, what is said goes in the speaker notes of the section's first slide.
  */
-function contentSlides(place: Place, title: string, blocks: readonly DocNode[]): Slide[] {
-  const items = itemsOf(blocks, { count: 0 })
-  const notes = blocks
-    .map(textOf)
-    .filter((text) => text.trim())
-    .join('\n')
+function contentSlides(place: Place, title: string, blocks: readonly DocNode[], outline: Outline = {}): Slide[] {
+  const found = itemsOf(blocks, { count: 0 }, outline)
+  const script = outline.script ? spoken(found) : null
+  const items = script?.items ?? found
+  const notes = script
+    ? ''
+    : blocks
+        .map(textOf)
+        .filter((text) => text.trim())
+        .join('\n')
   const slides: Slide[] = []
   let flow: Item[] = []
   let goesOn = false
@@ -738,13 +924,22 @@ function contentSlides(place: Place, title: string, blocks: readonly DocNode[]):
 
   flush()
 
-  return slides
+  return script?.said && slides.length ? [{ ...slides[0], notes: joinNotes(script.said, slides[0].notes) }, ...slides.slice(1)] : slides
 }
 
-/** The slides a document makes on a deck of `place`'s size and master, its title slide first, and the title it gives the deck. */
-function documentSlides(doc: DocJSON, place: Place, fallback?: string): { title: string; slides: Slide[] } {
-  const blocks = doc.content ?? []
-  const { title, subtitle, used } = titleOf(blocks, fallback)
+/**
+ * The slides a document makes on a deck of `place`'s size and master, its title slide first, and the
+ * title it gives the deck. Every heading starts a slide, or with `level` those at it and above:
+ * deeper ones are bullets of the slide of the heading above them, and a heading above the level
+ * with deeper ones under it makes a section header.
+ */
+function documentSlides(doc: DocJSON, place: Place, fallback?: string, options: DocumentOptions = {}): { title: string; slides: Slide[] } {
+  const blocks = shown(doc)
+  const { title, subtitle, used } = titleOf(blocks, fallback, options.level)
+  const levels = blocks.flatMap((block, index) => (isHeading(block) && !used.has(index) ? [levelOf(block)] : []))
+  // Asked for a level no heading is at or above, the shallowest headings are the first bullets of the slides after the title.
+  const cut = options.level === undefined ? undefined : !levels.length || levels.some((level) => level <= options.level!) ? options.level : Math.min(...levels) - 1
+  const outline: Outline = { ...(cut === undefined ? {} : { cut }), ...(options.notes ? { script: true } : {}) }
   const intro: DocNode[] = []
   const sections: Section[] = []
 
@@ -753,27 +948,34 @@ function documentSlides(doc: DocJSON, place: Place, fallback?: string): { title:
       return
     }
 
-    if (isHeading(block)) {
-      sections.push({ title: textOf(block).trim(), level: levelOf(block), blocks: [] })
+    if (isHeading(block) && (cut === undefined || levelOf(block) <= cut)) {
+      sections.push({ title: textOf(block).trim(), level: levelOf(block), blocks: [], notes: notesIn([block]) })
     } else {
       ;(sections.length ? sections[sections.length - 1].blocks : intro).push(block)
     }
   })
 
   const top = Math.min(...sections.map((section) => section.level))
-  const slides = [withPlaceholderText(slideOf(place, 'title', title), 'subtitle', subtitle), ...contentSlides(place, title, intro)]
+  const opening = withNotes(withPlaceholderText(slideOf(place, 'title', title), 'subtitle', subtitle), notesIn([...used].map((index) => blocks[index])))
+  const slides = [opening, ...contentSlides(place, title, intro, outline)]
 
   sections.forEach((section, index) => {
     const deeper = (sections[index + 1]?.level ?? 0) > section.level
     const content = section.blocks.filter((block) => !emptyParagraph(block))
+    const empty = !itemsOf(content, { count: 0 }, outline).length && !deeper
+    const made: Slide[] = []
 
-    if ((section.level === top && deeper) || (!itemsOf(content, { count: 0 }).length && !deeper)) {
+    if (cut === undefined ? (section.level === top && deeper) || empty : (section.level < cut && deeper) || empty) {
       // A section header's subtitle is its heading's one short paragraph.
       const lead = content.length === 1 ? shortText(content[0]) : null
-      slides.push(withPlaceholderText(slideOf(place, 'section', section.title), 'subtitle', lead ?? ''), ...(lead === null ? contentSlides(place, section.title, section.blocks) : []))
+      const header = withPlaceholderText(slideOf(place, 'section', section.title), 'subtitle', lead ?? '')
+      const said = lead !== null && outline.script ? textOf(content[0]).trim() : ''
+      made.push(withNotes({ ...header, notes: said }, lead === null ? [] : notesIn(content)), ...(lead === null ? contentSlides(place, section.title, section.blocks, outline) : []))
     } else {
-      slides.push(...contentSlides(place, section.title, section.blocks))
+      made.push(...contentSlides(place, section.title, section.blocks, outline))
     }
+
+    slides.push(...made.map((slide, at) => (at ? slide : withNotes(slide, section.notes))))
   })
 
   return { title, slides }
@@ -787,18 +989,19 @@ function documentSlides(doc: DocJSON, place: Place, fallback?: string): { title:
  * headings under it, or a heading with nothing under it, makes a Section Header; a heading's text
  * makes Title and Content slides of bullets (list levels kept), going on over "… (continued)"
  * slides as it needs. A picture alone goes on a Picture with Caption slide, one with text beside it
- * on a Two Content slide; tables, quotes and code get Title Only slides of their own.
+ * on a Two Content slide; tables, quotes and code get Title Only slides of their own. `level` and
+ * `notes` (see `DocumentOptions`) change which headings start slides and how much a slide shows.
  */
-export function deckFromDocument(doc: DocJSON, options: { title?: string; theme?: Theme; size?: SlideSize } = {}): Deck {
+export function deckFromDocument(doc: DocJSON, options: { title?: string; theme?: Theme; size?: SlideSize } & DocumentOptions = {}): Deck {
   const deck = newDeck(options.title ?? '', { size: options.size, theme: options.theme })
-  const { title, slides } = documentSlides(doc, deck, options.title)
+  const { title, slides } = documentSlides(doc, deck, options.title, { level: options.level, notes: options.notes })
 
   return { ...deck, title, slides }
 }
 
 /** A document's slides, as `deckFromDocument` makes them, in a deck after `after` (at the end without one) as one step; without a title of its own, the document has no title slide. */
-export function slidesFromDocument(deck: Deck, doc: DocJSON, options: { after?: string | null } = {}): DeckChange & { slideIds: string[] } {
-  const [opening, ...rest] = documentSlides(doc, deck).slides
+export function slidesFromDocument(deck: Deck, doc: DocJSON, options: { after?: string | null } & DocumentOptions = {}): DeckChange & { slideIds: string[] } {
+  const [opening, ...rest] = documentSlides(doc, deck, undefined, { level: options.level, notes: options.notes }).slides
   const slides = opening.elements.every(isEmptyPlaceholder) ? rest : [opening, ...rest]
   const label = 'Slides from Document'
 

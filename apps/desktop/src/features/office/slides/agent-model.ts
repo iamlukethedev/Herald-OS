@@ -1,20 +1,48 @@
-import type { DocJSON, DocNode } from '../../../../shared/office/document.ts'
+import type { DocJSON } from '../../../../shared/office/document.ts'
+import type { WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
 import { parseJsonArg } from '../agent-model.ts'
-import { type Color, type Deck, LAYOUTS, type LayoutId, SHAPE_KINDS, type ShapeKind, type Slide, type SlideElement, type SlideSize, SLIDE_SIZES, type TextAlign, type TextBody, type TextRun, type Theme } from './deck.ts'
+import {
+  type Background,
+  type Box,
+  type Color,
+  type Connector,
+  type DateFormat,
+  type Deck,
+  type Fill,
+  type GradientStop,
+  LAYOUTS,
+  type LayoutId,
+  SHAPE_KINDS,
+  type ShapeKind,
+  type Slide,
+  type SlideElement,
+  type SlideSize,
+  SLIDE_SIZES,
+  type SlideTransition,
+  type TextAlign,
+  type TextBody,
+  type TextRun,
+  type Theme
+} from './deck.ts'
 import { coverCrop, describeElement } from './elements.ts'
+import { headerFooterOf } from './footers.ts'
+import type { DocumentOptions } from './from-document.ts'
+import { contentArea } from './from-sheet.ts'
 import { isEmptyPlaceholder, LAYOUT_NAMES, layoutPlaceholders, placeholderFor } from './layouts.ts'
 import * as model from './model.ts'
 import type { DeckChange } from './model.ts'
-import { SHAPE_NAMES } from './shapes.ts'
-import { MAX_COLUMNS, MAX_ROWS, tableText } from './tables.ts'
-import { isSlot, normalHex, THEMES } from './themes.ts'
+import { SHAPE_GROUPS, SHAPE_NAMES } from './shapes.ts'
+import { MAX_COLUMNS, MAX_ROWS, ROW_HEIGHT, tableText } from './tables.ts'
+import { isSlot, normalHex, sameTheme, THEMES } from './themes.ts'
 import { plainText, tidyRuns } from './text.ts'
+import { sameTransition, transitionFor } from './transitions.ts'
 
 /*
  * Herald Slides for Hermes, without a window: the slide, layout, colour and theme a command names;
  * every change as a pure step on the deck, so a batch is its steps one after another and lands as
  * one step to undo; a deck read the way Hermes wants it; find and replace over a deck's text; and
- * the slides a Herald Docs document makes. Tested directly.
+ * the slides a Herald Docs document makes and the tables a Herald Sheets range makes, as the
+ * editor's own File and Insert menus make them. Tested directly.
  */
 
 type Args = Record<string, unknown>
@@ -34,10 +62,10 @@ const shorten = (value: string, limit: number): string => {
 }
 
 /** true, false, or undefined when the caller said nothing. */
-const flag = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : given(value) ? /^(true|yes|on|1)$/i.test(String(value).trim()) : undefined)
+export const flag = (value: unknown): boolean | undefined => (typeof value === 'boolean' ? value : given(value) ? /^(true|yes|on|1)$/i.test(String(value).trim()) : undefined)
 
 /** A number a command gave, within limits, or undefined when it gave none. */
-function numberIn(args: Args, name: string, low: number, high: number): number | undefined {
+export function numberIn(args: Args, name: string, low: number, high: number): number | undefined {
   if (!given(args[name])) {
     return undefined
   }
@@ -101,11 +129,63 @@ export function slideIdOf(deck: Deck, ref: unknown, front?: string | null): stri
   return deck.slides[index].id
 }
 
+/**
+ * The slides a command names: one as `slideIdOf` finds it, several ("2, 4-6", ids or titles,
+ * separated by commas) or all; `front`, or else the first slide, when it names none. A title with a
+ * comma in it is found whole before the list is split.
+ */
+export function slideIdsOf(deck: Deck, ref: unknown, front?: string | null): string[] {
+  const asked = text(ref)
+
+  if (/^(all|every|all slides|every slide)$/i.test(asked)) {
+    return deck.slides.map((slide) => slide.id)
+  }
+
+  try {
+    return [slideIdOf(deck, asked, front)]
+  } catch (error) {
+    const parts = asked.split(',').map((part) => part.trim()).filter(Boolean)
+
+    if (parts.length < 2 && !/^\d+\s*[-–]\s*\d+$/.test(asked)) {
+      throw error
+    }
+
+    const ids = parts.flatMap((part) => {
+      const span = /^(\d+)\s*[-–]\s*(\d+)$/.exec(part)
+
+      if (!span) {
+        return [slideIdOf(deck, part, front)]
+      }
+
+      const [from, to] = [Number(span[1]), Number(span[2])].sort((a, b) => a - b)
+
+      return Array.from({ length: to - from + 1 }, (_, n) => model.slideRef(deck, from + n))
+    })
+
+    return [...new Set(ids)]
+  }
+}
+
 /** A slide's number, 1 for the first. */
 export const slideNumber = (deck: Deck, slideId: string): number => deck.slides.findIndex((slide) => slide.id === slideId) + 1
 
+/** "slides 2, 3 and 5" or "slide 4 (“Plan”)", for what a step says it did. */
+export function slidesLabel(deck: Deck, ids: readonly string[]): string {
+  if (ids.length === 1) {
+    return slideLabel(deck, ids[0])
+  }
+
+  if (ids.length === deck.slides.length) {
+    return 'every slide'
+  }
+
+  const numbers = ids.map((id) => slideNumber(deck, id)).sort((a, b) => a - b)
+
+  return `slides ${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`
+}
+
 /** "slide 3 (“Plan”)", for what a step says it did. */
-function slideLabel(deck: Deck, slideId: string): string {
+export function slideLabel(deck: Deck, slideId: string): string {
   const title = model.slideTitle(findSlideIn(deck, slideId))
 
   return `slide ${slideNumber(deck, slideId)}${title ? ` (“${shorten(title, 48)}”)` : ''}`
@@ -227,6 +307,9 @@ const NAMED_COLORS: Record<string, `#${string}`> = {
 
 const SLOT_WORDS: Record<string, Color> = { text: 'tx1', text1: 'tx1', text2: 'tx2', background: 'bg1', background1: 'bg1', background2: 'bg2', accent: 'accent1' }
 
+/** The theme colours a read names as a command would. */
+const SLOT_NAMES_READ: Partial<Record<Color, string>> = { tx1: 'text', bg1: 'background', tx2: 'text2', bg2: 'background2' }
+
 /** A colour from a command: #rrggbb or #rgb, a name (navy, teal…) or a theme colour (accent1 to accent6, text, background); null for none. */
 export function colorArg(value: unknown, name: string): Color | null {
   const asked = text(value).toLowerCase()
@@ -246,15 +329,54 @@ export function colorArg(value: unknown, name: string): Color | null {
   return found
 }
 
-/** A built-in theme by id or name. */
-export function themeOf(value: unknown): Theme {
+/**
+ * A gradient from a command: two or more colours from first to last, separated by commas or "to"
+ * ("navy to teal", "#13204a, #2563eb 60%, white"), evenly spaced unless a percentage places one; at
+ * `angle` degrees (90, the default, runs top to bottom, 0 left to right), spreading from the middle
+ * with `radial`. Null when no gradient is given.
+ */
+export function gradientArg(args: Args): { stops: GradientStop[]; angle: number; radial?: boolean } | null {
+  if (!given(args.gradient)) {
+    return null
+  }
+
+  const parts = text(args.gradient)
+    .split(/\s*,\s*|\s+to\s+/i)
+    .filter(Boolean)
+
+  if (parts.length < 2) {
+    throw new Error('gradient is two or more colours from first to last: "navy to teal" or "#13204a, #2563eb 60%, white"')
+  }
+
+  const stops = parts.map((part, index): GradientStop => {
+    const placed = /^(.+?)\s+(\d+(?:\.\d+)?)\s*%$/.exec(part)
+    const color = colorArg(placed ? placed[1] : part, 'gradient')
+
+    if (!color) {
+      throw new Error('A gradient’s colours are colours, not none')
+    }
+
+    return { at: placed ? Math.min(1, Number(placed[2]) / 100) : index / (parts.length - 1), color }
+  })
+  const angle = numberIn(args, 'angle', -360, 360) ?? 90
+  const radial = flag(args.radial) === true
+
+  return { stops: stops.sort((a, b) => a.at - b.at), angle: ((angle % 360) + 360) % 360, ...(radial ? { radial } : {}) }
+}
+
+/** A colour as Hermes reads it: a theme colour by the name a command gives it (accent1, text, background), or #rrggbb. */
+export const colorName = (color: Color): string => SLOT_NAMES_READ[color] ?? color
+
+/** A built-in theme, or one of the custom themes the person made, by id or name. */
+export function themeOf(value: unknown, custom: readonly Theme[] = []): Theme {
   const wanted = text(value)
     .toLowerCase()
     .replace(/\s+theme$/, '')
-  const found = THEMES.find((theme) => theme.id === wanted || theme.name.toLowerCase() === wanted) ?? (wanted === 'default' ? THEMES[0] : undefined)
+  const known = [...THEMES, ...custom]
+  const found = known.find((theme) => theme.id === wanted) ?? known.find((theme) => theme.name.toLowerCase() === wanted) ?? (wanted === 'default' ? THEMES[0] : undefined)
 
   if (!found) {
-    throw new Error(`theme is one of ${THEMES.map((theme) => theme.id).join(', ')}, not “${text(value)}”`)
+    throw new Error(`theme is one of ${THEMES.map((theme) => theme.id).join(', ')}${custom.length ? ` or a custom theme (${custom.map((theme) => `${theme.name}: ${theme.id}`).join(', ')})` : ''}, not “${text(value)}”`)
   }
 
   return found
@@ -299,18 +421,23 @@ const SHAPE_WORDS: Record<string, ShapeKind> = {
   rectangularcallout: 'wedgeRectCallout'
 }
 
-/** A shape from its preset name or a word for it (rectangle, circle, star, arrow, callout); a rectangle when none is named. */
+const squashed = (value: string): string => value.toLowerCase().replace(/[\s_-]/g, '')
+
+/** Shapes by the names the shape gallery gives them ("cylinder", "decision", "u-turn arrow"). */
+const SHAPE_BY_NAME: ReadonlyMap<string, ShapeKind> = new Map(SHAPE_KINDS.map((kind) => [squashed(SHAPE_NAMES[kind]), kind]))
+
+/** A shape from its preset name, a word for it (rectangle, circle, star, arrow, callout) or its name in the shape gallery; a rectangle when none is named. */
 export function shapeOf(value: unknown): ShapeKind {
-  const wanted = text(value).toLowerCase().replace(/[\s_-]/g, '')
+  const wanted = squashed(text(value))
 
   if (!wanted) {
     return 'rect'
   }
 
-  const found = SHAPE_KINDS.find((kind) => kind.toLowerCase() === wanted) ?? SHAPE_WORDS[wanted]
+  const found = SHAPE_KINDS.find((kind) => kind.toLowerCase() === wanted) ?? SHAPE_WORDS[wanted] ?? SHAPE_BY_NAME.get(wanted)
 
   if (!found) {
-    throw new Error(`kind is a shape: ${SHAPE_KINDS.join(', ')} (or rectangle, circle, star, arrow, callout), not “${text(value)}”`)
+    throw new Error(`kind is a shape, by PowerPoint's preset name: ${SHAPE_GROUPS.map((group) => `${group.name.toLowerCase()}: ${group.kinds.join(', ')}`).join('; ')} (or rectangle, circle, star, arrow, callout); not “${text(value)}”`)
   }
 
   return found
@@ -469,15 +596,30 @@ export interface Picture {
   natural: { width: number; height: number }
 }
 
+/** A workbook a range comes from, read before the change is made: its snapshot as it is now, and its selection when it is open. */
+export interface SheetSource {
+  name: string
+  workbook: WorkbookSnapshot
+  /** What is selected in it, open in Herald Sheets: its sheet's name and the range in A1 style. */
+  selection: { sheet: string; range: string } | null
+}
+
 export interface StepContext {
   /** The slide in front, where a step that names none lands. */
   front: string | null
-  /** Pictures read for addImage steps, by their source as given. */
+  /** Pictures read for the steps that put one in, by their source as given. */
   pictures?: ReadonlyMap<string, Picture>
+  /** The custom themes the person made, besides Herald's own. */
+  themes?: readonly Theme[]
+  /** Workbooks read for the steps that take a range, by the workbook as given ('' for the one in front). */
+  sheets?: ReadonlyMap<string, SheetSource>
 }
 
 /** A change made by one command or edit: what it did in a few words, and what Hermes is told back. */
 export type Step = DeckChange & { done: string; info?: Record<string, unknown> }
+
+/** What one command or edit does to a deck. */
+export type StepMaker = (deck: Deck, args: Args, context: StepContext) => Step
 
 export function addSlideStep(deck: Deck, args: Args, context: StepContext): Step {
   const asked = given(args.layout) ? layoutOf(args.layout) : null
@@ -576,11 +718,11 @@ export function removeSlideStep(deck: Deck, args: Args, context: StepContext): S
 }
 
 /** A box from a command, in points: what it gives of x, y, width and height. */
-function boxIn(args: Args): { x?: number; y?: number; width?: number; height?: number } {
+export function boxIn(args: Args): { x?: number; y?: number; width?: number; height?: number } {
   return { x: numberIn(args, 'x', -5000, 10000), y: numberIn(args, 'y', -5000, 10000), width: numberIn(args, 'width', 4, 10000), height: numberIn(args, 'height', 4, 10000) }
 }
 
-function elementStep(change: DeckChange & { elementId: string }, slideId: string, what: string): Step {
+export function elementStep(change: DeckChange & { elementId: string }, slideId: string, what: string): Step {
   return { ...change, done: `added ${what} to ${slideLabel(change.deck, slideId)}`, info: { slide: slideNumber(change.deck, slideId), element: change.elementId } }
 }
 
@@ -598,11 +740,24 @@ export function addTextStep(deck: Deck, args: Args, context: StepContext): Step 
   return elementStep(change, slideId, 'a text box')
 }
 
+/** A fill from a command: a gradient, a colour, null for none, or undefined when it names neither. */
+export function fillArg(args: Args): Fill | null | undefined {
+  const gradient = gradientArg(args)
+
+  if (gradient) {
+    return { color: gradient.stops[0].color, gradient }
+  }
+
+  const color = given(args.fill) ? colorArg(args.fill, 'fill') : undefined
+
+  return color === undefined ? undefined : color ? { color } : null
+}
+
 export function addShapeStep(deck: Deck, args: Args, context: StepContext): Step {
   const shape = shapeOf(args.kind ?? args.shape)
   const slideId = slideIdOf(deck, args.slide, context.front)
-  const fill = given(args.fill) ? colorArg(args.fill, 'fill') : undefined
-  const change = model.addShape(deck, slideId, { shape, ...boxIn(args), ...(fill !== undefined ? { fill: fill ? { color: fill } : null } : {}), ...(given(args.text) ? { text: String(args.text) } : {}) })
+  const fill = fillArg(args)
+  const change = model.addShape(deck, slideId, { shape, ...boxIn(args), ...(fill !== undefined ? { fill } : {}), ...(given(args.text) ? { text: String(args.text) } : {}) })
   const name = SHAPE_NAMES[shape].toLowerCase()
 
   return elementStep(change, slideId, `${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name}`)
@@ -685,8 +840,18 @@ export function addTableStep(deck: Deck, args: Args, context: StepContext): Step
   return elementStep(change, slideId, `a table of ${rows} row${rows === 1 ? '' : 's'} by ${columns} column${columns === 1 ? '' : 's'}`)
 }
 
-export function setThemeStep(deck: Deck, args: Args): Step {
-  const theme = themeOf(args.theme)
+/** A theme (Herald's own or a custom one) for the whole deck, or as their own for the slides `slide` names. */
+export function setThemeStep(deck: Deck, args: Args, context: StepContext = { front: null }): Step {
+  const theme = themeOf(args.theme, context.themes)
+  const ids = given(args.slide) ? slideIdsOf(deck, args.slide, context.front) : []
+
+  if (ids.length && ids.length < deck.slides.length) {
+    const change = model.applyTheme(deck, theme, ids)
+    const which = slidesLabel(deck, ids)
+
+    return { ...change, done: change.deck === deck ? `${which} already ${ids.length === 1 ? 'has' : 'have'} the ${theme.name} theme` : `gave ${which} the ${theme.name} theme`, info: { theme: theme.id, slides: ids.map((id) => slideNumber(deck, id)) } }
+  }
+
   const change = model.applyTheme(deck, theme)
 
   return { ...change, done: change.deck === deck ? `it already has the ${theme.name} theme` : `applied the ${theme.name} theme`, info: { theme: theme.id } }
@@ -711,9 +876,10 @@ export const SLIDE_EDIT_OPS = ['addSlide', 'setSlide', 'duplicateSlide', 'moveSl
 
 export type SlideEditOp = (typeof SLIDE_EDIT_OPS)[number]
 
-export type SlideEdit = Args & { op: SlideEditOp }
+/** One edit of a batch: an op, and that op's arguments. */
+export type SlideEdit = Args & { op: string }
 
-const STEPS: Record<SlideEditOp, (deck: Deck, args: Args, context: StepContext) => Step> = {
+export const STEPS: Readonly<Record<SlideEditOp, StepMaker>> = {
   addSlide: addSlideStep,
   setSlide: setSlideStep,
   duplicateSlide: duplicateSlideStep,
@@ -727,8 +893,8 @@ const STEPS: Record<SlideEditOp, (deck: Deck, args: Args, context: StepContext) 
   replace: replaceStep
 }
 
-/** The edits of a batch: a list of objects, each with an `op` and that op's arguments. */
-export function slideEditsOf(value: unknown): SlideEdit[] {
+/** The edits of a batch: a list of objects, each with an `op` (one of `ops`, in any case) and that op's arguments. */
+export function slideEditsOf(value: unknown, ops: readonly string[] = SLIDE_EDIT_OPS): SlideEdit[] {
   const parsed = parseJsonArg(value, 'edits')
 
   if (!Array.isArray(parsed) || !parsed.length) {
@@ -741,10 +907,10 @@ export function slideEditsOf(value: unknown): SlideEdit[] {
 
   return parsed.map((edit, index) => {
     const op = edit && typeof edit === 'object' ? text((edit as Args).op) : ''
-    const found = SLIDE_EDIT_OPS.find((name) => name.toLowerCase() === op.toLowerCase())
+    const found = ops.find((name) => name.toLowerCase() === op.toLowerCase())
 
     if (!found) {
-      throw new Error(`Edit ${index + 1}: op is one of ${SLIDE_EDIT_OPS.join(', ')}, not “${op}”`)
+      throw new Error(`Edit ${index + 1}: op is one of ${ops.join(', ')}, not “${op}”`)
     }
 
     return { ...(edit as Args), op: found }
@@ -756,14 +922,20 @@ export function slideEditsOf(value: unknown): SlideEdit[] {
  * edit added can be named by its title, and an edit that names no slide lands where the one before
  * it left the editor. An edit that fails stops the batch, and nothing of it lands.
  */
-export function runEdits(deck: Deck, edits: readonly SlideEdit[], context: StepContext): Step {
+export function runEdits(deck: Deck, edits: readonly SlideEdit[], context: StepContext, steps: Readonly<Record<string, StepMaker>> = STEPS): Step {
   let front = context.front
   const done: string[] = []
   const change = composeChanges(
     deck,
     edits.map((edit, index) => (current: Deck) => {
       try {
-        const step = STEPS[edit.op](current, edit, { ...context, front })
+        const make = steps[edit.op]
+
+        if (!make) {
+          throw new Error(`there is no op ${edit.op}`)
+        }
+
+        const step = make(current, edit, { ...context, front })
         front = step.focus?.slideId ?? front
         done.push(step.done)
 
@@ -840,19 +1012,74 @@ function bodyElements(slide: Slide): SlideElement[] {
 
 const READ_ROLES = new Set(['title', 'body', 'subtitle', 'caption'])
 
-function readElement(element: SlideElement) {
+/** How a connector runs, as a command names it. */
+const CONNECTOR_KINDS: Record<string, string> = { straight: 'straight', bent: 'elbow', curved: 'curved' }
+
+/** A connector as Hermes reads it: how it runs, and the elements (and their connection sites) its ends are glued to. */
+function readConnector(connector: Connector) {
+  const { start, end } = connector
+
+  return {
+    kind: CONNECTOR_KINDS[/^[a-z]+/.exec(connector.preset)?.[0] ?? 'straight'] ?? 'straight',
+    ...(start ? { from: start.element, fromSite: start.site } : {}),
+    ...(end ? { to: end.element, toSite: end.site } : {})
+  }
+}
+
+/** A background as Hermes reads it: a colour, a gradient's colours and angle, or a picture. */
+export function backgroundText(background: Background): string {
+  switch (background.kind) {
+    case 'solid':
+      return colorName(background.color)
+    case 'gradient':
+      return `gradient ${background.stops.map((stop) => colorName(stop.color)).join(' to ')}${background.radial ? ', radial' : `, ${Math.round(background.angle)}°`}`
+    case 'image':
+      return 'picture'
+  }
+}
+
+/** A slide's transition as Hermes reads it: its kind, which way it goes and how long it takes. */
+export function transitionText(transition: SlideTransition) {
+  return { kind: transition.kind, ...(transition.direction ? { direction: transition.direction } : {}), ...(transition.orientation ? { orientation: transition.orientation } : {}), seconds: transition.duration / 1000 }
+}
+
+/** The names a command gives PowerPoint's date formats. */
+export const DATE_NAMES: Record<DateFormat, string> = { datetime1: 'numeric', datetime2: 'long', datetime3: 'dmy', datetime4: 'mdy' }
+
+/** The deck's header and footer as Hermes reads them, when its slides show any: the date (its format, or the text in its place), the slide number and the footer's text, and whether title slides go without. */
+export function readHeaderFooter(deck: Deck) {
+  const settings = headerFooterOf(deck)
+  const footer = settings.footer && settings.footerText ? settings.footerText : ''
+
+  if (!settings.date && !settings.number && !footer) {
+    return undefined
+  }
+
+  return {
+    ...(settings.date ? { date: settings.dateText ? { text: settings.dateText } : { format: DATE_NAMES[settings.dateFormat] } } : {}),
+    ...(settings.number ? { slideNumber: true } : {}),
+    ...(footer ? { footer } : {}),
+    ...(settings.skipTitle ? { skipTitle: true } : {})
+  }
+}
+
+export function readElement(element: SlideElement) {
   const words = element.kind === 'table' ? shorten(tableText(element).replace(/\t/g, ' | ').replace(/\n/g, ' / '), 240) : element.kind === 'image' ? (element.alt ?? '') : READ_ROLES.has(element.placeholder?.role ?? '') ? '' : shorten(textOfElement(element), 160)
 
   return {
     id: element.id,
     kind: describeElement(element),
+    ...(element.kind === 'shape' ? { shape: element.shape } : {}),
     ...(words ? { text: words } : {}),
     box: [element.x, element.y, element.width, element.height].map(Math.round),
+    ...(element.rotation ? { rotation: Math.round(element.rotation) } : {}),
+    ...(element.group?.length ? { group: element.group[0] } : {}),
+    ...(element.kind === 'line' && element.connector ? { connector: readConnector(element.connector) } : {}),
     ...(isEmptyPlaceholder(element) ? { empty: true } : {})
   }
 }
 
-function readSlide(slide: Slide, index: number) {
+function readSlide(deck: Deck, slide: Slide, index: number) {
   const title = model.slideTitle(slide)
   const bodies = bodyElements(slide).map(textOfElement)
 
@@ -865,19 +1092,30 @@ function readSlide(slide: Slide, index: number) {
     ...(bodies[1] ? { body2: bodies[1] } : {}),
     ...(slide.notes.trim() ? { notes: slide.notes.trim() } : {}),
     ...(slide.hidden ? { hidden: true } : {}),
+    ...(slide.theme && !sameTheme(slide.theme, deck.theme) ? { theme: slide.theme.name } : {}),
+    ...(slide.transition && !sameTransition(slide.transition, transitionFor(deck.transition)) ? { transition: transitionText(slide.transition) } : {}),
+    ...(slide.background ? { background: backgroundText(slide.background) } : {}),
+    ...(slide.showMaster === false ? { masterGraphics: 'hidden' } : {}),
     elements: slide.elements.map(readElement)
   }
 }
 
-/** A deck as Hermes reads it: its title, size, theme and transition, and each slide (or only `only`) with its text and elements. */
+/**
+ * A deck as Hermes reads it: its title, size, theme and transition, its header and footer, and each
+ * slide (or only `only`) with its text and elements, and its own theme, transition and background
+ * where it has them, and whether it hides the master's graphics.
+ */
 export function readDeck(deck: Deck, only?: string | null) {
+  const headerFooter = readHeaderFooter(deck)
+
   return {
     title: deck.title,
     size: sizeLabel(deck.size),
     theme: deck.theme.name,
     transition: deck.transition,
+    ...(headerFooter ? { headerFooter } : {}),
     slideCount: deck.slides.length,
-    slides: deck.slides.flatMap((slide, index) => (only && slide.id !== only ? [] : [readSlide(slide, index)]))
+    slides: deck.slides.flatMap((slide, index) => (only && slide.id !== only ? [] : [readSlide(deck, slide, index)]))
   }
 }
 
@@ -1074,280 +1312,111 @@ export function replaceInDeck(deck: Deck, find: string, replacement: string, opt
   return { deck: { ...deck, slides }, label: 'Replace', replaced: budget.used, slides: touched, focus: { slideId: slides[touched[0] - 1].id } }
 }
 
-// Slides from a document.
+// Slides from a document, and tables from a sheet.
 
-/** A slide a document makes: its layout, title, text (a line a bullet, a tab deeper a level), speaker notes and a table. */
-export interface SlideSpec {
-  layout: LayoutId
-  title: string
-  body: string[]
-  notes: string
-  table?: string[][]
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** fromDocument's options from its arguments: the heading level that starts a slide (1 to 6), and every paragraph in the speaker notes. */
+export function documentOptionsOf(args: Args): DocumentOptions {
+  return { ...(given(args.level) ? { level: headingLevelOf(args.level) } : {}), ...(flag(args.notes) ? { notes: true } : {}) }
 }
 
-/** A bullet is at most this long; longer text is shortened and the whole of it goes to the notes. */
-const BULLET = 120
-/** With notes: true, bullets are kept this short. */
-const SHORT_BULLET = 80
-const MAX_BULLETS = 8
-/** As many rows of 18 point text as fit under a slide's title. */
-const MAX_TABLE_ROWS = 12
+/** A document's slides at the end of a deck as one step, as Insert > Slides from Document puts them in. */
+export function documentSlidesStep(deck: Deck, doc: DocJSON, source: { name: string; from: string }, options: DocumentOptions = {}): Step {
+  const added = model.slidesFromDocument(deck, doc, { after: deck.slides[deck.slides.length - 1]?.id ?? null, ...options })
 
-const LISTS = new Set(['bulletList', 'orderedList', 'taskList'])
-
-/** A block's own words, line breaks as spaces. */
-function inlineText(node: DocNode): string {
-  if (node.type === 'text') {
-    return node.text ?? ''
+  if (!added.slideIds.length) {
+    throw new Error(`${source.name} has nothing to make slides of`)
   }
 
-  return node.type === 'hardBreak' ? ' ' : (node.content ?? []).map(inlineText).join(node.type === 'paragraph' || node.type === 'heading' ? '' : ' ')
+  return {
+    ...added,
+    label: `Slides from ${source.name.replace(/\.[a-z0-9]{1,5}$/i, '')}`,
+    done: `added ${plural(added.slideIds.length, 'slide')} from ${source.name} at the end`,
+    info: { from: source.from, first: slideNumber(added.deck, added.slideIds[0]), slides: added.slideIds.length }
+  }
 }
 
-const firstSentence = (line: string): string => /^.+?[.!?…](?=\s+[\p{Lu}\d“"(]|$)/u.exec(line)?.[0] ?? line
+/** The workbook a step names, as read before the change. */
+function sheetSourceIn(args: Args, context: StepContext): SheetSource {
+  const ref = text(args.workbook)
+  const source = context.sheets?.get(ref)
 
-/** A text at most `limit` long: as it is when it fits, else its first sentence when that fits, else cut at a word with an ellipsis. */
-export function shortVersion(value: string, limit: number): string {
-  const line = flat(value)
-
-  if (line.length <= limit) {
-    return line
+  if (!source) {
+    throw new Error(ref ? `The workbook ${ref} was not read` : 'The workbook was not read')
   }
 
-  const sentence = firstSentence(line)
-
-  if (sentence.length <= limit) {
-    return sentence
-  }
-
-  const cut = line.slice(0, limit - 1)
-  const space = cut.lastIndexOf(' ')
-
-  return `${(space > limit / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.–-]+$/, '')}…`
+  return source
 }
 
-/** Blocks in reading order, callouts and quotes opened up. */
-const blocksOf = (nodes: readonly DocNode[]): DocNode[] => nodes.flatMap((node) => (node.type === 'callout' || node.type === 'blockquote' ? blocksOf(node.content ?? []) : [node]))
+/** The cells a step takes: a range as given (its sheet's name in it, or in `sheet`), the selection of an open workbook, or the cells that hold something on the sheet. */
+function rangeIn(args: Args, source: SheetSource): { range?: string; sheet?: string } {
+  const range = text(args.range)
 
-/** A list's items as bullets: each item's own words, its nested lists a level deeper. */
-function listItems(list: DocNode, depth: number, out: { depth: number; words: string }[] = []): { depth: number; words: string }[] {
-  for (const item of list.content ?? []) {
-    const own = flat(
-      (item.content ?? [])
-        .filter((child) => !LISTS.has(child.type))
-        .map(inlineText)
-        .join(' ')
-    )
-
-    if (own) {
-      out.push({ depth, words: own })
+  if (range.toLowerCase() === 'selection') {
+    if (!source.selection) {
+      throw new Error(`Only a workbook open in Herald Sheets has a selection: give a range of ${source.name}, like A1:D12`)
     }
 
-    for (const child of item.content ?? []) {
-      if (LISTS.has(child.type)) {
-        listItems(child, own ? depth + 1 : depth, out)
-      }
-    }
+    return { range: source.selection.range, sheet: source.selection.sheet }
   }
 
-  return out
+  return { ...(range ? { range } : {}), ...(given(args.sheet) ? { sheet: text(args.sheet) } : {}) }
 }
 
-const tableRows = (table: DocNode): string[][] => (table.content ?? []).map((row) => (row.content ?? []).map((cell) => flat(inlineText(cell)))).filter((row) => row.some(Boolean))
+/** The box x, y and width give a table from a sheet: across the slide's content area unless they say otherwise, and down to its foot; undefined when none is given. */
+function tableBox(deck: Deck, slideId: string, args: Args): Box | undefined {
+  const { x, y, width } = boxIn(args)
 
-/** A slide with more bullets than fit, as several ("Title", "Title (cont.)"), breaking before a top-level bullet where it can. */
-function split(spec: SlideSpec): SlideSpec[] {
-  const out: SlideSpec[] = []
-  let rest = spec.body
+  if (x === undefined && y === undefined && width === undefined) {
+    return undefined
+  }
 
-  do {
-    let cut = rest.length
+  const area = contentArea(deck, findSlideIn(deck, slideId)).box
+  const wide = width ?? area.width
+  const top = y ?? area.y
 
-    if (rest.length > MAX_BULLETS) {
-      const at = rest.slice(0, MAX_BULLETS + 1).findLastIndex((line, index) => index > 0 && !line.startsWith('\t'))
-      cut = at > 0 ? at : MAX_BULLETS
-    }
+  return { x: x ?? (deck.size.width - wide) / 2, y: top, width: wide, height: Math.max(ROW_HEIGHT, area.y + area.height - top) }
+}
 
-    out.push({ ...spec, title: out.length ? `${spec.title} (cont.)` : spec.title, body: rest.slice(0, cut), notes: out.length ? '' : spec.notes })
-    rest = rest.slice(cut)
-  } while (rest.length)
+/** A range of a workbook on new Title Only slides after `after` (at the end without one), titled with its sheet's name or `title`, going on over more slides when it is long; as Insert > Table from Sheet makes them. */
+export function rangeSlidesStep(deck: Deck, args: Args, context: StepContext): Step {
+  const source = sheetSourceIn(args, context)
+  const after = given(args.after) ? slideIdOf(deck, args.after, context.front) : null
+  const header = flag(args.header)
+  const change = model.addSlideFromSheet(deck, source.workbook, { ...rangeIn(args, source), ...(given(args.title) ? { title: text(args.title) } : {}), ...(header === undefined ? {} : { header }), after })
+  const first = slideNumber(change.deck, change.slideIds[0])
+  const count = change.slideIds.length
 
-  return out
+  return {
+    ...change,
+    done: `added ${count === 1 ? `slide ${first}` : `slides ${first} to ${first + count - 1}`} with ${change.range} of ${source.name} as a table`,
+    info: { slide: first, slides: count, from: { workbook: source.name, sheet: change.sheet, range: change.range } }
+  }
 }
 
 /**
- * The slides a document makes. A title slide from its Title paragraph, or a heading that is the
- * only one of the top level and comes first, or else the document's name; its subtitle from a
- * Subtitle paragraph or a short first paragraph, and what else comes before the first slide in its
- * notes. Each heading of `level` (by default the top level below the title) starts a slide: its
- * list items and short paragraphs are its bullets (nested lists and deeper headings a level
- * deeper), long paragraphs are shortened to a bullet with the whole of them in the notes (with
- * notes: true every paragraph goes to the notes and bullets stay short), a table gets a slide of
- * its own, and more than eight bullets go on to another slide. Headings above the level make
- * section slides; a document without headings makes one slide of its content.
+ * A range of a workbook as a table on a slide, as its cells show, as Insert > Table from Sheet
+ * puts one in: in place of the slide's empty text placeholder, else under its title, or in the box
+ * x, y and width give; `slide` new puts it on new slides after the slide in front instead.
  */
-export function slidesFromDocument(doc: DocJSON, options: { name?: string; level?: number; notes?: boolean } = {}): { title: string; slides: SlideSpec[] } {
-  const blocks = blocksOf(doc.content ?? [])
-  const levelOf = (node: DocNode): number => Math.min(6, Math.max(1, Math.round(Number(node.attrs?.level ?? 1)) || 1))
-  const headings = blocks.filter((node) => node.type === 'heading' && flat(inlineText(node)))
-  const styled = (style: string) => blocks.find((node) => node.type === 'paragraph' && node.attrs?.docStyle === style && flat(inlineText(node)))
-  const titled = styled('title')
-  const top = headings.length ? Math.min(...headings.map(levelOf)) : 0
-  const lone = !titled && headings[0] && levelOf(headings[0]) === top && headings.filter((node) => levelOf(node) === top).length === 1 && !(options.level && options.level <= top) ? headings[0] : undefined
-  const titleNode = titled ?? lone
-  const subtitleNode = styled('subtitle')
-  const title = (titleNode ? flat(inlineText(titleNode)) : '') || options.name?.trim() || 'Untitled'
-  const below = headings.filter((node) => node !== titleNode).map(levelOf)
-  const asked = options.level ?? (below.length ? Math.min(...below) : 0)
-  const starts = below.some((found) => found <= asked)
-  // With no heading to start a slide, the shallowest headings are the top bullets of one slide.
-  const level = starts ? asked : below.length ? Math.min(...below) - 1 : 0
-  const terse = options.notes === true
-  const slides: SlideSpec[] = []
-  const sections = new Set<SlideSpec>()
-  const leads = new Map<SlideSpec, string[]>()
-  const intro: string[] = []
-  let subtitle = subtitleNode ? flat(inlineText(subtitleNode)) : ''
-  let current: SlideSpec | null = null
-  let base = 0
-
-  if (!starts) {
-    current = { layout: 'title-content', title, body: [], notes: '' }
-    slides.push(current)
+export function insertRangeStep(deck: Deck, args: Args, context: StepContext): Step {
+  if (text(args.slide).toLowerCase() === 'new') {
+    return rangeSlidesStep(deck, { ...args, after: context.front ?? undefined }, context)
   }
 
-  const note = (spec: SlideSpec, words: string) => {
-    spec.notes = spec.notes ? `${spec.notes}\n\n${words}` : words
+  const source = sheetSourceIn(args, context)
+  const slideId = slideIdOf(deck, args.slide, context.front)
+  const box = tableBox(deck, slideId, args)
+  const header = flag(args.header)
+  const change = model.addTableFromSheet(deck, slideId, source.workbook, { ...rangeIn(args, source), ...(box ? { box } : {}), ...(header === undefined ? {} : { header }) })
+  const table = findSlideIn(change.deck, slideId).elements.find((element) => element.id === change.elementId)
+  const rows = table?.kind === 'table' ? table.rows.length : 0
+
+  return {
+    ...change,
+    label: 'Table',
+    done: `put ${change.range} of ${source.name} (${plural(rows, 'row')}) on slide ${slideNumber(change.deck, slideId)} as a table`,
+    info: { slide: slideNumber(change.deck, slideId), element: change.elementId, from: { workbook: source.name, sheet: change.sheet, range: change.range } }
   }
-
-  const bullet = (depth: number, words: string, limit: number) => {
-    if (!current) {
-      intro.push(`${'  '.repeat(depth)}• ${words}`)
-
-      return
-    }
-
-    const short = shortVersion(words, limit)
-    current.body.push(`${'\t'.repeat(Math.min(8, depth))}${short}`)
-
-    if (short !== words) {
-      note(current, words)
-    }
-  }
-
-  for (const node of blocks) {
-    if (node === titleNode || node === subtitleNode) {
-      continue
-    }
-
-    if (node.type === 'heading') {
-      const words = flat(inlineText(node))
-      const depth = levelOf(node) - level
-
-      if (!words) {
-        continue
-      }
-
-      if (depth <= 0) {
-        current = { layout: 'title-content', title: words, body: [], notes: '' }
-        slides.push(current)
-        base = 0
-
-        if (depth < 0) {
-          sections.add(current)
-        }
-      } else {
-        bullet(depth - 1, words, BULLET)
-        base = depth
-      }
-    } else if (node.type === 'paragraph') {
-      const words = flat(inlineText(node))
-
-      if (!words) {
-        continue
-      }
-
-      if (!current) {
-        if (!subtitle && !intro.length && words.length <= BULLET) {
-          subtitle = words
-        } else {
-          intro.push(words)
-        }
-      } else if (terse) {
-        note(current, words)
-        leads.set(current, [...(leads.get(current) ?? []), shortVersion(firstSentence(words), SHORT_BULLET)])
-      } else {
-        bullet(base, words, BULLET)
-      }
-    } else if (LISTS.has(node.type)) {
-      for (const item of listItems(node, base)) {
-        bullet(item.depth, item.words, terse ? SHORT_BULLET : BULLET)
-      }
-    } else if (node.type === 'table') {
-      const rows = tableRows(node)
-
-      if (rows.length) {
-        slides.push({ layout: 'title-only', title: current?.title ?? title, body: [], notes: rows.length > MAX_TABLE_ROWS ? `The table has ${rows.length} rows; the first ${MAX_TABLE_ROWS} are on the slide.` : '', table: rows.slice(0, MAX_TABLE_ROWS) })
-      }
-    } else if (node.type === 'codeBlock') {
-      const code = (node.content ?? []).map(inlineText).join('').trim()
-
-      if (code && current) {
-        note(current, code)
-      } else if (code) {
-        intro.push(code)
-      }
-    }
-  }
-
-  for (const spec of slides) {
-    if (!spec.body.length && leads.has(spec)) {
-      spec.body = leads.get(spec) ?? []
-    }
-
-    if (!spec.table) {
-      spec.layout = sections.has(spec) ? (spec.body.length <= 1 ? 'section' : 'title-content') : spec.body.length ? 'title-content' : 'title-only'
-    }
-  }
-
-  const titleSlide: SlideSpec = { layout: 'title', title, body: subtitle ? [subtitle] : [], notes: intro.join('\n') }
-  const content = starts ? slides : slides.filter((spec) => spec.body.length || spec.notes || spec.table)
-
-  return { title, slides: [titleSlide, ...content.flatMap(split)] }
-}
-
-/** Slides a document made, added after `after` (at the end without one) as one change; a deck with a title slide of its own gets the document's as a section header. */
-export function addSpecs(deck: Deck, specs: readonly SlideSpec[], options: { after?: string | null; asSection?: boolean } = {}): DeckChange & { added: string[] } {
-  let next = deck
-  let after = options.after ?? deck.slides[deck.slides.length - 1]?.id ?? null
-  const added: string[] = []
-
-  for (const spec of specs) {
-    const slide = model.addSlide(next, { layout: options.asSection && spec.layout === 'title' ? 'section' : spec.layout, after, ...(spec.title ? { title: spec.title } : {}) })
-    next = slide.deck
-
-    if (spec.body.length) {
-      next = model.setBody(next, slide.slideId, spec.body).deck
-    }
-
-    if (spec.notes) {
-      next = model.setNotes(next, slide.slideId, spec.notes).deck
-    }
-
-    if (spec.table) {
-      next = addTableStep(next, { slide: slide.slideId, cells: spec.table }, { front: null }).deck
-    }
-
-    added.push(slide.slideId)
-    after = slide.slideId
-  }
-
-  return { deck: next, label: 'New Slides', added, ...(added.length ? { focus: { slideId: added[0], selected: [] } } : {}) }
-}
-
-/** A new deck of the slides a document made. */
-export function deckFromSpecs(title: string, specs: readonly SlideSpec[]): Deck {
-  const deck = model.newDeck(title)
-
-  return specs.length ? model.removeSlides(addSpecs(deck, specs).deck, [deck.slides[0].id]).deck : deck
 }
