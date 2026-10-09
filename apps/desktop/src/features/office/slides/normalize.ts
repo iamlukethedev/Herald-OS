@@ -398,6 +398,7 @@ function element(value: unknown, depth = 0): SlideElement | null {
       const preview = isObject(value.preview) ? value.preview : null
       const picture = preview ? imageSource(preview.src) : ''
       const natural = preview && isObject(preview.natural) ? preview.natural : {}
+      const drawnIn = isObject(value.drawnIn) ? value.drawnIn : {}
       const drawing =
         depth < 1
           ? list(value.shapes, 2000)
@@ -414,7 +415,7 @@ function element(value: unknown, depth = 0): SlideElement | null {
         kind: 'object',
         object: oneOf(value.object, OBJECT_KINDS, 'other'),
         ...(picture ? { preview: { src: picture, natural: { width: num(natural.width, 0, 0, 1_000_000), height: num(natural.height, 0, 0, 1_000_000) } } } : {}),
-        ...(drawing.length ? { shapes: drawing } : {}),
+        ...(drawing.length ? { shapes: drawing, drawnIn: { width: num(drawnIn.width, frame.width, 1, 100_000), height: num(drawnIn.height, frame.height, 1, 100_000) } } : {}),
         source: { xml, parts: keptParts(source.parts) }
       }
     }

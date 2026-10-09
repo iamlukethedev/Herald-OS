@@ -450,8 +450,9 @@ export interface ObjectElement extends Frame {
   object: ObjectKind
   /** The picture the file keeps for it (an embedded object's, or a chart's fallback), as a data URL. */
   preview?: { src: string; natural: { width: number; height: number } }
-  /** The drawing the file keeps for it (SmartArt's shapes), in slide points as laid out at its box. */
+  /** The drawing the file keeps for it (SmartArt's shapes), placed from the object's top left as laid out in a box of `drawnIn`, and stretched with the box. */
   shapes?: SlideElement[]
+  drawnIn?: { width: number; height: number }
   /** The frame's XML as the file had it (`p:graphicFrame`, or the `mc:AlternateContent` around one), and the parts it names. */
   source: { xml: string; parts: KeptPart[] }
 }
