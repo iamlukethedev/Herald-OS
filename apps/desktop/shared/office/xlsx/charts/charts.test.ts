@@ -175,6 +175,15 @@ describe('charts written into a file and read back', () => {
     expect(Object.keys(((await readHeraldPart(pkg))?.[HERALD_SECTION] ?? {}) as object)).toEqual(['Q1 sales'])
   })
 
+  it('writes the series it can and passes over broken ones', async () => {
+    const spec = { kind: 'line', series: [null, { values: { sheet: 's1' } }, north], legend: 'none', labels: 'none' } as unknown as ChartSpec
+    const { bytes, losses } = await xlsxFromWorkbook(chartWorkbook([chartDrawing('c', 's1', spec)]))
+    const { charts } = await readBack(await withoutHeraldPart(bytes))
+
+    expect(losses).toEqual([])
+    expect(charts[0].data.spec.series.map((series) => series.values)).toEqual([range('sheet-1', 1, 1, 4, 1)])
+  })
+
   it('leaves out a chart whose cells are on a sheet since deleted', async () => {
     const spec: ChartSpec = { kind: 'column', series: [{ values: range('gone', 0, 0, 3, 0) }], legend: 'none', labels: 'none' }
     const { bytes, losses } = await xlsxFromWorkbook(chartWorkbook([chartDrawing('c', 's1', spec)]))

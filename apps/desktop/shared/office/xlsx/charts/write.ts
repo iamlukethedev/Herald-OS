@@ -36,6 +36,9 @@ const val = (name: string, value: string | number): string => `<c:${name} val="$
 
 type GroupType = 'column' | 'line' | 'area'
 
+const isRange = (value: unknown): value is ChartRange =>
+  Boolean(value) && typeof value === 'object' && typeof (value as ChartRange).sheet === 'string' && ['startRow', 'startColumn', 'endRow', 'endColumn'].every((key) => Number.isInteger((value as unknown as Record<string, number>)[key]))
+
 /** How a series of a combo chart draws: its own type, else its first series as columns and the rest as lines. */
 export const comboType = (spec: ChartSpec, index: number): GroupType => spec.series[index]?.type ?? (index === 0 ? 'column' : 'line')
 
@@ -147,7 +150,7 @@ class ChartWriter {
   name(series: ChartSeries): string {
     const cell = series.name?.cell
 
-    if (cell && this.source.sheetName(cell.sheet) !== undefined) {
+    if (isRange(cell) && this.source.sheetName(cell.sheet) !== undefined) {
       const formula = encodeXml(formulaOf(cell, this.source.sheetName(cell.sheet)!))
       const text = this.cells(cell).map(textIn).join(' ')
 
@@ -159,7 +162,7 @@ class ChartWriter {
 
   /** The categories every series is drawn against: the first series' that has them. */
   get categories(): ChartRange | undefined {
-    return this.spec.series.find((series) => series.categories && this.source.sheetName(series.categories.sheet) !== undefined)?.categories
+    return this.spec.series.find((series) => isRange(series?.categories) && this.source.sheetName(series.categories.sheet) !== undefined)?.categories
   }
 
   points(series: ChartSeries): number {
@@ -260,7 +263,7 @@ class ChartWriter {
   /** The plot area's chart groups and axes. */
   plot(): string {
     const { spec } = this
-    const indexes = spec.series.map((_, i) => i).filter((i) => this.source.sheetName(spec.series[i].values.sheet) !== undefined)
+    const indexes = spec.series.map((_, i) => i).filter((i) => drawable(spec.series[i], this.source))
     const stacking = spec.stacking ?? 'none'
     const grouping = stacking === 'stacked' ? 'stacked' : stacking === 'percent' ? 'percentStacked' : undefined
     const stacked = grouping !== undefined
@@ -349,8 +352,10 @@ class ChartWriter {
   }
 }
 
+const drawable = (series: ChartSeries | undefined, source: Pick<ChartCells, 'sheetName'>): boolean => isRange(series?.values) && source.sheetName(series.values.sheet) !== undefined
+
 /** Whether a chart has a series whose cells are on a sheet the file has. */
-export const hasSeries = (spec: ChartSpec, source: Pick<ChartCells, 'sheetName'>): boolean => spec.series.some((series) => source.sheetName(series.values.sheet) !== undefined)
+export const hasSeries = (spec: ChartSpec, source: Pick<ChartCells, 'sheetName'>): boolean => Array.isArray(spec.series) && spec.series.some((series) => drawable(series, source))
 
 /** A chart part for a chart: series colours from the series or `palette` in turn. */
 export function chartXml(spec: ChartSpec, source: ChartCells, palette: string[]): string {

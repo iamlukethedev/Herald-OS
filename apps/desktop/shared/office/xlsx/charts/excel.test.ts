@@ -209,6 +209,54 @@ describe('charts Excel made, saved again', () => {
   })
 })
 
+describe('what Herald shows of an Excel chart', () => {
+  const sheet = { name: 'Data', rows: [['Item', 'Value', 'Group'], ['A', 1, 'X'], ['B', 2, 'X'], ['C', 3, 'Y']] as (string | number)[][] }
+  const read = async (xml: string) => {
+    const bytes = await chartPackage({ sheets: [{ ...sheet, anchors: [twoCellAnchor(2, [4, 0, 1, 0], [10, 0, 15, 0], chartFrame(0, 'Chart 1'))], related: [{ type: CHART_REL, path: 'xl/charts/chart1.xml' }] }], parts: { 'xl/charts/chart1.xml': { content: xml, type: CHART_TYPE } } })
+    const { notes, charts } = await readExcel(bytes)
+
+    return { notes: notes.filter((note) => (Object.values(NOTES) as string[]).includes(note)), spec: charts(SALES)[0]?.data.spec }
+  }
+  const bars = (series: string, axes = excelAxes(1, 2), dLbls = '') =>
+    excelChart({ plot: `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/>${series}</c:ser>${dLbls}<c:gapWidth val="150"/><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}` })
+  const values = `<c:val>${numRef('Data!$B$2:$B$4', [1, 2, 3])}</c:val>`
+
+  it('shows a gradient as its first colour, and DrawingML’s shades and tints closely', async () => {
+    const gradient = await read(bars(`<c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="336699"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst></a:gradFill></c:spPr>${values}`))
+    const shade = await read(bars(`<c:spPr><a:solidFill><a:srgbClr val="FF0000"><a:shade val="50000"/></a:srgbClr></a:solidFill></c:spPr>${values}`))
+    const tint = await read(bars(`<c:spPr><a:solidFill><a:schemeClr val="accent2"><a:tint val="50000"/></a:schemeClr></a:solidFill></c:spPr>${values}`))
+
+    expect(gradient).toMatchObject({ notes: [NOTES.fills], spec: { series: [{ color: '#336699' }] } })
+    expect(shade).toMatchObject({ notes: [], spec: { series: [{ color: '#800000' }] } })
+    // The fixture theme's accent 2 is C55A11, half of it mixed with white.
+    expect(tint.spec?.series[0].color).toBe('#e2ad88')
+  })
+
+  it('says what it does not draw: trendlines, error bars, labels of several kinds, levels of categories, logarithmic axes', async () => {
+    const extras = await read(bars(`<c:trendline><c:trendlineType val="linear"/></c:trendline><c:errBars><c:errDir val="y"/><c:errBarType val="both"/><c:errValType val="percentage"/><c:val val="5"/></c:errBars>${values}`))
+    const labels = await read(bars(`${values}`, excelAxes(1, 2), '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="1"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>'))
+    const levels = await read(bars(`<c:cat><c:multiLvlStrRef><c:f>Data!$A$2:$C$4</c:f></c:multiLvlStrRef></c:cat>${values}`))
+    const logarithmic = await read(bars(values, excelAxes(1, 2).replace('<c:valAx><c:axId val="2"/><c:scaling>', '<c:valAx><c:axId val="2"/><c:scaling><c:logBase val="10"/>')))
+
+    expect(extras.notes).toEqual([NOTES.extras])
+    expect(labels).toMatchObject({ notes: [NOTES.labels], spec: { labels: 'value' } })
+    expect(levels).toMatchObject({ notes: [NOTES.levels], spec: { series: [{ categories: range(SALES, 1, 2, 3, 2) }] } })
+    expect(logarithmic.notes).toEqual([NOTES.axes])
+  })
+
+  it('titles a chart with the text of the cell its title shows', async () => {
+    const { spec } = await read(bars(values).replace('<c:autoTitleDeleted val="1"/>', `<c:title><c:tx>${strRef('Data!$A$1', ['Item'])}</c:tx><c:overlay val="0"/></c:title>`))
+
+    expect(spec?.title).toBe('Item')
+  })
+
+  it('leaves a chart part it cannot parse in the file, and opens the workbook', async () => {
+    const broken = await read('<c:chartSpace><c:chart><c:plotArea>')
+
+    expect(broken.spec).toBeUndefined()
+  })
+})
+
 describe('charts Herald does not read', () => {
   const sheet = { name: 'Data', rows: [['Item', 'Value'], ['A', 1], ['B', 2]] as (string | number)[][] }
   const single = (series: string) =>

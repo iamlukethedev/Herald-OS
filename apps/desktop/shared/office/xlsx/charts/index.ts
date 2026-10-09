@@ -79,7 +79,8 @@ async function findCharts(pkg: XlsxPackage, sheet: PackageSheet, context: Readin
     const related = anchor ? drawing!.relationships.get(anchor.chart) : undefined
     const part = related && !related.external && related.type.endsWith('/chart') ? related.target : undefined
     const chartXml = part ? await pkg.read(part) : undefined
-    const reading = chartXml ? await readChartXml(chartXml, context) : null
+    // A chart Herald fails to read stays in the file as it is, like one it does not draw.
+    const reading = chartXml ? await readChartXml(chartXml, context).catch(() => null) : null
 
     if (anchor && part && chartXml && reading) {
       charts.push({ index, anchor: anchor.element, part, xml: chartXml, reading })
@@ -160,9 +161,22 @@ function filedFor(herald: Record<string, unknown> | null, sheetName: string): (p
   }
 }
 
+const heralds = new WeakMap<XlsxPackage, Promise<Record<string, unknown> | null>>()
+
+const heraldOf = (pkg: XlsxPackage): Promise<Record<string, unknown> | null> => {
+  let herald = heralds.get(pkg)
+
+  if (!herald) {
+    herald = readHeraldPart(pkg)
+    heralds.set(pkg, herald)
+  }
+
+  return herald
+}
+
 /** The chart a part of a file holds as Herald reads it: the spec Herald's part keeps for it, else its XML read. */
 async function specOfPart(pkg: XlsxPackage, part: string, xml: string): Promise<ChartSpec | null> {
-  const herald = await readHeraldPart(pkg)
+  const herald = await heraldOf(pkg)
   const print = fingerprint(xml)
   const section = (herald?.[HERALD_SECTION] ?? {}) as FiledCharts
   const filed = Object.values(section && typeof section === 'object' ? section : {})
@@ -218,7 +232,27 @@ const OFFICE_ACCENTS = OFFICE_THEME.slice(4, 10).map((hex) => `#${hex.toLowerCas
 
 const LOSSES = {
   percent: 'Excel labels columns, bars, lines and areas with their values where Herald Sheets shows each one’s share of its category.',
-  gone: 'Charts whose cells were all on sheets since deleted are left out of the file.'
+  gone: 'Charts whose cells were all on sheets since deleted are left out of the file.',
+  failed: (title: string | undefined, error: unknown) => `The chart ${title?.trim() ? `“${title.trim()}” ` : ''}could not be saved, so the file leaves it out (${error instanceof Error ? error.message : String(error)}).`
+}
+
+/** A chart part for a chart that changed or is new: its path and XML; null for a chart with nothing left to show. */
+async function writeChart(ctx: FinishContext, spec: ChartSpec, cells: ChartCells): Promise<{ path: string; xml: string } | null> {
+  if (!hasSeries(spec, cells)) {
+    ctx.losses.add(LOSSES.gone)
+
+    return null
+  }
+
+  const xml = chartXml(spec, cells, spec.palette?.length ? spec.palette : OFFICE_ACCENTS)
+  const path = ctx.writer.freshName((n) => `xl/charts/chart${n}.xml`)
+  await ctx.writer.put(path, xml, CONTENT_TYPE.chart)
+
+  if (spec.labels === 'percent' && !['pie', 'doughnut', 'scatter'].includes(spec.kind)) {
+    ctx.losses.add(LOSSES.percent)
+  }
+
+  return { path, xml }
 }
 
 /** The number format a cell shows its value with. */
@@ -259,22 +293,18 @@ export async function finishCharts(ctx: FinishContext): Promise<void> {
       }
 
       const { spec } = drawing.data
-      let written = await unchangedChart(ctx, drawing.data)
+      let written: { path: string; xml: string } | null
+
+      // One chart that cannot be written leaves the rest of the workbook to save.
+      try {
+        written = (await unchangedChart(ctx, drawing.data)) ?? (await writeChart(ctx, spec, cells))
+      } catch (error) {
+        ctx.losses.add(LOSSES.failed(spec.title, error))
+        continue
+      }
 
       if (!written) {
-        if (!hasSeries(spec, cells)) {
-          ctx.losses.add(LOSSES.gone)
-          continue
-        }
-
-        const xml = chartXml(spec, cells, spec.palette?.length ? spec.palette : OFFICE_ACCENTS)
-        const path = ctx.writer.freshName((n) => `xl/charts/chart${n}.xml`)
-        await ctx.writer.put(path, xml, CONTENT_TYPE.chart)
-        written = { path, xml }
-
-        if (spec.labels === 'percent' && !['pie', 'doughnut', 'scatter'].includes(spec.kind)) {
-          ctx.losses.add(LOSSES.percent)
-        }
+        continue
       }
 
       count++
@@ -311,10 +341,11 @@ export async function readCharts(ctx: ReadContext): Promise<Resource[]> {
     for (const chart of charts) {
       const saved = filed(chart.part, chart.xml)
       const spec = saved ? withSheets(saved.spec, (name) => idOfName.get(name.toLowerCase()) ?? name) : chart.reading.spec
-      let drawingId = saved?.id ?? `chart-${sheetId}-${chart.index + 1}`
+      const base = saved?.id ?? `chart-${sheetId}-${chart.index + 1}`
+      let drawingId = base
 
       for (let n = 2; taken.has(drawingId); n++) {
-        drawingId = `${saved?.id ?? `chart-${sheetId}-${chart.index + 1}`}-${n}`
+        drawingId = `${base}-${n}`
       }
 
       taken.add(drawingId)
