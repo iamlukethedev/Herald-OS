@@ -54,6 +54,8 @@ export interface DrawingAnchor {
   relationships: { type: string; target: string; external?: boolean }[]
   /** Namespace declarations (and mc:Ignorable) the anchor needs on the drawing's root. */
   namespaces?: Record<string, string>
+  /** Its place in the source file's drawing, which keeps what is in front in front; new anchors go on top. */
+  order?: number
 }
 
 const XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
@@ -68,8 +70,9 @@ export class DrawingBuilder {
     this.anchors.set(sheetId, [...(this.anchors.get(sheetId) ?? []), anchor])
   }
 
+  /** A sheet's anchors, back to front. */
   of(sheetId: string): readonly DrawingAnchor[] {
-    return this.anchors.get(sheetId) ?? []
+    return [...(this.anchors.get(sheetId) ?? [])].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity))
   }
 
   async write(ctx: Pick<FinishContext, 'writer' | 'sheets'>): Promise<void> {

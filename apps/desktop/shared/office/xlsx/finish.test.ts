@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 import { CELL_TYPE, newSheet, newWorkbook } from '../workbook.ts'
+import { childElements } from './drawing.ts'
 import { DrawingBuilder } from './finish.ts'
 import { HERALD_PART, readHeraldPart } from './herald-part.ts'
 import { CONTENT_TYPE, PackageWriter, placeInWorkbook, placeInWorksheet, REL, relativeTarget } from './opc.ts'
@@ -68,6 +69,15 @@ describe('drawings', () => {
     expect(sheet).toMatch(/<worksheet xmlns:r="[^"]+"/)
     expect(sheet.indexOf('<drawing r:id="rId1"/>')).toBeLessThan(sheet.indexOf('<tableParts'))
     expect(await zip.file('xl/drawings/_rels/drawing1.xml.rels')!.async('string')).toContain('Target="../charts/chart1.xml"')
+  })
+})
+
+describe('source drawings', () => {
+  it('splits a drawing into its anchors, an alternate content holding nested ones counted as one', () => {
+    const slicer = '<mc:AlternateContent><mc:Choice Requires="sle15"><xdr:twoCellAnchor><mc:AlternateContent><mc:Choice/></mc:AlternateContent></xdr:twoCellAnchor></mc:Choice><mc:Fallback><xdr:twoCellAnchor/></mc:Fallback></mc:AlternateContent>'
+    const xml = `<?xml version="1.0"?><xdr:wsDr xmlns:xdr="x"><xdr:twoCellAnchor editAs="oneCell"><xdr:pic/></xdr:twoCellAnchor><!-- note -->${slicer}<xdr:absoluteAnchor/></xdr:wsDr>`
+
+    expect(childElements(xml)).toEqual(['<xdr:twoCellAnchor editAs="oneCell"><xdr:pic/></xdr:twoCellAnchor>', slicer, '<xdr:absoluteAnchor/>'])
   })
 })
 

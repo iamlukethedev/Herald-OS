@@ -9,6 +9,9 @@
 /** The Univer component that draws a chart in its floating object. */
 export const CHART_COMPONENT = 'herald-chart'
 
+/** The kind of sheet drawing a chart's floating object is: Univer's DrawingTypeEnum.DRAWING_DOM. */
+export const CHART_DRAWING_TYPE = 8
+
 export const CHART_KINDS = ['column', 'bar', 'line', 'area', 'pie', 'doughnut', 'scatter', 'combo'] as const
 
 export type ChartKind = (typeof CHART_KINDS)[number]
@@ -70,8 +73,12 @@ export interface ChartData {
   herald: 'chart'
   version: 1
   spec: ChartSpec
-  /** The chart part it was read from, with a fingerprint of the spec as read: an unchanged chart is written back as the file had it. */
-  source?: { part: string; fingerprint: string }
+  /**
+   * The chart part it was read from, with a fingerprint of the spec as read (an unchanged chart is
+   * written back as the file had it) and its anchor's place in the sheet's drawing (which keeps it
+   * in front of or behind the pictures and shapes around it).
+   */
+  source?: { part: string; fingerprint: string; anchor?: number }
 }
 
 export const isChartData = (data: unknown): data is ChartData => Boolean(data) && typeof data === 'object' && (data as ChartData).herald === 'chart' && typeof (data as ChartData).spec === 'object'
