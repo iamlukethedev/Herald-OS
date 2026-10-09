@@ -193,6 +193,20 @@ describe('what else the source file holds', () => {
     expect(await plain.text(cells)).toContain('<c:f>Sales!$C$2:$C$7</c:f>')
   })
 
+  it('copies a picture two anchors show once', async () => {
+    const original = await withParts(await keptWorkbook({ dashboard: ['picture'] }), {
+      change: { 'xl/drawings/drawing1.xml': (xml) => xml.replace('</xdr:wsDr>', `${/<xdr:twoCellAnchor[\s\S]*<\/xdr:twoCellAnchor>/.exec(xml)![0].replace('id="2" name="Picture 1"', 'id="8" name="Picture 2"')}</xdr:wsDr>`) }
+    })
+    const { bytes } = await xlsxFromWorkbook(await read(original), { original })
+    const file = await opened(bytes)
+    const [drawing] = await file.related(file.sheet('Dashboard'), 'drawing')
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect((await file.text(drawing)).match(/<xdr:pic>/g)).toHaveLength(2)
+    expect(new Set(await file.related(drawing, 'image')).size).toBe(1)
+    expect(file.files(/^xl\/media\//)).toHaveLength(1)
+  })
+
   it('keeps a shape’s link to a place in the workbook, with its sheet’s name now', async () => {
     const original = await withParts(await keptWorkbook({ dashboard: ['shape'] }), {
       relationships: { 'xl/drawings/drawing1.xml': [['rId9', `${R}/hyperlink`, '#Summary!A1']] },
@@ -272,6 +286,16 @@ describe('what cannot come along', () => {
     expect((await opened(bytes)).sheets.map((sheet) => sheet.name)).toEqual(['Sales', 'Summary', 'Chart1'])
   })
 
+  it('makes a table a plain range when a filter of its sheet overlaps it', async () => {
+    const original = await keptWorkbook()
+    const workbook = await read(original)
+    workbook.resources = [...((workbook.resources as { name: string; data: string }[]) ?? []), { name: RESOURCES.filter, data: JSON.stringify({ 'sheet-1': { ref: { startRow: 0, endRow: 6, startColumn: 4, endColumn: 5 } } }) }]
+    const { bytes, losses } = await xlsxFromWorkbook(workbook, { original })
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect(losses).toEqual(['The table Targets on Sales becomes a plain range: a filter overlaps it.'])
+  })
+
   it('makes a table a plain range when a defined name has its name', async () => {
     const original = await keptWorkbook()
     const workbook = await read(original)
@@ -312,6 +336,18 @@ describe('pivot caches', () => {
     workbook.sheets['sheet-1'].cellData[0][5] = { v: 'Goal', t: 1 }
 
     expect(await cacheOf((await xlsxFromWorkbook(workbook, { original })).bytes)).not.toContain('refreshOnLoad')
+  })
+
+  it('refreshes a cache over a defined name the workbook still has, and keeps one over a name it lacks as it was', async () => {
+    const cacheOver = async (name: string) => {
+      const original = await withParts(await keptWorkbook(), { change: { 'xl/pivotCache/pivotCacheDefinition1.xml': (xml) => xml.replace('<worksheetSource ref="A1:C7" sheet="Sales"/>', `<worksheetSource name="${name}"/>`) } })
+      const file = await opened((await xlsxFromWorkbook(await read(original), { original })).bytes)
+
+      return file.text((await file.related((await file.related(file.sheet('Summary'), 'pivotTable'))[0], 'pivotCacheDefinition'))[0])
+    }
+
+    expect(await cacheOver('Amounts')).toContain('refreshOnLoad="1"')
+    expect(await cacheOver('Nowhere')).not.toContain('refreshOnLoad')
   })
 
   it('copies a cache two pivot tables share once, and lists it once', async () => {
