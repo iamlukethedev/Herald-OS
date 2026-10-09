@@ -260,7 +260,7 @@ describe('reading, changing, moving and removing charts', () => {
       await insertChart(target, { range: 'A1:C7', title: 'Sales' })
       await insertChart(target, { range: 'A1:C7', title: 'Sales' })
 
-      expect(() => describeChart(target, { chart: 'Profit' })).toThrow(/There is no chart “Profit”: give a chart’s id, title or number \(chart-\w+ \(“Sales” on Sales\)/)
+      expect(() => describeChart(target, { chart: 'Profit' })).toThrow(/There is no chart “Profit”: give a chart’s id, title or number \(chart-[\w-]+ \(“Sales” on Sales\)/)
       expect(() => describeChart(target, { chart: 'sales' })).toThrow('Several charts are titled “sales”')
       await expect(updateChart(target, { chart: 1 })).rejects.toThrow('Say what to change')
       await expect(updateChart(target, { chart: 1, legend: 'middle' })).rejects.toThrow('legend is one of top, bottom, left, right, none')
