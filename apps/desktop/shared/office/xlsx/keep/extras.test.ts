@@ -286,6 +286,28 @@ describe('what cannot come along', () => {
     expect((await opened(bytes)).sheets.map((sheet) => sheet.name)).toEqual(['Sales', 'Summary', 'Chart1'])
   })
 
+  it('makes a table a plain range when a header cell holds a formula, which Excel does not take', async () => {
+    const original = await keptWorkbook()
+    const workbook = await read(original)
+    workbook.sheets['sheet-1'].cellData[0][5] = { f: '="Target"', v: 'Target', t: 1 }
+    const { losses } = await xlsxFromWorkbook(workbook, { original })
+
+    expect(losses).toEqual(['The table Targets on Sales becomes a plain range: its headers changed.'])
+  })
+
+  it('leaves out a pivot table that merged cells now overlap, with its slicer', async () => {
+    const original = await keptWorkbook({ chartSheet: false })
+    const workbook = await read(original)
+    workbook.sheets['sheet-2'].mergeData = [{ startRow: 3, endRow: 4, startColumn: 0, endColumn: 0 }]
+    const { bytes, losses } = await xlsxFromWorkbook(workbook, { original })
+    const file = await opened(bytes)
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect(losses).toEqual(['The pivot table PivotTable1 on Summary is not kept: merged cells overlap it.', 'The slicer Region on Summary is not kept: the pivot table it filtered is gone.'])
+    expect(file.files(/^xl\/(pivotTables|pivotCache|slicers|slicerCaches)\//)).toEqual([])
+    expect(file.workbook).not.toContain('pivotCaches')
+  })
+
   it('makes a table a plain range when a filter of its sheet overlaps it', async () => {
     const original = await keptWorkbook()
     const workbook = await read(original)

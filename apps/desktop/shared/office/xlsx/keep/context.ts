@@ -1,3 +1,4 @@
+import type { CellRange } from '../address.ts'
 import type { FinishContext, SourcePackage, WrittenSheet } from '../finish.ts'
 import type { Relationship } from '../opc.ts'
 import type { PackageSheet, XlsxPackage } from '../package.ts'
@@ -54,8 +55,9 @@ export class Keep {
   readonly keepablePivotCacheIds = new Set<string>()
   /** Each kept pivot cache by its workbook cacheId: its definition in the source, and where it went. */
   readonly pivotCaches = new Map<string, { source: string; target: string }>()
-  /** The tables kept, by id, with their names. */
+  /** The tables kept, by id, with their names, and their ranges on each written sheet. */
   readonly tables = new Map<string, string[]>()
+  readonly tableRanges = new Map<string, CellRange[]>()
   /** The slicer and timeline caches kept, by name. */
   readonly caches = new Set<string>()
   /** The slicers and timelines kept on each written sheet ("slicer:Region", "timeline:Date"), for their anchors. */

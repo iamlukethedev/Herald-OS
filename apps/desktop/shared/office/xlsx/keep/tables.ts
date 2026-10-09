@@ -43,8 +43,12 @@ export function readTable(xml: string): SourceTable {
 /** Text as a file escapes it (`_x000A_`), read back. */
 const unescaped = (text: string): string => text.replace(/_x([0-9A-Fa-f]{4})_/g, (_whole, code: string) => String.fromCharCode(parseInt(code, 16)))
 
-/** The text a cell holds, when it holds text. */
+/** The text a cell holds, when it holds text (a table's header cells hold no formulas). */
 function textOf(cell: CellSnapshot | undefined): string | null {
+  if (cell?.f || typeof cell?.si === 'string') {
+    return null
+  }
+
   if (typeof cell?.v === 'string') {
     return cell.v
   }
@@ -55,6 +59,22 @@ function textOf(cell: CellSnapshot | undefined): string | null {
 }
 
 const overlaps = (a: CellRange, b: CellRange): boolean => a.startRow <= b.endRow && b.startRow <= a.endRow && a.startColumn <= b.endColumn && b.startColumn <= a.endColumn
+
+/** What Herald writes on a sheet that a kept table or pivot table may not overlap: its filter, merged cells (unless asked to let them be), the tables kept. */
+export function overlapping(keep: Keep, sheet: KeptSheet, range: CellRange, options: { merges: boolean }): string | null {
+  const snapshot = keep.ctx.workbook.sheets[sheet.written.id]
+  const filter = readResource<Record<string, UAutoFilter>>(keep.ctx.workbook.resources, RESOURCES.filter)?.[sheet.written.id]?.ref
+
+  if (filter && overlaps(filter, range)) {
+    return 'a filter overlaps it'
+  }
+
+  if (options.merges && ((snapshot?.mergeData ?? []) as CellRange[]).some((merge) => overlaps(merge, range))) {
+    return 'merged cells overlap it'
+  }
+
+  return (keep.tableRanges.get(sheet.written.id) ?? []).some((table) => overlaps(table, range)) ? 'a table overlaps it' : null
+}
 
 /** Why a table cannot be kept on its sheet as Herald writes it; null when it can. */
 function whyNot(keep: Keep, sheet: KeptSheet, table: SourceTable, range: CellRange): string | null {
@@ -68,14 +88,10 @@ function whyNot(keep: Keep, sheet: KeptSheet, table: SourceTable, range: CellRan
     }
   }
 
-  const filter = readResource<Record<string, UAutoFilter>>(keep.ctx.workbook.resources, RESOURCES.filter)?.[sheet.written.id]?.ref
+  const overlap = overlapping(keep, sheet, range, { merges: true })
 
-  if (filter && overlaps(filter, range)) {
-    return 'a filter overlaps it'
-  }
-
-  if (((snapshot?.mergeData ?? []) as CellRange[]).some((merge) => overlaps(merge, range))) {
-    return 'merged cells overlap it'
+  if (overlap) {
+    return overlap
   }
 
   if (keep.writtenNames().has(table.name.toLowerCase()) || keep.writtenNames().has(table.displayName.toLowerCase())) {
@@ -121,6 +137,7 @@ export async function keepTables(keep: Keep): Promise<void> {
       }
 
       keep.tables.set(table.id, [table.name, table.displayName])
+      keep.tableRanges.set(sheet.written.id, [...(keep.tableRanges.get(sheet.written.id) ?? []), range])
       parts.push(`<tablePart r:id="${await keep.ctx.writer.relate(sheet.written.path, REL.table, target)}"/>`)
     }
 

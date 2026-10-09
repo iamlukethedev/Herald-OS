@@ -1,8 +1,10 @@
+import { parseRange } from '../address.ts'
 import { REL } from '../opc.ts'
 import { attributesOf } from '../xml.ts'
 import type { Keep } from './context.ts'
 import { withAttribute, withoutAttributes } from './markup.ts'
 import { type Refusal, refused } from './parts.ts'
+import { overlapping } from './tables.ts'
 
 /*
  * Pivot tables on the sheets that are still there, with their caches (a cache several pivot tables
@@ -94,7 +96,16 @@ export async function keepPivots(keep: Keep): Promise<void> {
         continue
       }
 
-      const { name = '', cacheId = '' } = attributesOf(/<(?:[\w.-]+:)?pivotTableDefinition\b[^>]*>/.exec(xml)?.[0] ?? '')
+      const { name = '', cacheId = '', mergeItem } = attributesOf(/<(?:[\w.-]+:)?pivotTableDefinition\b[^>]*>/.exec(xml)?.[0] ?? '')
+      const location = parseRange(attributesOf(/<(?:[\w.-]+:)?location\b[^>]*>/.exec(xml)?.[0] ?? '').ref ?? '')
+      // A pivot table that merges its own labels has merged cells of its own.
+      const overlap = location ? overlapping(keep, sheet, location, { merges: mergeItem !== '1' && mergeItem !== 'true' }) : null
+
+      if (overlap) {
+        keep.loss(`The pivot table ${name} on ${sheet.written.name} is not kept: ${overlap}.`)
+        continue
+      }
+
       const id = pivotCacheIdOf(cacheXml)
       const shared = keep.pivotCaches.get(cacheId)
       const target = !shared || shared.source === cache.target ? await keep.copier.copy(rel.target) : null
