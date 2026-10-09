@@ -243,6 +243,10 @@ that File > Export as PDF… writes; Export as PDF has no shortcut.
   the file, a sheet wider than the page prints landscape, under its name.
 - **Herald Slides** prints one slide on each page, at the slide's size; hidden slides are left out.
 
+The pages are laid out at the document's own size and scaled to the paper the printer has. On
+Herald OS Linux, which comes without a print server, the system has no print dialog to show, so
+Print asks where to save a PDF of the same pages instead (Print to File).
+
 ## Working with Hermes
 
 Ask in the Hermes window, with your voice, or in the Ask Hermes field in the status bar ("Ask Hermes
