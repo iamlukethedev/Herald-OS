@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPrompt, type CellSelection, type CleanKind, type DocsAction, editsOffice, MAX_TEXT, type PromptContext, stepLabel, type TextSelection } from './prompts.ts'
+import { buildPrompt, type CellSelection, type CleanKind, type DocsAction, editsOffice, MAX_TEXT, type PromptContext, type SlideSelection, type SlidesAction, stepLabel, type TextSelection } from './prompts.ts'
 
 const home = '/Users/sam'
 const report = { name: 'Report.docx', path: '/Users/sam/Documents/Report.docx' }
@@ -23,6 +23,20 @@ const cells: CellSelection = {
   formula: '=SUM(B2:C2)'
 }
 const sheets = (extra: Partial<PromptContext> = {}): PromptContext => ({ app: 'sheets', document: { name: 'Budget.xlsx', path: '/Users/sam/Budget.xlsx' }, words: 'add a total row', selection: cells, home, ...extra })
+
+const slide: SlideSelection = {
+  kind: 'slide',
+  number: 3,
+  count: 5,
+  id: 'slide-3',
+  layout: 'title-content',
+  title: 'Market',
+  bodies: ['Growing 20% a year\n  Mostly in Europe'],
+  notes: 'Say the number twice.',
+  selected: ['text box “Source: Gartner”'],
+  titles: ['Pitch', 'Problem', 'Market', '', 'Ask']
+}
+const deck = (extra: Partial<PromptContext> = {}): PromptContext => ({ app: 'slides', document: { name: 'Pitch.pptx', path: '/Users/sam/Pitch.pptx' }, words: 'add a slide about pricing', selection: slide, home, ...extra })
 
 describe('the prompt for a request about a document', () => {
   it('names the document, the words and the docs tool, and asks for one call and a short reply', () => {
@@ -192,19 +206,89 @@ describe('the inline actions', () => {
     expect(prompt).toContain('totals, trends, outliers and gaps')
   })
 
-  it('works on a presentation through the slides commands', () => {
-    const deck = { app: 'slides' as const, document: { name: 'Pitch.pptx', path: '/Users/sam/Pitch.pptx' }, home, detail: 'slide 3 of 12 (“Market”)' }
-    const prompt = buildPrompt({ ...deck, words: 'add a slide about pricing' })
+  const pitch = (action: SlidesAction) => buildPrompt(deck({ words: 'an action', action }))
+
+  it('write speaker notes for the slide in front with one set_slide, or for every slide with one edit batch', () => {
+    const one = pitch({ id: 'notes' })
+
+    expect(one).toContain('asks: Write speaker notes for slide 3.\n')
+    expect(one).toContain('- Make ONE slides call: action=set_slide presentation="~/Pitch.pptx" slide=3 notes=<two to four short sentences to say aloud, in the slide’s language>.')
+
+    const every = pitch({ id: 'allNotes' })
+
+    expect(every).toContain('- Read the deck first (slides action=read presentation="~/Pitch.pptx").')
+    expect(every).toContain('- Then make ONE slides call: action=edit presentation="~/Pitch.pptx" edits=[{"op": "setSlide", "slide": <its number>, "notes": "<two to four short sentences to say aloud>"}, …], one setSlide for each slide with something on it.')
+  })
+
+  it('choose layouts for the whole deck in one edit batch', () => {
+    const prompt = pitch({ id: 'layouts' })
+
+    expect(prompt).toContain('asks: Choose each slide’s layout for what it holds.\n')
+    expect(prompt).toContain('action=edit presentation="~/Pitch.pptx" edits=[{"op": "setSlide", "slide": <its number>, "layout": "<title, title-content, two-content, comparison, section, title-only, blank or picture-caption>"}, …]')
+  })
+
+  it('tighten the slide in front with one set_slide, its notes left alone', () => {
+    const prompt = pitch({ id: 'tighten' })
+
+    expect(prompt).toContain('asks: Tighten slide 3: shorter, parallel bullets.\n')
+    expect(prompt).toContain('- Make ONE slides call: action=set_slide presentation="~/Pitch.pptx" slide=3 body=<the tightened text')
+    expect(prompt).toContain('leave its notes as they are')
+  })
+
+  it('make slides from an open document, into this deck or a new one, saying which', () => {
+    const report = { app: 'docs' as const, name: 'Report.docx', path: '/Users/sam/Documents/Report.docx' }
+    const into = pitch({ id: 'fromDocument', document: report, into: 'this' })
+
+    expect(into).toContain('asks: Make slides from the document “Report.docx” and add them at the end of this presentation.\n')
+    expect(into).toContain('- Make ONE slides call: action=from_document document="~/Documents/Report.docx" presentation="~/Pitch.pptx".')
+
+    const fresh = pitch({ id: 'fromDocument', document: { app: 'docs', name: 'Notes', path: null }, into: 'new' })
+
+    expect(fresh).toContain('asks: Make a new presentation from the document “Notes”.\n')
+    expect(fresh).toContain('- Make ONE slides call: action=from_document document="Notes", leaving presentation out so the slides go in a new presentation named after the document.')
+  })
+
+  it('put a workbook’s selection on a table slide with insert_range, after a slide that sums it up', () => {
+    const prompt = pitch({ id: 'fromSheet', workbook: { app: 'sheets', name: 'Budget.xlsx', path: '/Users/sam/Budget.xlsx', selection: 'Sheet1!B2:D9' } })
+
+    expect(prompt).toContain('asks: Put the cells of “Budget.xlsx” on a new slide after slide 3 as a table, with a slide after it that sums them up.\n')
+    expect(prompt).toContain('- Read the cells first (sheets action=read workbook="~/Budget.xlsx" range=Sheet1!B2:D9).')
+    expect(prompt).toContain('- Add both slides with ONE slides call: action=edit presentation="~/Pitch.pptx" edits=[{"op": "addSlide", "layout": "title-only", "title": "<what the table shows>", "after": 3}, {"op": "addSlide"')
+    expect(prompt).toContain('- Then put the table on the first of them with ONE more call: action=insert_range presentation="~/Pitch.pptx" slide="<the table slide’s title>" workbook="~/Budget.xlsx" range=Sheet1!B2:D9.')
+
+    const used = pitch({ id: 'fromSheet', workbook: { app: 'sheets', name: 'Budget.xlsx', path: '/Users/sam/Budget.xlsx', selection: 'Sheet1!B2' } })
+
+    expect(used).toContain('sheets action=read workbook="~/Budget.xlsx" with no range gives the ones that hold something')
+    expect(used).toContain('workbook="~/Budget.xlsx" range=<that range>.')
+  })
+})
+
+describe('the prompt for a request about a presentation', () => {
+  it('names the slide in front by number, with its text, notes, selection and the deck’s titles', () => {
+    const prompt = buildPrompt(deck())
 
     expect(prompt.startsWith('[Herald Slides] The person is working on “Pitch.pptx” (~/Pitch.pptx) in Herald Slides and asks: add a slide about pricing\n')).toBe(true)
+    expect(prompt).toContain(
+      'In front: slide 3 of 5, “Market” (layout title-content, id slide-3).\nIts text:\n"""\nGrowing 20% a year\n  Mostly in Europe\n"""\nIts speaker notes:\n"""\nSay the number twice.\n"""\nSelected on it: text box “Source: Gartner”.\nThe slides: 1 “Pitch”, 2 “Problem”, 3 “Market”, 4 (no title), 5 “Ask”.'
+    )
+    expect(prompt).toContain('- Work on that presentation with the slides tool (presentation="~/Pitch.pptx"); slide=3 is the slide in front.')
+    expect(prompt).toContain('- Land the whole change in ONE call where you can (action=edit for several changes): each call is one step the person can undo.')
+    expect(prompt).not.toContain('os_ui')
+  })
+
+  it('shows both columns of a two-column slide, and at most forty titles', () => {
+    const prompt = buildPrompt(deck({ selection: { ...slide, layout: 'two-content', bodies: ['Pros\nFast', 'Cons\nCostly'], notes: '', selected: [], titles: Array.from({ length: 45 }, (_, n) => `Slide ${n + 1}`) } }))
+
+    expect(prompt).toContain('Its two columns:\n"""\nPros\nFast\n"""\n"""\nCons\nCostly\n"""')
+    expect(prompt).toContain('40 “Slide 40”, and 5 more.')
+    expect(prompt).not.toContain('Its speaker notes')
+  })
+
+  it('says what the editor shows when there is no slide to read', () => {
+    const prompt = buildPrompt(deck({ selection: null, detail: 'slide 3 of 12 (“Market”)' }))
+
     expect(prompt).toContain('On screen: slide 3 of 12 (“Market”).')
-
-    for (const command of ['os_ui action=run', 'slides.addSlide', 'slides.setSlide', 'slides.fromDocument', 'slides.insertRange', 'presentation="~/Pitch.pptx"']) {
-      expect(prompt).toContain(command)
-    }
-
-    expect(buildPrompt({ ...deck, words: 'Speaker notes', action: { id: 'notes' } })).toContain('- Make ONE call: os_ui action=run command=slides.setSlide on the slide in front (presentation="~/Pitch.pptx"), setting its speaker notes')
-    expect(buildPrompt({ ...deck, words: 'Layout', action: { id: 'layout' } })).toContain('command=slides.setSlide on the slide in front (presentation="~/Pitch.pptx"), setting its layout and keeping its text.')
+    expect(prompt).toContain('- Work on that presentation with the slides tool (presentation="~/Pitch.pptx").')
   })
 })
 
@@ -213,6 +297,8 @@ describe('what the bar says of Hermes’s work', () => {
     expect(stepLabel('docs', { action: 'write' })).toBe('docs · write')
     expect(stepLabel('docs', { action: 'read' })).toBe('Reading the document')
     expect(stepLabel('sheets', { action: 'read' })).toBe('Reading the cells')
+    expect(stepLabel('slides', { action: 'read' })).toBe('Reading the presentation')
+    expect(stepLabel('slides', { action: 'set_slide' })).toBe('slides · set_slide')
     expect(stepLabel('sheets', { action: 'list_all' })).toBe('Looking at what is open')
     expect(stepLabel('os_ui', { action: 'run', command: 'slides.setSlide' })).toBe('slides · setSlide')
     expect(stepLabel('terminal', null)).toBe('terminal')

@@ -1,14 +1,17 @@
+import { atom } from 'nanostores'
 import type { OfficeApp } from '../../../../shared/office/files.ts'
+import { openEntries } from '../agent.ts'
 import type { OfficeCommand, OfficeMenu } from '../shell/commands.ts'
 import { $hermesState, askHermes, askOf, draftAsk } from './ask.ts'
-import type { CleanKind, DocsAction, HermesAction, SheetsAction, SlidesAction } from './prompts.ts'
+import type { CleanKind, DocsAction, HermesAction, OpenDocument, SheetsAction, SlidesAction } from './prompts.ts'
 
 /*
  * The inline actions: Hermes rewrites, shortens, translates or summarises the selection in Herald
  * Docs; explains a formula, fills a column from its examples or cleans data in Herald Sheets; writes
- * speaker notes or picks a layout in Herald Slides. Each goes through the Ask Hermes bar with a
- * prompt that names the one call landing the change as a step to undo. A window gives what only it
- * reads cheaply: the document in front and what is selected in it.
+ * speaker notes, tightens a slide, picks layouts or makes slides from a document or cells in Herald
+ * Slides. Each goes through the Ask Hermes bar with a prompt that names the call landing the change
+ * as a step to undo. A window gives what only it reads cheaply: the document in front and what is
+ * selected in it.
  */
 
 export const TONES = ['Professional', 'Friendly', 'Confident', 'Casual'] as const
@@ -49,9 +52,17 @@ export function actionName(action: HermesAction): string {
     case 'insights':
       return 'What stands out in this sheet?'
     case 'notes':
-      return 'Write speaker notes'
-    case 'layout':
-      return 'Suggest a layout'
+      return 'Speaker notes for this slide'
+    case 'allNotes':
+      return 'Speaker notes for every slide'
+    case 'layouts':
+      return 'Choose layouts for the content'
+    case 'tighten':
+      return 'Tighten this slide'
+    case 'fromDocument':
+      return action.into === 'this' ? `Slides from ${action.document.name}` : `New deck from ${action.document.name}`
+    case 'fromSheet':
+      return `Slides from ${action.workbook.name}`
   }
 }
 
@@ -127,21 +138,66 @@ export function sheetsHermesMenu(source: SheetsSource): OfficeMenu {
   }
 }
 
-/** Herald Slides' Hermes menu, for its window to add: the bar, the actions on the slide in front, and decks made from a topic, a document or cells. */
+/** The Office documents open anywhere, for the menus that list them; a window refreshes it while it shows. */
+export const $openDocuments = atom<readonly OpenDocument[]>([])
+
+export async function refreshOpenDocuments(): Promise<void> {
+  const entries = await openEntries().catch(() => null)
+
+  if (entries) {
+    $openDocuments.set(entries.map(({ app, name, path, selection }) => ({ app, name, path, ...(selection ? { selection } : {}) })))
+  }
+}
+
+/** A submenu of the documents open in an app, read as the menu shows it. */
+function openIn(app: 'docs' | 'sheets', item: (doc: OpenDocument, index: number) => OfficeCommand): OfficeCommand[] {
+  const docs = $openDocuments.get().filter((doc) => doc.app === app)
+
+  return docs.length ? docs.map(item) : [{ id: `hermes-none-${app}`, label: app === 'docs' ? 'No document is open in Herald Docs' : 'No workbook is open in Herald Sheets', enabled: () => false, run: () => {} }]
+}
+
+/** Herald Slides' Hermes menu: the bar, the actions on the slide in front or the whole deck, and slides made from a topic, a document or cells. */
 export function slidesHermesMenu(source: { docKey: () => string | null }): OfficeMenu {
   const enabled = () => free(source.docKey())
-  const action = (id: string, label: string, chosen: SlidesAction): OfficeCommand => ({ id: `hermes-${id}`, label, enabled, run: () => runAction('slides', source.docKey(), chosen) })
+  const action = (id: string, label: string, chosen: SlidesAction, extra: Partial<OfficeCommand> = {}): OfficeCommand => ({ id: `hermes-${id}`, label, enabled, run: () => runAction('slides', source.docKey(), chosen), ...extra })
 
   return {
     id: 'hermes',
     label: 'Hermes',
     items: [
       { id: 'hermes-ask', label: 'Ask Hermes…', enabled: () => Boolean(source.docKey()), run: () => draftAsk('slides') },
-      { ...action('notes', 'Write Speaker Notes', { id: 'notes' }), dividerBefore: true },
-      action('layout', 'Suggest a Layout', { id: 'layout' }),
-      { id: 'hermes-from-topic', label: 'Slides from a Topic…', enabled, dividerBefore: true, run: () => draftAsk('slides', 'Make slides about ') },
-      { id: 'hermes-from-document', label: 'Slides from a Document…', enabled, run: () => draftAsk('slides', 'Make slides from the document ') },
-      { id: 'hermes-from-cells', label: 'Slide from Selected Cells', enabled, run: () => draftAsk('slides', 'Put the cells selected in Herald Sheets on a new slide') }
+      action('notes', 'Speaker Notes for This Slide', { id: 'notes' }, { dividerBefore: true }),
+      action('all-notes', 'Speaker Notes for Every Slide', { id: 'allNotes' }),
+      action('tighten', 'Tighten This Slide', { id: 'tighten' }),
+      action('layouts', 'Choose Layouts for the Content', { id: 'layouts' }),
+      { id: 'hermes-topic', label: 'A Deck from a Topic…', enabled, dividerBefore: true, run: () => draftAsk('slides', 'Make a deck about ') },
+      {
+        id: 'hermes-from-document',
+        label: 'Add Slides from a Document',
+        enabled,
+        run: () => {},
+        get submenu() {
+          return openIn('docs', (doc, index) => action(`from-document-${index}`, doc.name, { id: 'fromDocument', document: doc, into: 'this' }))
+        }
+      },
+      {
+        id: 'hermes-deck-from-document',
+        label: 'New Deck from a Document',
+        enabled,
+        run: () => {},
+        get submenu() {
+          return openIn('docs', (doc, index) => action(`deck-from-document-${index}`, doc.name, { id: 'fromDocument', document: doc, into: 'new' }))
+        }
+      },
+      {
+        id: 'hermes-from-sheet',
+        label: 'Add Slides from a Sheet',
+        enabled,
+        run: () => {},
+        get submenu() {
+          return openIn('sheets', (doc, index) => action(`from-sheet-${index}`, doc.name, { id: 'fromSheet', workbook: doc }))
+        }
+      }
     ]
   }
 }

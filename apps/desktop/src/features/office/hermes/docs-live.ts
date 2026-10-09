@@ -33,8 +33,8 @@ export function docsLive(docKey: string, mark: boolean): LiveDoc | null {
 
       return () => editor.off('transaction', listener)
     },
-    undo: () => {
-      if (alive()) {
+    undo: (steps) => {
+      for (let n = 0; n < steps && alive(); n++) {
         editor.commands.undo()
       }
     },

@@ -59,7 +59,8 @@ export interface LiveDoc {
   depth: () => number | null
   /** Calls back on every change to the document or its history (and more: the depth tells). */
   watch: (listener: () => void) => () => void
-  undo: () => void
+  /** Undo this many steps (never past the document as the request found it). */
+  undo: (steps: number) => void
   /** Clears the mark the request put on the text. */
   unmark: () => void
 }
@@ -251,9 +252,7 @@ async function liveDocOf(app: OfficeApp, docKey: string, mark: boolean): Promise
     return (await import('./sheets-live.ts')).sheetsLive(docKey)
   }
 
-  const doc = (await import('../slides/store.ts')).slidesSession.find(docKey)
-
-  return doc && { name: doc.name, path: doc.path, selection: null, detail: doc.editor?.detail?.(), depth: () => null, watch: () => () => {}, undo: () => {}, unmark: () => {} }
+  return (await import('./slides-live.ts')).slidesLive(docKey)
 }
 
 async function otherDocuments(docKey: string): Promise<OpenDocument[]> {
@@ -379,11 +378,7 @@ export function undoAsk(docKey: string): void {
   }
 
   release(docKey)
-
-  for (let n = 0; n < undo; n++) {
-    track.live.undo()
-  }
-
+  track.live.undo(undo)
   $asks.setKey(docKey, IDLE)
 }
 

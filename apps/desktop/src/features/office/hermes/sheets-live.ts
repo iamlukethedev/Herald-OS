@@ -89,7 +89,11 @@ export function sheetsLive(docKey: string): LiveDoc | null {
 
       return () => subscription.dispose()
     },
-    undo: () => doc.editor?.undo(),
+    undo: (steps) => {
+      for (let n = 0; n < steps; n++) {
+        doc.editor?.undo()
+      }
+    },
     unmark: () => {}
   }
 }
