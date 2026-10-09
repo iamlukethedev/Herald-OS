@@ -14,6 +14,8 @@ This manual is for using Herald OS day to day. The [README](../../README.md) cov
   branding, keyboard shortcuts, and hooks and automations that run when something happens.
 - [Herald Canvas](canvas.md): the image editor, its tools and AI features, Photoshop files, and
   working on pictures with Hermes.
+- [Herald Office](office.md): Herald Docs, Sheets and Slides, the files they open and save,
+  printing, and working on documents with Hermes and your voice.
 - [Troubleshooting](troubleshooting.md): when something does not work.
 - [FAQ](faq.md): short answers to common questions.
 

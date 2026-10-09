@@ -92,7 +92,8 @@ and a small window manager. Its apps are registered in `src/shell/apps.ts`:
 
 - **Pages** of the main Hermes window, picked from its sidebar: Overview, Hermes (chat), Missions,
   Memory, Files, Automations, Connections, Settings.
-- **Floating apps** with their own window: Terminal, System, Web, Studio, and a chat pop-out.
+- **Floating apps** with their own window: Terminal, System, Web, Studio, Herald Canvas, Herald
+  Docs, Sheets and Slides, and a chat pop-out.
 
 It runs in one of two modes, chosen by Electron main (`electron/shell/mode.ts`):
 
@@ -177,44 +178,79 @@ The image editor (decision record: ADR-020; using it: [the manual](manual/canvas
 
 ## Herald Office
 
-Herald Docs, Sheets and Slides (decision record: ADR-021, proposed) live in `src/features/office`,
-with the formats in `shared/office` and file access in `electron/office`.
+Herald Docs, Sheets and Slides (decision record: ADR-021; using them:
+[the manual](manual/office.md)) live in `src/features/office`, with the formats in `shared/office`
+and file access in `electron/office`.
 
-- **One window for three apps** (`shell/OfficeWindow.tsx`): menus, document tabs, the status bar and
-  the dialogs. Each app's session (`session.ts`) opens, saves, watches and closes its documents,
-  through an adapter that reads, writes and prints its formats (`docs/adapter.ts` and so on).
+- **One frame for three apps** (`shell/OfficeWindow.tsx`): the menus (File and Edit shared, then
+  the app's own) and their shortcuts in one table (`shell/commands.ts`), the document tabs, the
+  status bar with the Ask Hermes bar, and the dialogs. Each app's session (`session.ts`) opens,
+  saves, watches, prints and closes its documents through an adapter that reads, writes and prints
+  its formats (`docs/adapter.ts` and so on); `shared/office/files.ts` says which formats each app
+  opens and saves, and main builds its dialogs from it.
 - **The save policy.** Before the first save over a file, the fidelity report lists what Herald
   showed differently and what the format will not keep; main copies the original into
   `office-backups` under the Herald OS data folder the first time Herald writes over it in a session
   (`electron/office/backups.ts`). Herald saves a document by itself only once the person has saved
-  it, and stops when a save would lose something new.
+  it, and stops when a save would lose something new. A change on disk loads by itself when there
+  are no unsaved edits and is a question when there are.
+- **Docs** is TipTap 3 (`docs/`): one schema (`docs/schema.ts`) for the editor, the converters, the
+  print view and the document API (`docs/model.ts`), which works on a live editor or a file's JSON.
+  The page view (`docs/pages/`) lays the one editor's text out on pages, with headers, footers and
+  notes edited in place on them (`parts.ts`, `PartEditor.tsx`) and sections that each have a page
+  setup. Comments (`comments.ts`, `CommentsPanel.tsx`) and live tables of contents (`toc.ts`,
+  `toc-view.ts`) are operations of the same API, and templates (`docs/templates/`) and statistics
+  (`statistics.ts`) build and read documents of the same shape. Word files go through Herald's own
+  reader and the docx package (`shared/office/docx`), Markdown and plain text through
+  `shared/office/doc-text.ts`, and the page spell-checks with suggestions on right-click
+  (`electron/office/spelling.ts`).
 - **Sheets** is Univer's open-source packages (`univer/`), one instance per open workbook, in
   Herald's palette (`palette.ts`, `theme.ts`, `univer.css`); formulas are worked out in a worker,
   `.xlsx` is read and written in another (`sheets/xlsx-worker.ts`), and `sheets/headless.ts` runs
-  Univer without a window for the workbook API (`sheets/model.ts`).
-- **Docs** is TipTap 3 (`docs/`): one schema (`docs/schema.ts`) for the editor, the converters, the
-  print view and the document API (`docs/model.ts`), which works on a live editor or a file's JSON.
-  Word files go through Herald's own reader and the docx package (`shared/office/docx`), and the
-  page spell-checks with suggestions on right-click (`electron/office/spelling.ts`).
+  Univer without a window for the workbook API (`sheets/model.ts`). Herald's own features attach to
+  each workbook's Univer (`sheets/features.ts`): charts drawn by ECharts in Univer's floating
+  objects (`sheets/charts/`), comments and notes, named ranges and validation, each in a folder of
+  its own, and the data tools and the summaries built of formulas (`sheets/tools/`).
+  `shared/office/xlsx` writes charts, comments and notes into the package after ExcelJS
+  (`finish.ts`), carries the parts of the opened file that Herald does not model, such as pivot
+  tables, pictures and slicers (`keep/`), and keeps what only Herald reads back in a part of its own
+  (`herald-part.ts`).
 - **Slides** is a DOM slide editor: a deck in points with PowerPoint's model (`slides/deck.ts`),
   one view that draws a slide for the editor, the slide list, presenting and PDF export
   (`slides/view/`), TipTap for the text in boxes, shapes and table cells (`slides/editor/`), and the
-  deck API (`slides/model.ts`, applied by `slides/live.ts`). PowerPoint files are written by
-  PptxGenJS with a finishing pass and read by Herald's own DrawingML reader (`slides/pptx/`), and
-  each file Herald saves carries its deck for exact reopening (`slides/pptx/herald-part.ts`).
-- **Hermes** works through the `docs.*`, `sheets.*` and `office.list` commands (`src/commands/docs.ts`,
-  `sheets.ts`, `office.ts`), which find their document in `features/office/agent.ts`: open in this
-  window, the change is one transaction (Docs) or one Univer undo group (Sheets), so it is one step
-  to undo and saves the way the person's edits do; a file that is not open is changed and written
-  back only when Herald keeps everything in it. In panels mode each Office app is its own window, and
-  main relays a command from the Hermes window to the window that has the document open
-  (`officeRun`). Each window's report carries its documents' selections, which `office.list`, the
-  `os_ui` state and spoken requests pass on to Hermes. An Ask Hermes request marks the text it is
-  about (`docs/marked.ts`), so the answer lands there even after the person clicks elsewhere.
-- **Main** reads and writes files whole and atomically, watches each open file's folder with a poll
-  as a safety net (`file-watch.ts`), keeps what each window has open for Hermes, prints PDFs, and
-  can convert OpenDocument files through headless LibreOffice when it is installed (`convert.ts`);
-  no window converts through it yet, so `.odt`, `.ods` and `.odp` stay off in
+  deck API (`slides/model.ts`, applied by `slides/live.ts`). The master and its layouts open as a
+  deck of their own in the same editor (`slides/masters.ts`, `layouts.ts`); themes (`themes.ts`,
+  custom ones in `theme-store.ts`), transitions (`transitions.ts`), groups (`groups.ts`) and
+  connectors glued to shapes' sites (`sites.ts`) are parts of the deck. Presenting
+  (`slides/present/`) is one state that every view's keys move: the show, the presenter view and the
+  audience window, which main lets open full screen on another display
+  (`electron/office/presenter.ts`). `from-document.ts` and `from-sheet.ts` lay out slides from a
+  Docs document and tables from a Sheets range by rule. PowerPoint files are written by PptxGenJS
+  with a finishing pass and read by Herald's own DrawingML reader (`slides/pptx/`), and each file
+  Herald saves carries its deck for exact reopening (`slides/pptx/herald-part.ts`).
+- **Hermes** works through the `docs.*`, `sheets.*`, `slides.*` and `office.list` commands
+  (`src/commands/docs.ts`, `docs-depth.ts`, `sheets.ts`, `sheets-depth.ts`, `slides.ts`,
+  `office.ts`), which find their document in `agent.ts`: open in this window, the change is one
+  transaction (Docs), one Univer undo group (Sheets) or one step of the deck's history (Slides), so
+  it is one step to undo and saves the way the person's edits do; a file that is not open is
+  changed and written back only when Herald keeps everything in it. In panels mode each Office app
+  is its own window, and main relays a command from the Hermes window to the window that has the
+  document open (`officeRun`). Each window's report carries its documents' selections, which
+  `office.list`, the `os_ui` state and spoken requests pass on to Hermes. The Ask Hermes bar and the
+  inline actions (`hermes/`) build each request from the live document and follow it in the
+  document's own Hermes session; a request marks the text it is about (`docs/marked.ts`), so the
+  answer lands there even after the person clicks elsewhere, and Review with Hermes leaves its
+  comments in one `docs.addComments` call (`hermes/docs-review.ts`). Dictation types into the page,
+  the cell or the text box in front (`typing.ts`).
+- **Main** (`electron/office/`): `ipc.ts` shows the open and save dialogs, reads and writes files
+  whole and atomically (inside the home folder, up to 512 MB), keeps what each window has open for
+  Hermes and relays `officeRun`. `file-watch.ts` watches each open file's folder, with a poll as a
+  safety net, and `watches.ts` ends each watch with its window. `print.ts` gives Export as PDF and
+  Print one path: the window's print view is loaded, scripts off, in a hidden window that prints it
+  to PDF bytes or through the system's print dialog, so paper shows what the PDF does.
+  `templates.ts` keeps the templates the person saves, in `office-templates` under the Herald OS
+  data folder. `convert.ts` can convert OpenDocument files through headless LibreOffice when it is
+  installed; no window converts through it yet, so `.odt`, `.ods` and `.odp` stay off in
   `shared/office/files.ts`.
 
 ## System bridge

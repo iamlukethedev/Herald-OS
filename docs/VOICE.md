@@ -118,12 +118,14 @@ sends the sentence to Hermes as said; it never fills a command's slot or starts 
 budget for my trip", "write a cover letter", "draft a report on our Q3 numbers", "create a
 presentation about volcanoes", "turn this into slides", "make this a table", "add a total row", "add
 a column for tax", "fill in the rest of this column", "sum the March sales", "sort this by date",
-"translate this paragraph into Spanish", "make the heading bold". The app commands stay instant:
-"new document", "new spreadsheet", "open Herald Docs", "open Sheets", "save the document", "undo",
-"open budget.xlsx". Every spoken request also carries what Herald Office has open, for the model
-only and before the screen line: the document in front with its file, its sheet and selection (or
-the selected text, or the slide), and the other open documents, so "this sheet", "this paragraph"
-and "the selection" mean what you are looking at.
+"translate this paragraph into Spanish", "make the heading bold", "make slide 3 a two-column
+comparison", "hide column C". The app commands stay instant: "new document", "new spreadsheet",
+"new presentation", "new slide", "open Herald Docs", "open Sheets", "open Slides", "save the
+document", "save the presentation", "undo"; "open budget.xlsx" finds the file and shows it in
+Files, where Edit in Herald Sheets opens it. Every spoken request also carries what Herald Office
+has open, for the model only and before the screen line: the document in front with its file, its
+sheet and selection (or the selected text, or the slide), and the other open documents, so "this
+sheet", "this paragraph" and "the selection" mean what you are looking at.
 
 **Approvals by voice.** While one of the conversation's approval cards is up, a short answer decides
 it instead of interrupting Hermes: "yes", "yes, go ahead", "do it", "approve" or "okay" allow it
@@ -165,7 +167,7 @@ Command families: `page.open|back`, `window.focus|close|minimize|maximize|restor
 `memory.show|search|add|update|forget`; `file.open|openExternal`, `files.open|show|search|reveal|newFolder`; `automation.list|show|run|pause|resume|create|delete`;
 `connection.list|show|enable|disable`; `build.start`, `studio.open|preview|file|close`; `native.launch`, `web.open`; `settings.open`, `theme.set`, `accent.set`,
 `motion.reduce`, `dock.autoHide`, `voice.engine.set`, `voice.wake.set`; `agents.pauseAll`, `agents.toolSearch.set`;
-`docs.open|new|save`, `sheets.open|new|save` and the rest of `docs.*`, `sheets.*`, `office.list` for Hermes.
+`docs.open|new|save`, `sheets.open|new|save`, `slides.open|new|addSlide|save` and the rest of `docs.*`, `sheets.*`, `slides.*`, `office.list` for Hermes.
 
 Tiers: `read` and `act` commands run immediately (audited when Hermes runs them); `mutate` (add a
 memory, pause an automation, change a setting) runs and is shown in the caption; `destructive`

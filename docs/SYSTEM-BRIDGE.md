@@ -88,12 +88,13 @@ argument has one type whatever the action; the shell's commands take the bridge'
   is open (`office.list`); when the shell cannot say, the file counts as closed. A tier is never
   lowered (`office_tier` in `bridge/tools.py`).
 - **Comments.** Comments, replies and notes Hermes adds are signed Hermes; those the person adds
-  carry the one name they confirmed for every Office app (Settings > General), and a command run
-  from the command bar or by voice signs with that name or a neutral one. Review > Review with
-  Hermes in Herald Docs asks Hermes, through the document's Ask Hermes bar, to read the document
-  and leave its clarity, grammar and tone comments on exact passages in one `docs
-  action=add_comments` call: one step to undo, and the text unchanged. In Herald Sheets, Univer
-  keeps comment threads out of undo, so a comment added or deleted stays that way.
+  carry the one name they confirmed for every Office app (asked for at their first comment, and
+  changed in Settings > General > Herald Office), and a command run from the command bar or by
+  voice signs with that name or a neutral one ("Herald user"). Review > Review with Hermes in
+  Herald Docs asks Hermes, through the document's Ask Hermes bar, to read the document and leave
+  its clarity, grammar and tone comments on exact passages in one `docs action=add_comments` call:
+  one step to undo, and the text unchanged. In Herald Sheets, Univer keeps comment threads out of
+  undo, so a comment added or deleted stays that way.
 - **What is open.** `office.list` (`list_all` in each tool) lists every document open in Herald
   Docs, Sheets and Slides: its app, name, path and unsaved edits, the one in front in each app
   (`active`) and of them all (`front`), and what is selected in each (text, a range, a slide).

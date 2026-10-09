@@ -275,6 +275,11 @@ abilities as a regular Hermes plugin, `herald-os-bridge`.
   models that run on your computer, open and export Photoshop files, and ask Hermes for a poster or a
   warmer photo while you watch it work. Its projects open in Compositor on the Mac. See
   [the manual](docs/manual/canvas.md).
+- **Herald Office**: Herald Docs, Sheets and Slides for Word, Excel and PowerPoint files: real pages
+  with headers, footers, comments and tables of contents; formulas, charts and summaries; themes,
+  masters and a presenter view. Ask Hermes for a cover letter, a cleaner column or slides from a
+  report and watch each change land as a step you can undo. Before Herald first saves over a file,
+  it says what the file would lose and backs it up. See [the manual](docs/manual/office.md).
 - **Make it yours**: twelve themes (two light) that also dress Hermes's own command line, a theme
   made from any image, themes installed from git, your own fonts, and Hermes can design one from a
   description. Widgets for the menu bar, the Overview or their own window run sandboxed with only
