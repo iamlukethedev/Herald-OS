@@ -4,7 +4,7 @@ import { cellName, quoteSheet, rangeName } from '../../../../shared/office/xlsx/
 import { isPanels } from '../../../store/shell.ts'
 import { openApp } from '../../../store/windows.ts'
 import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve, showDocument, withEditor } from '../agent.ts'
-import { documentFileName, freePath, parseJsonArg, stepCount, tildePath } from '../agent-model.ts'
+import { documentFileName, fileName, freePath, parseJsonArg, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
 import { sheetsAdapter } from './adapter.ts'
 import { caseValues, cleanActionOf, columnRuns, dateValues, dayOrderOf, dedupeRows, delimiterOf, fillGrid, findInGrid, numberValues, replaceInGrid, sheetEditsOf, sheetTemplateOf, splitValues, trimTable, trimValues, valuesOf } from './agent-model.ts'
@@ -57,13 +57,13 @@ async function onWorkbook<T>(target: Local<WorkbookSnapshot>, work: (on: SheetsT
     if (change) {
       const { result } = await changeFile(file, work, sheetsAdapter, io)
 
-      return { result, name: baseName(file), path: file, docKey: null }
+      return { result, name: fileName(file), path: file, docKey: null }
     }
 
     const read = await sheetsAdapter.read((await io.read(file)).bytes, extensionOf(file), baseName(file))
     const { result } = await withHeadlessSheets(read.model, ({ univer, workbook }) => work({ univer, workbook }))
 
-    return { result, name: baseName(file), path: file, docKey: null }
+    return { result, name: fileName(file), path: file, docKey: null }
   }
 
   // Only a change brings a closed window back, so the person sees it land as a step they can undo.
@@ -150,13 +150,13 @@ export async function open(args: Args): Promise<Outcome> {
   }
 
   if (officeAppFor(file, { libreOffice: false }) !== 'sheets') {
-    throw new Error(`Herald Sheets opens Excel workbooks (.xlsx) and CSV files, not ${baseName(file)}`)
+    throw new Error(`Herald Sheets opens Excel workbooks (.xlsx) and CSV files, not ${fileName(file)}`)
   }
 
   if (isPanels) {
     openInOffice('sheets', { file })
 
-    return { summary: `Opened ${baseName(file)} in Herald Sheets`, data: { path: file } }
+    return { summary: `Opened ${fileName(file)} in Herald Sheets`, data: { path: file } }
   }
 
   openApp('sheets')
@@ -184,7 +184,7 @@ export async function create(args: Args): Promise<Outcome> {
     }
 
     if (await exists(file)) {
-      throw new Error(`${baseName(file)} already exists: sheets.new never replaces a file (open it with sheets.open)`)
+      throw new Error(`${fileName(file)} already exists: sheets.new never replaces a file (open it with sheets.open)`)
     }
   }
 
@@ -648,19 +648,19 @@ export async function save(args: Args): Promise<Outcome> {
   const to = text(args.to) ? resolve(text(args.to)) : null
 
   if (to && (await exists(to)) && args.overwrite !== true) {
-    throw new Error(`${baseName(to)} already exists: pass overwrite=true to replace it`)
+    throw new Error(`${fileName(to)} already exists: pass overwrite=true to replace it`)
   }
 
   if (target.kind === 'file') {
     if (!to) {
-      return { summary: `${baseName(target.path)} is not open, so there is nothing unsaved: changes to it are written as they are made`, data: { path: target.path } }
+      return { summary: `${fileName(target.path)} is not open, so there is nothing unsaved: changes to it are written as they are made`, data: { path: target.path } }
     }
 
     const read = await sheetsAdapter.read((await io.read(target.path)).bytes, extensionOf(target.path), baseName(target.path))
     const written = await sheetsAdapter.write(read.model, extensionOf(to), extensionOf(to) === extensionOf(target.path) ? read.layout : undefined)
     await io.write(to, written.bytes)
 
-    return { summary: `Saved ${baseName(target.path)} as ${baseName(to)}${written.losses.length ? ` (it cannot keep: ${written.losses.join('; ')})` : ''}`, data: { path: to, ...(written.losses.length ? { losses: written.losses } : {}) } }
+    return { summary: `Saved ${fileName(target.path)} as ${fileName(to)}${written.losses.length ? ` (it cannot keep: ${written.losses.join('; ')})` : ''}`, data: { path: to, ...(written.losses.length ? { losses: written.losses } : {}) } }
   }
 
   const { doc } = target
@@ -680,12 +680,12 @@ export async function save(args: Args): Promise<Outcome> {
 
 export async function exportPdf(args: Args): Promise<Outcome> {
   const target = await located(args.workbook)
-  const name = target.kind === 'file' ? baseName(target.path) : target.doc.name
+  const name = target.kind === 'file' ? fileName(target.path) : target.doc.name
   let to = text(args.to) ? resolve(text(args.to)) : null
   to = to && !to.toLowerCase().endsWith('.pdf') ? `${to}.pdf` : to
 
   if (to && (await exists(to)) && args.overwrite !== true) {
-    throw new Error(`${baseName(to)} already exists: pass overwrite=true to replace it`)
+    throw new Error(`${fileName(to)} already exists: pass overwrite=true to replace it`)
   }
 
   const file = to ?? (await freePath(resolve('~/Documents'), `${name.replace(/\.[a-z0-9]{1,5}$/i, '')}.pdf`, exists))
@@ -705,7 +705,7 @@ export async function step(direction: 'undo' | 'redo', args: Args): Promise<Outc
   const target = await located(args.workbook)
 
   if (target.kind === 'file') {
-    throw new Error(`Undo works in the open Herald Sheets window: ${baseName(target.path)} is not open`)
+    throw new Error(`Undo works in the open Herald Sheets window: ${fileName(target.path)} is not open`)
   }
 
   const { doc } = target

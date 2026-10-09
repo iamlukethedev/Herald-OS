@@ -6,7 +6,7 @@ import { baseName, extensionOf, officeAppFor } from '../../../../shared/office/f
 import { isPanels } from '../../../store/shell.ts'
 import { openApp } from '../../../store/windows.ts'
 import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve, showDocument, withEditor } from '../agent.ts'
-import { documentFileName, freePath, stepCount, tildePath } from '../agent-model.ts'
+import { documentFileName, fileName, freePath, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
 import { docsAdapter } from './adapter.ts'
 import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, templateOf } from './agent-model.ts'
@@ -56,7 +56,7 @@ async function readFile(file: string) {
 
 async function reading(target: Local<DocJSON>): Promise<Reading> {
   if (target.kind === 'file') {
-    return { name: baseName(target.path), path: target.path, state: stateOf((await readFile(target.path)).model), live: false, marked: null }
+    return { name: fileName(target.path), path: target.path, state: stateOf((await readFile(target.path)).model), live: false, marked: null }
   }
 
   // Reading leaves a closed window closed: without an editor, the document as it was last held.
@@ -77,25 +77,25 @@ async function change(target: Local<DocJSON>, build: (state: EditorState, marked
     const read = await readFile(file)
 
     if (read.notes.length) {
-      throw new Error(`${baseName(file)} has things Herald Docs shows differently (${read.notes[0].replace(/\.$/, '')}${read.notes.length > 1 ? `, and ${read.notes.length - 1} more` : ''}): open it in Herald Docs to change it (docs.open)`)
+      throw new Error(`${fileName(file)} has things Herald Docs shows differently (${read.notes[0].replace(/\.$/, '')}${read.notes.length > 1 ? `, and ${read.notes.length - 1} more` : ''}): open it in Herald Docs to change it (docs.open)`)
     }
 
     const state = stateOf(read.model)
     const tr = build(state, null, false)(state)
 
     if (!tr || !tr.steps.length) {
-      return { changed: false, name: baseName(file), path: file }
+      return { changed: false, name: fileName(file), path: file }
     }
 
     const written = await docsAdapter.write(jsonOf(tr.doc), extensionOf(file), read.layout)
 
     if (written.losses.length) {
-      throw new Error(`Saving ${baseName(file)} would lose something (${written.losses[0].replace(/\.$/, '')}): open it in Herald Docs to change it (docs.open)`)
+      throw new Error(`Saving ${fileName(file)} would lose something (${written.losses[0].replace(/\.$/, '')}): open it in Herald Docs to change it (docs.open)`)
     }
 
     await window.heraldOS.office.write(file, written.bytes)
 
-    return { changed: true, name: baseName(file), path: file }
+    return { changed: true, name: fileName(file), path: file }
   }
 
   const { doc } = target
@@ -145,7 +145,7 @@ async function picture(source: string, maxWidth: number): Promise<{ src: string;
   const found = pictureFrom((await window.heraldOS.office.read(file)).bytes, mime, maxWidth)
 
   if (!found) {
-    throw new Error(`${baseName(file)} is not a picture Herald Docs shows (PNG, JPEG, GIF, WebP, BMP or SVG)`)
+    throw new Error(`${fileName(file)} is not a picture Herald Docs shows (PNG, JPEG, GIF, WebP, BMP or SVG)`)
   }
 
   return found
@@ -216,13 +216,13 @@ export async function open(args: Args): Promise<Outcome> {
   }
 
   if (officeAppFor(file, { libreOffice: false }) !== 'docs') {
-    throw new Error(`Herald Docs opens Word documents (.docx), Markdown and text files, not ${baseName(file)}`)
+    throw new Error(`Herald Docs opens Word documents (.docx), Markdown and text files, not ${fileName(file)}`)
   }
 
   if (isPanels) {
     openInOffice('docs', { file })
 
-    return { summary: `Opened ${baseName(file)} in Herald Docs`, data: { path: file } }
+    return { summary: `Opened ${fileName(file)} in Herald Docs`, data: { path: file } }
   }
 
   openApp('docs')
@@ -250,7 +250,7 @@ export async function create(args: Args): Promise<Outcome> {
     }
 
     if (await exists(file)) {
-      throw new Error(`${baseName(file)} already exists: docs.new never replaces a file (open it with docs.open)`)
+      throw new Error(`${fileName(file)} already exists: docs.new never replaces a file (open it with docs.open)`)
     }
   }
 
@@ -508,12 +508,12 @@ export async function save(args: Args): Promise<Outcome> {
   const to = text(args.to) ? resolve(text(args.to)) : null
 
   if (to && (await exists(to)) && args.overwrite !== true) {
-    throw new Error(`${baseName(to)} already exists: pass overwrite=true to replace it`)
+    throw new Error(`${fileName(to)} already exists: pass overwrite=true to replace it`)
   }
 
   if (target.kind === 'file') {
     if (!to) {
-      return { summary: `${baseName(target.path)} is not open, so there is nothing unsaved: changes to it are written as they are made`, data: { path: target.path } }
+      return { summary: `${fileName(target.path)} is not open, so there is nothing unsaved: changes to it are written as they are made`, data: { path: target.path } }
     }
 
     // Save as for a file: read in its format, written in the new one.
@@ -521,7 +521,7 @@ export async function save(args: Args): Promise<Outcome> {
     const written = await docsAdapter.write(read.model, extensionOf(to), extensionOf(to) === extensionOf(target.path) ? read.layout : undefined)
     await window.heraldOS.office.write(to, written.bytes)
 
-    return { summary: `Saved ${baseName(target.path)} as ${baseName(to)}${written.losses.length ? ` (it cannot keep: ${written.losses.join('; ')})` : ''}`, data: { path: to, ...(written.losses.length ? { losses: written.losses } : {}) } }
+    return { summary: `Saved ${fileName(target.path)} as ${fileName(to)}${written.losses.length ? ` (it cannot keep: ${written.losses.join('; ')})` : ''}`, data: { path: to, ...(written.losses.length ? { losses: written.losses } : {}) } }
   }
 
   const { doc } = target
@@ -541,13 +541,13 @@ export async function save(args: Args): Promise<Outcome> {
 
 export async function exportPdf(args: Args): Promise<Outcome> {
   const target = await located(args.document)
-  const { name } = target.kind === 'file' ? { name: baseName(target.path) } : target.doc
+  const { name } = target.kind === 'file' ? { name: fileName(target.path) } : target.doc
   const stem = name.replace(/\.[a-z0-9]{1,5}$/i, '')
   let to = text(args.to) ? resolve(text(args.to)) : null
   to = to && !to.toLowerCase().endsWith('.pdf') ? `${to}.pdf` : to
 
   if (to && (await exists(to)) && args.overwrite !== true) {
-    throw new Error(`${baseName(to)} already exists: pass overwrite=true to replace it`)
+    throw new Error(`${fileName(to)} already exists: pass overwrite=true to replace it`)
   }
 
   const file = to ?? (await freePath(resolve('~/Documents'), `${stem}.pdf`, exists))
@@ -566,7 +566,7 @@ export async function step(direction: 'undo' | 'redo', args: Args): Promise<Outc
   const target = await located(args.document)
 
   if (target.kind === 'file') {
-    throw new Error(`Undo works in the open Herald Docs window: ${baseName(target.path)} is not open`)
+    throw new Error(`Undo works in the open Herald Docs window: ${fileName(target.path)} is not open`)
   }
 
   const { doc } = target

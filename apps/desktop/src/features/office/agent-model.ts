@@ -113,6 +113,9 @@ export function describeOffice(entries: readonly OfficeEntry[], home = ''): stri
   return `Office: in front is ${describeEntry(front, home)}${rest}.`
 }
 
+/** A file's name with its extension, for what Hermes says about files on disk. */
+export const fileName = (file: string): string => file.split('/').pop() || file
+
 /** A file name for a new document: a name without characters that cannot name a file, with the extension the format has. */
 export function documentFileName(name: string, extension: string): string {
   const clean = name.replace(/[/\\:]/g, '-').trim() || 'Untitled'
