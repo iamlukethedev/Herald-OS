@@ -12,6 +12,7 @@ import { OfficeBackups } from './backups.ts'
 import { convertWithLibreOffice, findSoffice } from './convert.ts'
 import { digestOfBytes, FileWatcher, stampOf } from './file-watch.ts'
 import { registerSpellingMenus } from './spelling.ts'
+import { OfficeTemplates } from './templates.ts'
 import { OfficeWatches } from './watches.ts'
 
 /** The largest Office file Herald opens or writes. */
@@ -257,4 +258,10 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.officeConvert, async (_event, target: string, to: string) => convertWithLibreOffice(officePath(target), String(to)))
+
+  const templates = new OfficeTemplates(path.join(heraldOsDataDir(), 'office-templates'))
+  ipcMain.handle(IPC.officeTemplates, (_event, app: OfficeApp) => templates.list(app))
+  ipcMain.handle(IPC.officeTemplateSave, (_event, app: OfficeApp, name: unknown, model: unknown, id?: unknown) => templates.save(app, name, model, id))
+  ipcMain.handle(IPC.officeTemplateRename, (_event, app: OfficeApp, id: unknown, name: unknown) => templates.rename(app, id, name))
+  ipcMain.handle(IPC.officeTemplateRemove, (_event, app: OfficeApp, id: unknown) => templates.remove(app, id))
 }

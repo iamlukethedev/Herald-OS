@@ -16,6 +16,7 @@ import { $pickImage } from './slash.ts'
 import { activeEditor, docsSession } from './store.ts'
 import { TABLE_ACTIONS } from './table-menu.ts'
 import { $templateGallery, openTemplateGallery, TemplateGallery } from './TemplateGallery.tsx'
+import { $saveTemplate, SaveTemplateDialog } from './templates/SaveTemplateDialog.tsx'
 import { DocsToolbar } from './Toolbar.tsx'
 
 const STYLE_SHORTCUTS: Record<string, string> = { normal: 'mod+alt+0', heading1: 'mod+alt+1', heading2: 'mod+alt+2', heading3: 'mod+alt+3' }
@@ -132,6 +133,7 @@ function docsMenus(): OfficeMenu[] {
     session: docsSession,
     canSave: true,
     onNew: openTemplateGallery,
+    file: [{ id: 'save-template', label: 'Save as Template…', enabled: () => Boolean(docsSession.active()), run: () => $saveTemplate.set(true) }],
     edit: [
       { id: 'find', label: 'Find…', shortcut: 'mod+f', enabled: has, run: () => act.openFind(false), dividerBefore: true },
       { id: 'replace', label: 'Replace…', shortcut: 'mod+shift+h', enabled: has, run: () => act.openFind(true) }
@@ -149,6 +151,7 @@ function docsMenus(): OfficeMenu[] {
 export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
   const [canOpen, setCanOpen] = useState(true)
   const gallery = useStore($templateGallery)
+  const savingTemplate = useStore($saveTemplate)
   const picker = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -202,6 +205,7 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
         }}
       />
       {gallery && <TemplateGallery />}
+      {savingTemplate && <SaveTemplateDialog />}
     </>
   )
 }
