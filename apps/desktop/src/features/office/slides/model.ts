@@ -208,6 +208,26 @@ export function moveSlides(deck: Deck, ids: readonly string[], toIndex: number):
   return { deck: { ...deck, slides }, label: moving.length > 1 ? 'Move Slides' : 'Move Slide', focus: { slideId: moving[0].id } }
 }
 
+/** Whether some slides show their master's and layout's drawings (PowerPoint's "Hide background graphics" unticked). */
+export function setShowMasterOnSlides(deck: Deck, ids: readonly string[], show: boolean): DeckChange {
+  const wanted = new Set(ids)
+  const slides = deck.slides.map((slide) => {
+    if (!wanted.has(slide.id) || (slide.showMaster !== false) === show) {
+      return slide
+    }
+
+    const next: Slide = { ...slide, showMaster: false }
+
+    if (show) {
+      delete next.showMaster
+    }
+
+    return next
+  })
+
+  return { deck: { ...deck, slides }, label: show ? 'Show Background Graphics' : 'Hide Background Graphics' }
+}
+
 export function setHidden(deck: Deck, ids: readonly string[], hidden: boolean): DeckChange {
   const wanted = new Set(ids)
 

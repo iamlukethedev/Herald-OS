@@ -22,6 +22,8 @@ export class SlidesDocument {
   preview: Deck | null = null
   /** How big the slide is shown: fitted to the window, or CSS pixels a point. */
   zoom: 'fit' | number = 'fit'
+  /** What is edited: the deck's slides, or its master and layouts as the slides of a deck of their own. */
+  mode: 'slides' | 'master' = 'slides'
   revision = 0
   private readonly listeners = new Set<() => void>()
 
@@ -40,6 +42,11 @@ export class SlidesDocument {
 
   get slide(): Slide {
     return findSlide(this.deck, this.slideId) ?? this.deck.slides[0]
+  }
+
+  /** How a slide of `deck` is drawn beyond its own content: in the master view, a layout over the master's drawings. */
+  viewOptions(slide: Slide): { inherit?: boolean; behind?: readonly SlideElement[] } {
+    return this.mode === 'master' && slide ? { inherit: false } : {}
   }
 
   get index(): number {
