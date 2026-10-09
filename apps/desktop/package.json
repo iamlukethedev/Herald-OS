@@ -157,7 +157,9 @@
       "!**/node_modules/{docx,xml-js,xml,hash.js}/**",
       "!**/node_modules/{pptxgenjs,image-size,queue}/**",
       "!**/node_modules/{jszip,lie,setimmediate}/**",
-      "!**/node_modules/{echarts,zrender}/**"
+      "!**/node_modules/{echarts,zrender}/**",
+      "!**/node_modules/{onnxruntime-web,onnxruntime-common}/**",
+      "!**/node_modules/@tabler/**"
     ],
     "extraResources": [
       {
