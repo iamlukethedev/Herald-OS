@@ -82,7 +82,7 @@ function menuItems(commands: CanvasCommand[], doc: CanvasDocument | null): MenuI
   return commands.map((command) => ({
     id: command.id,
     label: commandLabel(command, doc),
-    hint: command.keys ? keysLabel(command.keys) : undefined,
+    hint: command.shortcut ? keysLabel(command.shortcut) : undefined,
     disabled: !isEnabled(command, doc),
     checked: command.checked?.(doc),
     dividerBefore: command.dividerBefore,

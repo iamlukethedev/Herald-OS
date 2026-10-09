@@ -95,8 +95,8 @@ export interface CanvasCommand {
   id: string
   label: string | ((doc: CanvasDocument | null) => string)
   /** `mod` is ⌘ on the Mac and Ctrl elsewhere: `mod+shift+z`. */
-  keys?: string
-  /** Other keys that run it, not shown in the menu. */
+  shortcut?: string
+  /** Other shortcuts that run it, not shown in the menu. */
   also?: string[]
   run: (doc: CanvasDocument | null) => void
   /** Off when it cannot apply; commands that need a document are off without one. */
@@ -274,39 +274,39 @@ export const MENUS: CanvasMenu[] = [
     id: 'file',
     label: 'File',
     items: [
-      { id: 'new', label: 'New…', keys: 'mod+n', run: () => $dialog.set({ kind: 'new' }) },
-      { id: 'open', label: 'Open…', keys: 'mod+o', run: () => void openFile() },
-      { id: 'save', label: 'Save', keys: 'mod+s', needsDocument: true, run: onDoc((doc) => void save(doc).catch(() => {})), dividerBefore: true },
-      { id: 'save-as', label: 'Save As…', keys: 'mod+shift+s', needsDocument: true, run: onDoc((doc) => void save(doc, { as: true }).catch(() => {})) },
+      { id: 'new', label: 'New…', shortcut: 'mod+n', run: () => $dialog.set({ kind: 'new' }) },
+      { id: 'open', label: 'Open…', shortcut: 'mod+o', run: () => void openFile() },
+      { id: 'save', label: 'Save', shortcut: 'mod+s', needsDocument: true, run: onDoc((doc) => void save(doc).catch(() => {})), dividerBefore: true },
+      { id: 'save-as', label: 'Save As…', shortcut: 'mod+shift+s', needsDocument: true, run: onDoc((doc) => void save(doc, { as: true }).catch(() => {})) },
       { id: 'autosave', label: 'Save Automatically', checked: () => $autosave.get(), run: () => setAutosave(!$autosave.get()) },
-      { id: 'export-png', label: 'Export as PNG…', keys: 'mod+alt+shift+w', needsDocument: true, run: onDoc((doc) => void exportDocument(doc, 'png')), dividerBefore: true },
+      { id: 'export-png', label: 'Export as PNG…', shortcut: 'mod+alt+shift+w', needsDocument: true, run: onDoc((doc) => void exportDocument(doc, 'png')), dividerBefore: true },
       { id: 'export-jpeg', label: 'Export as JPEG…', needsDocument: true, run: onDoc((doc) => void exportDocument(doc, 'jpeg')) },
       { id: 'export-webp', label: 'Export as WebP…', needsDocument: true, run: onDoc((doc) => void exportDocument(doc, 'webp')) },
       { id: 'export-psd', label: 'Export as PSD…', needsDocument: true, run: onDoc((doc) => void exportDocument(doc, 'psd')) },
-      { id: 'close', label: 'Close', keys: 'mod+w', needsDocument: true, run: onDoc((doc) => $dialog.set({ kind: 'close', key: doc.key })), dividerBefore: true }
+      { id: 'close', label: 'Close', shortcut: 'mod+w', needsDocument: true, run: onDoc((doc) => $dialog.set({ kind: 'close', key: doc.key })), dividerBefore: true }
     ]
   },
   {
     id: 'edit',
     label: 'Edit',
     items: [
-      { id: 'undo', label: (doc) => (doc?.history.undoLabel ? `Undo ${doc.history.undoLabel}` : 'Undo'), keys: 'mod+z', needsDocument: true, enabled: (doc) => doc.history.canUndo, run: onDoc((doc) => doc.undo()) },
-      { id: 'redo', label: (doc) => (doc?.history.redoLabel ? `Redo ${doc.history.redoLabel}` : 'Redo'), keys: 'mod+shift+z', needsDocument: true, enabled: (doc) => doc.history.canRedo, run: onDoc((doc) => doc.redo()) },
-      { id: 'toggle-last', label: 'Toggle Last State', keys: 'mod+alt+z', needsDocument: true, enabled: (doc) => doc.history.canUndo || doc.history.canRedo, run: onDoc((doc) => doc.toggleLast()) },
+      { id: 'undo', label: (doc) => (doc?.history.undoLabel ? `Undo ${doc.history.undoLabel}` : 'Undo'), shortcut: 'mod+z', needsDocument: true, enabled: (doc) => doc.history.canUndo, run: onDoc((doc) => doc.undo()) },
+      { id: 'redo', label: (doc) => (doc?.history.redoLabel ? `Redo ${doc.history.redoLabel}` : 'Redo'), shortcut: 'mod+shift+z', needsDocument: true, enabled: (doc) => doc.history.canRedo, run: onDoc((doc) => doc.redo()) },
+      { id: 'toggle-last', label: 'Toggle Last State', shortcut: 'mod+alt+z', needsDocument: true, enabled: (doc) => doc.history.canUndo || doc.history.canRedo, run: onDoc((doc) => doc.toggleLast()) },
       { id: 'history', label: 'History', needsDocument: true, checked: () => $panelTab.get() === 'history', run: () => showPanel($panelTab.get() === 'history' ? 'properties' : 'history') },
-      { id: 'cut', label: 'Cut', keys: 'mod+x', needsDocument: true, enabled: selected, run: onDoc(cutSelection), dividerBefore: true },
-      { id: 'copy', label: 'Copy', keys: 'mod+c', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => copySelection(doc)) },
-      { id: 'copy-merged', label: 'Copy Merged', keys: 'mod+shift+c', needsDocument: true, run: onDoc((doc) => copySelection(doc, true)) },
-      { id: 'paste', label: 'Paste', keys: 'mod+v', needsDocument: true, run: onDoc((doc) => void paste(doc).catch((error: unknown) => notify(`Could not paste: ${messageOf(error)}`, 'error'))) },
-      { id: 'fill', label: 'Fill…', keys: 'shift+f5', also: ['shift+backspace'], needsDocument: true, enabled: hasLayer, run: () => $dialog.set({ kind: 'fill' }), dividerBefore: true },
-      { id: 'fill-foreground', label: 'Fill with Foreground', keys: 'alt+backspace', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => fillSelection(doc, [...$foreground.get(), 255])) },
-      { id: 'fill-background', label: 'Fill with Background', keys: 'mod+backspace', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => fillSelection(doc, [...$background.get(), 255])) },
+      { id: 'cut', label: 'Cut', shortcut: 'mod+x', needsDocument: true, enabled: selected, run: onDoc(cutSelection), dividerBefore: true },
+      { id: 'copy', label: 'Copy', shortcut: 'mod+c', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => copySelection(doc)) },
+      { id: 'copy-merged', label: 'Copy Merged', shortcut: 'mod+shift+c', needsDocument: true, run: onDoc((doc) => copySelection(doc, true)) },
+      { id: 'paste', label: 'Paste', shortcut: 'mod+v', needsDocument: true, run: onDoc((doc) => void paste(doc).catch((error: unknown) => notify(`Could not paste: ${messageOf(error)}`, 'error'))) },
+      { id: 'fill', label: 'Fill…', shortcut: 'shift+f5', also: ['shift+backspace'], needsDocument: true, enabled: hasLayer, run: () => $dialog.set({ kind: 'fill' }), dividerBefore: true },
+      { id: 'fill-foreground', label: 'Fill with Foreground', shortcut: 'alt+backspace', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => fillSelection(doc, [...$foreground.get(), 255])) },
+      { id: 'fill-background', label: 'Fill with Background', shortcut: 'mod+backspace', needsDocument: true, enabled: hasLayer, run: onDoc((doc) => fillSelection(doc, [...$background.get(), 255])) },
       { id: 'content-fill', label: 'Content-Aware Fill…', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'content-fill' }) },
       { id: 'generative-fill', label: 'Generative Fill…', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'generate', mode: 'fill' }) },
       {
         id: 'clear',
         label: (doc) => (doc?.state.selection ? 'Clear' : 'Delete Layer'),
-        keys: 'backspace',
+        shortcut: 'backspace',
         also: ['delete'],
         needsDocument: true,
         enabled: (doc) => doc.picked.length > 0,
@@ -315,7 +315,7 @@ export const MENUS: CanvasMenu[] = [
       {
         id: 'free-transform',
         label: 'Free Transform',
-        keys: 'mod+t',
+        shortcut: 'mod+t',
         needsDocument: true,
         enabled: hasLayer,
         inSession: true,
@@ -348,11 +348,11 @@ export const MENUS: CanvasMenu[] = [
     id: 'image',
     label: 'Image',
     items: [
-      { id: 'auto-tone', label: 'Auto Tone', keys: 'mod+shift+l', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'tone')) },
-      { id: 'auto-contrast', label: 'Auto Contrast', keys: 'mod+alt+shift+l', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'contrast')) },
-      { id: 'auto-color', label: 'Auto Color', keys: 'mod+shift+b', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'color')) },
-      { id: 'image-size', label: 'Image Size…', keys: 'mod+alt+i', needsDocument: true, run: () => $dialog.set({ kind: 'image-size' }), dividerBefore: true },
-      { id: 'canvas-size', label: 'Canvas Size…', keys: 'mod+alt+c', needsDocument: true, run: () => $dialog.set({ kind: 'canvas-size' }) },
+      { id: 'auto-tone', label: 'Auto Tone', shortcut: 'mod+shift+l', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'tone')) },
+      { id: 'auto-contrast', label: 'Auto Contrast', shortcut: 'mod+alt+shift+l', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'contrast')) },
+      { id: 'auto-color', label: 'Auto Color', shortcut: 'mod+shift+b', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => autoAdjust(doc, 'color')) },
+      { id: 'image-size', label: 'Image Size…', shortcut: 'mod+alt+i', needsDocument: true, run: () => $dialog.set({ kind: 'image-size' }), dividerBefore: true },
+      { id: 'canvas-size', label: 'Canvas Size…', shortcut: 'mod+alt+c', needsDocument: true, run: () => $dialog.set({ kind: 'canvas-size' }) },
       { id: 'crop', label: 'Crop to Selection', needsDocument: true, enabled: selected, run: onDoc(cropToSelection), dividerBefore: true },
       { id: 'trim', label: 'Trim…', needsDocument: true, run: () => $dialog.set({ kind: 'trim' }) },
       { id: 'rotate-canvas-180', label: 'Rotate Canvas 180°', needsDocument: true, run: onDoc((doc) => rotateCanvasBy(doc, 2)), dividerBefore: true },
@@ -367,56 +367,56 @@ export const MENUS: CanvasMenu[] = [
     id: 'layer',
     label: 'Layer',
     items: [
-      { id: 'new-layer', label: 'New Layer', keys: 'mod+shift+n', needsDocument: true, run: onDoc(addLayer) },
+      { id: 'new-layer', label: 'New Layer', shortcut: 'mod+shift+n', needsDocument: true, run: onDoc(addLayer) },
       { id: 'new-folder', label: 'New Folder', needsDocument: true, run: onDoc(addFolder) },
       { id: 'new-adjustment', label: 'New Adjustment Layer', needsDocument: true, run: nothing, submenu: ADJUSTMENT_ITEMS },
       { id: 'new-generated', label: 'New Generated Layer…', needsDocument: true, run: () => $dialog.set({ kind: 'generate', mode: 'layer' }) },
       {
         id: 'duplicate',
         label: (doc) => (doc?.state.selection ? 'New Layer via Copy' : 'Duplicate'),
-        keys: 'mod+j',
+        shortcut: 'mod+j',
         needsDocument: true,
         enabled: (doc) => doc.picked.length > 0,
         run: onDoc((doc) => (doc.state.selection ? layerViaCopy(doc) : duplicatePicked(doc)))
       },
-      { id: 'via-cut', label: 'New Layer via Cut', keys: 'mod+shift+j', needsDocument: true, enabled: (doc) => selected(doc) && Boolean(doc.active?.pixels), run: onDoc((doc) => layerViaCopy(doc, true)) },
+      { id: 'via-cut', label: 'New Layer via Cut', shortcut: 'mod+shift+j', needsDocument: true, enabled: (doc) => selected(doc) && Boolean(doc.active?.pixels), run: onDoc((doc) => layerViaCopy(doc, true)) },
       { id: 'delete', label: 'Delete', needsDocument: true, enabled: (doc) => doc.picked.length > 0, run: onDoc(deletePicked) },
       { id: 'rasterize', label: 'Rasterize', needsDocument: true, enabled: (doc) => Boolean(doc.active?.text || doc.active?.shape), run: onDoc(rasterize) },
       { id: 'remove-background', label: 'Remove Background…', needsDocument: true, enabled: (doc) => !cannotSegment(doc.active), run: () => $dialog.set({ kind: 'remove-background' }) },
-      { id: 'group', label: 'Group Layers', keys: 'mod+g', needsDocument: true, enabled: (doc) => doc.picked.length > 0, run: onDoc(groupPicked), dividerBefore: true },
-      { id: 'ungroup', label: 'Ungroup', keys: 'mod+shift+g', needsDocument: true, enabled: (doc) => Boolean(doc.active?.isGroup), run: onDoc(ungroupActive) },
+      { id: 'group', label: 'Group Layers', shortcut: 'mod+g', needsDocument: true, enabled: (doc) => doc.picked.length > 0, run: onDoc(groupPicked), dividerBefore: true },
+      { id: 'ungroup', label: 'Ungroup', shortcut: 'mod+shift+g', needsDocument: true, enabled: (doc) => Boolean(doc.active?.isGroup), run: onDoc(ungroupActive) },
       { id: 'mask', label: 'Add Mask', needsDocument: true, enabled: (doc) => Boolean(doc.active && !doc.active.mask), run: onDoc((doc) => addMask(doc)), dividerBefore: true },
       { id: 'layer-mask', label: 'Layer Mask', needsDocument: true, enabled: hasLayer, run: nothing, submenu: MASK_ITEMS },
       { id: 'layer-effects', label: 'Layer Style', needsDocument: true, enabled: (doc) => doc.picked.some(takesEffects), run: nothing, submenu: EFFECT_ITEMS },
       {
         id: 'clip',
         label: (doc) => (doc?.active?.maskSourceID ? 'Release Clipping Mask' : 'Create Clipping Mask'),
-        keys: 'mod+alt+g',
+        shortcut: 'mod+alt+g',
         needsDocument: true,
         enabled: (doc) => Boolean(doc.active && !doc.active.isGroup),
         run: onDoc(toggleClipping),
         dividerBefore: true
       },
-      { id: 'forward', label: 'Bring Forward', keys: 'mod+]', needsDocument: true, run: onDoc((doc) => arrange(doc, 'up')), dividerBefore: true },
-      { id: 'backward', label: 'Send Backward', keys: 'mod+[', needsDocument: true, run: onDoc((doc) => arrange(doc, 'down')) },
-      { id: 'front', label: 'Bring to Front', keys: 'mod+shift+]', needsDocument: true, run: onDoc((doc) => arrange(doc, 'top')) },
-      { id: 'back', label: 'Send to Back', keys: 'mod+shift+[', needsDocument: true, run: onDoc((doc) => arrange(doc, 'bottom')) },
+      { id: 'forward', label: 'Bring Forward', shortcut: 'mod+]', needsDocument: true, run: onDoc((doc) => arrange(doc, 'up')), dividerBefore: true },
+      { id: 'backward', label: 'Send Backward', shortcut: 'mod+[', needsDocument: true, run: onDoc((doc) => arrange(doc, 'down')) },
+      { id: 'front', label: 'Bring to Front', shortcut: 'mod+shift+]', needsDocument: true, run: onDoc((doc) => arrange(doc, 'top')) },
+      { id: 'back', label: 'Send to Back', shortcut: 'mod+shift+[', needsDocument: true, run: onDoc((doc) => arrange(doc, 'bottom')) },
       { id: 'align', label: (doc) => (doc?.state.selection ? 'Align Layers to Selection' : 'Align'), needsDocument: true, enabled: (doc) => doc.picked.length > 0, run: nothing, submenu: ALIGN_ITEMS, dividerBefore: true },
       { id: 'distribute', label: 'Distribute', needsDocument: true, enabled: (doc) => doc.picked.length >= 3, run: nothing, submenu: DISTRIBUTE_ITEMS },
-      { id: 'merge-down', label: 'Merge Down', keys: 'mod+e', needsDocument: true, enabled: (doc) => Boolean(mergeTarget(doc)), run: onDoc(mergeDown), dividerBefore: true }
+      { id: 'merge-down', label: 'Merge Down', shortcut: 'mod+e', needsDocument: true, enabled: (doc) => Boolean(mergeTarget(doc)), run: onDoc(mergeDown), dividerBefore: true }
     ]
   },
   {
     id: 'select',
     label: 'Select',
     items: [
-      { id: 'select-all', label: 'All', keys: 'mod+a', needsDocument: true, run: onDoc(selectEverything) },
-      { id: 'deselect', label: 'Deselect', keys: 'mod+d', needsDocument: true, enabled: selected, run: onDoc(deselect) },
-      { id: 'reselect', label: 'Reselect', keys: 'mod+shift+d', needsDocument: true, enabled: (doc) => Boolean(doc.lastSelection && !doc.state.selection), run: onDoc(reselect) },
-      { id: 'inverse', label: 'Inverse', keys: 'mod+shift+i', needsDocument: true, enabled: selected, run: onDoc(invertSelected) },
+      { id: 'select-all', label: 'All', shortcut: 'mod+a', needsDocument: true, run: onDoc(selectEverything) },
+      { id: 'deselect', label: 'Deselect', shortcut: 'mod+d', needsDocument: true, enabled: selected, run: onDoc(deselect) },
+      { id: 'reselect', label: 'Reselect', shortcut: 'mod+shift+d', needsDocument: true, enabled: (doc) => Boolean(doc.lastSelection && !doc.state.selection), run: onDoc(reselect) },
+      { id: 'inverse', label: 'Inverse', shortcut: 'mod+shift+i', needsDocument: true, enabled: selected, run: onDoc(invertSelected) },
       { id: 'subject', label: 'Subject', needsDocument: true, enabled: (doc) => doc.state.layers.length > 0, run: onDoc((doc) => void subject(doc)) },
-      { id: 'select-and-mask', label: 'Select and Mask…', keys: 'mod+alt+r', needsDocument: true, enabled: (doc) => selected(doc) || Boolean(doc.editingMask), run: onDoc(startSelectMask) },
-      { id: 'feather', label: 'Feather…', keys: 'shift+f6', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'modify-selection', change: 'feather' }), dividerBefore: true },
+      { id: 'select-and-mask', label: 'Select and Mask…', shortcut: 'mod+alt+r', needsDocument: true, enabled: (doc) => selected(doc) || Boolean(doc.editingMask), run: onDoc(startSelectMask) },
+      { id: 'feather', label: 'Feather…', shortcut: 'shift+f6', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'modify-selection', change: 'feather' }), dividerBefore: true },
       { id: 'expand', label: 'Expand…', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'modify-selection', change: 'expand' }) },
       { id: 'contract', label: 'Contract…', needsDocument: true, enabled: selected, run: () => $dialog.set({ kind: 'modify-selection', change: 'contract' }) },
       { id: 'layer-pixels', label: 'Layer Pixels', needsDocument: true, enabled: (doc) => Boolean(doc.active?.pixels), run: onDoc((doc) => selectLayerPixels(doc)), dividerBefore: true },
@@ -434,7 +434,7 @@ export const MENUS: CanvasMenu[] = [
 
           return spec ? `Last Filter: ${FILTER_NAMES[spec.kind]}` : 'Last Filter'
         },
-        keys: 'mod+alt+f',
+        shortcut: 'mod+alt+f',
         needsDocument: true,
         enabled: (doc) => Boolean(lastFilter()) && !cannotPaint(doc),
         run: onDoc((doc) => void repeatLastFilter(doc))
@@ -449,16 +449,16 @@ export const MENUS: CanvasMenu[] = [
     id: 'view',
     label: 'View',
     items: [
-      { id: 'zoom-in', label: 'Zoom In', keys: 'mod+=', needsDocument: true, run: onDoc((doc) => zoomStep(doc, 1)) },
-      { id: 'zoom-out', label: 'Zoom Out', keys: 'mod+-', needsDocument: true, run: onDoc((doc) => zoomStep(doc, -1)) },
-      { id: 'fit', label: 'Fit on Screen', keys: 'mod+0', needsDocument: true, run: onDoc((doc) => fitToScreen(doc)) },
-      { id: 'actual', label: 'Actual Pixels', keys: 'mod+1', needsDocument: true, run: onDoc(actualPixels) },
-      { id: 'rulers', label: 'Rulers', keys: 'mod+r', checked: () => $viewOptions.get().rulers, run: () => setViewOption('rulers', !$viewOptions.get().rulers), dividerBefore: true },
-      { id: 'show-guides', label: 'Guides', keys: 'mod+;', checked: () => $viewOptions.get().guides, run: () => setViewOption('guides', !$viewOptions.get().guides) },
-      { id: 'lock-guides', label: 'Lock Guides', keys: 'mod+alt+;', checked: () => $viewOptions.get().lockGuides, run: () => setViewOption('lockGuides', !$viewOptions.get().lockGuides) },
+      { id: 'zoom-in', label: 'Zoom In', shortcut: 'mod+=', needsDocument: true, run: onDoc((doc) => zoomStep(doc, 1)) },
+      { id: 'zoom-out', label: 'Zoom Out', shortcut: 'mod+-', needsDocument: true, run: onDoc((doc) => zoomStep(doc, -1)) },
+      { id: 'fit', label: 'Fit on Screen', shortcut: 'mod+0', needsDocument: true, run: onDoc((doc) => fitToScreen(doc)) },
+      { id: 'actual', label: 'Actual Pixels', shortcut: 'mod+1', needsDocument: true, run: onDoc(actualPixels) },
+      { id: 'rulers', label: 'Rulers', shortcut: 'mod+r', checked: () => $viewOptions.get().rulers, run: () => setViewOption('rulers', !$viewOptions.get().rulers), dividerBefore: true },
+      { id: 'show-guides', label: 'Guides', shortcut: 'mod+;', checked: () => $viewOptions.get().guides, run: () => setViewOption('guides', !$viewOptions.get().guides) },
+      { id: 'lock-guides', label: 'Lock Guides', shortcut: 'mod+alt+;', checked: () => $viewOptions.get().lockGuides, run: () => setViewOption('lockGuides', !$viewOptions.get().lockGuides) },
       { id: 'new-guide', label: 'New Guide…', needsDocument: true, run: () => $dialog.set({ kind: 'new-guide' }) },
       { id: 'clear-guides', label: 'Clear Guides', needsDocument: true, enabled: (doc) => doc.state.guides.length > 0, run: onDoc((doc) => doc.commit('Clear Guides', { ...doc.state, guides: [] })) },
-      { id: 'snap', label: 'Snap', keys: 'mod+shift+;', checked: () => $viewOptions.get().snap, run: () => setViewOption('snap', !$viewOptions.get().snap), dividerBefore: true },
+      { id: 'snap', label: 'Snap', shortcut: 'mod+shift+;', checked: () => $viewOptions.get().snap, run: () => setViewOption('snap', !$viewOptions.get().snap), dividerBefore: true },
       { id: 'snap-to', label: 'Snap To', run: nothing, submenu: SNAP_ITEMS },
       { id: 'smart-guides', label: 'Smart Guides', checked: () => $viewOptions.get().smartGuides, run: () => setViewOption('smartGuides', !$viewOptions.get().smartGuides) }
     ]
@@ -493,7 +493,7 @@ const everyCommand = (commands: readonly CanvasCommand[]): CanvasCommand[] => co
 export function runShortcut(event: KeyboardEvent | ReactKeyboardEvent, doc: CanvasDocument | null): boolean {
   for (const menu of MENUS) {
     for (const command of everyCommand(menu.items)) {
-      if ([command.keys, ...(command.also ?? [])].some((keys) => keys && matches(event, keys)) && isEnabled(command, doc)) {
+      if ([command.shortcut, ...(command.also ?? [])].some((shortcut) => shortcut && matches(event, shortcut)) && isEnabled(command, doc)) {
         runCommand(command, doc)
 
         return true
