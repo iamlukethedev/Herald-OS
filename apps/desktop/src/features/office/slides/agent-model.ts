@@ -603,8 +603,9 @@ export function addShapeStep(deck: Deck, args: Args, context: StepContext): Step
   const slideId = slideIdOf(deck, args.slide, context.front)
   const fill = given(args.fill) ? colorArg(args.fill, 'fill') : undefined
   const change = model.addShape(deck, slideId, { shape, ...boxIn(args), ...(fill !== undefined ? { fill: fill ? { color: fill } : null } : {}), ...(given(args.text) ? { text: String(args.text) } : {}) })
+  const name = SHAPE_NAMES[shape].toLowerCase()
 
-  return elementStep(change, slideId, `a ${SHAPE_NAMES[shape].toLowerCase()}`)
+  return elementStep(change, slideId, `${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name}`)
 }
 
 const FITS = ['contain', 'cover', 'stretch', 'slide'] as const
@@ -1102,7 +1103,9 @@ function inlineText(node: DocNode): string {
   return node.type === 'hardBreak' ? ' ' : (node.content ?? []).map(inlineText).join(node.type === 'paragraph' || node.type === 'heading' ? '' : ' ')
 }
 
-/** Its first sentence when that fits in `limit`, else cut at a word with an ellipsis. */
+const firstSentence = (line: string): string => /^.+?[.!?…](?=\s+[\p{Lu}\d“"(]|$)/u.exec(line)?.[0] ?? line
+
+/** A text at most `limit` long: as it is when it fits, else its first sentence when that fits, else cut at a word with an ellipsis. */
 export function shortVersion(value: string, limit: number): string {
   const line = flat(value)
 
@@ -1110,9 +1113,9 @@ export function shortVersion(value: string, limit: number): string {
     return line
   }
 
-  const sentence = /^.+?[.!?…](?=\s+[\p{Lu}\d“"(]|$)/u.exec(line)?.[0]
+  const sentence = firstSentence(line)
 
-  if (sentence && sentence.length <= limit) {
+  if (sentence.length <= limit) {
     return sentence
   }
 
@@ -1271,7 +1274,7 @@ export function slidesFromDocument(doc: DocJSON, options: { name?: string; level
         }
       } else if (terse) {
         note(current, words)
-        leads.set(current, [...(leads.get(current) ?? []), shortVersion(words, SHORT_BULLET)])
+        leads.set(current, [...(leads.get(current) ?? []), shortVersion(firstSentence(words), SHORT_BULLET)])
       } else {
         bullet(base, words, BULLET)
       }
