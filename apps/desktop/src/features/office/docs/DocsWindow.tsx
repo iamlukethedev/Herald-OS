@@ -1,4 +1,5 @@
 import './docs.css'
+import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type CalloutKind, pageOf, type PageSettings, pageSizeName } from '../../../../shared/office/document.ts'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
@@ -14,6 +15,7 @@ import { BLOCK_STYLES, styleAt } from './model.ts'
 import { $pickImage } from './slash.ts'
 import { activeEditor, docsSession } from './store.ts'
 import { TABLE_ACTIONS } from './table-menu.ts'
+import { $templateGallery, openTemplateGallery, TemplateGallery } from './TemplateGallery.tsx'
 import { DocsToolbar } from './Toolbar.tsx'
 
 const STYLE_SHORTCUTS: Record<string, string> = { normal: 'mod+alt+0', heading1: 'mod+alt+1', heading2: 'mod+alt+2', heading3: 'mod+alt+3' }
@@ -129,6 +131,7 @@ function docsMenus(): OfficeMenu[] {
   return officeMenus({
     session: docsSession,
     canSave: true,
+    onNew: openTemplateGallery,
     edit: [
       { id: 'find', label: 'Find…', shortcut: 'mod+f', enabled: has, run: () => act.openFind(false), dividerBefore: true },
       { id: 'replace', label: 'Replace…', shortcut: 'mod+shift+h', enabled: has, run: () => act.openFind(true) }
@@ -145,6 +148,7 @@ function docsMenus(): OfficeMenu[] {
 /** Herald Docs: Word documents, Markdown and plain text on real pages, in a Herald window. */
 export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
   const [canOpen, setCanOpen] = useState(true)
+  const gallery = useStore($templateGallery)
   const picker = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -181,6 +185,7 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
         noun="document"
         canOpen={canOpen}
         onDropFile={onDropFile}
+        onNew={openTemplateGallery}
         start={{ icon: 'docs', blurb: 'Write on real pages with styles, lists, tables and pictures. Word documents, Markdown and plain text open and save.', newLabel: 'New document', hint: 'Or drop a Word, Markdown or text file here.' }}
         toolbar={(doc) => <DocsToolbar key={doc.key} docKey={doc.key} />}
         renderEditor={(doc, active) => <DocsEditor doc={doc} active={active} />}
@@ -196,6 +201,7 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
           event.target.value = ''
         }}
       />
+      {gallery && <TemplateGallery />}
     </>
   )
 }

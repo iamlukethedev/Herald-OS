@@ -85,10 +85,11 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     return { key: `${adapter.app}-${++nextKey}`, name, path, format, digest: null, modified: false, notes: [], layout: undefined, accepted: null, autosave: false, initial: model, editor: null, revision: 0 }
   }
 
-  function create(): OfficeDocument<Model> {
-    const name = `Untitled${++untitled > 1 ? ` ${untitled}` : ''}`
+  /** A new document: a blank one, or `model` (made from a template, say) called `name`. */
+  function create(model?: Model, name?: string): OfficeDocument<Model> {
+    const title = name ?? `Untitled${++untitled > 1 ? ` ${untitled}` : ''}`
 
-    return add(blankDocument(name, adapter.blank(name), null, adapter.defaultFormat))
+    return add(blankDocument(title, model ?? adapter.blank(title), null, adapter.defaultFormat))
   }
 
   /** Files being read, so a second request for one (a double click, Files and Hermes at once) gets the same tab. */

@@ -53,7 +53,7 @@ function MenuBar({ menus }: { menus: readonly OfficeMenu[] }) {
   )
 }
 
-function Tabs<Model>({ session, documents, active }: { session: OfficeSession<Model>; documents: OfficeDocument<Model>[]; active: OfficeDocument<Model> | null }) {
+function Tabs<Model>({ session, documents, active, onNew }: { session: OfficeSession<Model>; documents: OfficeDocument<Model>[]; active: OfficeDocument<Model> | null; onNew: () => void }) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-2" role="tablist">
       {documents.map((doc) => (
@@ -80,7 +80,7 @@ function Tabs<Model>({ session, documents, active }: { session: OfficeSession<Mo
           </button>
         </div>
       ))}
-      <button type="button" aria-label="New" title="New" onClick={() => session.create()} className="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 hover:bg-white/8 hover:text-fg">
+      <button type="button" aria-label="New" title="New" onClick={() => onNew()} className="grid size-6 shrink-0 place-items-center rounded-md text-fg-3 hover:bg-white/8 hover:text-fg">
         <IconPlus size={14} />
       </button>
     </div>
@@ -145,7 +145,7 @@ function StatusBar<Model>({ session, doc, noun }: { session: OfficeSession<Model
   )
 }
 
-function StartScreen<Model>({ session, start, canOpen }: { session: OfficeSession<Model>; start: StartInfo; canOpen: boolean }) {
+function StartScreen<Model>({ session, start, canOpen, onNew }: { session: OfficeSession<Model>; start: StartInfo; canOpen: boolean; onNew: () => void }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center">
       <AppTile id={start.icon} size={56} />
@@ -154,7 +154,7 @@ function StartScreen<Model>({ session, start, canOpen }: { session: OfficeSessio
         <div className="mt-1 max-w-md text-[12.5px] text-fg-3">{start.blurb}</div>
       </div>
       <div className="flex gap-2">
-        <GlassButton variant="primary" onClick={() => session.create()}>
+        <GlassButton variant="primary" onClick={() => onNew()}>
           <IconFilePlus size={16} /> {start.newLabel}
         </GlassButton>
         {canOpen && (
@@ -184,6 +184,8 @@ export interface OfficeWindowProps<Model> {
   canOpen: boolean
   /** Opens a dropped file, or says why not; null leaves drops alone. */
   onDropFile?: (file: string) => void
+  /** What the person's New does (the tab bar's + and the start screen); a blank document without one. A `command: 'new'` payload is always blank. */
+  onNew?: () => void
   /** One document's editor. Every open document keeps its editor; only the active one shows. */
   renderEditor: (doc: OfficeDocument<Model>, active: boolean) => ReactNode
   /** A bar under the menus for the active document (formatting tools and the like). */
@@ -191,7 +193,7 @@ export interface OfficeWindowProps<Model> {
 }
 
 /** The frame Herald Docs, Sheets and Slides share: menus, tabs, the editors, the status bar and dialogs. */
-export function OfficeWindow<Model>({ session, menus, payload, start, noun, canOpen, onDropFile, renderEditor, toolbar }: OfficeWindowProps<Model>) {
+export function OfficeWindow<Model>({ session, menus, payload, start, noun, canOpen, onDropFile, onNew, renderEditor, toolbar }: OfficeWindowProps<Model>) {
   const documents = useStore(session.$documents)
   const activeKey = useStore(session.$activeKey)
   const dialog = useStore(session.$dialog)
@@ -201,6 +203,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
   const requested = typeof payload?.path === 'string' ? payload.path : null
   const command = typeof payload?.command === 'string' ? payload.command : null
   const requestedAt = payload?.at
+  const newDocument = onNew ?? (() => session.create())
 
   // A file handed over by Herald (Files, the viewer, Hermes), or a new document asked for.
   useEffect(() => {
@@ -288,7 +291,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
     >
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
         <MenuBar menus={menus} />
-        <Tabs session={session} documents={documents} active={doc} />
+        <Tabs session={session} documents={documents} active={doc} onNew={newDocument} />
       </div>
       {doc && toolbar?.(doc)}
       {conflict && conflict.key === doc?.key && <ConflictBar session={session} />}
@@ -298,7 +301,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
             {renderEditor(entry, entry === doc)}
           </div>
         ))}
-        {!doc && <StartScreen session={session} start={start} canOpen={canOpen} />}
+        {!doc && <StartScreen session={session} start={start} canOpen={canOpen} onNew={newDocument} />}
       </div>
       <StatusBar session={session} doc={doc} noun={noun} />
       {dialog?.kind === 'close' && <CloseDialog session={session} docKey={dialog.key} />}
