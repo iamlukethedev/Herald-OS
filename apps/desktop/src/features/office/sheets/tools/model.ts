@@ -3,7 +3,7 @@ import { type CellRange, cellName, columnName, rangeName } from '../../../../../
 import { slideFormula } from '../../../../../shared/office/xlsx/formula.ts'
 import { type CellInput, oneStep, parseTarget, type SheetsTarget, sheetOf } from '../model.ts'
 import { type Area, areaOf, type CellChange, columnIn, fieldNames, flag, isFormula, listOf, looksLikeHeader, MOST_CELLS, rangeOn, textIn, valuesIn, writeCells } from './table.ts'
-import { changeCaseOf, cleanText, DATE_ORDERS, type DateOrder, type Delimiter, DELIMITERS, parseDateText, parseNumberText, splitParts, TEXT_CASES, type TextCase, typedPart } from './text.ts'
+import { changeCaseOf, cleanText, DATE_FORMATS, DATE_ORDERS, type DateOrder, type Delimiter, DELIMITERS, parseDateText, parseNumberText, splitParts, TEXT_CASES, type TextCase, typedPart } from './text.ts'
 
 /*
  * What Hermes's commands and the menus do with data tools (removing duplicates, splitting text,
@@ -14,8 +14,7 @@ import { changeCaseOf, cleanText, DATE_ORDERS, type DateOrder, type Delimiter, D
  * and linked text alone.
  */
 
-export * from './summary.ts'
-export { MOST_CELLS } from './table.ts'
+export { listSummaries, refreshSummary, type SummaryDefinition, type SummaryFunction, type SummaryResult, summarize, summarySource } from './summary.ts'
 
 /** An area's cells as Univer keeps them, row by row; too large an area is refused. */
 function cellsIn(area: Area): Nullable<ICellData>[][] {
@@ -347,8 +346,6 @@ export async function convertToNumbers(target: SheetsTarget, args: { range: unkn
     return { v: number.value, t: 2, p: null, ...(style ? { s: style as ICellData['s'] } : {}) }
   })
 }
-
-export const DATE_FORMATS = ['yyyy-mm-dd', 'd mmm yyyy', 'dd/mm/yyyy', 'mm/dd/yyyy', 'mmmm d, yyyy'] as const
 
 /**
  * Convert text dates into dates: numbers in `order` ("31/12/2025" in DMY), or with the month's

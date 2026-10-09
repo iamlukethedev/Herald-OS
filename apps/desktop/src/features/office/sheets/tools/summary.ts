@@ -513,6 +513,14 @@ function checkBeside(source: Source, area: CellRange): void {
   }
 }
 
+/** A width for each of a summary's columns that shows its longest text, as Excel fits a pivot table's: about 7 pixels a character at 11 points. */
+function fittedWidths(layout: Layout): number[] {
+  // A number is worked out later; most show in about ten characters.
+  const length = (cell: ICellData) => (cell.f ? 10 : typeof cell.v === 'string' ? cell.v.length : cell.v === null || cell.v === undefined ? 0 : String(cell.v).length + 3)
+
+  return Array.from({ length: layout.width }, (_, column) => Math.min(280, Math.round(Math.max(...layout.cells.map((row) => length(row[column]))) * 7 + 16)))
+}
+
 function checkSize(layout: Layout): void {
   if (layout.height * layout.width > MAX_CELLS) {
     throw new Error(`That summary is ${layout.height.toLocaleString('en-US')} rows by ${layout.width} columns; a summary has at most ${MAX_CELLS.toLocaleString('en-US')} cells: put fewer columns in rows or columns, or filter`)
@@ -585,8 +593,8 @@ export interface SummaryResult {
   rows: number
   columns: number
   values: string[]
-  /** The names over its columns, and its first rows of labels. */
-  headers: string[]
+  /** Its header rows, and its first rows of labels. */
+  headers: string[][]
   labels: string[][]
 }
 
@@ -603,7 +611,7 @@ function resultOf(source: Source, spec: Spec, plan: Plan, layout: Layout, place:
     rows: plan.rowLabels.length,
     columns: plan.columnLabels.length,
     values: spec.values.map((value) => valueName({ field: source.names[value.column], fn: value.fn })),
-    headers: layout.cells[layout.headers - 1].map((cell) => String(cell.v ?? '')),
+    headers: layout.cells.slice(0, layout.headers).map((row) => row.map((cell) => String(cell.v ?? ''))),
     labels: plan.rowLabels.slice(0, 5).map((labels) => labels.map(labelText))
   }
 }
@@ -675,6 +683,16 @@ export async function summarize(target: SheetsTarget, args: { source: unknown; r
     const sheet = place.sheet ?? target.workbook.insertSheet(place.name, { index })
     growTo(sheet, cells)
     rangeOn(sheet, cells).setValues(layout.cells)
+
+    // Columns of a sheet made for the summary fit it; on another sheet, they are the person's.
+    if (!place.sheet) {
+      fittedWidths(layout).forEach((width, offset) => {
+        if (width > sheet.getColumnWidth(place.column + offset)) {
+          sheet.setColumnWidth(place.column + offset, width)
+        }
+      })
+    }
+
     storeSummaries(target, sheet, [...existing, definition])
     target.workbook.setActiveSheet(sheet)
   })

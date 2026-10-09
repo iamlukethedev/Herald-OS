@@ -129,7 +129,7 @@ describe('summaries', () => {
   it('previews its shape without changing anything', async () => {
     const result = await changeAndUndo(salesBook(), (target) => summarize(target, { source: 'A1', rows: ['Region', 'Product'], values: ['Amount'], preview: true }))
 
-    expect(result.value).toMatchObject({ preview: true, sheet: 'Summary', newSheet: true, range: 'A1:C10', rows: 8, headers: ['Region', 'Product', 'Sum of Amount'], labels: [['East', 'Apples'], ['East', 'Mixed*'], ['East', 'Pears'], ['North', 'Apples'], ['North', 'Pears']] })
+    expect(result.value).toMatchObject({ preview: true, sheet: 'Summary', newSheet: true, range: 'A1:C10', rows: 8, headers: [['Region', 'Product', 'Sum of Amount']], labels: [['East', 'Apples'], ['East', 'Mixed*'], ['East', 'Pears'], ['North', 'Apples'], ['North', 'Pears']] })
     expect(result.unchanged).toBe(true)
   })
 

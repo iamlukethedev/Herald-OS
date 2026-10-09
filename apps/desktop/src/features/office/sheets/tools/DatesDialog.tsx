@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { openDialog } from '../ui/overlay.tsx'
-import { convertToDates, DATE_FORMATS } from './model.ts'
-import { DATE_ORDERS, type DateOrder } from './text.ts'
+import { convertToDates } from './model.ts'
+import { DATE_FORMATS, DATE_ORDERS, type DateOrder } from './text.ts'
 import { Choices, counted, Heading, Note, Select, ToolDialog, useLive } from './ui.tsx'
 
 /* Data → Convert text to dates…: the order the dates are written in, with examples from the cells, and the format they get. */
@@ -53,7 +53,7 @@ function DatesDialog({ docKey, range, sheet }: { docKey: string; range: string; 
     >
       <section>
         <Heading>The dates are written</Heading>
-        <Choices label="Order of day, month and year" value={order} onChange={setOrder} autoFocus options={DATE_ORDERS.map((id) => ({ id, label: `${id === 'DMY' ? 'Day first' : id === 'MDY' ? 'Month first' : 'Year first'} (${ORDER_EXAMPLES[id]})` }))} />
+        <Choices label="Order of day, month and year" value={order} onChange={setOrder} autoFocus options={DATE_ORDERS.map((id) => ({ id, label: id === 'DMY' ? 'Day first' : id === 'MDY' ? 'Month first' : 'Year first', detail: ORDER_EXAMPLES[id] }))} />
       </section>
       {result && (
         <section>

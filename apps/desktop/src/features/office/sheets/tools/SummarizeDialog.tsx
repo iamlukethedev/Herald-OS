@@ -73,6 +73,8 @@ function FilterValues({ field, kept, onChange }: { field: Field; kept: CellInput
 
 function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
   const [source, setSource] = useState(range)
+  // The table as read ("Sales!A1:D11"), and what the person typed over it.
+  const [shown, setShown] = useState(range)
   const [typed, setTyped] = useState(range)
   const table = useLive(docKey, (target) => summarySource(target, { source }), [source])
   const fields = table.value?.fields ?? []
@@ -92,7 +94,9 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
 
     const label = fields.find((field) => !field.numeric) ?? fields[0]
     const number = fields.find((field) => field.numeric && field.name !== label?.name)
-    setTyped(`${quoteSheet(table.value.sheet)}!${table.value.range}`)
+    const read = `${quoteSheet(table.value.sheet)}!${table.value.range}`
+    setShown(read)
+    setTyped(read)
     setRows(label ? [label.name] : [])
     setColumns([])
     setValues(number ? [{ field: number.name, fn: 'sum' }] : label ? [{ field: label.name, fn: 'count' }] : [])
@@ -103,6 +107,10 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
   const ready = Boolean(table.value && rows.length && values.length && (where === 'new' || cell.trim()))
   const preview = useLive(docKey, (target) => (ready ? summarize(target, { ...definition, preview: true }) : null), [definition, ready])
   const fieldOf = (name: string) => fields.find((field) => field.name === name)
+  const apply = () => {
+    setShown(typed)
+    setSource(typed)
+  }
   const setFn = (field: string, fn: SummaryFunction) => setValues(values.map((value) => (value.field === field ? { ...value, fn } : value)))
 
   return (
@@ -125,12 +133,13 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
           autoFocus
           value={typed}
           onChange={(event) => setTyped(event.target.value)}
-          onBlur={() => setSource(typed)}
+          onBlur={() => typed !== shown && apply()}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && typed !== source) {
+            // Enter reads a table typed afresh; on the table as read, it summarizes.
+            if (event.key === 'Enter' && typed !== shown) {
               event.stopPropagation()
               event.preventDefault()
-              setSource(typed)
+              apply()
             }
           }}
           className="flex-1"
@@ -236,15 +245,17 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
           <section>
             <Heading>Put it on</Heading>
             <div className="flex items-center gap-2">
-              <Choices
-                label="Where the summary goes"
-                value={where}
-                options={[
-                  { id: 'new', label: 'A new sheet' },
-                  { id: 'cell', label: 'A cell' }
-                ]}
-                onChange={setWhere}
-              />
+              <div className="w-52 shrink-0">
+                <Choices
+                  label="Where the summary goes"
+                  value={where}
+                  options={[
+                    { id: 'new', label: 'A new sheet' },
+                    { id: 'cell', label: 'A cell' }
+                  ]}
+                  onChange={setWhere}
+                />
+              </div>
               {where === 'cell' && <TextField label="First cell of the summary" placeholder="Sheet2!A1" value={cell} onChange={(event) => setCell(event.target.value)} className="w-32" />}
             </div>
           </section>
@@ -255,7 +266,7 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
           <Heading>
             {preview.value.range} on {preview.value.newSheet ? 'a new sheet' : preview.value.sheet}
           </Heading>
-          <PreviewGrid rows={[preview.value.headers, ...preview.value.labels.map((labels) => [...labels, ...preview.value!.headers.slice(labels.length).map(() => '…')]), ...(preview.value.rows > preview.value.labels.length ? [[`${preview.value.rows - preview.value.labels.length} more`]] : []), ['Grand total']]} />
+          <PreviewGrid rows={[...preview.value.headers, ...preview.value.labels.map((labels) => [...labels, ...preview.value!.headers[0].slice(labels.length).map(() => '…')]), ...(preview.value.rows > preview.value.labels.length ? [[`${preview.value.rows - preview.value.labels.length} more`]] : []), ['Grand total']]} />
         </section>
       )}
       {preview.error && <Note tone="warn">{preview.error}</Note>}

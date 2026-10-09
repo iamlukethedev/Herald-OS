@@ -51,8 +51,10 @@ export function ToolDialog({ docKey, title, action, ready = true, confirm, child
           void run()
         }}
         onKeyDown={(event) => {
-          // Enter confirms from any field; a button pressed with Enter does what it says.
-          if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+          const button = event.target instanceof HTMLButtonElement ? event.target : null
+
+          // Enter confirms from any field, a choice included; another button pressed with Enter does what it says.
+          if (event.key === 'Enter' && (!button || button.getAttribute('role') === 'radio')) {
             event.preventDefault()
             void run()
           }
@@ -82,8 +84,10 @@ export function Heading({ children, action }: { children: ReactNode; action?: Re
   )
 }
 
-/** One of a few choices, as a row of buttons. */
-export function Choices<T extends string>({ label, value, options, onChange, autoFocus }: { label: string; value: T; options: { id: T; label: ReactNode; title?: string }[]; onChange: (id: T) => void; autoFocus?: boolean }) {
+/** One of a few choices, as a row of buttons; a choice's detail goes on a second line. */
+export function Choices<T extends string>({ label, value, options, onChange, autoFocus }: { label: string; value: T; options: { id: T; label: ReactNode; detail?: string; title?: string }[]; onChange: (id: T) => void; autoFocus?: boolean }) {
+  const tall = options.some((option) => option.detail)
+
   return (
     <div className="flex rounded-md bg-white/5 p-0.5 ring-1 ring-line" role="radiogroup" aria-label={label}>
       {options.map((option, index) => (
@@ -95,9 +99,10 @@ export function Choices<T extends string>({ label, value, options, onChange, aut
           aria-checked={option.id === value}
           autoFocus={autoFocus && index === 0}
           onClick={() => onChange(option.id)}
-          className={cn('h-7 min-w-0 flex-1 truncate rounded px-1.5 text-[12px]', option.id === value ? 'bg-white/14 text-fg' : 'text-fg-3 hover:text-fg')}
+          className={cn('flex min-w-0 flex-1 flex-col items-center justify-center rounded px-1.5 text-[12px]', tall ? 'h-10' : 'h-7', option.id === value ? 'bg-white/14 text-fg' : 'text-fg-3 hover:text-fg')}
         >
-          {option.label}
+          <span className="max-w-full truncate">{option.label}</span>
+          {option.detail && <span className="max-w-full truncate text-[11px] text-fg-3">{option.detail}</span>}
         </button>
       ))}
     </div>

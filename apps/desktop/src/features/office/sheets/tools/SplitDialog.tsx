@@ -39,8 +39,10 @@ function SplitDialog({ docKey, range, sheet }: { docKey: string; range: string; 
       <section>
         <Heading>Split at</Heading>
         <div className="flex items-center gap-2">
-          <Choices label="Delimiter" value={delimiter} options={DELIMITER_CHOICES} onChange={setDelimiter} autoFocus />
-          {delimiter === 'other' && <TextField label="Text to split at" placeholder="|" value={other} onChange={(event) => setOther(event.target.value)} autoFocus className="w-16" />}
+          <div className="min-w-0 flex-1">
+            <Choices label="Delimiter" value={delimiter} options={DELIMITER_CHOICES} onChange={setDelimiter} autoFocus />
+          </div>
+          {delimiter === 'other' && <TextField label="Text to split at" placeholder="|" value={other} onChange={(event) => setOther(event.target.value)} autoFocus className="w-14 shrink-0" />}
         </div>
       </section>
       <Check checked={consecutive} onChange={setConsecutive}>

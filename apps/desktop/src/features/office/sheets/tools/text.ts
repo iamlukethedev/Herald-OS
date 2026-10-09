@@ -102,6 +102,9 @@ export type DateOrder = 'DMY' | 'MDY' | 'YMD'
 
 export const DATE_ORDERS: readonly DateOrder[] = ['DMY', 'MDY', 'YMD']
 
+/** Date formats the tools offer, the first the one they give unless told. */
+export const DATE_FORMATS = ['yyyy-mm-dd', 'd mmm yyyy', 'dd/mm/yyyy', 'mm/dd/yyyy', 'mmmm d, yyyy'] as const
+
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const WEEKDAY = /^(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+/i
 const TIME = /(?:^|[\sT])(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(?:([ap])\.?m\.?)?$/i
