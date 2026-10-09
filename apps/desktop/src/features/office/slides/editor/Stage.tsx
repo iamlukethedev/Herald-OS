@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Box, ConnectorEnd, ConnectorPreset, Deck, SlideElement } from '../deck.ts'
 import { findElement, findSlide } from '../deck.ts'
 import type { SlidesDocument } from '../document.ts'
@@ -8,7 +8,7 @@ import { isEmptyPlaceholder } from '../layouts.ts'
 import * as model from '../model.ts'
 import { slidesSession } from '../store.ts'
 import type { CellRef } from '../tables.ts'
-import { type EditingSlot, SlideView } from '../view/SlideView.tsx'
+import { type EditingSlot, SlideView, TextFlow } from '../view/SlideView.tsx'
 import { requestEditStart, textSessionOf } from './active.ts'
 import * as commands from './commands.ts'
 import {
@@ -39,7 +39,11 @@ import {
   withConnectorEnd
 } from './gestures.ts'
 import { Overlay } from './Overlay.tsx'
-import { selectWordAt, TextEditor } from './TextEditor.tsx'
+
+// The text editor (TipTap and ProseMirror, most of what Slides would load) comes once the deck is up.
+let textEditing: typeof import('./TextEditor.tsx') | null = null
+const loadTextEditor = () => import('./TextEditor.tsx').then((module) => (textEditing = module))
+const TextEditor = lazy(() => loadTextEditor().then((module) => ({ default: module.TextEditor })))
 
 /*
  * The slide being edited: shown fitted to the window or at a zoom, with everything done to it by
@@ -123,6 +127,13 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
     observer.observe(element)
 
     return () => observer.disconnect()
+  }, [])
+
+  // The text editor loads while the person looks at the deck, so typing starts without a wait.
+  useEffect(() => {
+    const idle = requestIdleCallback(() => void loadTextEditor(), { timeout: 2000 })
+
+    return () => cancelIdleCallback(idle)
   }, [])
 
   // Pinching or ⌘-scrolling zooms about the pointer; the listener is native to be allowed to stop the page's own zoom.
@@ -470,7 +481,7 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
     const cell = element.kind === 'table' ? cellAt(event.target) : null
 
     if (session?.elementId === element.id && (!cell || (cell.row === doc.cell?.row && cell.column === doc.cell.column))) {
-      selectWordAt(session.editor, event.clientX, event.clientY)
+      textEditing?.selectWordAt(session.editor, event.clientX, event.clientY)
     } else if (cell) {
       requestEditStart({ elementId: element.id, point: { x: event.clientX, y: event.clientY }, select: 'word' })
       doc.goToCell(element.id, cell, true)
@@ -544,7 +555,11 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
     ? {
         id: editingId,
         cell,
-        render: (body) => <TextEditor key={cell ? `${editingId}:${cell.row}:${cell.column}` : editingId} doc={doc} slideId={slide.id} elementId={editingId} cell={cell} onTab={(by) => commands.moveCell(by, doc)} body={body} theme={deck.theme} />
+        render: (body) => (
+          <Suspense fallback={<TextFlow body={body} theme={deck.theme} />}>
+            <TextEditor key={cell ? `${editingId}:${cell.row}:${cell.column}` : editingId} doc={doc} slideId={slide.id} elementId={editingId} cell={cell} onTab={(by) => commands.moveCell(by, doc)} body={body} theme={deck.theme} />
+          </Suspense>
+        )
       }
     : null
   const editingElement = editingId ? (findElement(slide, editingId) ?? null) : null

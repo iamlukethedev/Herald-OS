@@ -100,6 +100,15 @@ function Paragraphs({ body, theme, prompt }: { body: TextBody; theme: Theme; pro
   )
 }
 
+/** A body's text as the slide draws it, where its editor is still loading. */
+export function TextFlow({ body, theme }: { body: TextBody; theme: Theme }) {
+  return (
+    <div className="hs-flow" data-wrap={body.wrap ? undefined : 'false'} style={flowCss(body, theme) as CSSProperties}>
+      <Paragraphs body={body} theme={theme} />
+    </div>
+  )
+}
+
 /** Where a body's text goes in its element, insets taken off. */
 function innerBox(area: Box, body: TextBody): Box {
   const [left, top, right, bottom] = body.inset

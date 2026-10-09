@@ -38,7 +38,7 @@ import { allRuns, effectiveStyle, paragraphsAll, styleAll, textBody, withParagra
 import { $textSession, flushTyping, requestEditStart, textSessionOf } from './active.ts'
 import { $borderPen, type BorderChoice, bordersFor } from './borders.ts'
 import { decksFromDocuments, type FileAccess, officeFiles, pickDocuments, withDocumentSlides } from './from-files.ts'
-import { changeParagraphs, selectedParagraphs, shiftLevel, toggleList } from './tiptap.ts'
+import { changeParagraphs, selectedParagraphs, shiftLevel, toggleList } from './paragraphs.ts'
 
 /*
  * What the menus, the formatting bar and the keyboard do to the deck in front. Each change is one
