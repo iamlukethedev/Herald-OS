@@ -35,7 +35,7 @@ describe('where a write goes', () => {
   it('reads at, heading and mode', () => {
     expect(whereOf({})).toBe('end')
     expect(whereOf({ heading: 'Results' })).toBe('heading')
-    expect(whereOf({ at: 'Cursor' })).toBe('selection')
+    expect(whereOf({ at: 'Caret' })).toBe('selection')
     expect(() => whereOf({ at: 'middle' })).toThrow(/at is one of/)
     expect(placeFor(null, { heading: '2', mode: 'replace' }, null)).toEqual({ heading: 1, mode: 'replace' })
     expect(placeFor(null, { at: 'start' }, null)).toBe('start')
