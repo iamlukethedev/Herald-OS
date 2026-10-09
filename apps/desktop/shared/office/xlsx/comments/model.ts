@@ -24,7 +24,7 @@ export interface UNote {
 
 export interface UBody {
   dataStream: string
-  paragraphs?: { startIndex: number }[]
+  paragraphs?: { startIndex: number; paragraphId?: string }[]
   textRuns?: { st: number; ed: number; ts?: object }[]
   customRanges?: unknown[]
   [key: string]: unknown
@@ -64,14 +64,14 @@ export const personIdOf = (name: string): string => `${NAMED}${name}`
 /** The name in a person id made by `personIdOf`; null for other ids. */
 export const nameOfPersonId = (id: string): string | null => (id.startsWith(NAMED) ? id.slice(NAMED.length) : null)
 
-/** Plain text as Univer's document body: each paragraph ends with "\r", the body with "\r\n". */
+/** Plain text as Univer's document body: each paragraph ends with "\r" and has an id (Univer draws a comment's paragraphs by them), the body with "\r\n". */
 export function bodyOf(text: string): UBody {
-  const paragraphs: { startIndex: number }[] = []
+  const paragraphs: { startIndex: number; paragraphId: string }[] = []
   let dataStream = ''
 
   for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     dataStream += line
-    paragraphs.push({ startIndex: dataStream.length })
+    paragraphs.push({ startIndex: dataStream.length, paragraphId: `para_${paragraphs.length + 1}` })
     dataStream += '\r'
   }
 
