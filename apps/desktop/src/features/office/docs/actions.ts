@@ -1,31 +1,61 @@
 import type { ChainedCommands, Editor } from '@tiptap/core'
-import { type CalloutKind, type PageSizeName } from '../../../../shared/office/document.ts'
+import { type CalloutKind, headerKindFor, type NoteKind, type PageHeaders, type SectionKind } from '../../../../shared/office/document.ts'
 import { messageOf } from '../../canvas/errors.ts'
 import { insertPictures, mimeOfName } from './editor.ts'
-import { applyLive, type BlockStyle, clearFormatting, indent, insertPageBreak, insertTable, type Op, setAlignment, setLineSpacing, setPage, setStyle } from './model.ts'
-import { $find, $linkEdit, $zoom, activeEditor, docsSession } from './store.ts'
+import {
+  applyLive,
+  type BlockStyle,
+  clearFormatting,
+  type FieldChoice,
+  indent,
+  insertField,
+  insertNote,
+  insertPageBreak,
+  insertSectionBreak,
+  insertTable,
+  notes,
+  type Op,
+  type PageChange,
+  type PagePart,
+  setAlignment,
+  setLineSpacing,
+  setPage,
+  setStyle,
+  textWidthOf
+} from './model.ts'
+import { pageAt } from './pages/map.ts'
+import { paginatorOf } from './pages/paginator.ts'
+import { $pageSetup, openPartOf } from './parts.ts'
+import { $find, $linkEdit, $noteEdit, $pages, $partEdit, $zoom, activeEditor, docsSession, type ScreenRect } from './store.ts'
 
 /*
  * What the toolbar, the menus and the '/' menu do to the document in front. Formatting goes
  * through TipTap's commands (they carry formatting over to what is typed next); styles, layout
- * and insertions go through the document API, one undo step each.
+ * and insertions go through the document API, one undo step each. While a header, footer or note
+ * is open on the page, formatting and insertions go to it; breaks, notes and the page stay the text's.
  */
 
-export function apply(op: Op, editor: Editor | null = activeEditor()): void {
+/** The editor typing goes to in the document in front: a header, footer or note open on the page, else the document's text. */
+export const typingEditor = (): Editor | null => openPartOf(docsSession.$activeKey.get())?.editor ?? activeEditor()
+
+/** Whether the document in front has its text in front, with no header, footer or note open on it. */
+export const inText = (): boolean => Boolean(activeEditor()) && !openPartOf(docsSession.$activeKey.get())
+
+export function apply(op: Op, editor: Editor | null = typingEditor()): void {
   if (editor) {
     applyLive(editor.view, op)
     editor.commands.focus()
   }
 }
 
-export function chain(build: (chain: ChainedCommands) => ChainedCommands, editor: Editor | null = activeEditor()): void {
+export function chain(build: (chain: ChainedCommands) => ChainedCommands, editor: Editor | null = typingEditor()): void {
   if (editor) {
     build(editor.chain().focus()).run()
   }
 }
 
 export const hasEditor = (): boolean => Boolean(activeEditor())
-export const isActive = (name: string, attrs?: Record<string, unknown>): boolean => Boolean(activeEditor()?.isActive(name, attrs))
+export const isActive = (name: string, attrs?: Record<string, unknown>): boolean => Boolean(typingEditor()?.isActive(name, attrs))
 
 export type MarkName = 'bold' | 'italic' | 'underline' | 'strike' | 'superscript' | 'subscript' | 'code'
 
@@ -88,15 +118,28 @@ export function callout(kind: CalloutKind): void {
 
 export const removeCallout = (): void => chain((c) => c.lift('callout'))
 
-export const table = (rows = 3, cols = 3): void => apply(insertTable({ rows, cols }, 'selection'))
+export function table(rows = 3, cols = 3): void {
+  const text = activeEditor()
+  // A header, footer or note has no page of its own: its table shares the document's text width.
+  const widths = text && !inText() ? Array.from({ length: cols }, () => Math.floor(textWidthOf(text.state.doc) / cols)) : undefined
+
+  apply(insertTable({ rows, cols, widths }, 'selection'))
+}
+
 export const rule = (): void => chain((c) => c.setHorizontalRule())
-export const pageBreak = (): void => apply(insertPageBreak())
-export const page = (change: { size?: PageSizeName; orientation?: 'portrait' | 'landscape'; margins?: number }): void => apply(setPage(change))
+
+export function pageBreak(): void {
+  if (inText()) {
+    apply(insertPageBreak(), activeEditor())
+  }
+}
+
+export const page = (change: PageChange): void => apply(setPage(change), activeEditor())
 
 export function editLink(): void {
   const key = docsSession.$activeKey.get()
 
-  if (key) {
+  if (key && inText()) {
     $linkEdit.set({ key, at: Date.now() })
   }
 }
@@ -118,9 +161,65 @@ export function zoom(key: string, step: 'in' | 'out' | 'reset'): void {
   $zoom.set({ ...$zoom.get(), [key]: next })
 }
 
-/** Pictures picked in a file dialog, put in at the selection. */
-export async function picturesFromFiles(files: readonly File[]): Promise<void> {
+// The page: headers and footers, fields, notes, breaks and page setup.
+
+const screenRect = (element: Element | null | undefined): ScreenRect => {
+  const box = element?.getBoundingClientRect()
+
+  return box ? { left: box.left, top: box.top, width: box.width, height: box.height } : { left: 0, top: 0, width: 0, height: 0 }
+}
+
+/** Edit the header or footer of the page the caret is on, or of the page whose header or footer is open. */
+export function editPart(part: PagePart): void {
   const editor = activeEditor()
+  const key = docsSession.$activeKey.get()
+
+  if (!editor || !key) {
+    return
+  }
+
+  const page = openPartOf(key)?.page ?? pageAt($pages.get()[key], editor.state.selection.head)?.number ?? 1
+  const kind = headerKindFor((editor.state.doc.attrs.headers as PageHeaders | null) ?? null, page)
+  $partEdit.set({ docKey: key, part, kind, page, rect: screenRect(paginatorOf(editor.view)?.areaOf(part, page)) })
+}
+
+/** A page number, Page X of Y, the page count, the date or the time: in the header, footer or note open, else at the caret. */
+export const field = (choice: FieldChoice): void => apply(insertField(choice))
+
+/** A new footnote or endnote at the caret, opened to write in. */
+export function note(kind: NoteKind): void {
+  const editor = activeEditor()
+  const key = docsSession.$activeKey.get()
+
+  if (!editor || !key || !inText() || !applyLive(editor.view, insertNote(kind))) {
+    return
+  }
+
+  const pos = editor.state.selection.from - 1
+  const found = notes(editor.state.doc).find((entry) => entry.pos === pos)
+
+  if (found) {
+    $noteEdit.set({ docKey: key, kind, number: found.number, pos, rect: screenRect(editor.view.nodeDOM(pos) as Element | null) })
+  }
+}
+
+export function sectionBreak(kind: SectionKind): void {
+  if (inText()) {
+    apply(insertSectionBreak(kind), activeEditor())
+  }
+}
+
+export function pageSetup(): void {
+  const key = docsSession.$activeKey.get()
+
+  if (key && activeEditor()) {
+    $pageSetup.set(key)
+  }
+}
+
+/** Pictures picked in a file dialog, put in at the selection (of the header, footer or note open, if one is). */
+export async function picturesFromFiles(files: readonly File[]): Promise<void> {
+  const editor = typingEditor()
 
   if (!editor || !files.length) {
     return
