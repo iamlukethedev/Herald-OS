@@ -91,9 +91,11 @@ describe('second saves', () => {
   it('keeps each part once when a file Herald saved is saved again', async () => {
     const original = await keptWorkbook()
     const once = await xlsxFromWorkbook(await read(original), { original })
-    const twice = await xlsxFromWorkbook(await read(once.bytes), { original: once.bytes })
+    const again = await workbookFromXlsx(once.bytes, { id: 'book', name: 'Book' })
+    const twice = await xlsxFromWorkbook(again.workbook, { original: once.bytes })
     const [first, second] = [await opened(once.bytes), await opened(twice.bytes)]
 
+    expect(again.notes).toEqual([])
     expect(await packageProblems(twice.bytes)).toEqual([])
     expect(twice.losses).toEqual([])
     expect(second.files(/./).sort()).toEqual(first.files(/./).sort())
