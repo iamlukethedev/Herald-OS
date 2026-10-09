@@ -481,7 +481,8 @@ export async function sortRange(target: SheetsTarget, args: { range: unknown; by
     throw new Error(`${rangeName(cells)} has no rows under its header to sort`)
   }
 
-  await oneStep(target, () => sheet.getRange(body.startRow, body.startColumn, body.endRow - body.startRow + 1, body.endColumn - body.startColumn + 1).sort({ column, ascending }))
+  // Univer counts the sort column from the range's first column.
+  await oneStep(target, () => sheet.getRange(body.startRow, body.startColumn, body.endRow - body.startRow + 1, body.endColumn - body.startColumn + 1).sort({ column: column - body.startColumn, ascending }))
 
   return { sheet: sheet.getSheetName(), range: rangeName(body), column: columnName(column), ascending }
 }

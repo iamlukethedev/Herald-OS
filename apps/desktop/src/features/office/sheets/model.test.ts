@@ -125,6 +125,16 @@ describe('changes, each one step to undo', () => {
     expect(result.undone).toBe(true)
   })
 
+  it('sorts a range that does not start in column A by the column named', async () => {
+    const { result } = await withHeadlessSheets(budget(), async ({ univer, workbook }) => {
+      await sortRange({ univer, workbook }, { range: 'B1:C4', by: 'Cost', header: true })
+
+      return readRange({ univer, workbook }, { range: 'B2:B4' }).values
+    })
+
+    expect(result).toEqual([[60], [310.5], [1200]])
+  })
+
   it('filters by values and by a condition, and clears the filter', async () => {
     const byValue = await changeAndUndo((target) => filterRange(target, { range: 'A1:C4', by: 'Item', values: ['Rent', 'Bus'] }))
     const byCondition = await changeAndUndo((target) => filterRange(target, { range: 'A1:C4', by: 'B', condition: { operator: 'lessThan', value: 500 } }))
