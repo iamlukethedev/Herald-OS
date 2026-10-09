@@ -8,9 +8,9 @@ import { describeDeviceChoice } from '../../../lib/audio-devices.ts'
 import { audioScope, deviceNoun } from '../../../lib/platform-labels.ts'
 import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
-import { $inputDevices, $micLevel } from '../../../lib/voice/audio-capture.ts'
+import { $inputDevices } from '../../../lib/voice/audio-capture.ts'
 import { LOCAL_STT_MODELS } from '../../../lib/voice/stt-tuning.ts'
-import { $inputChoice, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../../store/audio-devices.ts'
+import { $inputChoice, $micHeldElsewhere, $micLevelPercent, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../../store/audio-devices.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $voice, $voiceActive, LIVE_RATE_PER_MINUTE, liveSecondsToday, speakWithFreeFallback, startVoice } from '../../../store/voice.ts'
@@ -146,8 +146,9 @@ export function VoiceSection() {
   // panel in the menu bar shows the same control. Herald OS Linux sets the machine's devices instead.
   const micDevices = useStore($inputDevices)
   const micChoice = useStore($inputChoice)
-  const micLevel = useStore($micLevel)
+  const micLevel = useStore($micLevelPercent)
   const testingMic = useStore($microphoneTest)
+  const micHeldElsewhere = useStore($micHeldElsewhere)
 
   useEffect(() => watchAudioDevices(), [])
 
@@ -219,19 +220,29 @@ export function VoiceSection() {
               onSelect={id => void selectMicrophone(String(id))}
               disabled={!voice.enabled}
             />
-            <GlassButton size="sm" onClick={() => (testingMic ? stopMicrophoneTest() : void startMicrophoneTest())} disabled={!voice.enabled} aria-label={testingMic ? 'Stop the microphone test' : 'Test the microphone'}>
-              {testingMic ? 'Listening…' : 'Test'}
-            </GlassButton>
           </SettingsRow>
           {voice.enabled && (
             <SettingsRow
               icon={<IconEar />}
               label="Microphone level"
-              description="Speak, and the bar shows what Herald hears. The test listens for a few seconds and then releases the microphone."
+              description={
+                micHeldElsewhere
+                  ? 'The microphone is open for a conversation, so the bar is live.'
+                  : 'Test hears the microphone for a few seconds and lets it go; the bar fills as you speak.'
+              }
             >
               <div className="flex w-[200px] items-center gap-2">
-                <Meter value={Math.min(100, Math.round(micLevel * 500))} className="flex-1" />
+                <Meter value={micLevel} className="flex-1" />
               </div>
+              <GlassButton
+                size="sm"
+                onClick={() => (testingMic ? stopMicrophoneTest() : void startMicrophoneTest())}
+                disabled={micHeldElsewhere}
+                title={micHeldElsewhere ? 'The microphone is already open' : undefined}
+                aria-label={testingMic ? 'Stop the microphone test' : 'Test the microphone'}
+              >
+                {testingMic ? 'Stop' : 'Test'}
+              </GlassButton>
             </SettingsRow>
           )}
         </SettingsGroup>

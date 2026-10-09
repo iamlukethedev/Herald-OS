@@ -30,8 +30,8 @@ import { Meter } from '../../components/ui/primitives.tsx'
 import { describeDeviceChoice } from '../../lib/audio-devices.ts'
 import { cn } from '../../lib/cn.ts'
 import { audioScope } from '../../lib/platform-labels.ts'
-import { $inputDevices, $micLevel, $micOpen } from '../../lib/voice/audio-capture.ts'
-import { $inputChoice, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../store/audio-devices.ts'
+import { $inputDevices } from '../../lib/voice/audio-capture.ts'
+import { $inputChoice, $micHeldElsewhere, $micLevelPercent, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../store/audio-devices.ts'
 import { $env, $prefs } from '../../store/backend.ts'
 import { runCommand } from '../../store/os-commands.ts'
 import { $panelStates, loadPanel, PANEL_TITLES, panelAction } from '../../store/status-panel.ts'
@@ -398,9 +398,9 @@ function HeraldVoiceRows() {
   const prefs = useStore($prefs)
   const devices = useStore($inputDevices)
   const choice = useStore($inputChoice)
-  const level = useStore($micLevel)
-  const open = useStore($micOpen)
+  const level = useStore($micLevelPercent)
   const testing = useStore($microphoneTest)
+  const held = useStore($micHeldElsewhere)
 
   useEffect(() => watchAudioDevices(), [])
 
@@ -436,9 +436,15 @@ function HeraldVoiceRows() {
             <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-fg-2">
               <IconPlayerPlay size={14} />
             </span>
-            <Meter value={Math.min(100, Math.round(level * 500))} className="flex-1" />
-            <GlassButton size="sm" onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())} aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}>
-              {testing || open ? 'Listening…' : 'Test'}
+            <Meter value={level} className="flex-1" />
+            <GlassButton
+              size="sm"
+              onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())}
+              disabled={held}
+              title={held ? 'The microphone is already open' : undefined}
+              aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}
+            >
+              {testing ? 'Stop' : 'Test'}
             </GlassButton>
           </div>
           {chosen && choice.reason === 'missing' && <Note>{choice.absent?.label} is not connected. It is used again the moment it comes back.</Note>}
