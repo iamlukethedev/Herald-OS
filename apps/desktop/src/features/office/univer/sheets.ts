@@ -32,7 +32,7 @@ import '@univerjs/sheets-drawing-ui/facade'
 import '@univerjs/thread-comment/facade'
 import '@univerjs/sheets-thread-comment/facade'
 import '@univerjs/sheets-note/facade'
-import { CommandType, ICommandService, type IWorkbookData, ThemeService, type Univer, UniverInstanceType } from '@univerjs/core'
+import { CommandType, type IAccessor, ICommandService, type IWorkbookData, LifecycleService, LifecycleStages, ThemeService, type Univer, UniverInstanceType } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import { UniverDataValidationPlugin } from '@univerjs/data-validation'
 import { UniverDocsPlugin } from '@univerjs/docs'
@@ -86,6 +86,8 @@ import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui'
 import { UniverThreadCommentPlugin } from '@univerjs/thread-comment'
 import ThreadCommentUIEnUS from '@univerjs/thread-comment-ui/locale/en-US'
 import { UniverThreadCommentUIPlugin } from '@univerjs/thread-comment-ui'
+import { getMenuHiddenObservable, ILayoutService, type IMenuButtonItem, IMenuManagerService, MenuItemType, ToggleFullscreenOperation } from '@univerjs/ui'
+import { distinctUntilChanged, fromEvent, map, merge, of, ReplaySubject, takeUntil } from 'rxjs'
 import { withoutAutomaticColor, type WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
 import { createUniver } from './base.ts'
 
@@ -101,6 +103,37 @@ export interface SheetsEngine {
   /** The sheet in front and the selection on it: "Sheet1", "B2:D9". */
   position: () => { sheetId: string | undefined; sheet: string; selection: string | undefined }
   dispose: () => void
+}
+
+/**
+ * Univer's Full Screen button watches the page for fullscreenchange, and its toolbar never stops
+ * watching what a button gave it: the page's listener would keep every closed workbook's Univer
+ * alive. This is the same button, and it stops watching when its Univer goes.
+ */
+function fullscreenButtonThatLetsGo(univer: Univer): void {
+  const gone = new ReplaySubject<void>(1)
+  univer.onDispose(() => gone.next())
+  const injector = univer.__getInjector()
+  const button = (accessor: IAccessor): IMenuButtonItem => {
+    const root = accessor.get(ILayoutService).rootContainerElement
+    const fullscreen$ = root ? merge(of(null), fromEvent(root.ownerDocument, 'fullscreenchange')).pipe(map(() => root.ownerDocument.fullscreenElement === root), distinctUntilChanged(), takeUntil(gone)) : of(false)
+
+    return {
+      id: ToggleFullscreenOperation.id,
+      type: MenuItemType.BUTTON,
+      tooltip: 'sheets-ui.toolbar.fullscreen',
+      icon: fullscreen$.pipe(map((on) => (on ? 'ShrinkIcon' : 'ExpandIcon'))),
+      activated$: fullscreen$,
+      hidden$: getMenuHiddenObservable(accessor, UniverInstanceType.UNIVER_SHEET)
+    }
+  }
+
+  // Univer Sheets' menus are in once its workbook is ready, and the toolbar draws after.
+  injector
+    .get(LifecycleService)
+    .onStage(LifecycleStages.Ready)
+    .then(() => injector.get(IMenuManagerService).mergeMenu({ [ToggleFullscreenOperation.id]: { menuItemFactory: button } }))
+    .catch(() => {})
 }
 
 /**
@@ -152,6 +185,7 @@ export function createSheetsEngine(container: HTMLElement, workbook: WorkbookSna
   univer.registerPlugin(UniverSheetsThreadCommentUIPlugin)
   univer.registerPlugin(UniverSheetsNotePlugin)
   univer.registerPlugin(UniverSheetsNoteUIPlugin)
+  fullscreenButtonThatLetsGo(univer)
   options.setup?.(univer, api)
   univer.createUnit(UniverInstanceType.UNIVER_SHEET, workbook as Partial<IWorkbookData>)
   const unitId = String(workbook.id)
