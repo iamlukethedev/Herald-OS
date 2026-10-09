@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultAdjustment, defaultTransform, imageFileFor, maskFileFor, newManifest, parseManifestText } from '../../shared/canvas/comp-format.ts'
 import { PackageWatcher, readAsset, readPackage, writePackage } from './package-io.ts'
 import { decodePng, encodePng } from './png.ts'
@@ -110,10 +110,10 @@ describe('writePackage and readPackage', () => {
 })
 
 describe('PackageWatcher', () => {
-  const settle = () => new Promise(resolve => setTimeout(resolve, 300))
+  const noise = { width: 2, height: 2, channels: 4 as const, data: Uint8Array.from({ length: 16 }, (_, i) => (i * 97) % 256) }
 
   /** File events arrive later on a busy machine (CI), so wait for the outcome rather than a fixed time. */
-  async function until(condition: () => boolean, timeoutMs = 4000): Promise<void> {
+  async function until(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
     const deadline = Date.now() + timeoutMs
 
     while (!condition() && Date.now() < deadline) {
@@ -121,12 +121,47 @@ describe('PackageWatcher', () => {
     }
   }
 
-  it('reports a change made elsewhere, but not Herald saving its own work', { timeout: 10_000 }, async () => {
+  /** Follows the watcher's checks of the project, so a test waits for the one a change causes rather than a fixed time. */
+  function checksOf(watcher: PackageWatcher) {
+    const check = vi.spyOn(watcher, 'check')
+    const started = () => check.mock.calls.length
+    const finished = async (count: number, failure: string) => {
+      expect(started(), failure).toBeGreaterThan(count)
+      await check.mock.results[count]?.value
+    }
+
+    return {
+      /** The next check to start, once it has finished. */
+      async next(): Promise<void> {
+        const count = started()
+        await until(() => started() > count)
+        await finished(count, 'the watcher never checked the project')
+      },
+      /**
+       * A folder watch reports nothing until the system has set it up, on macOS a moment after start()
+       * returns: writes a file the project does not use into `folder` until the watcher checks because of it.
+       */
+      async live(folder: string): Promise<void> {
+        const count = started()
+        const deadline = Date.now() + 10_000
+
+        for (let i = 0; started() === count && Date.now() < deadline; i++) {
+          await fs.writeFile(path.join(folder, '.DS_Store'), String(i))
+          await until(() => started() > count, 250)
+        }
+
+        await finished(count, `the watcher saw nothing change in ${path.basename(folder)}`)
+      }
+    }
+  }
+
+  it('reports a change made elsewhere, but not Herald saving its own work', { timeout: 30_000 }, async () => {
     const dir = await project()
     const assets = { [imageFileFor(A)]: rgba(8, 4, 1), [maskFileFor(A)]: gray(8, 4, 2), [imageFileFor(B)]: rgba(2, 2, 3) }
     const first = await writePackage(dir, { manifest: twoLayers(), assets })
     const seen: string[] = []
     const watcher = new PackageWatcher(dir, first, contents => seen.push(contents.manifest.layers[1].name), 40)
+    const checks = checksOf(watcher)
     watcher.start()
 
     try {
@@ -134,12 +169,13 @@ describe('PackageWatcher', () => {
       const renamed = twoLayers()
       renamed.layers[1].name = 'Mine'
       await watcher.ownWrite(() => writePackage(dir, { manifest: renamed, assets: {} }))
-      await settle()
+      await checks.next()
       expect(seen).toEqual([])
 
       // Someone else's edit: a half-written manifest first, then the finished one.
       await fs.writeFile(path.join(dir, 'manifest.json'), '{ "format": "com.compositor.project", ')
-      await settle()
+      await checks.next()
+      expect(seen).toEqual([])
       const theirs = twoLayers()
       theirs.layers[1].name = 'From Hermes'
       await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(theirs))
@@ -151,16 +187,46 @@ describe('PackageWatcher', () => {
     }
   })
 
-  it('reports an image replaced elsewhere through a rename', { timeout: 10_000 }, async () => {
+  it('reports a change its watches could not see, against the version the window has', { timeout: 30_000 }, async () => {
     const dir = await project()
     const assets = { [imageFileFor(A)]: rgba(8, 4, 1), [maskFileFor(A)]: gray(8, 4, 2), [imageFileFor(B)]: rgba(2, 2, 3) }
     const first = await writePackage(dir, { manifest: twoLayers(), assets })
+    const file = path.join(dir, 'images', imageFileFor(B))
+    await fs.writeFile(file, encodePng(noise))
+    const after = (await fs.stat(file)).size
+    // Another watcher reports the change first, so the next one cannot count on the system replaying the
+    // write to it, as macOS does for a write made just before a watch starts.
+    const reported: number[] = []
+    const earlier = new PackageWatcher(dir, first, contents => reported.push(contents.assets[imageFileFor(B)]), 40)
+    earlier.start()
+    await until(() => reported.length > 0)
+    earlier.stop()
+    expect(reported).toEqual([after])
     const sizes: number[] = []
     const watcher = new PackageWatcher(dir, first, contents => sizes.push(contents.assets[imageFileFor(B)]), 40)
     watcher.start()
 
     try {
-      const noise = { width: 2, height: 2, channels: 4 as const, data: Uint8Array.from({ length: 16 }, (_, i) => (i * 97) % 256) }
+      await until(() => sizes.length > 0)
+      expect(sizes).toEqual([after])
+    } finally {
+      watcher.stop()
+    }
+  })
+
+  it('reports an image replaced elsewhere through a rename', { timeout: 30_000 }, async () => {
+    const dir = await project()
+    const assets = { [imageFileFor(A)]: rgba(8, 4, 1), [maskFileFor(A)]: gray(8, 4, 2), [imageFileFor(B)]: rgba(2, 2, 3) }
+    const first = await writePackage(dir, { manifest: twoLayers(), assets })
+    const sizes: number[] = []
+    const watcher = new PackageWatcher(dir, first, contents => sizes.push(contents.assets[imageFileFor(B)]), 40)
+    const checks = checksOf(watcher)
+    watcher.start()
+
+    try {
+      // Past the check as it starts and on a live watch, only the images folder's watch can report the rename.
+      await checks.next()
+      await checks.live(path.join(dir, 'images'))
       const file = path.join(dir, 'images', imageFileFor(B))
       const before = (await fs.stat(file)).size
       await fs.writeFile(`${file}.tmp`, encodePng(noise))

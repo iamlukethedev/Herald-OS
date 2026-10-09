@@ -198,6 +198,9 @@ export class PackageWatcher {
     // Some file systems (network shares, some containers) report no events: the manifest's time and size still move.
     this.poll = setInterval(() => void this.probe(), this.pollMs)
     this.poll.unref()
+    // A folder watch reports nothing until the system has set it up (on macOS, a moment after `watch` returns):
+    // one check after starting finds what changed before then.
+    this.schedule()
   }
 
   /**
