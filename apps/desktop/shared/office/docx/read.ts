@@ -495,14 +495,14 @@ function noteContent(entries: readonly Entry[]): DocNode[] {
 
 /** A footnote or endnote, read where its reference is; Word has notes in the body only. */
 function noteReference(element: XmlElement, reader: Reader, story: Story, line: Line): void {
+  if (story.kind !== 'body') {
+    return
+  }
+
   const kind: NoteKind = element.name === 'w:footnoteReference' ? 'footnote' : 'endnote'
   const part = reader.notes[kind]
   const id = attr(element, 'w:id')
   const note = children(part?.xml, `w:${kind}`).find((item) => attr(item, 'w:id') === id)
-
-  if (story.kind !== 'body') {
-    return
-  }
 
   if (isOn(attr(element, 'w:customMarkFollows'))) {
     reader.found.add('noteMarks')
