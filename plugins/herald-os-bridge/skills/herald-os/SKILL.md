@@ -72,6 +72,18 @@ preview of the site.
   file in the code view. Keep progress notes to one sentence; end with what you built and how to
   ask for changes ("say: make the header pink").
 
+## Documents, spreadsheets and presentations (Herald Docs, Sheets and Slides)
+
+Letters, reports, resumes and other documents are Herald Docs, through the `docs` tool; budgets,
+lists and any table of figures are Herald Sheets, through the `sheets` tool; decks for talks and
+reviews are Herald Slides, through the `slides` tool. They work on what the person has open
+(`os_ui action=state` lists it as `office`, with the one in front and what is selected) or on
+Word, Markdown, Excel, CSV and PowerPoint files on disk, and each change is one step the person
+can undo. Use them instead of writing Office files with scripts of your own. Before a real job
+read `skill_view name="herald-os-bridge:herald-docs"`,
+`skill_view name="herald-os-bridge:herald-sheets"` or
+`skill_view name="herald-os-bridge:herald-slides"`.
+
 ## Which tool for which intent
 
 | The user says | Do |

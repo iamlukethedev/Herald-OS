@@ -970,7 +970,12 @@ export const IPC = {
   /** A file converted by headless LibreOffice, as the converted file's bytes. */
   officeConvert: 'herald-os:office:convert',
   /** Main -> renderer: an open file changed on disk (Hermes, another app); its new digest, or null once it is gone. */
-  officeChanged: 'herald-os:office:changed'
+  officeChanged: 'herald-os:office:changed',
+  /** Panels mode: run a command in the Office window that has a document open, and wait for its result. */
+  officeRun: 'herald-os:office:run',
+  /** Main -> an Office window: run this command here; the window answers on `officeRunReply`. */
+  officeRunRequest: 'herald-os:office:run-request',
+  officeRunReply: 'herald-os:office:run-reply'
 } as const
 
 /** Raw pixels for a project image or an export: RGBA layers, grayscale masks. */
@@ -1080,6 +1085,8 @@ export interface OfficeDocSummary {
   modified: boolean
   /** What is in front inside it: the sheet and selection, the slide. */
   detail?: string
+  /** What is selected in it, for Hermes: the text in a document, a range in a workbook, a slide. */
+  selection?: string
 }
 
 /** What one Office window has open; `at` is when it was last used. */
@@ -1088,6 +1095,21 @@ export interface OfficePresence {
   at: number
   active: string | null
   documents: OfficeDocSummary[]
+}
+
+/** A command for the Office window that has a document open (panels mode, where each app is its own window). */
+export interface OfficeRunRequest {
+  requestId: string
+  command: string
+  args: Record<string, unknown>
+  /** Who asked, as the command registry names it. */
+  source: 'voice' | 'agent' | 'palette' | 'cli' | 'shortcut' | 'ui' | 'follow' | 'plugin'
+}
+
+export interface OfficeRunReply {
+  requestId: string
+  result?: unknown
+  error?: string
 }
 
 export interface OfficePdfRequest {

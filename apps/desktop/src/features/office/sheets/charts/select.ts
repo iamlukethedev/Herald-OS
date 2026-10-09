@@ -21,7 +21,7 @@ export function selectChart(target: SheetsTarget, id: string): void {
   const injector = target.univer.__getInjector()
   const unitId = target.workbook.getId()
   const info = injector.get(SheetCanvasFloatDomManagerService, Quantity.OPTIONAL)?.getFloatDomInfo(id)
-  const transformer = injector.get(IRenderManagerService, Quantity.OPTIONAL)?.getRenderUnitById(unitId)?.scene.getTransformerByCreate()
+  const transformer = injector.get(IRenderManagerService, Quantity.OPTIONAL)?.getRenderUnitById?.(unitId)?.scene.getTransformerByCreate()
 
   if (!info || !transformer) {
     return

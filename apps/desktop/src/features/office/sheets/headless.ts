@@ -17,6 +17,7 @@ import { UniverDataValidationPlugin } from '@univerjs/data-validation'
 import { UniverDocsPlugin } from '@univerjs/docs'
 import { UniverDrawingPlugin } from '@univerjs/drawing'
 import { UniverFormulaEnginePlugin } from '@univerjs/engine-formula'
+import { IRenderManagerService } from '@univerjs/engine-render'
 import { UniverSheetsPlugin } from '@univerjs/sheets'
 import type { FWorkbook } from '@univerjs/sheets/facade'
 import { UniverSheetsConditionalFormattingPlugin } from '@univerjs/sheets-conditional-formatting'
@@ -30,6 +31,7 @@ import { UniverSheetsNumfmtPlugin } from '@univerjs/sheets-numfmt'
 import { UniverSheetsSortPlugin } from '@univerjs/sheets-sort'
 import { UniverSheetsThreadCommentPlugin } from '@univerjs/sheets-thread-comment'
 import { UniverThreadCommentPlugin } from '@univerjs/thread-comment'
+import { NEVER } from 'rxjs'
 import type { WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
 import { trackChartRanges } from './charts/track.ts'
 
@@ -82,6 +84,13 @@ export async function withHeadlessSheets<T>(snapshot: WorkbookSnapshot, work: (s
     const { activeSheetId: _active, ...data } = structuredClone(snapshot)
     univer.createUnit(UniverInstanceType.UNIVER_SHEET, data as unknown as Partial<IWorkbookData>)
     settle(univer)
+    // Once a window has shown a workbook, the Sheets UI facade is loaded and listens for this instance's renderers; it draws none.
+    const injector = univer.__getInjector()
+
+    if (!injector.has(IRenderManagerService)) {
+      injector.add([IRenderManagerService, { useValue: { created$: NEVER } as unknown as IRenderManagerService }])
+    }
+
     trackChartRanges(univer)
     const api = FUniver.newAPI(univer)
     const workbook = api.getWorkbook(snapshot.id) ?? api.getActiveWorkbook()

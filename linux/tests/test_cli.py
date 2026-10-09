@@ -2,9 +2,11 @@
 
 import importlib.machinery
 import importlib.util
+import io
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -77,6 +79,224 @@ def test_canvas_words_become_canvas_commands(tmp_path, monkeypatch):
     for wrong in (["paint"], ["text"], ["resize"], ["crop", "1", "2"], ["mask", "Photo"], ["mask", "Photo", "feather"], ["fill", "1", "2", "3"], ["align"], ["distribute"], ["guides", "paint"], ["guides", "add", "vertical"], ["guides", "clear", "x"], ["filter"]):
         with pytest.raises(SystemExit):
             cli.canvas_request(wrong)
+
+
+def test_docs_words_become_docs_commands(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    here = tmp_path.resolve()
+    (tmp_path / "Report.docx").write_bytes(b"docx")
+    report = str(here / "Report.docx")
+    assert cli.docs_request([]) == ("docs.open", {})
+    assert cli.docs_request(["open", "Report.docx"]) == ("docs.open", {"path": report})
+    assert cli.docs_request(["new", "Trip", "notes", "--template", "meeting notes", "--path", "Trip.docx"]) == ("docs.new", {"name": "Trip notes", "template": "meeting notes", "path": str(here / "Trip.docx")})
+    assert cli.docs_request(["list"]) == ("docs.list", {})
+    # A file that is there, or a path, becomes absolute; anything else is an open document's tab name.
+    assert cli.docs_request(["read", "Report.docx", "--part", "outline"]) == ("docs.read", {"document": report, "part": "outline"})
+    assert cli.docs_request(["read", "Untitled", "2", "--heading", "Costs"]) == ("docs.read", {"document": "Untitled 2", "heading": "Costs"})
+    assert cli.docs_request(["read", "--document", "~/Notes.md"]) == ("docs.read", {"document": str(Path("~/Notes.md").expanduser().resolve())})
+    assert cli.docs_request(["find", "next", "steps", "--document", "Report.docx"]) == ("docs.find", {"document": report, "text": "next steps"})
+    assert cli.docs_request(["write", "##", "Summary", "--at", "heading", "--heading", "Costs", "--mode", "replace"]) == ("docs.write", {"content": "## Summary", "at": "heading", "heading": "Costs", "mode": "replace"})
+    assert cli.docs_request(["replace", "DRAFT", "", "--first"]) == ("docs.replace", {"find": "DRAFT", "replacement": "", "all": False})
+    assert cli.docs_request(["format", "--at", "text", "--text", "Herald", "--bold", "--no-italic", "--color", "#1f6feb", "--size", "14"]) == ("docs.format", {"at": "text", "text": "Herald", "color": "#1f6feb", "bold": True, "italic": False, "size": 14.0})
+    assert cli.docs_request(["format", "--style", "heading2", "--align", "center", "--line-spacing", "1.5"]) == ("docs.format", {"style": "heading2", "align": "center", "lineSpacing": 1.5})
+    command, payload = cli.docs_request(["table", '[["Item", "Cost"], ["Rent", "1200"]]', "--at", "after", "--no-header"])
+    assert command == "docs.insertTable" and json.loads(payload.pop("cells")) == [["Item", "Cost"], ["Rent", "1200"]]
+    assert payload == {"at": "after", "header": False}
+    assert cli.docs_request(["image", "chart.png", "--width", "480", "--alt", "Sales"]) == ("docs.insertImage", {"source": str(here / "chart.png"), "width": 480.0, "alt": "Sales"})
+    assert cli.docs_request(["insert-range", "A1:D12", "--workbook", "Budget.xlsx", "--document", "Report.docx", "--at", "end"]) == ("docs.insertRange", {"document": report, "range": "A1:D12", "workbook": "Budget.xlsx", "at": "end"})
+    assert cli.docs_request(["save", "--to", "Final.docx", "--overwrite"]) == ("docs.save", {"to": str(here / "Final.docx"), "overwrite": True})
+    assert cli.docs_request(["pdf", "Report.docx"]) == ("docs.exportPdf", {"document": report})
+    assert cli.docs_request(["undo", "--steps", "3"]) == ("docs.undo", {"steps": 3})
+    assert cli.docs_request(["redo", "Untitled 2"]) == ("docs.redo", {"document": "Untitled 2"})
+    for wrong in (["paint"], ["find"], ["write"], ["replace", "DRAFT"], ["format"], ["format", "bold"], ["format", "--size", "big"], ["table"], ["table", "not json"], ["table", '{"Item": "Cost"}'], ["image"], ["undo", "--steps", "two"], ["read", "--part"]):
+        with pytest.raises(SystemExit) as stopped:
+            cli.docs_request(wrong)
+        assert stopped.value.code == 2, wrong
+
+
+def test_docs_takes_markdown_and_rows_from_stdin(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("# Trip\n\n- Flights booked\n"))
+    assert cli.docs_request(["write", "-", "--at", "start"]) == ("docs.write", {"content": "# Trip\n\n- Flights booked\n", "at": "start"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("# Notes\n"))
+    assert cli.docs_request(["new", "Notes", "--content", "-"]) == ("docs.new", {"name": "Notes", "content": "# Notes\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO('[["Day", "Plan"], ["1", "Alfama"]]'))
+    _, payload = cli.docs_request(["table", "-"])
+    assert json.loads(payload["cells"]) == [["Day", "Plan"], ["1", "Alfama"]]
+    monkeypatch.setattr(sys, "stdin", io.StringIO("  \n"))
+    with pytest.raises(SystemExit) as stopped:
+        cli.docs_request(["write", "-"])
+    assert stopped.value.code == 2
+    # Only a lone - stands for stdin.
+    assert cli.docs_request(["write", "-", "done"]) == ("docs.write", {"content": "- done"})
+
+
+def test_sheets_words_become_sheets_commands(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    here = tmp_path.resolve()
+    (tmp_path / "Budget.xlsx").write_bytes(b"xlsx")
+    budget = str(here / "Budget.xlsx")
+    assert cli.sheets_request([]) == ("sheets.open", {})
+    assert cli.sheets_request(["open", "Budget.xlsx"]) == ("sheets.open", {"path": budget})
+    assert cli.sheets_request(["new", "Trip", "budget", "--template", "budget", "--path", "Trip.xlsx"]) == ("sheets.new", {"name": "Trip budget", "template": "budget", "path": str(here / "Trip.xlsx")})
+    assert cli.sheets_request(["list"]) == ("sheets.list", {})
+    assert cli.sheets_request(["read", "A1:D20", "--workbook", "Budget.xlsx", "--sheet", "2026"]) == ("sheets.read", {"workbook": budget, "range": "A1:D20", "sheet": "2026"})
+    assert cli.sheets_request(["read", "'Q1", "sales'!A1:B9"]) == ("sheets.read", {"range": "'Q1 sales'!A1:B9"})
+    assert cli.sheets_request(["find", "Lisbon", "--workbook", "Trip.xlsx"]) == ("sheets.find", {"workbook": "Trip.xlsx", "text": "Lisbon"})
+    # Several words are one text value; a single JSON array is rows.
+    assert cli.sheets_request(["write", "A1", "Trip", "budget"]) == ("sheets.write", {"range": "A1", "values": "Trip budget"})
+    assert cli.sheets_request(["write", "B7", "=SUM(B2:B6)"]) == ("sheets.write", {"range": "B7", "values": "=SUM(B2:B6)"})
+    command, payload = cli.sheets_request(["write", "A1", '[["Item", "Cost"], ["Rent", 1200]]', "--sheet", "Costs"])
+    assert command == "sheets.write" and json.loads(payload.pop("values")) == [["Item", "Cost"], ["Rent", 1200]]
+    assert payload == {"range": "A1", "sheet": "Costs"}
+    assert cli.sheets_request(["fill", "E2:E40", "=C2*D2"]) == ("sheets.fill", {"range": "E2:E40", "formula": "=C2*D2"})
+    assert cli.sheets_request(["fill", "E2:E40"]) == ("sheets.fill", {"range": "E2:E40"})
+    command, payload = cli.sheets_request(["format", "B2:B9", '{"numberFormat": "$#,##0.00", "bold": true}'])
+    assert command == "sheets.format" and json.loads(payload["format"]) == {"numberFormat": "$#,##0.00", "bold": True}
+    assert cli.sheets_request(["sort", "A1:D40", "--by", "Cost", "--descending", "--header"]) == ("sheets.sort", {"range": "A1:D40", "by": "Cost", "ascending": False, "header": True})
+    command, payload = cli.sheets_request(["filter", "A1:D40", "--by", "Status", "--values", '["Paid", "Due"]'])
+    assert command == "sheets.filter" and json.loads(payload.pop("values")) == ["Paid", "Due"]
+    assert payload == {"range": "A1:D40", "by": "Status"}
+    _, payload = cli.sheets_request(["filter", "A1:D40", "--by", "Cost", "--condition", '{"operator": "greaterThan", "value": 100}'])
+    assert json.loads(payload["condition"]) == {"operator": "greaterThan", "value": 100}
+    assert cli.sheets_request(["filter", "--clear"]) == ("sheets.filter", {"clear": True})
+    assert cli.sheets_request(["freeze", "1"]) == ("sheets.freeze", {"rows": 1})
+    assert cli.sheets_request(["freeze", "1", "2"]) == ("sheets.freeze", {"rows": 1, "columns": 2})
+    assert cli.sheets_request(["add-sheet", "Q2", "plan", "--index", "1"]) == ("sheets.addSheet", {"name": "Q2 plan", "index": 1})
+    assert cli.sheets_request(["rename-sheet", "Sheet1", "Budget"]) == ("sheets.renameSheet", {"sheet": "Sheet1", "name": "Budget"})
+    assert cli.sheets_request(["remove-sheet", "Old", "data", "--workbook", "Budget.xlsx"]) == ("sheets.removeSheet", {"workbook": budget, "sheet": "Old data"})
+    assert cli.sheets_request(["replace", "N/A", "", "--range", "B2:B90", "--first"]) == ("sheets.replace", {"find": "N/A", "replacement": "", "range": "B2:B90", "all": False})
+    assert cli.sheets_request(["clean", "A1:D50", "dedupe", "--header", "--by", "A,B"]) == ("sheets.clean", {"range": "A1:D50", "action": "dedupe", "by": "A,B", "header": True})
+    assert cli.sheets_request(["clean", "C2:C90", "dates", "--order", "dmy", "--date-format", "dd/mm/yyyy"]) == ("sheets.clean", {"range": "C2:C90", "action": "dates", "order": "dmy", "dateFormat": "dd/mm/yyyy"})
+    assert cli.sheets_request(["clean", "A2:A40", "split", "--delimiter", "space", "--overwrite"]) == ("sheets.clean", {"range": "A2:A40", "action": "split", "delimiter": "space", "overwrite": True})
+    assert cli.sheets_request(["save", "Budget.xlsx", "--to", "Budget.csv"]) == ("sheets.save", {"workbook": budget, "to": str(here / "Budget.csv")})
+    assert cli.sheets_request(["pdf", "--to", "~/Desktop/Budget.pdf", "--overwrite"]) == ("sheets.exportPdf", {"to": str(Path("~/Desktop/Budget.pdf").expanduser().resolve()), "overwrite": True})
+    assert cli.sheets_request(["undo", "--steps", "2"]) == ("sheets.undo", {"steps": 2})
+    wrongs = (
+        ["chart"], ["find"], ["write", "A1"], ["write", "A1", "[1, 2"], ["fill"], ["format", "A1"], ["format", "A1", "bold"], ["format", "A1", "[1]"],
+        ["sort", "A1:D9"], ["filter", "A1:D9", "--by", "C"], ["filter", "A1:D9", "--values", '["x"]'], ["filter", "A1:D9", "--by", "C", "--values", "Paid"],
+        ["freeze"], ["freeze", "one"], ["freeze", "1", "2", "3"], ["rename-sheet", "Sheet1"], ["remove-sheet"], ["replace", "N/A"],
+        ["clean", "A1:A9"], ["clean", "A1:A9", "wash"], ["add-sheet", "--index", "first"], ["undo", "--steps", "-1"], ["read", "--sheet"],
+    )
+    for wrong in wrongs:
+        with pytest.raises(SystemExit) as stopped:
+            cli.sheets_request(wrong)
+        assert stopped.value.code == 2, wrong
+
+
+def test_docs_and_sheets_print_what_they_read(monkeypatch, capsys):
+    replies = {
+        "docs.list": {"ok": True, "summary": "2 documents open", "data": {"documents": [
+            {"name": "Report.docx", "path": "/home/me/Report.docx", "modified": True, "active": True, "selection": "Sales rose\n12% on last year"},
+            {"name": "Untitled 2", "path": None, "modified": False, "active": False},
+        ]}},
+        "docs.read": {"ok": True, "summary": "Report.docx: 3 words, 2 headings", "data": {"outline": [{"level": 1, "text": "Report"}, {"level": 2, "text": "Costs"}], "content": "# Report\n\n## Costs\n\nRent."}},
+        "sheets.list": {"ok": True, "summary": "Nothing is open in Herald Sheets", "data": {"workbooks": []}},
+        "sheets.read": {"ok": True, "summary": "Budget.xlsx: Sheet1 (3×2)", "data": {"values": [["Item", "Cost"], ["Rent", 1200]], "text": [["Item", "Cost"], ["Rent", "$1,200.00"]]}},
+    }
+    timeouts = []
+
+    def run_os_wait(command, args=None, timeout=30):
+        timeouts.append(timeout)
+        return replies[command]
+
+    monkeypatch.setattr(cli, "run_os_wait", run_os_wait)
+    assert cli.docs_cmd(["list"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["* Report.docx  /home/me/Report.docx  (edited)  “Sales rose 12% on last year”", "  Untitled 2  not saved"]
+    cli.docs_cmd(["read"])
+    assert capsys.readouterr().out == "Report\n  Costs\n\n# Report\n\n## Costs\n\nRent.\n"
+    cli.docs_cmd(["list", "--json"])
+    assert json.loads(capsys.readouterr().out) == replies["docs.list"]["data"]
+    cli.sheets_cmd(["list"])
+    assert capsys.readouterr().out == "Nothing is open in Herald Sheets\n"
+    # What the cells show when it differs from their values, else the values.
+    cli.sheets_cmd(["read", "A1:B2"])
+    assert capsys.readouterr().out == "Item\tCost\nRent\t$1,200.00\n"
+    replies["sheets.read"]["data"] = {"values": [["Paid", True, None, 3.5], ["Note", "two\tparts", 0, False]]}
+    cli.sheets_cmd(["read"])
+    assert capsys.readouterr().out == "Paid\tTRUE\t\t3.5\nNote\ttwo parts\t0\tFALSE\n"
+    assert timeouts and all(timeout >= 60 for timeout in timeouts)
+
+
+def test_slides_words_become_slides_commands(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    here = tmp_path.resolve()
+    (tmp_path / "Q3.pptx").write_bytes(b"pptx")
+    (tmp_path / "Report.docx").write_bytes(b"docx")
+    deck = str(here / "Q3.pptx")
+    assert cli.slides_request([]) == ("slides.open", {})
+    assert cli.slides_request(["open", "Q3.pptx"]) == ("slides.open", {"path": deck})
+    command, payload = cli.slides_request(["new", "Q3", "review", "--theme", "midnight", "--size", "standard", "--slides", '[{"layout": "title", "title": "Q3 review"}]'])
+    assert command == "slides.new" and json.loads(payload.pop("slides")) == [{"layout": "title", "title": "Q3 review"}]
+    assert payload == {"name": "Q3 review", "theme": "midnight", "size": "standard"}
+    assert cli.slides_request(["list"]) == ("slides.list", {})
+    assert cli.slides_request(["read", "Q3.pptx", "--slide", "2"]) == ("slides.read", {"presentation": deck, "slide": "2"})
+    assert cli.slides_request(["read", "--presentation", "Q3 review"]) == ("slides.read", {"presentation": "Q3 review"})
+    assert cli.slides_request(["add-slide", "Next", "steps", "--layout", "title-content", "--notes", "Ask for a decision", "--after", "3"]) == ("slides.addSlide", {"title": "Next steps", "layout": "title-content", "notes": "Ask for a decision", "after": "3"})
+    assert cli.slides_request(["set-slide", "7", "--hidden"]) == ("slides.setSlide", {"slide": "7", "hidden": True})
+    assert cli.slides_request(["set-slide", "Risks", "--title", "Open risks", "--background", "accent1", "--shown"]) == ("slides.setSlide", {"slide": "Risks", "title": "Open risks", "background": "accent1", "hidden": False})
+    assert cli.slides_request(["notes", "2", "Lead", "with", "revenue"]) == ("slides.setSlide", {"slide": "2", "notes": "Lead with revenue"})
+    assert cli.slides_request(["move", "Risks", "last"]) == ("slides.moveSlide", {"slide": "Risks", "to": "last"})
+    assert cli.slides_request(["remove", "Thank", "you", "--presentation", "Q3.pptx"]) == ("slides.removeSlide", {"presentation": deck, "slide": "Thank you"})
+    assert cli.slides_request(["theme", "paper"]) == ("slides.setTheme", {"theme": "paper"})
+    # from-doc's --notes is a switch, and the deck it adds to is --presentation.
+    assert cli.slides_request(["from-doc", "Report.docx", "--level", "2", "--notes", "--presentation", "Q3 review"]) == ("slides.fromDocument", {"presentation": "Q3 review", "document": str(here / "Report.docx"), "level": 2, "notes": True})
+    assert cli.slides_request(["from-doc"]) == ("slides.fromDocument", {})
+    assert cli.slides_request(["insert-range", "A1:D6", "--workbook", "Budget.xlsx", "--slide", "Costs"]) == ("slides.insertRange", {"range": "A1:D6", "workbook": "Budget.xlsx", "slide": "Costs"})
+    assert cli.slides_request(["replace", "Q2", "Q3", "--first"]) == ("slides.replace", {"find": "Q2", "replacement": "Q3", "all": False})
+    assert cli.slides_request(["save", "--to", "Q3 final.pptx"]) == ("slides.save", {"to": str(here / "Q3 final.pptx")})
+    assert cli.slides_request(["pdf", "Q3.pptx", "--overwrite", "--to", "Q3.pdf"]) == ("slides.exportPdf", {"presentation": deck, "to": str(here / "Q3.pdf"), "overwrite": True})
+    assert cli.slides_request(["undo", "--steps", "2"]) == ("slides.undo", {"steps": 2})
+    wrongs = (
+        ["animate"], ["set-slide", "2"], ["set-slide", "--title", "x"], ["notes", "2"], ["move", "2"], ["remove"], ["theme"], ["theme", "a", "b"],
+        ["replace", "Q2"], ["new", "--slides", '{"title": "x"}'], ["from-doc", "--level", "two"], ["undo", "--steps", "x"], ["read", "--slide"], ["add-slide", "--notes"],
+    )
+    for wrong in wrongs:
+        with pytest.raises(SystemExit) as stopped:
+            cli.slides_request(wrong)
+        assert stopped.value.code == 2, wrong
+
+
+def test_slides_take_bodies_notes_and_decks_from_stdin(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Revenue up 12%\n  Subscriptions\nCosts flat\n"))
+    assert cli.slides_request(["add-slide", "Results", "--body", "-"]) == ("slides.addSlide", {"title": "Results", "body": "Revenue up 12%\n  Subscriptions\nCosts flat\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Lead with revenue.\n"))
+    assert cli.slides_request(["notes", "2", "-"]) == ("slides.setSlide", {"slide": "2", "notes": "Lead with revenue.\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO('[{"title": "One"}, {"title": "Two"}]'))
+    _, payload = cli.slides_request(["new", "Deck", "--slides", "-"])
+    assert json.loads(payload["slides"]) == [{"title": "One"}, {"title": "Two"}]
+
+
+def test_slides_print_what_they_read(monkeypatch, capsys):
+    replies = {
+        "slides.list": {"ok": True, "summary": "1 presentation open", "data": {"presentations": [{"name": "Q3 review", "path": None, "modified": True, "active": True, "selection": "slide 2"}]}},
+        "slides.read": {"ok": True, "summary": "Q3 review: 3 slides", "data": {"front": 2, "slides": [
+            {"number": 1, "layout": "title", "title": "Q3 review", "body": "Finance team"},
+            {"number": 2, "layout": "two-content", "title": "Mix", "body": "Subscriptions\n  Up 31%", "body2": "One-off\n  Down 6%", "notes": "The mix keeps\nmoving."},
+            {"number": 3, "layout": "blank", "hidden": True},
+        ]}},
+    }
+    timeouts = []
+
+    def run_os_wait(command, args=None, timeout=30):
+        timeouts.append(timeout)
+        return replies[command]
+
+    monkeypatch.setattr(cli, "run_os_wait", run_os_wait)
+    cli.slides_cmd(["list"])
+    assert capsys.readouterr().out == "* Q3 review  not saved  (edited)  slide 2\n"
+    cli.slides_cmd(["read"])
+    assert capsys.readouterr().out.splitlines() == [
+        "   1. Q3 review  (title)",
+        "       Finance team",
+        "*  2. Mix  (two-content)",
+        "       Subscriptions",
+        "         Up 31%",
+        "       One-off",
+        "         Down 6%",
+        "       notes: The mix keeps moving.",
+        "   3. (no title)  (blank, hidden)",
+    ]
+    assert all(timeout >= 60 for timeout in timeouts)
 
 
 def test_herald_keymap_is_the_template():

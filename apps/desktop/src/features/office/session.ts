@@ -8,9 +8,10 @@
  */
 
 import { atom } from 'nanostores'
-import { baseName, extensionOf, OFFICE_APP_NAMES, OFFICE_NOUNS, saveFormats } from '../../../shared/office/files.ts'
-import type { OfficeChangedEvent } from '../../../shared/ipc.ts'
+import { baseName, extensionOf, OFFICE_APP_NAMES, OFFICE_NOUNS, type OfficeApp, saveFormats } from '../../../shared/office/files.ts'
+import type { OfficeChangedEvent, OfficeDocSummary } from '../../../shared/ipc.ts'
 import { messageOf } from '../canvas/errors.ts'
+import { summaryOf } from './agent-model.ts'
 import { officeAbilities } from './open.ts'
 import type { Conflict, EditorHandle, Notice, OfficeAdapter, OfficeDialog, OfficeDocument } from './types.ts'
 
@@ -19,6 +20,9 @@ const AUTOSAVE_DELAY = 1500
 export { officeAbilities }
 
 export type OfficeSession<Model> = ReturnType<typeof createSession<Model>>
+
+/** The Office sessions loaded in this window, as Hermes's commands read them: what is open, and what is in front. */
+export const loadedSessions = new Map<OfficeApp, { active: () => string | null; summaries: () => OfficeDocSummary[] }>()
 
 export function createSession<Model>(adapter: OfficeAdapter<Model>) {
   const appName = OFFICE_APP_NAMES[adapter.app]
@@ -43,13 +47,13 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     $documents.set([...$documents.get()])
   }
 
+  /** Each document as Hermes reads it, its detail and selection read from its editor now. */
+  function summaries() {
+    return $documents.get().map((doc) => summaryOf(doc, doc.editor?.detail?.(), doc.editor?.selection?.()))
+  }
+
   function report(focused = false): void {
-    window.heraldOS.office.report({
-      app: adapter.app,
-      focused,
-      active: $activeKey.get(),
-      documents: $documents.get().map((doc) => ({ key: doc.key, path: doc.path, name: doc.name, format: doc.format, modified: doc.modified, detail: doc.editor?.detail?.() }))
-    })
+    window.heraldOS.office.report({ app: adapter.app, focused, active: $activeKey.get(), documents: summaries() })
   }
 
   async function watch(doc: OfficeDocument<Model>): Promise<void> {
@@ -85,10 +89,11 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     return { key: `${adapter.app}-${++nextKey}`, name, path, format, digest: null, modified: false, notes: [], layout: undefined, accepted: null, autosave: false, initial: model, editor: null, revision: 0 }
   }
 
-  function create(): OfficeDocument<Model> {
-    const name = `Untitled${++untitled > 1 ? ` ${untitled}` : ''}`
+  /** A new document: blank and untitled, or named and holding what Hermes started it with. */
+  function create(options: { name?: string; model?: Model } = {}): OfficeDocument<Model> {
+    const name = options.name?.trim() || `Untitled${++untitled > 1 ? ` ${untitled}` : ''}`
 
-    return add(blankDocument(name, adapter.blank(name), null, adapter.defaultFormat))
+    return add(blankDocument(name, options.model ?? adapter.blank(name), null, adapter.defaultFormat))
   }
 
   /** Files being read, so a second request for one (a double click, Files and Hermes at once) gets the same tab. */
@@ -190,7 +195,8 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     return new Promise((resolve) => $dialog.set({ kind: 'fidelity', key: doc.key, notes, losses, resolve }))
   }
 
-  async function save(doc: OfficeDocument<Model> | null = active(), options: { as?: boolean; auto?: boolean } = {}): Promise<boolean> {
+  /** Save a document: over its file, where the person picks (`as`), or to `to` (a path in one of the app's formats). */
+  async function save(doc: OfficeDocument<Model> | null = active(), options: { as?: boolean; auto?: boolean; to?: string } = {}): Promise<boolean> {
     if (!doc) {
       return false
     }
@@ -216,9 +222,14 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     }
   }
 
-  async function saveNow(doc: OfficeDocument<Model>, options: { as?: boolean; auto?: boolean }): Promise<boolean> {
+  async function saveNow(doc: OfficeDocument<Model>, options: { as?: boolean; auto?: boolean; to?: string }): Promise<boolean> {
     const savable = saveFormats(adapter.app, await officeAbilities()).map((format) => format.extension)
-    let target = doc.path && !options.as && savable.includes(doc.format) ? { path: doc.path, extension: doc.format } : null
+
+    if (options.to && !savable.includes(extensionOf(options.to))) {
+      throw new Error(`${appName} saves ${noun}s as ${savable.join(', ')}, not ${extensionOf(options.to) || 'a file without an extension'}`)
+    }
+
+    let target = options.to ? { path: options.to, extension: extensionOf(options.to) } : doc.path && !options.as && savable.includes(doc.format) ? { path: doc.path, extension: doc.format } : null
 
     if (!target) {
       if (options.auto) {
@@ -433,6 +444,7 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
   }
 
   window.heraldOS.office.onChanged((event) => void onChanged(event))
+  loadedSessions.set(adapter.app, { active: () => $activeKey.get(), summaries })
 
-  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, active, find, notify, report, create, open, openPicked, activate, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf }
+  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, active, find, notify, report, summaries, create, open, openPicked, activate, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf }
 }

@@ -59,7 +59,8 @@ export function applyDrawings(target: SheetsTarget, change: DrawingChange, drawi
     return
   }
 
-  if (injector.get(IRenderManagerService, Quantity.OPTIONAL)) {
+  // A workbook with nothing drawn may still have a render manager (one that never renders, for the Sheets UI facade).
+  if (injector.get(IRenderManagerService, Quantity.OPTIONAL)?.getRenderUnitById?.(unitId)) {
     if (!commands.syncExecuteCommand(COMMANDS[change], { unitId, subUnitId, drawings })) {
       throw new Error(`Univer did not ${change} the chart`)
     }

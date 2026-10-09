@@ -18,7 +18,7 @@ import { $prefs, updatePrefs } from './backend.ts'
 import { $chats, interruptChat, sendPrompt } from './chat.ts'
 import { $gatewayReady, onGatewayEvent } from './gateway.ts'
 import { notify } from './notifications.ts'
-import { screenContextLine } from './on-screen.ts'
+import { officeContextLine, screenContextLine } from './on-screen.ts'
 import { $pendingRequests, resolveRequest } from './requests.ts'
 import { isMainSurface, onShellCommand } from './shell.ts'
 import { fetchLiveStatus, type LiveStatus } from './voice-live-status.ts'
@@ -210,10 +210,11 @@ const host: VoiceHost = {
   prefs: () => $prefs.get().voice,
   setState: state => patch({ state }),
   setCaptions: captions => patch({ captions: { ...$voice.get().captions, ...captions } }),
-  // The screen line rides with the spoken context (model input only), so "this folder" and "this
-  // file" mean what Files or the viewer shows while the person's words stay exactly as said.
+  // The Office and screen lines ride with the spoken context (model input only), so "this folder",
+  // "this file" and "this sheet" mean what is open and shown while the person's words stay exactly as said.
   submit: async (text, options) => {
-    const sessionId = await sendPrompt(text, { surface: 'voice-live', voiceContext: withScreenContext(options.voiceContext, screenContextLine()), interrupted: options.interrupted })
+    const office = await officeContextLine()
+    const sessionId = await sendPrompt(text, { surface: 'voice-live', voiceContext: withScreenContext(options.voiceContext, screenContextLine(), office), interrupted: options.interrupted })
 
     if (sessionId) {
       $voiceSessionId.set(sessionId)

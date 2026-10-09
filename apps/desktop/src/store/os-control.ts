@@ -40,6 +40,17 @@ export function osState(): Record<string, unknown> {
   }
 }
 
+/** The documents open in Herald Docs, Sheets and Slides, the one in front first, with what is selected in each. */
+async function officeState(): Promise<Record<string, unknown>[]> {
+  try {
+    const { openEntries } = await import('../features/office/agent.ts')
+
+    return (await openEntries()).map(({ key: _key, ...entry }) => entry)
+  } catch {
+    return []
+  }
+}
+
 let bound = false
 
 export function bindOsControl(): () => void {
@@ -57,7 +68,7 @@ export function bindOsControl(): () => void {
       } else if (request.kind === 'list') {
         bridge.reply({ requestId: request.requestId, result: listCommands({ includeHidden: true }) })
       } else {
-        bridge.reply({ requestId: request.requestId, result: osState() })
+        bridge.reply({ requestId: request.requestId, result: { ...osState(), office: await officeState() } })
       }
     } catch (error) {
       bridge.reply({ requestId: request.requestId, error: error instanceof Error ? error.message : String(error) })

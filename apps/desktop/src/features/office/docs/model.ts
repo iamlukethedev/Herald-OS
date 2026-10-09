@@ -187,8 +187,8 @@ const headingOrThrow = (doc: PMNode, heading: string | number): OutlineEntry => 
 
 // Where changes go.
 
-/** Where content goes in: the start or end, the selection, a heading's section, or a position. */
-export type Place = 'start' | 'end' | 'selection' | { heading: string | number; mode?: 'append' | 'prepend' | 'replace' } | { pos: number }
+/** Where content goes in: the start or end, the selection, a heading's section, a position, or over a range. */
+export type Place = 'start' | 'end' | 'selection' | { heading: string | number; mode?: 'append' | 'prepend' | 'replace' } | { pos: number } | { from: number; to: number }
 
 /** What a change applies to: the selection, everything, a heading's section, matches of some text, or a range. */
 export type Target = 'selection' | 'all' | { heading: string | number; part?: 'heading' | 'section' | 'all' } | { text: string; all?: boolean; options?: SearchOptions } | { from: number; to: number }
@@ -221,6 +221,13 @@ function placeRange(state: EditorState, place: Place): Range & { inline: boolean
     const pos = Math.max(0, Math.min(size, Math.round(place.pos)))
 
     return { from: pos, to: pos, inline: doc.resolve(pos).parent.isTextblock }
+  }
+
+  if ('from' in place) {
+    const from = Math.max(0, Math.min(size, Math.round(place.from)))
+    const to = Math.max(from, Math.min(size, Math.round(place.to)))
+
+    return { from, to, inline: doc.resolve(from).parent.isTextblock && doc.resolve(to).parent.isTextblock }
   }
 
   const entry = headingOrThrow(doc, place.heading)

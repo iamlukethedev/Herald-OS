@@ -83,6 +83,11 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
 
         return heading ? `In “${heading.text}”, ${words}` : words
       },
+      selection: () => {
+        const { from, to } = instance.state.selection
+
+        return destroyed || to <= from ? undefined : instance.state.doc.textBetween(from, to, '\n', ' ').slice(0, 2000) || undefined
+      },
       focus: () => instance.commands.focus(),
       zoom: (step) => act.zoom(doc.key, step),
       dispose: () => {

@@ -1,5 +1,5 @@
 import type { KeyModifier } from '../../shared/ipc.ts'
-import { parseDictationText } from '../lib/voice/dictation.ts'
+import { parseDictationText, withLeadingSpace } from '../lib/voice/dictation.ts'
 import { charBeforeCaret, NoEditTargetError, performEdit, scrollFront } from '../store/edit-target.ts'
 import { fail, ok, type OsCommand } from '../store/os-commands.ts'
 
@@ -20,6 +20,17 @@ async function edit(run: () => Promise<{ target: string }>, done: (target: strin
     return ok(done(target), { spoken: 'Done.' })
   } catch (error) {
     return fail(error instanceof NoEditTargetError ? error.message : error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** The Herald Docs page, Sheets cell or Slides text box in front takes the words itself (one step to undo); null leaves them to the focused field. */
+async function typeInOffice(text: string, submit: boolean): Promise<string | null> {
+  try {
+    const { typeIntoOffice } = await import('../features/office/typing.ts')
+
+    return await typeIntoOffice(text, { submit })
+  } catch {
+    return null
   }
 }
 
@@ -56,7 +67,7 @@ export const editCommands: readonly OsCommand[] = [
   {
     id: 'text.type',
     title: 'Type text',
-    description: 'Type text into the focused field, the terminal or the web page. Say "comma", "question mark", "new line" for punctuation; end with "and press enter" to submit.',
+    description: 'Type text into the focused field, the terminal or the web page; with Herald Docs, Sheets or Slides in front, at the caret, into the active cell (then down the column) or into the text box being edited. Say "comma", "question mark", "new line" for punctuation; end with "and press enter" to submit.',
     tier: 'mutate',
     args: [
       { name: 'text', type: 'string', description: 'What to type', required: true },
@@ -66,10 +77,13 @@ export const editCommands: readonly OsCommand[] = [
     run: async ({ text, submit }) => {
       const parsed = parseDictationText(String(text))
       const pressEnter = Boolean(submit) || parsed.submit
+      const office = await typeInOffice(parsed.text, pressEnter)
 
-      // Consecutive dictations read as one sentence: add the space the user did not say.
-      const before = charBeforeCaret()
-      const insert = before && !/\s/.test(before) && /^[\p{L}\p{N}"'(]/u.test(parsed.text) ? ` ${parsed.text}` : parsed.text
+      if (office) {
+        return ok(office, { spoken: 'Done.' })
+      }
+
+      const insert = withLeadingSpace(charBeforeCaret(), parsed.text)
 
       return edit(
         async () => {
