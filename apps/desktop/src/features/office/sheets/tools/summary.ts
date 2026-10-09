@@ -809,7 +809,7 @@ export function listSummaries(target: SheetsTarget, args: { sheet?: unknown } = 
   }
 }
 
-/** A table as the Summarize dialog shows it: its fields, whether each holds numbers, and its values to filter by (the first 200, as cells show them). */
+/** A table as the Summarize dialog shows it: its fields, whether each holds numbers, and its values to filter by (the first 500, as cells show them). */
 export function summarySource(target: SheetsTarget, args: { source: unknown; sheet?: unknown }): { sheet: string; range: string; rows: number; fields: { name: string; letter: string; numeric: boolean; distinct: number; values: { value: CellInput; text: string }[] }[] } {
   const area = areaOf(target.workbook, args.source, args.sheet)
   const source = readSource(area.sheet, area.cells)
@@ -820,7 +820,7 @@ export function summarySource(target: SheetsTarget, args: { source: unknown; she
     rows: source.records.length,
     fields: source.names.map((name, column) => {
       const values = [...distinct(source.records.map((record) => record[column])).values()].sort(compareValues)
-      const shown = values.slice(0, 200).map((value) => {
+      const shown = values.slice(0, 500).map((value) => {
         const index = typeof value === 'number' && source.formats[column] ? source.records.findIndex((record) => labelKey(record[column]) === labelKey(value)) : -1
         const text = index >= 0 ? area.sheet.getRange(source.rows[index], source.cells.startColumn + column).getDisplayValue() : labelText(value)
 

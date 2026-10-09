@@ -153,7 +153,19 @@ describe('converting text', () => {
       return { done, read: readRange(target, { range: 'A1:A8' }) }
     })
 
-    expect(result.value.done).toEqual({ sheet: 'Data', range: 'A1:A8', converted: 6, failed: 1, notConverted: [{ cell: 'A6', text: 'n/a' }], preview: false })
+    expect(result.value.done).toEqual({
+      sheet: 'Data',
+      range: 'A1:A8',
+      converted: 6,
+      examples: [
+        { cell: 'A1', text: '1,234.50', value: 1234.5 },
+        { cell: 'A2', text: '$12', value: 12 },
+        { cell: 'A3', text: '(45)', value: -45 }
+      ],
+      failed: 1,
+      notConverted: [{ cell: 'A6', text: 'n/a' }],
+      preview: false
+    })
     expect(result.value.read.values.flat()).toEqual([1234.5, 12, -45, 0.125, -7, 'n/a', 5, 99])
     expect(result.value.read.text.flat()).toEqual(['1,234.50', '$12', '-45', '12.5%', '-7', 'n/a', '5', '99'])
   })

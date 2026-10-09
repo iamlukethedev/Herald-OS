@@ -278,6 +278,8 @@ export interface ConvertResult {
   sheet: string
   range: string
   converted: number
+  /** The first cells converted: their text and what it reads as. */
+  examples: { cell: string; text: string; value: number }[]
   /** Text cells that do not read as numbers (or dates), and the first of them. */
   failed: number
   notConverted: { cell: string; text: string }[]
@@ -288,6 +290,7 @@ export interface ConvertResult {
 async function convertText(target: SheetsTarget, area: Area, preview: boolean, read: (text: string, format: string) => ICellData | null): Promise<ConvertResult> {
   const formats = area.range.getNumberFormats()
   const changes: CellChange[] = []
+  const examples: { cell: string; text: string; value: number }[] = []
   const notConverted: { cell: string; text: string }[] = []
   let failed = 0
 
@@ -304,6 +307,10 @@ async function convertText(target: SheetsTarget, area: Area, preview: boolean, r
 
       if (made) {
         changes.push({ ...position, cell: made })
+
+        if (examples.length < 3) {
+          examples.push({ cell: cellName(position.row, position.column), text, value: Number(made.v) })
+        }
       } else if (++failed <= 20) {
         notConverted.push({ cell: cellName(position.row, position.column), text })
       }
@@ -314,7 +321,7 @@ async function convertText(target: SheetsTarget, area: Area, preview: boolean, r
     await oneStep(target, () => writeCells(area.sheet, changes))
   }
 
-  return { sheet: area.sheet.getSheetName(), range: rangeName(area.cells), converted: changes.length, failed, notConverted, preview }
+  return { sheet: area.sheet.getSheetName(), range: rangeName(area.cells), converted: changes.length, examples, failed, notConverted, preview }
 }
 
 const isGeneral = (format: string) => !format || format.toLowerCase() === 'general'
