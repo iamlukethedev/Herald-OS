@@ -187,11 +187,70 @@ describe('what else the source file holds', () => {
     expect(await plain.text(cells)).toContain('<c:f>Sales!$C$2:$C$7</c:f>')
   })
 
+  it('keeps a shape’s link to a place in the workbook, with its sheet’s name now', async () => {
+    const original = await withParts(await keptWorkbook({ dashboard: ['shape'] }), {
+      relationships: { 'xl/drawings/drawing1.xml': [['rId9', `${R}/hyperlink`, '#Summary!A1']] },
+      change: { 'xl/drawings/drawing1.xml': (xml) => xml.replace('<xdr:cNvPr id="3" name="Rectangle 2"/>', `<xdr:cNvPr id="3" name="Rectangle 2"><a:hlinkClick xmlns:r="${R}" r:id="rId9"/></xdr:cNvPr>`) }
+    })
+    const workbook = await read(original)
+    workbook.sheets['sheet-2'].name = 'Totals'
+    const { bytes, losses } = await xlsxFromWorkbook(workbook, { original })
+    const file = await opened(bytes)
+    const [drawing] = await file.related(file.sheet('Dashboard'), 'drawing')
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect(losses).toEqual([])
+    expect(await file.relationships(drawing)).toEqual([{ id: expect.any(String), type: `${R}/hyperlink`, target: '#Totals!A1', external: true }])
+  })
+
   it('keeps a hidden chart sheet hidden', async () => {
     const original = await withParts(await keptWorkbook(), { change: { 'xl/workbook.xml': (xml) => xml.replace('<sheet name="Chart1" sheetId="5" r:id="rId3"/>', '<sheet name="Chart1" sheetId="5" state="hidden" r:id="rId3"/>') } })
     const { bytes } = await xlsxFromWorkbook(await read(original), { original })
 
     expect((await opened(bytes)).sheets.find((sheet) => sheet.name === 'Chart1')?.state).toBe('hidden')
+  })
+})
+
+describe('slicers on another sheet than their pivot table', () => {
+  /** The slicer moved from Summary, beside its pivot table, to the dashboard. */
+  async function slicerOnDashboard(): Promise<Uint8Array> {
+    const source = await keptWorkbook({ chartSheet: false, dashboard: ['picture'] })
+    const anchor = /<mc:AlternateContent[\s\S]*<\/mc:AlternateContent>/.exec((await (await JSZip.loadAsync(source)).file('xl/drawings/drawing2.xml')!.async('string')) ?? '')![0]
+
+    return withParts(source, {
+      relationships: { 'xl/worksheets/sheet3.xml': [['rId3', 'http://schemas.microsoft.com/office/2007/relationships/slicer', '../slicers/slicer1.xml']] },
+      change: {
+        'xl/worksheets/_rels/sheet2.xml.rels': (xml) => xml.replace(/<Relationship Id="rId[23]"[^>]*\/>/g, ''),
+        'xl/worksheets/sheet2.xml': (xml) => xml.replace(/<drawing r:id="rId2"\/><extLst>.*<\/extLst>/, ''),
+        'xl/worksheets/sheet3.xml': (xml) => xml.replace('</worksheet>', '<extLst><ext uri="{A8765BA9-456A-4dab-B4F3-ACF838C121DE}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:slicerList><x14:slicer r:id="rId3"/></x14:slicerList></ext></extLst></worksheet>'),
+        'xl/drawings/drawing1.xml': (xml) => xml.replace('</xdr:wsDr>', `${anchor.replace('id="2" name="Region"', 'id="9" name="Region"')}</xdr:wsDr>`)
+      }
+    })
+  }
+
+  it('drops the slicer’s cache with the sheet the slicer was on', async () => {
+    const original = await slicerOnDashboard()
+    // Without the chart sheet, the dashboard is the third sheet.
+    const { bytes, losses } = await xlsxFromWorkbook(remove(await read(original), 'sheet-3'), { original })
+    const file = await opened(bytes)
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect(losses).toEqual([])
+    expect(file.files(/^xl\/(slicers|slicerCaches)\//)).toEqual([])
+    expect(file.workbook).not.toContain('slicerCache')
+    expect(await file.related(file.sheet('Summary'), 'pivotTable')).toHaveLength(1)
+  })
+
+  it('drops a slicer whose pivot table went with its sheet, and says so', async () => {
+    const original = await slicerOnDashboard()
+    const { bytes, losses } = await xlsxFromWorkbook(remove(await read(original), 'sheet-2'), { original })
+    const file = await opened(bytes)
+    const [drawing] = await file.related(file.sheet('Dashboard'), 'drawing')
+
+    expect(await packageProblems(bytes)).toEqual([])
+    expect(losses).toEqual(['The slicer Region on Dashboard is not kept: the pivot table it filtered is gone.'])
+    expect(await file.text(drawing)).not.toContain('slicer')
+    expect(await file.text(file.sheet('Dashboard'))).not.toContain('slicerList')
   })
 })
 

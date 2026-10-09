@@ -1,6 +1,6 @@
-import { rootNamespaces } from '../opc.ts'
+import { type Relationship, rootNamespaces } from '../opc.ts'
 import { attributesOf, elementsOf } from '../xml.ts'
-import { type Keep, sheetIds } from './context.ts'
+import { type Keep, type KeptSheet, sheetIds } from './context.ts'
 import { carried, extensionsOf, uriOf, withoutAttributes } from './markup.ts'
 import { type Refusal, refused } from './parts.ts'
 
@@ -103,6 +103,16 @@ export function slicersPart(keep: Keep, xml: string): string | Refusal {
 
 /** Keep the slicer and timeline caches of what is kept, and on each sheet that is still there, the slicers and timelines of those caches. */
 export async function keepSlicers(keep: Keep): Promise<void> {
+  const parts: { sheet: KeptSheet; rel: Relationship; kind: 'slicer' | 'timeline'; entries: Record<string, string>[] }[] = []
+
+  for (const sheet of keep.sheets) {
+    for (const rel of sheet.relationships.filter((entry) => !entry.external && /\/(slicer|timeline)$/.test(entry.type))) {
+      const kind = rel.type.endsWith('/slicer') ? 'slicer' : 'timeline'
+      parts.push({ sheet, rel, kind, entries: elementsOf((await keep.pkg.read(rel.target)) ?? '', kind).map(({ attributes }) => attributes) })
+    }
+  }
+
+  const shownCaches = new Set(parts.flatMap((part) => part.entries.map((entry) => entry.cache ?? '')))
   const ids = new Map<string, string>()
   const gone = new Map<string, string>()
 
@@ -116,13 +126,16 @@ export async function keepSlicers(keep: Keep): Promise<void> {
       }
 
       const name = attributesOf(rootTag(xml)).name ?? ''
-      const target = await keep.copier.copy(rel.target)
+      const reason = await keep.copier.check(rel.target)
+
+      if (reason === 'gone') {
+        gone.set(name, /tableSlicerCache/.test(xml) ? 'the table it filtered is not kept' : 'the pivot table it filtered is gone')
+      }
+
+      // A cache whose slicers are all on sheets that are gone goes with them.
+      const target = !reason && shownCaches.has(name) ? await keep.copier.copy(rel.target) : null
 
       if (!target) {
-        if ((await keep.copier.check(rel.target)) === 'gone') {
-          gone.set(name, /tableSlicerCache/.test(xml) ? 'the table it filtered is not kept' : 'the pivot table it filtered is gone')
-        }
-
         continue
       }
 
@@ -143,18 +156,14 @@ export async function keepSlicers(keep: Keep): Promise<void> {
     const sheetIdsNow = new Map<string, string>()
     const shown = new Set<string>()
 
-    for (const rel of sheet.relationships.filter((entry) => !entry.external && /\/(slicer|timeline)$/.test(entry.type))) {
-      const xml = await keep.pkg.read(rel.target)
-      const kind = rel.type.endsWith('/slicer') ? 'slicer' : 'timeline'
+    for (const { rel, kind, entries } of parts.filter((part) => part.sheet === sheet)) {
       const before = shown.size
 
-      for (const { attributes } of xml ? elementsOf(xml, kind) : []) {
-        const cache = attributes.cache ?? ''
-
+      for (const { cache = '', name = '', caption } of entries) {
         if (keep.caches.has(cache)) {
-          shown.add(`${kind}:${attributes.name ?? ''}`)
+          shown.add(`${kind}:${name}`)
         } else if (gone.has(cache)) {
-          keep.loss(`The ${kind} ${attributes.caption ?? attributes.name ?? ''} on ${sheet.written.name} is not kept: ${gone.get(cache)}.`)
+          keep.loss(`The ${kind} ${caption ?? name} on ${sheet.written.name} is not kept: ${gone.get(cache)}.`)
         }
       }
 

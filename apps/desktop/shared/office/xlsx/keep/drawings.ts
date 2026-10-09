@@ -1,7 +1,8 @@
 import { shownAnchors } from '../charts/index.ts'
 import { drawingOf, type SourceDrawing } from '../drawing.ts'
 import type { DrawingAnchor } from '../finish.ts'
-import { decodeXml } from '../xml.ts'
+import { relsPathOf } from '../opc.ts'
+import { decodeXml, elementsOf } from '../xml.ts'
 import type { Keep } from './context.ts'
 import type { Refusal } from './parts.ts'
 
@@ -18,7 +19,7 @@ const SLICER = /<(?:[\w.-]+:)?(slicer|timeslicer)\b[^>]*?\sname="([^"]*)"/
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** An anchor with `{{rel:N}}` for each relationship it names, and the parts those are, copied; why not when it cannot be kept. */
-async function keptAnchor(keep: Keep, drawing: SourceDrawing, anchor: string): Promise<Pick<DrawingAnchor, 'xml' | 'relationships'> | Refusal['refused']> {
+async function keptAnchor(keep: Keep, drawing: SourceDrawing & { targets: Map<string, string> }, anchor: string): Promise<Pick<DrawingAnchor, 'xml' | 'relationships'> | Refusal['refused']> {
   const declared = [...Object.entries(drawing.namespaces), ...[...anchor.matchAll(/\s(xmlns:[\w.-]+)\s*=\s*"([^"]*)"/g)].map((found) => [found[1], found[2]] as const)]
   const prefixes = [...new Set(declared.filter(([, uri]) => uri === RELATIONSHIPS).map(([name]) => name.slice('xmlns:'.length)))]
   // Text that reads like one of the drawing builder's placeholders stays text.
@@ -30,7 +31,14 @@ async function keptAnchor(keep: Keep, drawing: SourceDrawing, anchor: string): P
 
   const pattern = new RegExp(`(\\s(?:${prefixes.map(escapeRegExp).join('|')}):[\\w.-]+\\s*=\\s*)(["'])(.*?)\\2`, 'g')
   const ids = [...new Set([...xml.matchAll(pattern)].map((found) => decodeXml(found[3])))]
-  const rels = ids.map((id) => drawing.relationships.get(id))
+  // A link to a place in the workbook ("#Sheet2!A1") is an address, not a part, its sheet named as it is now.
+  const rels = ids.map((id) => {
+    const rel = drawing.relationships.get(id)
+    const target = drawing.targets.get(id) ?? rel?.target ?? ''
+    const place = target.startsWith('#') ? keep.names.formula(target.slice(1)) : null
+
+    return rel?.type.endsWith('/hyperlink') ? { ...rel, target: place === null ? target : `#${place}`, external: true } : rel
+  })
   const relationships: DrawingAnchor['relationships'] = []
 
   for (const rel of rels) {
@@ -53,12 +61,14 @@ async function keptAnchor(keep: Keep, drawing: SourceDrawing, anchor: string): P
 /** Give each sheet that is still there the anchors of its drawing that Herald does not show. */
 export async function keepDrawings(keep: Keep): Promise<void> {
   for (const sheet of keep.sheets) {
-    const drawing = await drawingOf(keep.pkg, sheet.source)
+    const source = await drawingOf(keep.pkg, sheet.source)
 
-    if (!drawing) {
+    if (!source) {
       continue
     }
 
+    const targets = new Map(elementsOf((await keep.pkg.read(relsPathOf(source.path))) ?? '', 'Relationship').map(({ attributes }) => [attributes.Id ?? '', attributes.Target ?? '']))
+    const drawing = { ...source, targets }
     const shown = await shownAnchors(keep.pkg, sheet.source)
     const failed = new Set<Refusal['refused']>()
 
