@@ -426,55 +426,58 @@ export function Toolbar({ doc }: { doc: SlidesDocument }) {
   const master = doc.mode === 'master'
 
   return (
-    <div data-slides-keep-editing="" className="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto overflow-y-visible border-b border-line px-2 text-[12px]">
-      <div className="relative flex">
-        <Tool label="New slide" className="rounded-r-none px-2" disabled={master} onClick={() => commands.newSlide(doc.slide.layout === 'title' ? 'title-content' : doc.slide.layout)}>
-          <span className="flex items-center gap-1.5">
-            <IconPlus size={15} /> Slide
-          </span>
-        </Tool>
-        <PopoverButton label="New slide with a layout" className="rounded-l-none px-0.5" disabled={master} panel={(close) => <LayoutGrid deck={deck} onPick={(layout) => (commands.newSlide(layout), close())} />}>
-          <IconChevronDown size={13} />
+    <div data-slides-keep-editing="" className="flex h-10 shrink-0 items-center border-b border-line px-2 text-[12px]">
+      {/* The tools scroll when the window is narrow; the deck's own controls and Present stay in view. */}
+      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-visible">
+        <div className="relative flex">
+          <Tool label="New slide" className="rounded-r-none px-2" disabled={master} onClick={() => commands.newSlide(doc.slide.layout === 'title' ? 'title-content' : doc.slide.layout)}>
+            <span className="flex items-center gap-1.5">
+              <IconPlus size={15} /> Slide
+            </span>
+          </Tool>
+          <PopoverButton label="New slide with a layout" className="rounded-l-none px-0.5" disabled={master} panel={(close) => <LayoutGrid deck={deck} onPick={(layout) => (commands.newSlide(layout), close())} />}>
+            <IconChevronDown size={13} />
+          </PopoverButton>
+        </div>
+        <PopoverButton label="Layout" disabled={master} panel={(close) => <LayoutGrid deck={deck} current={doc.slide.layout} onPick={(layout) => (commands.setLayout(layout), close())} />}>
+          <IconLayoutBoardSplit />
         </PopoverButton>
+        <Divider />
+        <Tool label="Text box" onClick={commands.insertText}>
+          <IconLetterT />
+        </Tool>
+        <PopoverButton label="Shape" active={Boolean(drawing)} panel={(close) => <ShapeGallery doc={doc} onDone={close} />}>
+          <span className="flex items-center">
+            <IconTriangle size={15} />
+            <IconCircle size={11} className="-ml-1" />
+          </span>
+        </PopoverButton>
+        <Tool label="Picture" onClick={() => commands.pickPictures(doc)}>
+          <IconPhoto />
+        </Tool>
+        <PopoverButton label="Table" panel={(close) => <TableGrid onPick={(rows, columns) => (close(), commands.insertTable(rows, columns, doc))} />}>
+          <IconTable />
+        </PopoverButton>
+        {texty && (
+          <>
+            <Divider />
+            <TextTools doc={doc} />
+          </>
+        )}
+        {(selection.some((element) => element.kind !== 'object') || commands.canConvert(doc)) && (
+          <>
+            <Divider />
+            <ShapeTools doc={doc} />
+          </>
+        )}
+        {selection.length === 1 && selection[0].kind === 'table' && (
+          <>
+            <Divider />
+            <TableTools doc={doc} />
+          </>
+        )}
       </div>
-      <PopoverButton label="Layout" disabled={master} panel={(close) => <LayoutGrid deck={deck} current={doc.slide.layout} onPick={(layout) => (commands.setLayout(layout), close())} />}>
-        <IconLayoutBoardSplit />
-      </PopoverButton>
-      <Divider />
-      <Tool label="Text box" onClick={commands.insertText}>
-        <IconLetterT />
-      </Tool>
-      <PopoverButton label="Shape" active={Boolean(drawing)} panel={(close) => <ShapeGallery doc={doc} onDone={close} />}>
-        <span className="flex items-center">
-          <IconTriangle size={15} />
-          <IconCircle size={11} className="-ml-1" />
-        </span>
-      </PopoverButton>
-      <Tool label="Picture" onClick={() => commands.pickPictures(doc)}>
-        <IconPhoto />
-      </Tool>
-      <PopoverButton label="Table" panel={(close) => <TableGrid onPick={(rows, columns) => (close(), commands.insertTable(rows, columns, doc))} />}>
-        <IconTable />
-      </PopoverButton>
-      {texty && (
-        <>
-          <Divider />
-          <TextTools doc={doc} />
-        </>
-      )}
-      {(selection.some((element) => element.kind !== 'object') || commands.canConvert(doc)) && (
-        <>
-          <Divider />
-          <ShapeTools doc={doc} />
-        </>
-      )}
-      {selection.length === 1 && selection[0].kind === 'table' && (
-        <>
-          <Divider />
-          <TableTools doc={doc} />
-        </>
-      )}
-      <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+      <div className="flex shrink-0 items-center gap-0.5 pl-2">
         <PopoverButton label="Background" align="right" panel={(close) => <BackgroundPanel doc={doc} onDone={close} />}>
           <IconBackground />
         </PopoverButton>
