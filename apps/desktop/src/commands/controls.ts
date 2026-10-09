@@ -1,4 +1,8 @@
 import type { ControlAction, StatusPanelId, StatusPanelState } from '../../shared/ipc.ts'
+import { findAudioDevice, isAutomaticDeviceName } from '../lib/audio-devices.ts'
+import { ownsSystemAudio } from '../lib/platform-labels.ts'
+import { $inputDevices } from '../lib/voice/audio-capture.ts'
+import { chooseInputDevice, deviceSummary, refreshAudioDevices } from '../store/audio-devices.ts'
 import { fail, ok, type OsCommand } from '../store/os-commands.ts'
 import { openStatusPanel, PANEL_TITLES } from '../store/status-panel.ts'
 
@@ -192,6 +196,69 @@ export const controlCommands: readonly OsCommand[] = [
       await act({ panel: 'audio', action: 'default', kind: 'output', id: match.id })
 
       return ok(`Sound now plays through ${match.name}`)
+    }
+  },
+  {
+    id: 'audio.input',
+    title: 'Choose the microphone',
+    description: 'Pick the microphone the voice listens through, by name. On Herald OS Linux this sets the machine default; elsewhere it applies to Herald only.',
+    tier: 'act',
+    args: [{ name: 'device', type: 'string', description: 'Part of the device name, or automatic', required: true }],
+    phrases: ['use the {device} microphone', 'switch the microphone to {device}', 'listen through the {device}', { phrase: 'use the automatic microphone', args: { device: 'automatic' } }],
+    run: async ({ device }) => {
+      const name = String(device)
+
+      // Herald OS Linux owns the session, so there the choice is the machine's default microphone.
+      if (ownsSystemAudio()) {
+        const { audio } = await status('audio')
+        const match = pick(audio.inputs, name)
+
+        if ('error' in match) {
+          return fail(match.error)
+        }
+
+        await act({ panel: 'audio', action: 'default', kind: 'input', id: match.id })
+
+        return ok(`The microphone is ${match.name}`)
+      }
+
+      await refreshAudioDevices()
+
+      if (isAutomaticDeviceName(name)) {
+        await chooseInputDevice(null)
+
+        return ok(`The microphone follows the system: ${deviceSummary('input')}`)
+      }
+
+      const match = findAudioDevice($inputDevices.get(), name)
+
+      if ('error' in match) {
+        return fail(match.error)
+      }
+
+      await chooseInputDevice({ id: match.device.id, label: match.device.label })
+
+      return ok(`The microphone is ${match.device.label}`)
+    }
+  },
+  {
+    id: 'audio.devices',
+    title: 'Which microphone is in use',
+    description: 'Say which microphone the voice listens through, and why that one.',
+    tier: 'read',
+    args: [],
+    phrases: ['which microphone am i using', 'what microphone is herald using', 'microphone status'],
+    run: async () => {
+      if (ownsSystemAudio()) {
+        const { audio } = await status('audio')
+        const input = audio.inputs.find(device => device.isDefault) ?? audio.inputs[0]
+
+        return ok(input ? `This machine's microphone is ${input.name}` : 'No microphone was found', { data: { input } })
+      }
+
+      await refreshAudioDevices()
+
+      return ok(deviceSummary('input'), { data: { devices: $inputDevices.get().devices } })
     }
   },
   {
