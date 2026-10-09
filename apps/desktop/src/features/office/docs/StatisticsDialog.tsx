@@ -4,7 +4,7 @@ import type { DocJSON } from '../../../../shared/office/document.ts'
 import { GlassButton } from '../../../components/ui/glass.tsx'
 import { Modal } from '../shell/dialogs.tsx'
 import { type DocumentStatistics, documentStatistics, durationLabel } from './statistics.ts'
-import { activeEditor } from './store.ts'
+import { $pages, activeEditor, docsSession } from './store.ts'
 
 /** Whether Tools > Word Count and Statistics… is open. */
 export const $statistics = atom(false)
@@ -37,11 +37,12 @@ const ROWS: { label: string; value: (stats: DocumentStatistics) => ReactNode }[]
   { label: 'Grade level', value: (stats) => (stats.readability ? tenths(stats.readability.grade) : '–') }
 ]
 
-/** The figures of the document in front, and of the selection beside them when text is selected. */
+/** The figures of the document in front, with its pages as the page view laid them out, and the selection's beside them when text is selected. */
 export function StatisticsDialog() {
   const close = () => $statistics.set(false)
   const figures = useMemo(() => {
     const editor = activeEditor()
+    const key = docsSession.$activeKey.get()
 
     if (!editor) {
       return null
@@ -49,8 +50,9 @@ export function StatisticsDialog() {
 
     const { selection } = editor.state
     const selected = selection.empty ? null : documentStatistics({ type: 'doc', content: selection.content().content.toJSON() ?? [] })
+    const pages = key ? $pages.get()[key]?.pages.length : undefined
 
-    return { all: documentStatistics(editor.state.doc.toJSON() as DocJSON), selected: selected?.characters ? selected : null }
+    return { all: documentStatistics(editor.state.doc.toJSON() as DocJSON, { pages }), selected: selected?.characters ? selected : null }
   }, [])
 
   return (
@@ -67,6 +69,13 @@ export function StatisticsDialog() {
             </thead>
           )}
           <tbody>
+            {figures.all.pages !== undefined && (
+              <tr>
+                <td className="py-1 pr-4 text-fg-2">Pages</td>
+                {figures.selected && <td />}
+                <td className="selectable py-1 pl-4 text-right text-fg">{whole(figures.all.pages)}</td>
+              </tr>
+            )}
             {ROWS.map((row) => (
               <tr key={row.label} className="align-top">
                 <td className="py-1 pr-4 text-fg-2">{row.label}</td>
