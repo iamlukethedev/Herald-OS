@@ -140,6 +140,8 @@ const VARIANTS: ChartSpec[] = [
   { kind: 'combo', series: [north, { ...south, type: 'area' }, { ...margin, type: 'line', secondary: true }], legend: 'right', labels: 'value', stacking: 'percent' },
   { kind: 'combo', series: [{ ...north, type: 'line' }, { ...margin, type: 'column', secondary: true }], legend: 'top', labels: 'category', axes: { y2: { hidden: true, gridlines: true } } },
   { kind: 'combo', series: [{ ...north, secondary: true }], legend: 'none', labels: 'none' },
+  { kind: 'combo', series: [north, { ...south, type: 'area' }, { ...margin, secondary: true }], legend: 'bottom', labels: 'value', stacking: 'stacked', axes: { x: { reverse: true, title: 'Month' } } },
+  { kind: 'bar', series: [north, south], legend: 'right', labels: 'value', stacking: 'percent', axes: { x: { reverse: true } } },
   { kind: 'column', series: [{ values: range('s1', 1, 0, 1, 16383), categories: months }], legend: 'none', labels: 'none' }
 ]
 

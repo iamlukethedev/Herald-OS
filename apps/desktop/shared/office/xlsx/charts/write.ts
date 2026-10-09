@@ -321,12 +321,14 @@ class ChartWriter {
 
     const areasOnly = indexes.length > 0 && indexes.every((i) => typeOf(i) === 'area')
     const between = areasOnly ? 'midCat' : 'between'
-    // Herald lists a bar chart's categories from the top down; the value axis then crosses at the far end to stay below them.
+    // Excel lists bars from the bottom up, where Herald lists them from the top down unless reversed.
+    const reversed = horizontal !== (spec.axes?.x?.reverse === true)
+    // Across reversed categories a value axis crosses at the other end, so it stays where Herald draws it: below the bars, left of the columns, the second one on the right.
     const axes =
-      this.categoryAxis(AXIS.category, AXIS.value, spec.axes?.x, { position: horizontal ? 'l' : 'b', reversed: horizontal }) +
-      this.valueAxis(AXIS.value, AXIS.category, spec.axes?.y, { position: horizontal ? 'b' : 'l', gridlines: true, crosses: horizontal ? 'max' : 'autoZero', between })
+      this.categoryAxis(AXIS.category, AXIS.value, spec.axes?.x, { position: horizontal ? 'l' : 'b', reversed }) +
+      this.valueAxis(AXIS.value, AXIS.category, spec.axes?.y, { position: horizontal ? 'b' : 'l', gridlines: true, crosses: reversed ? 'max' : 'autoZero', between })
     const secondaryAxes = twoAxes
-      ? this.valueAxis(AXIS.value2, AXIS.category2, spec.axes?.y2, { position: 'r', gridlines: false, crosses: 'max', between }) + this.categoryAxis(AXIS.category2, AXIS.value2, undefined, { position: 'b', deleted: true })
+      ? this.valueAxis(AXIS.value2, AXIS.category2, spec.axes?.y2, { position: 'r', gridlines: false, crosses: reversed ? 'autoZero' : 'max', between }) + this.categoryAxis(AXIS.category2, AXIS.value2, undefined, { position: 'b', deleted: true, reversed })
       : ''
 
     return `${groups.join('')}${axes}${secondaryAxes}`

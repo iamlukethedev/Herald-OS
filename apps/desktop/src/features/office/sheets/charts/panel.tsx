@@ -182,7 +182,7 @@ const TYPE_CHOICES = [
   ['area', 'Area']
 ] as const
 
-function AxisSettings({ title, axis, onChange, range, format, gridlines }: { title: string; axis: ChartAxis | undefined; onChange: (axis: Record<string, unknown>) => void; range: boolean; format: boolean; gridlines: boolean }) {
+function AxisSettings({ title, axis, onChange, range, format, gridlines, reversible = false }: { title: string; axis: ChartAxis | undefined; onChange: (axis: Record<string, unknown>) => void; range: boolean; format: boolean; gridlines: boolean; reversible?: boolean }) {
   const number = (text: string) => (text.trim() === '' ? null : Number(text))
 
   return (
@@ -204,6 +204,11 @@ function AxisSettings({ title, axis, onChange, range, format, gridlines }: { tit
           Hidden
         </Check>
       </div>
+      {reversible && (
+        <Check checked={axis?.reverse === true} onChange={(reverse) => onChange({ reverse })}>
+          Reverse category order
+        </Check>
+      )}
     </div>
   )
 }
@@ -370,7 +375,7 @@ function ChartPanel({ docKey, chart }: { docKey: string; chart: string }) {
       {cartesian && (
         <section className="flex flex-col gap-3">
           <Heading>Axes</Heading>
-          <AxisSettings title={scatter ? 'X axis' : 'Category axis'} axis={description.axes.x} range={scatter} format={scatter} gridlines={scatter} onChange={(x) => change({ axes: { x } })} />
+          <AxisSettings title={scatter ? 'X axis' : 'Category axis'} axis={description.axes.x} range={scatter} format={scatter} gridlines={scatter} reversible={!scatter} onChange={(x) => change({ axes: { x } })} />
           <AxisSettings title={scatter ? 'Y axis' : 'Value axis'} axis={description.axes.y} range format gridlines onChange={(y) => change({ axes: { y } })} />
           {combo && description.series.some((series) => series.secondary) && <AxisSettings title="Second value axis" axis={description.axes.y2} range format gridlines={false} onChange={(y2) => change({ axes: { y2 } })} />}
         </section>

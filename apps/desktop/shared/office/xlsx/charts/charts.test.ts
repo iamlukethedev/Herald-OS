@@ -6,7 +6,7 @@ import { openPackage } from '../package.ts'
 import { workbookFromXlsx } from '../read.ts'
 import { readResource } from '../rules.ts'
 import { xlsxFromWorkbook } from '../write.ts'
-import { chartDrawing, chartWorkbook, EVERY_KIND, range, SALES_SERIES } from './fixtures.ts'
+import { chartDrawing, chartWorkbook, EITHER_WAY, EVERY_KIND, range, SALES_SERIES } from './fixtures.ts'
 import { HERALD_SECTION, shownAnchors, withSheets } from './index.ts'
 import { NOTES } from './read.ts'
 
@@ -24,6 +24,14 @@ async function withoutHeraldPart(bytes: Uint8Array): Promise<Uint8Array> {
   zip.remove(HERALD_PART)
 
   return zip.generateAsync({ type: 'uint8array' })
+}
+
+/** Each axis of the first `count` chart parts: its kind, id, orientation and where it crosses the other. */
+async function axesOf(bytes: Uint8Array, count: number): Promise<string[][]> {
+  const zip = await JSZip.loadAsync(bytes)
+  const parts = await Promise.all(Array.from({ length: count }, (_, i) => zip.file(`xl/charts/chart${i + 1}.xml`)!.async('string')))
+
+  return parts.map((xml) => [...xml.matchAll(/<c:(catAx|valAx)><c:axId val="(\d+)"\/><c:scaling><c:orientation val="(\w+)"\/>.*?<c:crosses val="(\w+)"\/>/g)].map((match) => match.slice(1).join(' ')))
 }
 
 async function readBack(bytes: Uint8Array) {
@@ -47,6 +55,32 @@ describe('charts written into a file and read back', () => {
     for (const spec of EVERY_KIND) {
       expect(charts.find((chart) => chart.data.spec.kind === spec.kind)!.data.spec).toEqual(asRead(spec))
     }
+  })
+
+  it('gives back bars and columns with their categories either way round, writing each way as Excel reads it', async () => {
+    const { bytes } = await xlsxFromWorkbook(chartWorkbook(EITHER_WAY.map((spec, i) => chartDrawing(`c${i}`, 's1', spec, { at: i }))))
+    const { charts } = await readBack(await withoutHeraldPart(bytes))
+
+    expect(charts.map((chart) => chart.data.spec)).toEqual(EITHER_WAY.map(asRead))
+    // Excel lists bars from the bottom up and columns from the left (minMax); a value axis crosses at the far end of reversed categories.
+    expect(await axesOf(bytes, EITHER_WAY.length)).toEqual([
+      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max'],
+      ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero'],
+      ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero'],
+      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max'],
+      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max', 'valAx 104 minMax autoZero', 'catAx 103 maxMin autoZero']
+    ])
+  })
+
+  it('writes the axes of charts that do not reverse their categories as before', async () => {
+    const plain = EVERY_KIND.filter((spec) => ['bar', 'column', 'combo'].includes(spec.kind))
+    const { bytes } = await xlsxFromWorkbook(chartWorkbook(plain.map((spec, i) => chartDrawing(`c${i}`, 's1', spec, { at: i }))))
+
+    expect(await axesOf(bytes, plain.length)).toEqual([
+      ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero'],
+      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max'],
+      ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero', 'valAx 104 minMax max', 'catAx 103 minMax autoZero']
+    ])
   })
 
   it('gives back the exact spec through Herald’s part: its palette, label mode, fields Excel has no place for, and the drawing’s id', async () => {

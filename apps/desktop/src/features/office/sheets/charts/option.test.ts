@@ -3,7 +3,10 @@ import { GridComponent, LegendComponent, TitleComponent, TooltipComponent } from
 import * as echarts from 'echarts/core'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it } from 'vitest'
-import { CHART_KINDS, type ChartSpec } from '../../../../../shared/office/charts.ts'
+import { CHART_KINDS, type ChartDrawing, type ChartSpec, DRAWING_RESOURCE } from '../../../../../shared/office/charts.ts'
+import { excelBarWorkbook } from '../../../../../shared/office/xlsx/charts/fixtures.ts'
+import { workbookFromXlsx } from '../../../../../shared/office/xlsx/read.ts'
+import { readResource } from '../../../../../shared/office/xlsx/rules.ts'
 import type { ChartValues } from './data.ts'
 import { specOf } from './fixtures.ts'
 import { type ChartTheme, chartOption, formatNumber, OFFICE_ACCENTS } from './option.ts'
@@ -46,6 +49,24 @@ describe('the option of each kind of chart', () => {
 
     expect(option.xAxis.type).toBe('value')
     expect(option.yAxis).toMatchObject({ type: 'category', inverse: true })
+  })
+
+  it('runs the categories the other way round when the axis is reversed: bars from the bottom up, columns from the right', () => {
+    const reversed = { axes: { x: { reverse: true } } }
+
+    expect(optionOf(specOf('bar', two, reversed)).yAxis).toMatchObject({ type: 'category', inverse: false })
+    expect(optionOf(specOf('column', two, reversed)).xAxis).toMatchObject({ type: 'category', inverse: true })
+    expect(optionOf(specOf('combo', two, reversed)).xAxis).toMatchObject({ type: 'category', inverse: true })
+    expect(optionOf(specOf('line', two, { axes: { x: { reverse: false } } })).xAxis).toMatchObject({ inverse: false })
+  })
+
+  it('draws a bar chart Excel made from the bottom up, as Excel shows it', async () => {
+    const { workbook } = await workbookFromXlsx(await excelBarWorkbook(), { id: 'book', name: 'Book' })
+    const drawings = readResource<Record<string, { data: Record<string, ChartDrawing>; order: string[] }>>(workbook.resources, DRAWING_RESOURCE)!
+    const [bars, columns] = drawings['sheet-1'].order.map((id) => drawings['sheet-1'].data[id].data.spec)
+
+    expect(optionOf(bars).yAxis).toMatchObject({ type: 'category', inverse: false })
+    expect(optionOf(columns).xAxis).toMatchObject({ type: 'category', inverse: true })
   })
 
   it('draws lines with gaps for missing values, smoothed and marked as each series asks', () => {

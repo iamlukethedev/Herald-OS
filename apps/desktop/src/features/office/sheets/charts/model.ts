@@ -248,7 +248,8 @@ export function describeChart(target: SheetsTarget, args: { chart: unknown }): C
 /**
  * Change a chart: kind, title, series (the whole list, each {values, name or nameCell, categories, color,
  * type, secondary, smooth, markers}), categories (for every series), range (series laid out again from a
- * block), legend, labels, axes ({x, y, y2}, each {title, min, max, gridlines, format, hidden}; null clears),
+ * block), legend, labels, axes ({x, y, y2}, each {title, min, max, gridlines, format, hidden}, and x also
+ * reverse: bars from the bottom up, columns from right to left; null clears),
  * stacking, palette (colours, or "workbook") or hole. One step to undo.
  */
 export async function updateChart(target: SheetsTarget, args: { chart: unknown; [setting: string]: unknown }): Promise<ChartDescription> {

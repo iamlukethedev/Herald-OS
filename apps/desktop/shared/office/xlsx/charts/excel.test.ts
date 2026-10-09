@@ -8,7 +8,7 @@ import { openPackage } from '../package.ts'
 import { workbookFromXlsx } from '../read.ts'
 import { readResource } from '../rules.ts'
 import { xlsxFromWorkbook } from '../write.ts'
-import { CHART_REL, CHART_TYPE, chartFrame, chartPackage, COLUMN_CHART, excelAxes, excelChart, excelWorkbook, numRef, strRef, twoCellAnchor } from './fixtures.ts'
+import { CHART_REL, CHART_TYPE, chartFrame, chartPackage, COLUMN_CHART, excelAxes, excelBarWorkbook, excelChart, excelWorkbook, numRef, strRef, twoCellAnchor } from './fixtures.ts'
 import { type FiledCharts, HERALD_SECTION, shownAnchors } from './index.ts'
 import { NOTES } from './read.ts'
 
@@ -98,6 +98,15 @@ describe('charts Excel made', () => {
       labels: 'none',
       axes: { x: { gridlines: false }, y: { gridlines: true }, y2: { gridlines: false, min: 0, max: 0.5, format: '0%' } }
     } satisfies ChartSpec)
+  })
+
+  it('reads Excel’s bars, which run from the bottom up, and columns it reversed as categories the other way round', async () => {
+    const { charts, notes } = await readExcel(await excelBarWorkbook())
+    const [bars, columns] = charts(SALES)
+
+    expect(bars.data.spec).toMatchObject({ kind: 'bar', title: 'Bars', axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true } } })
+    expect(columns.data.spec).toMatchObject({ kind: 'column', title: 'Backwards', axes: { x: { gridlines: false, reverse: true } } })
+    expect(notes).not.toContain(NOTES.axes)
   })
 
   it('reads a scatter chart placed absolutely, a whole column trimmed to its values', async () => {

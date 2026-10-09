@@ -160,7 +160,8 @@ function categoryAxis(spec: ChartSpec, values: ChartValues, theme: ChartTheme, p
     type: 'category',
     data: values.categories,
     show: axis?.hidden !== true,
-    inverse: horizontal,
+    // ECharts starts a vertical category axis at the bottom; Herald's bars start at the top unless reversed.
+    inverse: horizontal !== (axis?.reverse === true),
     boundaryGap: !edgeToEdge,
     ...(axis?.title && !preview ? { name: axis.title, nameLocation: 'middle', nameGap: horizontal ? 40 : 28, nameRotate: horizontal ? 90 : 0, nameMoveOverlap: true, nameTextStyle: { color: theme.muted, fontFamily: theme.font, fontSize: 11 } } : {}),
     axisLine: { show: true, lineStyle: { color: theme.muted } },

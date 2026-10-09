@@ -159,12 +159,13 @@ class Reader {
     return paint?.none ? undefined : paint?.color
   }
 
-  /** An axis; `bars` for a bar chart's categories, whose order Herald sets itself (from the top down). */
+  /** An axis of values, or of categories (`bars` for a bar chart's, which Herald lists from the top down where a file lists them from the bottom up). */
   axis(element: XmlElement | undefined, values: boolean, bars = false): ChartAxis {
     const axis: ChartAxis = { gridlines: Boolean(child(element, 'c:majorGridlines')) }
     const title = titleText(child(element, 'c:title'), 'Axis Title')
     const scaling = child(element, 'c:scaling')
     const format = child(element, 'c:numFmt')
+    const maxMin = child(scaling, 'c:orientation')?.attrs.val === 'maxMin'
 
     if (title) {
       axis.title = title
@@ -190,7 +191,11 @@ class Reader {
       axis.hidden = true
     }
 
-    if (child(scaling, 'c:logBase') || (!bars && child(scaling, 'c:orientation')?.attrs.val === 'maxMin') || child(element, 'c:dispUnits')) {
+    if (!values && maxMin !== bars) {
+      axis.reverse = true
+    }
+
+    if (child(scaling, 'c:logBase') || (values && maxMin) || child(element, 'c:dispUnits')) {
       this.notes.add(NOTES.axes)
     }
 

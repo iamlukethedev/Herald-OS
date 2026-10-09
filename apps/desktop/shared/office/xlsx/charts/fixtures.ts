@@ -146,8 +146,35 @@ export const EVERY_KIND: ChartSpec[] = [
   }
 ]
 
-/** A workbook made in Herald with a chart of every kind, one under another (the scatter chart on sheet "Points"). */
-export const everyKindWorkbook = (): WorkbookSnapshot => chartWorkbook(EVERY_KIND.map((spec, i) => chartDrawing(`chart-${spec.kind}`, spec.kind === 'scatter' ? 's2' : 's1', spec, { at: i })))
+/** Bars and columns with their categories each way round, as their chart parts say them exactly. */
+export const EITHER_WAY: ChartSpec[] = [
+  { kind: 'bar', title: 'From the top down', series: [{ ...north, color: '#2e75b6' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false }, y: { gridlines: true } } },
+  { kind: 'bar', title: 'From the bottom up', series: [{ ...north, color: '#2e75b6' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true } } },
+  { kind: 'column', title: 'From the left', series: [{ ...north, color: '#1f4e79' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false }, y: { gridlines: true } } },
+  { kind: 'column', title: 'From the right', series: [{ ...north, color: '#1f4e79' }], legend: 'none', labels: 'value', axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true } } },
+  {
+    kind: 'combo',
+    title: 'From the right, on two axes',
+    series: [
+      { ...north, color: '#1f4e79', type: 'column' },
+      { ...margin, color: '#548235', type: 'line', secondary: true, markers: true }
+    ],
+    legend: 'bottom',
+    labels: 'none',
+    axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true }, y2: { gridlines: false, format: '0%' } }
+  }
+]
+
+/**
+ * A workbook made in Herald with a chart of every kind, one under another (the scatter chart on sheet
+ * "Points"), then bars from the bottom up and columns from the right.
+ */
+export function everyKindWorkbook(): WorkbookSnapshot {
+  const reversed = EITHER_WAY.filter((spec) => spec.axes?.x?.reverse)
+  const drawings = [...EVERY_KIND, ...reversed].map((spec, i) => chartDrawing(`chart-${i + 1}-${spec.kind}`, spec.kind === 'scatter' ? 's2' : 's1', spec, { at: i }))
+
+  return chartWorkbook(drawings)
+}
 
 const MAIN = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -412,6 +439,38 @@ export const SCATTER_CHART = excelChart({
     `<c:valAx><c:axId val="51"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${AXIS_LINE}${text(900)}<c:crossAx val="52"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>` +
     `<c:valAx><c:axId val="52"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/>${GRID}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>${NO_LINE}${text(900)}<c:crossAx val="51"/><c:crosses val="autoZero"/><c:crossBetween val="midCat"/></c:valAx>`
 })
+
+/** Excel's "Clustered Bar": its categories up the left from the bottom (orientation minMax), its values along the bottom. */
+export const BAR_CHART = excelChart({
+  title: 'Bars',
+  legend: 'none',
+  plot: `<c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/><c:varyColors val="0"/>${barSeries(0, 'North', 'B', NORTH, '<a:schemeClr val="accent1"/>')}${LABELS_OFF}<c:gapWidth val="182"/><c:axId val="901"/><c:axId val="902"/></c:barChart>${excelAxes(901, 902, { position: 'l' })}`
+})
+
+/** Columns with "Categories in reverse order" set: the category axis from the right (orientation maxMin). */
+export const BACKWARDS_COLUMN_CHART = excelChart({
+  title: 'Backwards',
+  legend: 'none',
+  plot: `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>${barSeries(0, 'North', 'B', NORTH, '<a:schemeClr val="accent1"/>')}${LABELS_OFF}<c:gapWidth val="219"/><c:axId val="911"/><c:axId val="912"/></c:barChart>${excelAxes(911, 912).replace('<c:catAx><c:axId val="911"/><c:scaling><c:orientation val="minMax"/>', '<c:catAx><c:axId val="911"/><c:scaling><c:orientation val="maxMin"/>')}`
+})
+
+/** A workbook as Excel writes it with sheet "Q1 sales" and two charts: Excel's bars, from the bottom up, and columns it reversed. */
+export function excelBarWorkbook(): Promise<Uint8Array> {
+  return chartPackage({
+    sheets: [
+      {
+        name: 'Q1 sales',
+        rows: [['Month', 'North'], ...MONTHS.map((month, i) => [month, NORTH[i]])],
+        anchors: [twoCellAnchor(2, [3, 0, 1, 0], [10, 0, 16, 0], chartFrame(0, 'Chart 1')), twoCellAnchor(3, [11, 0, 1, 0], [18, 0, 16, 0], chartFrame(1, 'Chart 2'))],
+        related: [
+          { type: CHART_REL, path: 'xl/charts/chart1.xml' },
+          { type: CHART_REL, path: 'xl/charts/chart2.xml' }
+        ]
+      }
+    ],
+    parts: { 'xl/charts/chart1.xml': { content: BAR_CHART, type: CHART_TYPE }, 'xl/charts/chart2.xml': { content: BACKWARDS_COLUMN_CHART, type: CHART_TYPE } }
+  })
+}
 
 /** A 3D clustered column chart, which Herald does not draw. */
 export const COLUMN_3D_CHART = excelChart({
