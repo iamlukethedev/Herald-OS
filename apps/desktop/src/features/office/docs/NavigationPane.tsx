@@ -5,7 +5,7 @@ import type { Editor, EditorEvents } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { TextSelection } from '@tiptap/pm/state'
 import { Mapping } from '@tiptap/pm/transform'
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '../../../lib/cn.ts'
 import { keysLabel } from '../../../lib/shortcuts.ts'
 import { counts } from './model.ts'
@@ -101,6 +101,7 @@ function Pane({ editor, docKey }: { editor: Editor; docKey: string }) {
   /** Where the entry of the row with the keyboard focus starts, while the list has it. */
   const [focused, setFocused] = useState<number | null>(null)
   const map = useStore($pages)[docKey]
+  const pane = useRef<HTMLElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const firstDoc = useRef(outline.doc)
   const listId = useId()
@@ -165,6 +166,16 @@ function Pane({ editor, docKey }: { editor: Editor; docKey: string }) {
       window.clearTimeout(timer)
     }
   }, [editor])
+
+  // A layout effect, so the pane is still in the page when it closes: focus inside it goes back to the text.
+  useLayoutEffect(
+    () => () => {
+      if (pane.current?.contains(document.activeElement) && !editor.isDestroyed) {
+        editor.view.focus()
+      }
+    },
+    [editor]
+  )
 
   useEffect(() => {
     const row = list.current?.querySelector<HTMLElement>(`[data-row="${currentRow}"]`)
@@ -242,10 +253,10 @@ function Pane({ editor, docKey }: { editor: Editor; docKey: string }) {
   }
 
   return (
-    <aside aria-label="Navigation pane" className="flex w-60 shrink-0 flex-col border-r border-line">
+    <aside ref={pane} aria-label="Navigation pane" className="flex w-60 shrink-0 flex-col border-r border-line">
       <div className="flex h-9 shrink-0 items-center gap-1 pr-1.5 pl-3">
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg-2">Navigation</span>
-        <button type="button" aria-label="Close the navigation pane" title={`Close (${keysLabel(NAVIGATION_PANE_SHORTCUT)})`} onClick={() => showNavigationPane(false)} className="grid size-6 place-items-center rounded-md text-fg-3 hover:bg-white/8 hover:text-fg">
+        <button type="button" aria-label="Close the navigation pane" title={`Close (${keysLabel(NAVIGATION_PANE_SHORTCUT)})`} onMouseDown={(event) => event.preventDefault()} onClick={() => showNavigationPane(false)} className="grid size-6 place-items-center rounded-md text-fg-3 hover:bg-white/8 hover:text-fg">
           <IconX size={14} />
         </button>
       </div>
