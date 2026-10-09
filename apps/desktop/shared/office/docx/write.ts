@@ -78,7 +78,7 @@ import { Element, fieldRuns, noteReference, textRun } from './elements.ts'
 import { instructionOf } from './field-codes.ts'
 import { keptOf, writeKept } from './kept.ts'
 import { Repack } from './repack.ts'
-import { tocControl, tocParagraphs, tocStyles } from './toc.ts'
+import { tocControl, tocParagraphs, tocStyles } from './toc-write.ts'
 import { pixelsToTwips, pointsToTwips, TWIPS_PER_PIXEL } from './units.ts'
 
 /*
