@@ -1,12 +1,8 @@
 import { personIdOf } from '../../../../../shared/office/xlsx/comments/model.ts'
-import { $systemInfo } from '../../../../store/system.ts'
+import { commentNameFor } from '../../comment-name.ts'
 
-/** The name comments and notes made in Herald go under when the system does not give the person's. */
-export const NEUTRAL_AUTHOR = 'Herald user'
+/** A person as Univer keeps the people of comments: an id that carries their name, and the name. */
+export const authorNamed = (name: string): { id: string; name: string } => ({ id: personIdOf(name), name })
 
-/** Who writes the comments made in Herald: the account's full name when the system gives one, else a neutral name. */
-export function commentAuthor(): { id: string; name: string } {
-  const name = $systemInfo.get()?.fullName?.trim() || NEUTRAL_AUTHOR
-
-  return { id: personIdOf(name), name }
-}
+/** Who signs what a command writes, when it gives nobody: the name the person confirmed, else the neutral one (never the account's name unconfirmed). */
+export const commentAuthor = (): { id: string; name: string } => authorNamed(commentNameFor())

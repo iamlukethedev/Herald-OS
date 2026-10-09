@@ -1,7 +1,8 @@
 import { useStore } from '@nanostores/react'
-import { IconCoffee, IconDeviceDesktop, IconDeviceDesktopOff, IconFolder, IconKeyboard, IconLock, IconMaximize, IconMicrophone, IconMoodSmile, IconMoon, IconPower, IconStack2, IconSunset2, IconTerminal2, IconZzz } from '@tabler/icons-react'
-import { useEffect } from 'react'
+import { IconCoffee, IconDeviceDesktop, IconDeviceDesktopOff, IconFolder, IconKeyboard, IconLock, IconMaximize, IconMessage, IconMicrophone, IconMoodSmile, IconMoon, IconPower, IconStack2, IconSunset2, IconTerminal2, IconZzz } from '@tabler/icons-react'
+import { useEffect, useState } from 'react'
 import type { SwitchName } from '../../../../shared/ipc.ts'
+import { COMMENT_NAME_MAX, normalizeCommentName } from '../../../../shared/office/comment-name.ts'
 import { GlassButton, Toggle } from '../../../components/ui/glass.tsx'
 import { Kbd } from '../../../components/ui/primitives.tsx'
 import { hostPlatform } from '../../../lib/platform-labels.ts'
@@ -11,6 +12,7 @@ import { openEmojiPicker } from '../../../store/emoji.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $spaces } from '../../../store/spaces.ts'
 import { $switches, setSwitch, SWITCH_LABELS } from '../../../store/switches.ts'
+import { $commentName, loadCommentName, setCommentName } from '../../office/comment-name.ts'
 import { errorText, markSaved, MenuDropdown, SectionTitle, SettingsGroup, SettingsRow, Stepper } from './shared.tsx'
 
 export function GeneralSection() {
@@ -84,6 +86,7 @@ export function GeneralSection() {
       <SwitchesGroup />
       {hostPlatform() === 'linux' && <IdleGroup />}
       <TypingGroup />
+      <OfficeGroup />
 
 
       <SettingsGroup title="Session">
@@ -170,6 +173,53 @@ function TypingGroup() {
           />
         </SettingsRow>
       )}
+    </SettingsGroup>
+  )
+}
+
+/** Herald Docs, Sheets and Slides: the name on the comments and notes the person adds. */
+function OfficeGroup() {
+  const saved = useStore($commentName)
+  const [name, setName] = useState(saved)
+
+  useEffect(() => setName(saved), [saved])
+
+  useEffect(() => {
+    loadCommentName().catch(() => undefined)
+  }, [])
+
+  const save = (value: string) => {
+    if (normalizeCommentName(value) !== saved) {
+      setCommentName(value)
+        .then(markSaved)
+        .catch(error => notify({ title: 'Could not save setting', body: errorText(error), level: 'error' }))
+    }
+  }
+
+  return (
+    <SettingsGroup title="Herald Office">
+      <SettingsRow
+        icon={<IconMessage />}
+        label="Name on comments"
+        description="Shown on the comments and notes you add in Docs, Sheets and Slides and saved in those files; clear it to be asked again."
+        keywords="author comments notes replies docs sheets slides office name"
+      >
+        {saved && (
+          <GlassButton size="sm" variant="ghost" onClick={() => save('')}>
+            Clear
+          </GlassButton>
+        )}
+        <input
+          value={name}
+          onChange={event => setName(event.target.value)}
+          onBlur={() => save(name)}
+          onKeyDown={event => event.key === 'Enter' && event.currentTarget.blur()}
+          maxLength={COMMENT_NAME_MAX}
+          placeholder="Not set"
+          aria-label="Name on comments"
+          className="glass-input h-8 w-[200px] rounded-lg px-2.5 text-[12.5px] outline-none"
+        />
+      </SettingsRow>
     </SettingsGroup>
   )
 }

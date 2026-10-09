@@ -8,9 +8,9 @@ import type { CommentReply } from '../../../../shared/office/document.ts'
 import { HermesAvatar } from '../../../components/app-icon.tsx'
 import { cn } from '../../../lib/cn.ts'
 import { keysLabel } from '../../../lib/shortcuts.ts'
-import { useSystemInfo } from '../../../store/system.ts'
 import { Menu } from '../../files/Menu.tsx'
-import { $author, initialsOf, setAuthor } from './comment-author.ts'
+import { $commentName, askCommentName, setCommentName } from '../comment-name.ts'
+import { initialsOf } from './comment-author.ts'
 import { $commentsShown, $composeRequest, cancelComment, commentsState, leaveComment, postComment, removeThread, resolveThread, showThread, startComment } from './comments.ts'
 import { applyLive, comments, editComment, replyToComment } from './model.ts'
 import { keepInList } from './overlay.ts'
@@ -118,14 +118,6 @@ function Avatar({ name, initials, small = false }: { name: string; initials: str
   )
 }
 
-/** The name Herald proposes the first time: the account's full name, or its user name. */
-function useAccountName(): string {
-  const info = useSystemInfo()
-  const user = info?.userName?.trim() ?? ''
-
-  return info?.fullName?.trim() || capital(user)
-}
-
 /** A box to write a comment, a reply or an edit in: Enter posts, Shift+Enter starts a new line, Escape leaves. */
 function Composer({
   initial = '',
@@ -142,26 +134,15 @@ function Composer({
   action: string
   /** The box takes the focus when it shows with this set, and whenever this changes. */
   focusRequest?: number
-  /** Asks for the person's name when Herald does not know it yet. */
+  /** Signs what it posts with the person's name, which the Office window asks for the first time. */
   signs?: boolean
   onPost: (text: string, author: string) => void
   onEscape?: (text: string) => void
   /** A Cancel button beside the one that posts. */
   onCancel?: () => void
 }) {
-  const author = useStore($author)
-  const account = useAccountName()
   const [text, setText] = useState(initial)
-  const [name, setName] = useState('')
   const area = useRef<HTMLTextAreaElement>(null)
-  const nameField = useRef<HTMLInputElement>(null)
-  const asks = signs && !author
-
-  useEffect(() => {
-    if (asks && account) {
-      setName((typed) => typed || account)
-    }
-  }, [asks, account])
 
   useEffect(() => {
     const element = area.current
@@ -181,23 +162,20 @@ function Composer({
     }
   }, [text])
 
-  const post = () => {
+  const post = async () => {
     const value = text.replace(/\s+$/, '')
 
     if (!value.trim()) {
       return
     }
 
-    const by = asks ? name.trim() : author
+    const by = signs ? await askCommentName('docs') : ''
 
-    if (asks) {
-      if (!by) {
-        nameField.current?.focus()
+    // Without a name the comment is not posted, and its text stays here.
+    if (by === null) {
+      area.current?.focus({ preventScroll: true })
 
-        return
-      }
-
-      setAuthor(by)
+      return
     }
 
     setText('')
@@ -207,7 +185,7 @@ function Composer({
   const onKey = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
-      post()
+      void post()
     } else if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
@@ -222,20 +200,6 @@ function Composer({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {asks && (
-        <label className="flex items-center gap-2 text-[11.5px] text-fg-3">
-          <span className="shrink-0">Your name</span>
-          <input
-            ref={nameField}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={onKey}
-            placeholder="Shown on your comments"
-            aria-label="Your name, shown on your comments"
-            className="glass-input h-7 min-w-0 flex-1 rounded-md px-2 text-[12px] text-fg outline-none"
-          />
-        </label>
-      )}
       <textarea
         ref={area}
         rows={1}
@@ -253,7 +217,7 @@ function Composer({
               Cancel
             </button>
           )}
-          <button type="button" disabled={!text.trim()} onClick={post} className="h-7 rounded-md bg-accent px-2.5 text-[12px] font-medium text-accent-fg hover:bg-accent-strong disabled:opacity-40 disabled:hover:bg-accent">
+          <button type="button" disabled={!text.trim()} onClick={() => void post()} className="h-7 rounded-md bg-accent px-2.5 text-[12px] font-medium text-accent-fg hover:bg-accent-strong disabled:opacity-40 disabled:hover:bg-accent">
             {action}
           </button>
         </div>
@@ -434,9 +398,9 @@ function DraftCard({ editor, quote, list }: { editor: Editor; quote: string; lis
   )
 }
 
-/** Who the person's comments are by, and a way to change it. */
+/** Who the person's comments are by, in every Office app, and a way to change it. */
 function AuthorLine() {
-  const author = useStore($author)
+  const author = useStore($commentName)
   const [name, setName] = useState<string | null>(null)
 
   if (!author) {
@@ -462,7 +426,7 @@ function AuthorLine() {
           onBlur={() => setName(null)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && name.trim()) {
-              setAuthor(name)
+              setCommentName(name).catch(() => docsSession.notify('Could not save your name for comments', 'error'))
               setName(null)
             } else if (event.key === 'Escape') {
               event.stopPropagation()

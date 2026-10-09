@@ -3,6 +3,7 @@ import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { afterEach, describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
 import { commentsOf, type DocJSON, type DocNode, headersOf, pageOf, PAGE_SIZES } from '../../../../shared/office/document.ts'
+import { $commentName } from '../comment-name.ts'
 import {
   addCommentsChange,
   batchOutcome,
@@ -51,7 +52,6 @@ import {
   withBody
 } from './agent-depth-model.ts'
 import { chainBuilt, editsOf, pageArgsOf, readDocument, readOptions } from './agent-model.ts'
-import { $author } from './comment-author.ts'
 import { applyLive, comments, documentSections, documentStatistics, headerFooterText, jsonOf, notes, replaceText, stateOf } from './model.ts'
 import { docsSchema } from './schema.ts'
 import type { SavedTemplate } from './templates/saved.ts'
@@ -115,7 +115,7 @@ function onLive(made: Change, view: ReturnType<typeof live>) {
 const inline = (block: DocNode | undefined): string[] => (block?.content ?? []).map((node) => (node.type === 'text' ? (node.text ?? '') : `[${node.type}:${node.attrs?.kind}]`))
 
 afterEach(() => {
-  $author.set('')
+  $commentName.set('')
 })
 
 describe('headers and footers', () => {
@@ -335,7 +335,7 @@ describe('comments', () => {
   })
 
   it('adds the same to a file, by the name the person gave Herald for anyone but Hermes', () => {
-    $author.set('Ann Example')
+    $commentName.set('Ann Example')
     const items = commentItemsOf(REVIEW)
     const byHermes = onFile(addCommentsChange(items, commentAuthor({ source: 'agent' })), report())
     const byVoice = onFile(addCommentsChange(items, commentAuthor({ source: 'voice' })), report())
@@ -376,7 +376,7 @@ describe('comments', () => {
   })
 
   it('replies, changes, resolves and deletes comments and replies by their ids', () => {
-    $author.set('Ann Example')
+    $commentName.set('Ann Example')
     const reviewed = onFile(addCommentsChange(commentItemsOf('[{"text": "Source?", "quote": "Sales grew in March"}]')), report()).json
     const replied = onFile(replyChange({ comment: '0', text: 'The annual report.' }, 'Hermes'), reviewed)
     const again = onFile(replyChange({ comment: '1', text: 'Thanks.' }), replied.json)

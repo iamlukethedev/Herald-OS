@@ -5,9 +5,10 @@ import { excelThreads } from '../../../../../shared/office/xlsx/comments/fixture
 import { workbookFromXlsx } from '../../../../../shared/office/xlsx/read.ts'
 import { xlsxFromWorkbook } from '../../../../../shared/office/xlsx/write.ts'
 import { $systemInfo } from '../../../../store/system.ts'
+import { $commentName, $nameQuestion, NEUTRAL_NAME } from '../../comment-name.ts'
 import { withHeadlessSheets } from '../headless.ts'
 import type { SheetsTarget } from '../model.ts'
-import { NEUTRAL_AUTHOR } from './author.ts'
+import { authorNamed } from './author.ts'
 import { addComment, deleteComment, listComments, listNotes, removeNote, replyToComment, resolveComment, setNote } from './model.ts'
 
 const book = (): WorkbookSnapshot => newWorkbook('book', 'Book', [newSheet('s1', 'Plan'), newSheet('s2', 'Q1 sales')])
@@ -16,11 +17,22 @@ const run = <T>(work: (target: SheetsTarget) => Promise<T> | T, snapshot = book(
 
 const failure = (promise: Promise<unknown>): Promise<string> => promise.then(() => 'no error', (error: Error) => error.message)
 
-describe('comments', () => {
-  beforeEach(() => $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo))
-  afterEach(() => $systemInfo.set(null))
+/** The account's name is there all along; commands sign with the name the person confirmed. */
+function confirmed(name: string) {
+  beforeEach(() => {
+    $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo)
+    $commentName.set(name)
+  })
+  afterEach(() => {
+    $systemInfo.set(null)
+    $commentName.set('')
+  })
+}
 
-  it('starts threads on cells, under the person’s name, and lists them with their replies', async () => {
+describe('comments', () => {
+  confirmed('Sam Rivera')
+
+  it('starts threads on cells, under the name the person confirmed, and lists them with their replies', async () => {
     const { result } = await run(async (target) => {
       const made = await addComment(target, { cell: 'B2', text: 'Is rent right?\nIt went up.' })
       await addComment(target, { cell: "'Q1 sales'!C3", text: 'Check the March figure' })
@@ -37,28 +49,46 @@ describe('comments', () => {
         id: result.made.id,
         sheet: 'Plan',
         cell: 'B2',
-        author: 'Pat Example',
+        author: 'Sam Rivera',
         time: expect.stringMatching(/^\d{4}-\d\d-\d\d \d\d:\d\d$/),
         text: 'Is rent right?\nIt went up.',
         resolved: false,
         replies: [
-          { id: result.reply.id, author: 'Pat Example', time: expect.any(String), text: 'Yes, from March.' },
-          { id: expect.any(String), author: 'Pat Example', time: expect.any(String), text: 'Thanks' }
+          { id: result.reply.id, author: 'Sam Rivera', time: expect.any(String), text: 'Yes, from March.' },
+          { id: expect.any(String), author: 'Sam Rivera', time: expect.any(String), text: 'Thanks' }
         ]
       }
     ])
     expect(result.all.map((thread) => `${thread.sheet}!${thread.cell}`)).toEqual(['Plan!B2', 'Q1 sales!C3'])
   })
 
-  it('writes under a neutral name when the system gives none', async () => {
-    $systemInfo.set(null)
+  it('writes under the neutral name, not the account’s, before the person confirmed one, without asking', async () => {
+    $commentName.set('')
     const { result } = await run(async (target) => {
       await addComment(target, { cell: 'A1', text: 'Hello' })
+      await replyToComment(target, { cell: 'A1', text: 'Again' })
+      await setNote(target, { cell: 'B1', text: 'A note' })
 
-      return listComments(target)[0].author
+      return { comments: listComments(target), notes: listNotes(target) }
     })
 
-    expect(result).toBe(NEUTRAL_AUTHOR)
+    expect(result.comments.map((thread) => [thread.author, thread.replies.map((reply) => reply.author)])).toEqual([[NEUTRAL_NAME, [NEUTRAL_NAME]]])
+    expect(result.notes.map((note) => note.author)).toEqual([NEUTRAL_NAME])
+    expect($nameQuestion.get()).toBeNull()
+  })
+
+  it('signs what Hermes writes as Hermes', async () => {
+    const hermes = authorNamed('Hermes')
+    const { result } = await run(async (target) => {
+      await addComment(target, { cell: 'A1', text: 'Check' }, hermes)
+      await replyToComment(target, { cell: 'A1', text: 'Checked' }, hermes)
+      await setNote(target, { cell: 'B1', text: 'Estimate' }, hermes)
+
+      return { comments: listComments(target), notes: listNotes(target) }
+    })
+
+    expect(result.comments).toMatchObject([{ author: 'Hermes', replies: [{ author: 'Hermes' }] }])
+    expect(result.notes).toMatchObject([{ author: 'Hermes' }])
   })
 
   it('resolves and opens threads again, and deletes a reply or a whole thread', async () => {
@@ -115,15 +145,14 @@ describe('comments', () => {
 })
 
 describe('notes', () => {
-  beforeEach(() => $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo))
-  afterEach(() => $systemInfo.set(null))
+  confirmed('Sam Rivera')
 
   it('writes, replaces and removes notes, each in one step to undo', async () => {
     const { result } = await run(async (target) => {
       const written = await setNote(target, { cell: 'B2', text: 'Remember\nthe deposit' })
       await setNote(target, { cell: 'A1', text: 'Top', sheet: 'Q1 sales' })
       const listed = listNotes(target)
-      $systemInfo.set({ fullName: 'Sam Sample', userName: 'sam' } as SystemInfo)
+      $commentName.set('Sam Sample')
       await setNote(target, { cell: 'B2', text: 'Changed' })
       const replaced = listNotes(target, { sheet: 'Plan' })
       target.workbook.undo()
@@ -135,9 +164,9 @@ describe('notes', () => {
       return { written, listed, replaced, undone, removed, gone, back: listNotes(target, { sheet: 'Plan' }), missing: await failure(removeNote(target, { cell: 'Z9' })) }
     })
 
-    expect(result.written).toEqual({ sheet: 'Plan', cell: 'B2', text: 'Remember\nthe deposit', author: 'Pat Example', shown: false })
+    expect(result.written).toEqual({ sheet: 'Plan', cell: 'B2', text: 'Remember\nthe deposit', author: 'Sam Rivera', shown: false })
     expect(result.listed.map((note) => `${note.sheet}!${note.cell}`)).toEqual(['Plan!B2', 'Q1 sales!A1'])
-    expect(result.replaced).toEqual([{ sheet: 'Plan', cell: 'B2', text: 'Changed', author: 'Pat Example', shown: false }])
+    expect(result.replaced).toEqual([{ sheet: 'Plan', cell: 'B2', text: 'Changed', author: 'Sam Rivera', shown: false }])
     expect(result.undone[0].text).toBe('Remember\nthe deposit')
     expect(result.removed).toEqual({ sheet: 'Plan', cell: 'B2', text: 'Remember\nthe deposit' })
     expect(result.gone).toEqual([])
@@ -147,8 +176,7 @@ describe('notes', () => {
 })
 
 describe('comments and notes through .xlsx files', () => {
-  beforeEach(() => $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo))
-  afterEach(() => $systemInfo.set(null))
+  confirmed('Sam Rivera')
 
   it('keeps threads, replies, resolved threads, authors, times and notes through a file Herald writes', async () => {
     const { result: before, snapshot } = await run(async (target) => {

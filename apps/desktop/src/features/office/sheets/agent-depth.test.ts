@@ -6,6 +6,7 @@ import { xlsxFromWorkbook } from '../../../../shared/office/xlsx/write.ts'
 import { sheetsDepthCommands } from '../../../commands/sheets-depth.ts'
 import { COMMAND_ID, type CommandSource } from '../../../store/os-commands.ts'
 import { $systemInfo } from '../../../store/system.ts'
+import { $commentName, NEUTRAL_NAME } from '../comment-name.ts'
 import { sheetsAdapter } from './adapter.ts'
 import { cleanOn, DEPTH, type DepthCommand, type DepthWork, editOn, HERMES_AUTHOR, sortOn } from './agent-depth.ts'
 import { isDepthEdit, sheetEditsOf } from './agent-model.ts'
@@ -234,10 +235,17 @@ describe('names and validation', () => {
 })
 
 describe('comments and notes', () => {
-  beforeEach(() => $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo))
-  afterEach(() => $systemInfo.set(null))
+  beforeEach(() => {
+    $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo)
+    $commentName.set('Sam Rivera')
+  })
 
-  it('signs what Hermes writes Hermes, and what comes from anywhere else with the person’s name', async () => {
+  afterEach(() => {
+    $systemInfo.set(null)
+    $commentName.set('')
+  })
+
+  it('signs what Hermes writes Hermes, and what comes from anywhere else with the name the person confirmed', async () => {
     const result = await headless(book(MONTHLY, 'Sales'), async (on) => {
       const added = await run(on, 'addComment', { cell: 'B2', text: 'Is January right?' })
       const reply = await run(on, 'replyToComment', { commentId: String(added.data.id), text: 'Yes, from the bank.' }, 'palette')
@@ -263,8 +271,8 @@ describe('comments and notes', () => {
       said: '2 comment threads (1 resolved)',
       data: {
         comments: [
-          { cell: 'B2', author: 'Hermes', text: 'Is January right?', resolved: true, replies: [{ author: 'Pat Example', text: 'Yes, from the bank.' }] },
-          { cell: 'C3', author: 'Pat Example', resolved: false, replies: [{ author: 'Hermes', text: 'Noted' }] }
+          { cell: 'B2', author: 'Hermes', text: 'Is January right?', resolved: true, replies: [{ author: 'Sam Rivera', text: 'Yes, from the bank.' }] },
+          { cell: 'C3', author: 'Sam Rivera', resolved: false, replies: [{ author: 'Hermes', text: 'Noted' }] }
         ]
       }
     })
@@ -273,10 +281,23 @@ describe('comments and notes', () => {
     expect(result.deleted.said).toBe('deleted the comment on Sales!C3 with its replies')
     expect(result.comments).toMatchObject([{ cell: 'B2', author: 'Hermes', resolved: false, replies: [] }])
     expect(result.note).toMatchObject({ said: 'wrote the note on Sales!A5', data: { author: 'Hermes', text: 'Estimate' } })
-    expect(result.edited.data).toMatchObject({ cell: 'A4', author: 'Pat Example', text: 'From the bank statement' })
+    expect(result.edited.data).toMatchObject({ cell: 'A4', author: 'Sam Rivera', text: 'From the bank statement' })
     expect(result.notes.said).toBe('2 notes')
     expect(result.removed.said).toBe('removed the note on Sales!A5')
-    expect(result.notesLeft.map((entry) => [entry.cell, entry.author])).toEqual([['A4', 'Pat Example']])
+    expect(result.notesLeft.map((entry) => [entry.cell, entry.author])).toEqual([['A4', 'Sam Rivera']])
+  })
+
+  it('never signs with the account’s name before the person confirms theirs', async () => {
+    $commentName.set('')
+    const result = await headless(book(MONTHLY, 'Sales'), async (on) => {
+      await run(on, 'addComment', { cell: 'B2', text: 'Check this' }, 'palette')
+      await run(on, 'setNote', { cell: 'A4', text: 'From the bank' }, 'voice')
+
+      return { comments: listComments(on), notes: listNotes(on) }
+    })
+
+    expect(result.comments).toMatchObject([{ cell: 'B2', author: NEUTRAL_NAME }])
+    expect(result.notes.map((entry) => entry.author)).toEqual([NEUTRAL_NAME])
   })
 })
 

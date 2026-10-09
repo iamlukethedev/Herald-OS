@@ -33,7 +33,7 @@ export interface CellNote {
   shown: boolean
 }
 
-/** Who signs a comment, a reply or a new note: the person (commentAuthor) unless a command gives another. */
+/** Who signs a comment, a reply or a new note: the one a command gives (Hermes, for Hermes), else commentAuthor. */
 type Author = ReturnType<typeof commentAuthor>
 
 /** A new note's box, in pixels, as Univer draws one. */

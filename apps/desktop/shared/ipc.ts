@@ -534,6 +534,8 @@ export interface HeraldOSPrefs {
   sidebar?: { width: number; collapsed: boolean }
   /** Slide the Dock off-screen until the cursor reaches the bottom edge (default on). */
   dockAutoHide?: boolean
+  /** The name on the comments and notes the person adds in Herald Office, once they confirmed it; unset until then. */
+  commentName?: string
   voice: VoicePrefs
   continuity: ContinuityPrefs
   crashHelp: CrashHelpPrefs

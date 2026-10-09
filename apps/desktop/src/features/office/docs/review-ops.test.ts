@@ -1,9 +1,11 @@
 import { history, undo, undoDepth } from '@tiptap/pm/history'
 import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { SystemInfo } from '../../../../shared/ipc.ts'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
 import type { CommentThread, DocJSON, DocMark, DocNode } from '../../../../shared/office/document.ts'
-import { $author } from './comment-author.ts'
+import { $systemInfo } from '../../../store/system.ts'
+import { $commentName, $nameQuestion, NEUTRAL_NAME } from '../comment-name.ts'
 import {
   addComment,
   addComments,
@@ -69,7 +71,10 @@ function marked(json: DocJSON | null): string[] {
   return out
 }
 
-afterEach(() => $author.set(''))
+afterEach(() => {
+  $commentName.set('')
+  $systemInfo.set(null)
+})
 
 describe('reading comments', () => {
   it('gives each thread in the order of its text, with what it quotes and where, and threads whose text went last', () => {
@@ -106,7 +111,7 @@ describe('reading comments', () => {
 
 describe('adding comments', () => {
   it('comments the word at the caret, with an id of its own, the author and a date', () => {
-    $author.set('Cy Example')
+    $commentName.set('Cy Example')
     const changed = applyToJSON(reviewed(), addComment('selection', 'Which revenue?'))
     const added = threadsOf(changed)[3]
 
@@ -163,6 +168,23 @@ describe('adding comments', () => {
     expect(view.state.doc.eq(before)).toBe(true)
     expect(applyToJSON(reviewed(), addComments([{ target: { text: 'nowhere' }, text: 'x' }], 'Hermes'))).toBeNull()
   })
+
+  it('signs what commands add with the name the person confirmed, the neutral one before, never the account’s, and asks nothing', () => {
+    $systemInfo.set({ fullName: 'Pat Example', userName: 'pat' } as SystemInfo)
+    const costs = [{ target: { text: 'Costs' }, text: 'Which costs?' }]
+    const before = applyToJSON(reviewed(), addComments(costs))
+    const replyBefore = applyToJSON(reviewed(), replyToComment('2', 'Agreed'))
+    $commentName.set('Cy Example')
+    const after = applyToJSON(reviewed(), addComment({ text: 'Costs' }, 'Which costs?'))
+    const byHermes = applyToJSON(reviewed(), addComments(costs, 'Hermes'))
+
+    expect(threadsOf(before)[3]).toMatchObject({ author: NEUTRAL_NAME, initials: 'HU' })
+    expect(threadsOf(replyBefore)[1].replies?.[0]).toMatchObject({ author: NEUTRAL_NAME })
+    expect(threadsOf(after)[3]).toMatchObject({ author: 'Cy Example', initials: 'CE' })
+    expect(threadsOf(applyToJSON(reviewed(), replyToComment('2', 'Agreed')))[1].replies?.[0]).toMatchObject({ author: 'Cy Example', initials: 'CE' })
+    expect(threadsOf(byHermes)[3]).toMatchObject({ author: 'Hermes', initials: 'H' })
+    expect($nameQuestion.get()).toBeNull()
+  })
 })
 
 /** A live editor's state and dispatch, with the editor's own history. */
@@ -184,7 +206,7 @@ describe('changing comments', () => {
     expect(threadsOf(changed)[1].replies).toEqual([{ id: '8', author: 'Cy Example', initials: 'CE', date: expect.any(String), text: 'Agreed' }])
     expect(threadsOf(applyToJSON(reviewed(), replyToComment('0', 'More')))[0].replies?.map((reply) => [reply.id, reply.author])).toEqual([
       ['1', 'Bo Example'],
-      ['8', '']
+      ['8', NEUTRAL_NAME]
     ])
     expect(applyToJSON(reviewed(), replyToComment('1', 'To a reply'))).toBeNull()
   })

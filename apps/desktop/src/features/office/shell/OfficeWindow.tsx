@@ -10,9 +10,11 @@ import type { AppIconId } from '../../../shell/apps.ts'
 import { messageOf } from '../../canvas/errors.ts'
 import { Menu, type MenuItemDef } from '../../files/Menu.tsx'
 import { bindOfficeRelay } from '../agent.ts'
+import { $nameQuestion, loadCommentName } from '../comment-name.ts'
 import { AskHermesBar } from '../hermes/AskHermesBar.tsx'
 import type { OfficeSession } from '../session.ts'
 import type { OfficeDocument } from '../types.ts'
+import { CommentNamePrompt } from './CommentNamePrompt.tsx'
 import { type OfficeCommand, type OfficeMenu, runShortcut } from './commands.ts'
 import { CloseDialog, FidelityDialog, NotesDialog } from './dialogs.tsx'
 
@@ -226,12 +228,17 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
     return () => clearTimeout(timer)
   }, [documents, activeKey])
 
+  // The name on the person's comments, with the one Herald Docs kept before, ready before their first comment.
+  useEffect(() => {
+    loadCommentName().catch(() => {})
+  }, [])
+
   // A native listener: Univer's editors are React roots of their own, whose key events never reach
   // this root's React handlers. Stopping a handled key here keeps the desktop's own shortcuts out.
   useEffect(() => {
     const element = root.current
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!session.$dialog.get() && runShortcut(event, menus)) {
+      if (!session.$dialog.get() && $nameQuestion.get()?.app !== session.adapter.app && runShortcut(event, menus)) {
         event.preventDefault()
         event.stopPropagation()
       }
@@ -300,6 +307,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
       {dialog?.kind === 'close' && <CloseDialog session={session} docKey={dialog.key} />}
       {dialog?.kind === 'fidelity' && <FidelityDialog session={session} docKey={dialog.key} notes={dialog.notes} losses={dialog.losses} resolve={dialog.resolve} />}
       {dialog?.kind === 'notes' && <NotesDialog session={session} title={dialog.title} notes={dialog.notes} />}
+      <CommentNamePrompt app={session.adapter.app} />
     </div>
   )
 }

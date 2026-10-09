@@ -1,7 +1,8 @@
 import type { Node as PMNode } from '@tiptap/pm/model'
 import type { EditorState, Transaction } from '@tiptap/pm/state'
 import { type CommentReply, type CommentThread, commentsOf, type DocJSON, type DocNode, type TocAttrs, tocEntries } from '../../../../shared/office/document.ts'
-import { $author, initialsOf } from './comment-author.ts'
+import { commentNameFor } from '../comment-name.ts'
+import { initialsOf } from './comment-author.ts'
 import { insertNodes, type Op, type Place, type Range, type Target, targetRanges } from './model.ts'
 
 /*
@@ -236,7 +237,7 @@ function nextId(used: Set<string>): string {
 export const newCommentId = (doc: PMNode): string => nextId(usedIds(doc))
 
 export interface CommentOptions {
-  /** Who wrote it: the name the person gave Herald when left out. */
+  /** Who wrote it; left out by commands, which sign with the name the person confirmed, or the neutral one (commentNameFor). */
   author?: string
   initials?: string | null
   /** The new thread's id (the first one's, when the target has several ranges); one the document does not use is made when left out. */
@@ -260,7 +261,7 @@ function addThreads(state: EditorState, list: readonly CommentSpec[], options: C
   }
 
   const tr = state.tr
-  const by = signed(options.author ?? $author.get(), options.initials)
+  const by = signed(options.author ?? commentNameFor(), options.initials)
   const added: CommentThread[] = []
 
   for (const { target, text } of list) {
@@ -299,7 +300,7 @@ export function replyToComment(id: string, text: string, author?: string): Op {
       return null
     }
 
-    const reply: CommentReply = { id: nextId(usedIds(state.doc)), ...signed(author ?? $author.get()), text }
+    const reply: CommentReply = { id: nextId(usedIds(state.doc)), ...signed(author ?? commentNameFor()), text }
 
     return state.tr.setDocAttribute(
       'comments',
