@@ -1,11 +1,15 @@
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 import { type ChartDrawing, type ChartSpec, DRAWING_RESOURCE } from '../../charts.ts'
 import { tinted } from '../colors.ts'
+import { readHeraldPart } from '../herald-part.ts'
+import { parseRelationships, relsPathOf } from '../opc.ts'
 import { openPackage } from '../package.ts'
 import { workbookFromXlsx } from '../read.ts'
 import { readResource } from '../rules.ts'
-import { chartPackage, COLUMN_CHART, excelAxes, excelChart, excelWorkbook, CHART_REL, CHART_TYPE, numRef, strRef, twoCellAnchor, chartFrame } from './fixtures.ts'
-import { shownAnchors } from './index.ts'
+import { xlsxFromWorkbook } from '../write.ts'
+import { CHART_REL, CHART_TYPE, chartFrame, chartPackage, COLUMN_CHART, excelAxes, excelChart, excelWorkbook, numRef, strRef, twoCellAnchor } from './fixtures.ts'
+import { type FiledCharts, HERALD_SECTION, shownAnchors } from './index.ts'
 import { NOTES } from './read.ts'
 
 /* Charts as Excel writes them, read into the charts Herald draws, and the ones Herald leaves in the file. */
@@ -121,6 +125,87 @@ describe('charts Excel made', () => {
     expect([...(await shownAnchors(pkg, pkg.sheets[1]))]).toEqual([0])
     expect(notes).toContain(NOTES.shapes)
     expect(new Set(charts(SALES).map((chart) => chart.drawingId)).size).toBe(3)
+  })
+})
+
+describe('charts Excel made, saved again', () => {
+  const saved = async (change?: (workbook: Awaited<ReturnType<typeof readExcel>>['workbook']) => void) => {
+    const original = await excelWorkbook()
+    const { workbook } = await readExcel(original)
+    change?.(workbook)
+    const { bytes, losses } = await xlsxFromWorkbook(workbook, { original })
+    const pkg = await openPackage(bytes)
+    const filed = ((await readHeraldPart(pkg))?.[HERALD_SECTION] ?? {}) as FiledCharts
+
+    return { original: await JSZip.loadAsync(original), zip: await JSZip.loadAsync(bytes), bytes, losses, filed }
+  }
+  const bytesOf = (zip: JSZip, path: string) => zip.file(path)!.async('uint8array')
+
+  it('copies an unchanged chart byte for byte, with its style, colours, the shapes over it and their picture', async () => {
+    const { original, zip, filed } = await saved()
+    const [column, pie, combo] = Object.values(filed['Q1 sales']).map((chart) => chart.part)
+    const types = await zip.file('[Content_Types].xml')!.async('string')
+    const rels = parseRelationships(column, await zip.file(relsPathOf(column))!.async('string'))
+
+    expect(await bytesOf(zip, column)).toEqual(await bytesOf(original, 'xl/charts/chart1.xml'))
+    expect(await bytesOf(zip, pie)).toEqual(await bytesOf(original, 'xl/charts/chart2.xml'))
+    expect(await bytesOf(zip, combo)).toEqual(await bytesOf(original, 'xl/charts/chart3.xml'))
+    expect(await bytesOf(zip, Object.values(filed.Points)[0].part)).toEqual(await bytesOf(original, 'xl/charts/chart6.xml'))
+    // Excel's relationship ids stay, its colours listed before its style.
+    expect(rels.map((rel) => [rel.id, rel.type.split('/').pop()])).toEqual([
+      ['rId2', 'chartColorStyle'],
+      ['rId1', 'chartStyle'],
+      ['rId3', 'chartUserShapes']
+    ])
+    expect(await bytesOf(zip, rels[0].target)).toEqual(await bytesOf(original, 'xl/charts/colors1.xml'))
+    expect(await bytesOf(zip, rels[1].target)).toEqual(await bytesOf(original, 'xl/charts/style1.xml'))
+    expect(await bytesOf(zip, rels[2].target)).toEqual(await bytesOf(original, 'xl/drawings/drawing3.xml'))
+    const picture = parseRelationships(rels[2].target, await zip.file(relsPathOf(rels[2].target))!.async('string'))[0]
+    expect(await bytesOf(zip, picture.target)).toEqual(await bytesOf(original, 'xl/media/image2.png'))
+    expect(types).toContain(`<Override PartName="/${column}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`)
+    expect(types).toContain(`<Override PartName="/${rels[1].target}" ContentType="application/vnd.ms-office.chartstyle+xml"/>`)
+    expect(types).toContain(`<Override PartName="/${rels[0].target}" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/>`)
+    expect(types).toContain(`<Override PartName="/${rels[2].target}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml"/>`)
+    expect(types).toContain('<Default Extension="png" ContentType="image/png"/>')
+  })
+
+  it('reads the charts it copied back as they were read from Excel', async () => {
+    const original = await excelWorkbook()
+    const first = await readExcel(original)
+    const { bytes } = await xlsxFromWorkbook(first.workbook, { original })
+    const again = await readExcel(bytes)
+
+    expect(again.charts(SALES).map((chart) => chart.data.spec)).toEqual(first.charts(SALES).map((chart) => chart.data.spec))
+    expect(again.charts(POINTS).map((chart) => chart.data.spec)).toEqual(first.charts(POINTS).map((chart) => chart.data.spec))
+    expect(again.charts(SALES).map((chart) => chart.drawingId)).toEqual(first.charts(SALES).map((chart) => chart.drawingId))
+  })
+
+  it('writes a chart changed since from its spec, leaving the others copied', async () => {
+    const { original, zip, filed } = await saved((workbook) => {
+      const drawings = readResource<Drawings>(workbook.resources, DRAWING_RESOURCE)!
+      const column = drawings[SALES].data[drawings[SALES].order[0]]
+      column.data.spec = { ...column.data.spec, title: 'Sales by region' }
+      workbook.resources = (workbook.resources as { name: string; data: string }[]).map((resource) => (resource.name === DRAWING_RESOURCE ? { ...resource, data: JSON.stringify(drawings) } : resource))
+    })
+    const [column, pie] = Object.values(filed['Q1 sales']).map((chart) => chart.part)
+    const xml = await zip.file(column)!.async('string')
+
+    expect(xml).toContain('<a:t>Sales by region</a:t>')
+    expect(xml).not.toContain('c:userShapes')
+    expect(zip.file(relsPathOf(column))).toBeNull()
+    expect(await bytesOf(zip, pie)).toEqual(await bytesOf(original, 'xl/charts/chart2.xml'))
+  })
+
+  it('writes a chart anew when a sheet its formulas name was renamed', async () => {
+    const { zip, filed } = await saved((workbook) => {
+      workbook.sheets[SALES].name = 'Sales'
+    })
+    const xml = await zip.file(Object.values(filed.Sales)[0].part)!.async('string')
+
+    expect(xml).toContain('<c:f>Sales!$B$2:$B$5</c:f>')
+    expect(xml).not.toContain('Q1 sales')
+    // The scatter chart on the other sheet names only its own sheet, which kept its name.
+    expect(await zip.file(Object.values(filed.Points)[0].part)!.async('string')).toContain('<c14:style val="102"/>')
   })
 })
 

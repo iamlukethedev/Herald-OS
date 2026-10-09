@@ -1,15 +1,21 @@
-import { CHART_COMPONENT, CHART_DRAWING_TYPE, CHART_KINDS, type ChartDrawing, type ChartSpec, DRAWING_RESOURCE } from '../../charts.ts'
+import { CHART_COMPONENT, CHART_DRAWING_TYPE, CHART_KINDS, type ChartData, type ChartDrawing, type ChartSpec, DRAWING_RESOURCE, isChartData } from '../../charts.ts'
 import type { XmlElement } from '../../docx/xml.ts'
-import { themeColors } from '../colors.ts'
+import type { CellSnapshot } from '../../workbook.ts'
+import { OFFICE_THEME, themeColors } from '../colors.ts'
 import { drawingOf } from '../drawing.ts'
 import type { ReadContext } from '../extras.ts'
 import type { FinishContext } from '../finish.ts'
-import { fingerprint, stableJson } from '../herald-part.ts'
+import { fingerprint, readHeraldPart, stableJson } from '../herald-part.ts'
+import { CONTENT_TYPE, REL } from '../opc.ts'
 import type { PackageSheet, XlsxPackage } from '../package.ts'
-import type { Resource } from '../rules.ts'
-import { chartAnchor, placementOf, sheetGeometry } from './anchor.ts'
+import { readResource, type Resource } from '../rules.ts'
+import type { UStyle } from '../styles.ts'
+import { decodeXml } from '../xml.ts'
+import { anchorXml, chartAnchor, placementOf, sheetGeometry } from './anchor.ts'
+import { copyChartPart } from './copy.ts'
 import { parseFragment } from './drawingml.ts'
 import { type ChartReading, dataExtent, type DataExtent, readChartXml, type ReadingContext } from './read.ts'
+import { type ChartCells, chartXml, hasSeries } from './write.ts'
 
 /*
  * Herald Sheets' charts in .xlsx files: each chart floating over a sheet written as an Excel chart
@@ -83,8 +89,7 @@ async function findCharts(pkg: XlsxPackage, sheet: PackageSheet, context: Readin
   return charts
 }
 
-/** The charts Herald reads from a sheet's drawing; readCharts and shownAnchors both go through here, so they agree. */
-function chartsOf(pkg: XlsxPackage, sheet: PackageSheet): Promise<FoundChart[]> {
+function cacheOf(pkg: XlsxPackage): { context: ReadingContext; sheets: Map<string, Promise<FoundChart[]>> } {
   let entry = found.get(pkg)
 
   if (!entry) {
@@ -92,6 +97,14 @@ function chartsOf(pkg: XlsxPackage, sheet: PackageSheet): Promise<FoundChart[]> 
     found.set(pkg, entry)
   }
 
+  return entry
+}
+
+const chartsContext = (pkg: XlsxPackage): ReadingContext => cacheOf(pkg).context
+
+/** The charts Herald reads from a sheet's drawing; readCharts and shownAnchors both go through here, so they agree. */
+function chartsOf(pkg: XlsxPackage, sheet: PackageSheet): Promise<FoundChart[]> {
+  const entry = cacheOf(pkg)
   let charts = entry.sheets.get(sheet.path)
 
   if (!charts) {
@@ -147,8 +160,134 @@ function filedFor(herald: Record<string, unknown> | null, sheetName: string): (p
   }
 }
 
+/** The chart a part of a file holds as Herald reads it: the spec Herald's part keeps for it, else its XML read. */
+async function specOfPart(pkg: XlsxPackage, part: string, xml: string): Promise<ChartSpec | null> {
+  const herald = await readHeraldPart(pkg)
+  const print = fingerprint(xml)
+  const section = (herald?.[HERALD_SECTION] ?? {}) as FiledCharts
+  const filed = Object.values(section && typeof section === 'object' ? section : {})
+    .flatMap((sheet) => Object.values(sheet && typeof sheet === 'object' ? sheet : {}))
+    .find((chart) => chart?.part === part && chart.fingerprint === print && isSpec(chart.spec))
+
+  if (filed) {
+    const idOfName = new Map(pkg.sheets.map((sheet, index) => [sheet.name.toLowerCase(), `sheet-${index + 1}`]))
+
+    return withSheets(filed.spec, (name) => idOfName.get(name.toLowerCase()) ?? name)
+  }
+
+  return (await readChartXml(xml, chartsContext(pkg)))?.spec ?? null
+}
+
+/** Whether every sheet a chart part's formulas name has that name still in the file being written. */
+function sheetsKeepNames(xml: string, pkg: XlsxPackage, written: FinishContext['sheets']): boolean {
+  for (const formula of xml.matchAll(/<(?:[\w-]+:)?(?:f|sqref)>([^<]*)<\//g)) {
+    for (const match of decodeXml(formula[1]).matchAll(/(?:'((?:[^']|'')+)'|([^\s'!(),:;=+\-*/&^<>[\]{}"]+))!/g)) {
+      const name = (match[1]?.replace(/''/g, "'") ?? match[2]).toLowerCase()
+      const index = pkg.sheets.findIndex((sheet) => sheet.name.toLowerCase() === name)
+      const now = written.find((sheet) => sheet.id === `sheet-${index + 1}`)
+
+      if (index >= 0 && now?.name.toLowerCase() !== name) {
+        return false
+      }
+    }
+  }
+
+  return true
+}
+
+/** The source file's part of a chart that has not changed since it was read, copied with what it relates to; null to write the chart anew. */
+async function unchangedChart(ctx: FinishContext, data: ChartData): Promise<{ path: string; xml: string } | null> {
+  const source = ctx.source
+
+  if (!source || !data.source || fingerprint(stableJson(data.spec)) !== data.source.fingerprint) {
+    return null
+  }
+
+  const xml = await source.pkg.read(data.source.part)
+  const read = xml ? await specOfPart(source.pkg, data.source.part, xml) : null
+
+  // The part must still hold the chart as it was read, and its formulas name the sheets they did.
+  if (!xml || !read || fingerprint(stableJson(read)) !== data.source.fingerprint || !sheetsKeepNames(xml, source.pkg, ctx.sheets)) {
+    return null
+  }
+
+  return copyChartPart(ctx.writer, source.pkg, data.source.part)
+}
+
+const OFFICE_ACCENTS = OFFICE_THEME.slice(4, 10).map((hex) => `#${hex.toLowerCase()}`)
+
+const LOSSES = {
+  percent: 'Excel labels columns, bars, lines and areas with their values where Herald Sheets shows each one’s share of its category.',
+  gone: 'Charts whose cells were all on sheets since deleted are left out of the file.'
+}
+
+/** The number format a cell shows its value with. */
+function formatOf(workbook: FinishContext['workbook'], cell: CellSnapshot): string | undefined {
+  const style = (typeof cell.s === 'string' ? workbook.styles?.[cell.s] : cell.s) as UStyle | null | undefined
+
+  return style?.n?.pattern || undefined
+}
+
 /** Add the workbook's charts to the package being finished. */
-export async function finishCharts(_ctx: FinishContext): Promise<void> {}
+export async function finishCharts(ctx: FinishContext): Promise<void> {
+  const resource = readResource<Record<string, { data?: Record<string, ChartDrawing>; order?: string[] }>>(ctx.workbook.resources, DRAWING_RESOURCE)
+
+  if (!resource || typeof resource !== 'object') {
+    return
+  }
+
+  const names = new Map(ctx.sheets.map((sheet) => [sheet.id, sheet.name]))
+  const cells: ChartCells = {
+    sheetName: (id) => names.get(id),
+    cells: (id) => ctx.workbook.sheets[id]?.cellData,
+    format: (cell) => formatOf(ctx.workbook, cell),
+    date1904: ctx.workbook.dateSystem === 'date1904'
+  }
+  const filed: FiledCharts = {}
+
+  for (const sheet of ctx.sheets) {
+    const entry = resource[sheet.id]
+    const data = entry?.data && typeof entry.data === 'object' ? entry.data : {}
+    const order = Array.isArray(entry?.order) ? entry.order.filter((id) => data[id]) : []
+    let count = 0
+
+    for (const id of [...order, ...Object.keys(data).filter((key) => !order.includes(key))]) {
+      const drawing = data[id]
+
+      if (drawing?.componentKey !== CHART_COMPONENT || !isChartData(drawing.data) || !drawing.sheetTransform?.from || !drawing.sheetTransform.to) {
+        continue
+      }
+
+      const { spec } = drawing.data
+      let written = await unchangedChart(ctx, drawing.data)
+
+      if (!written) {
+        if (!hasSeries(spec, cells)) {
+          ctx.losses.add(LOSSES.gone)
+          continue
+        }
+
+        const xml = chartXml(spec, cells, spec.palette?.length ? spec.palette : OFFICE_ACCENTS)
+        const path = ctx.writer.freshName((n) => `xl/charts/chart${n}.xml`)
+        await ctx.writer.put(path, xml, CONTENT_TYPE.chart)
+        written = { path, xml }
+
+        if (spec.labels === 'percent' && !['pie', 'doughnut', 'scatter'].includes(spec.kind)) {
+          ctx.losses.add(LOSSES.percent)
+        }
+      }
+
+      count++
+      ctx.drawings.add(sheet.id, { xml: anchorXml(drawing, `Chart ${count}`), relationships: [{ type: REL.chart, target: written.path }], order: drawing.data.source?.anchor })
+      filed[sheet.name] ??= {}
+      filed[sheet.name][id] = { spec: withSheets(spec, (sheetId) => names.get(sheetId) ?? sheetId), part: written.path, fingerprint: fingerprint(written.xml) }
+    }
+  }
+
+  if (Object.keys(filed).length) {
+    ctx.herald[HERALD_SECTION] = filed
+  }
+}
 
 /** The sheet drawings resource with the charts of a file, when it has any Herald can draw. */
 export async function readCharts(ctx: ReadContext): Promise<Resource[]> {

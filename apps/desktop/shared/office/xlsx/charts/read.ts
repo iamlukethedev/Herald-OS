@@ -159,7 +159,8 @@ class Reader {
     return paint?.none ? undefined : paint?.color
   }
 
-  axis(element: XmlElement | undefined, values: boolean): ChartAxis {
+  /** An axis; `bars` for a bar chart's categories, whose order Herald sets itself (from the top down). */
+  axis(element: XmlElement | undefined, values: boolean, bars = false): ChartAxis {
     const axis: ChartAxis = { gridlines: Boolean(child(element, 'c:majorGridlines')) }
     const title = titleText(child(element, 'c:title'), 'Axis Title')
     const scaling = child(element, 'c:scaling')
@@ -189,7 +190,7 @@ class Reader {
       axis.hidden = true
     }
 
-    if (child(scaling, 'c:logBase') || child(scaling, 'c:orientation')?.attrs.val === 'maxMin' || child(element, 'c:dispUnits')) {
+    if (child(scaling, 'c:logBase') || (!bars && child(scaling, 'c:orientation')?.attrs.val === 'maxMin') || child(element, 'c:dispUnits')) {
       this.notes.add(NOTES.axes)
     }
 
@@ -250,17 +251,10 @@ async function readSeries(reader: Reader, element: XmlElement, group: XmlElement
 
     if (scatter) {
       const style = child(group, 'c:scatterStyle')?.attrs.val ?? 'marker'
-      const lines = !line?.none && style !== 'marker' && style !== 'none'
-      const markers = symbol !== 'none'
 
-      if (lines && markers && !smooth) {
+      // Herald draws a scatter chart's points, with no lines between them.
+      if (!line?.none && style !== 'marker' && style !== 'none') {
         reader.notes.add(NOTES.scatterLines)
-      } else if (lines && smooth) {
-        series.smooth = true
-      }
-
-      if (!markers) {
-        series.markers = false
       }
     } else {
       series.markers = symbol === 'none' ? false : flag(child(group, 'c:marker')) !== false
@@ -435,14 +429,17 @@ async function readChart(chart: XmlElement, plot: XmlElement, ctx: ReadingContex
     spec.stacking = stacking
   }
 
+  // Excel colours what has no colour of its own with the theme's accents in turn.
+  const accents = ctx.theme.slice(4, 10).map((rgb) => `#${rgb.toLowerCase()}`)
+
   if (kind === 'pie' || kind === 'doughnut') {
     const points = new Map(children(read[0].element, 'c:dPt').map((point) => [numberIn(child(point, 'c:idx')) ?? -1, reader.paint(fillIn(child(point, 'c:spPr'), ctx.theme))]))
     const own = reader.paint(fillIn(child(read[0].element, 'c:spPr'), ctx.theme))
 
     if ([...points.values()].some(Boolean)) {
-      spec.palette = Array.from({ length: Math.max(read[0].points, ...[...points.keys()].map((index) => index + 1)) }, (_, index) => points.get(index) ?? `#${(ctx.theme[4 + (index % 6)] ?? '4472C4').toLowerCase()}`)
-    } else if (own && flag(child(first, 'c:varyColors')) === false) {
-      spec.palette = [own]
+      spec.palette = Array.from({ length: Math.max(read[0].points, ...[...points.keys()].map((index) => index + 1)) }, (_, index) => points.get(index) ?? accents[index % accents.length])
+    } else {
+      spec.palette = own && flag(child(first, 'c:varyColors')) === false ? [own] : accents
     }
 
     if (kind === 'doughnut') {
@@ -456,12 +453,16 @@ async function readChart(chart: XmlElement, plot: XmlElement, ctx: ReadingContex
   } else {
     const ids = axisIds(first)
     const category = axes.get(ids.find((id) => axes.get(id)?.name !== 'c:valAx') ?? '')
-    spec.axes = { x: reader.axis(category, false), y: reader.axis(axes.get(primary ?? ''), true) }
+    spec.axes = { x: reader.axis(category, false, kind === 'bar'), y: reader.axis(axes.get(primary ?? ''), true) }
     const secondary = groups.map(valueAxisOf).find((id) => id !== primary)
 
     if (kind === 'combo' && secondary && read.some((entry) => entry.series.secondary)) {
       spec.axes.y2 = reader.axis(axes.get(secondary), true)
     }
+  }
+
+  if (kind !== 'pie' && kind !== 'doughnut' && read.some((entry) => !entry.series.color)) {
+    spec.palette = accents
   }
 
   return { spec, notes: [...reader.notes] }
