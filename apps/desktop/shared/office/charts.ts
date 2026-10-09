@@ -81,4 +81,34 @@ export interface ChartData {
   source?: { part: string; fingerprint: string; anchor?: number }
 }
 
+/** The snapshot resource of Univer's sheet drawings: sheet id → { data: { [drawingId]: drawing }, order: drawingId[] } (back to front). */
+export const DRAWING_RESOURCE = 'SHEET_DRAWING_PLUGIN'
+
+/** A cell's top-left corner and an offset from it in pixels, as Univer anchors drawings. */
+export interface CellOffset {
+  column: number
+  columnOffset: number
+  row: number
+  rowOffset: number
+}
+
+/** A chart's floating object as Univer's sheet drawings keep it in a snapshot. */
+export interface ChartDrawing {
+  unitId: string
+  /** The sheet's id. */
+  subUnitId: string
+  drawingId: string
+  drawingType: number
+  componentKey: string
+  /** The cells its corners are over. */
+  sheetTransform: { from: CellOffset; to: CellOffset }
+  axisAlignSheetTransform: { from: CellOffset; to: CellOffset }
+  /** Its place and size in pixels from the sheet's top-left corner. */
+  transform: { left: number; top: number; width: number; height: number }
+  /** Whether it moves and resizes with the cells under it: Univer's SheetDrawingAnchorType ("1" both, "0" moves only, "2" neither). */
+  anchorType?: '0' | '1' | '2'
+  data: ChartData
+  allowTransform?: boolean
+}
+
 export const isChartData = (data: unknown): data is ChartData => Boolean(data) && typeof data === 'object' && (data as ChartData).herald === 'chart' && typeof (data as ChartData).spec === 'object'
