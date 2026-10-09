@@ -583,18 +583,21 @@ describe('documentFromDocx: pictures, links and fields', () => {
     expect(notes).toEqual(['Links to places inside the document are kept as plain text.'])
   })
 
-  it('shows other fields as their last result', async () => {
+  it('reads page numbers and dates, simple and complex, as fields with their last result', async () => {
     const { doc, notes } = await read({
       body: [para(run('Page ') + `<w:fldSimple w:instr=" PAGE ">${run('3')}</w:fldSimple>`), para(field('DATE \\@ "d MMMM yyyy"', run('8 October 2026')))].join('')
     })
 
-    expect(doc.content).toEqual([paragraph('Page 3'), paragraph('8 October 2026')])
-    expect(notes).toEqual(['Fields (a table of contents, page numbers, dates) are shown as their last result and no longer update.'])
+    expect(doc.content).toEqual([
+      { type: 'paragraph', content: [text('Page '), { type: 'field', attrs: { kind: 'page', format: null, instruction: null, text: '3' } }] },
+      { type: 'paragraph', content: [{ type: 'field', attrs: { kind: 'date', format: 'd MMMM yyyy', instruction: null, text: '8 October 2026' } }] }
+    ])
+    expect(notes).toEqual([])
   })
 })
 
 describe('documentFromDocx: sections and the page', () => {
-  it('takes the page from the last section, and section breaks as page breaks unless continuous', async () => {
+  it('takes the page from the first section, with a break holding the next section’s kind and page between sections', async () => {
     const a4 = '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>'
     const { doc, notes } = await read({
       body: [
@@ -604,10 +607,17 @@ describe('documentFromDocx: sections and the page', () => {
         '<w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/><w:pgMar w:top="720" w:right="1080" w:bottom="720" w:left="1080" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>'
       ].join('')
     })
+    const landscape = { width: 792, height: 612, margins: { top: 36, right: 54, bottom: 36, left: 54, header: 35.4, footer: 35.4 } }
 
-    expect(doc.content).toEqual([paragraph('Part one'), { type: 'pageBreak' }, paragraph('Part two'), paragraph('Part three')])
-    expect(doc.attrs?.page).toEqual({ width: 792, height: 612, margins: { top: 36, right: 54, bottom: 36, left: 54 } })
-    expect(notes).toEqual(['Section breaks are shown as page breaks; the page size and margins are those of the last section.'])
+    expect(doc.content).toEqual([
+      paragraph('Part one'),
+      { type: 'sectionBreak', attrs: { kind: 'nextPage', page: null } },
+      paragraph('Part two'),
+      { type: 'sectionBreak', attrs: { kind: 'continuous', page: landscape } },
+      paragraph('Part three')
+    ])
+    expect(doc.attrs?.page).toEqual({ width: 595.3, height: 841.9, margins: { top: 72, right: 72, bottom: 72, left: 72 } })
+    expect(notes).toEqual([])
   })
 
   it('turns a landscape page written the wrong way round, and gives an empty file one paragraph', async () => {
@@ -651,26 +661,24 @@ describe('documentFromDocx: what it cannot show', () => {
     })
 
     expect(doc.content).toEqual([
-      paragraph('Goals\t1'),
-      paragraph(),
-      { type: 'paragraph', content: [text('Kept inserted text'), text('1', [{ type: 'superscript' }])] },
+      { type: 'tableOfContents', attrs: { levels: 3, title: null, pages: [1] } },
+      {
+        type: 'paragraph',
+        content: [text('Kept inserted', [{ type: 'comment', attrs: { id: '0' } }]), text(' text'), { type: 'note', attrs: { kind: 'footnote', content: [paragraph('Source: the plan.')] } }]
+      },
       paragraph('Anchor'),
-      paragraph('Boxed text'),
+      { type: 'textBox', attrs: { width: 144, height: 36, align: null, border: null, fill: null }, content: [paragraph('Boxed text')] },
       paragraph('x=1'),
-      paragraph('Ada'),
-      { type: 'horizontalRule' },
-      paragraph('1. Source: the plan.')
+      paragraph('Ada')
     ])
+    expect(doc.attrs?.headers).toEqual({ header: { default: [paragraph('Quarterly plan')] }, footer: {} })
+    expect(doc.attrs?.comments).toEqual([{ id: '0', author: 'Ada', initials: 'A', date: '2026-10-01T10:00:00.000Z', text: 'Check this' }])
     expect(notes).toEqual([
-      'Fields (a table of contents, page numbers, dates) are shown as their last result and no longer update.',
-      'Text boxes are shown as ordinary paragraphs after the text they were in, and shapes are left out.',
+      'Text boxes placed beside the text are shown after the paragraph they are anchored to.',
       'Equations are shown as plain text.',
-      'Footnotes and endnotes are shown as numbered notes at the end.',
-      'Tracked changes are shown accepted, and saving keeps them that way.',
-      'Comments are left out, and saving does not keep them.',
-      'Headers and footers are not shown, and saving does not keep them.',
+      'Tracked changes are shown accepted, and saving keeps them accepted.',
       'Content controls (form fields, checkboxes) are shown as their text.',
-      'Text in columns is shown in one column.',
+      'Text in columns is shown in one column, and saving keeps it in one column.',
       'Macros are not kept: Herald Docs saves Word documents without them.'
     ])
   })
@@ -692,12 +700,12 @@ describe('documentFromDocx: what it cannot show', () => {
     expect(notes).toEqual(['Charts and SmartArt are shown as pictures, or left out when the file has no picture of them.'])
   })
 
-  it('treats a table of contents in a building block as a field, not a form control', async () => {
+  it('reads a table of contents in a building block as one, not as a form control', async () => {
     const toc = `<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>${para(field('TOC \\o "1-3" \\h', run('Goals')))}</w:sdtContent></w:sdt>`
     const { doc, notes } = await read({ body: toc + para(run('After')) })
 
-    expect(doc.content).toEqual([paragraph('Goals'), paragraph('After')])
-    expect(notes).toEqual(['Fields (a table of contents, page numbers, dates) are shown as their last result and no longer update.'])
+    expect(doc.content).toEqual([{ type: 'tableOfContents', attrs: { levels: 3, title: null, pages: null } }, paragraph('After')])
+    expect(notes).toEqual([])
   })
 
   it('accepts tracked changes: deleted paragraphs and rows go, inserted text stays', async () => {
@@ -712,7 +720,7 @@ describe('documentFromDocx: what it cannot show', () => {
     })
 
     expect(doc.content).toEqual([paragraph('Kept'), { type: 'table', attrs: { borders: false }, content: [{ type: 'tableRow', content: [cell('Row', [100])] }] }, paragraph('Moved here')])
-    expect(notes).toEqual(['Tracked changes are shown accepted, and saving keeps them that way.'])
+    expect(notes).toEqual(['Tracked changes are shown accepted, and saving keeps them accepted.'])
   })
 
   it('reads Strict Open XML files, whose namespaces and relationship types differ', async () => {
@@ -817,7 +825,7 @@ describe('documentFromDocx: files made with the docx package', () => {
       { type: 'pageBreak' },
       paragraph('The end')
     ])
-    expect(doc.attrs?.page).toEqual({ width: 595.3, height: 841.9, margins: { top: 56.7, right: 56.7, bottom: 56.7, left: 56.7 } })
+    expect(doc.attrs?.page).toEqual({ width: 595.3, height: 841.9, margins: { top: 56.7, right: 56.7, bottom: 56.7, left: 56.7, header: 35.4, footer: 35.4 } })
     expect(notes).toEqual(['Styles Herald Docs does not have (Aside) are kept as the formatting they give the text.'])
   })
 })

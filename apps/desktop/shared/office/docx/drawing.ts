@@ -1,15 +1,15 @@
-import { dataUrl, type DocNode, IMAGE_TYPES, points } from '../document.ts'
+import { dataUrl, type DocNode, hexColor, IMAGE_TYPES, points, round, type TextBoxAttrs } from '../document.ts'
 import type { NoteKey } from './fidelity.ts'
 import type { Relationship } from './package.ts'
 import { intOf } from './styles.ts'
 import { emusToPixels, pointsToPixels } from './units.ts'
-import { attr, child, children, find, findAll, textOf, type XmlElement } from './xml.ts'
+import { attr, child, children, find, textOf, type XmlElement } from './xml.ts'
 
 /*
  * Pictures, text boxes and shapes in a Word file's text. DrawingML and VML pictures, in the line or
- * placed beside the text, become pictures in the line; text boxes give back their content, to be
- * shown after the paragraph they sit in; charts and SmartArt show the picture Word keeps of them
- * when it keeps one; shapes without text are left out.
+ * placed beside the text, become pictures in the line; text boxes give back their content with
+ * their size, place and colours, to be shown after the paragraph they sit in; charts and SmartArt
+ * show the picture Word keeps of them when it keeps one; shapes without text are left out.
  */
 
 export interface Picture {
@@ -17,18 +17,30 @@ export interface Picture {
   bytes: Uint8Array
 }
 
+/** What a part holds: the body, a header or footer, or the notes of one kind. */
+export type StoryKind = 'body' | 'header' | 'footnote' | 'endnote'
+
 /** A part with text (the main document, the footnotes): its relationships and the pictures they point at. */
 export interface Story {
+  kind: StoryKind
   relationships: Map<string, Relationship>
   pictures: Map<string, Picture>
   /** Each picture's data URL once made, or null for one that cannot be shown. */
   sources: Map<string, string | null>
 }
 
+export interface Box {
+  /** The box's text (w:txbxContent). */
+  content: XmlElement
+  attrs: TextBoxAttrs
+  /** In the line of its paragraph, which places it, rather than placed beside the text. */
+  inline: boolean
+}
+
 export interface Drawn {
   images: DocNode[]
-  /** The content of text boxes (w:txbxContent), read as paragraphs after the one they sit in. */
-  boxes: XmlElement[]
+  /** Text boxes, read as blocks after the paragraph they sit in. */
+  boxes: Box[]
   /** A horizontal line, as Word's Horizontal Line button draws it. */
   rule: boolean
 }
@@ -123,6 +135,64 @@ const extentOf = (extent: XmlElement | undefined): Pick<Placement, 'width' | 'he
 
 const hasText = (box: XmlElement): boolean => Boolean(textOf(box).trim() || find(box, 'w:drawing') || find(box, 'w:pict'))
 
+/** Every element with this name in a drawing, leaving out what is inside its text boxes, which is read with their text. */
+function outsideBoxes(element: XmlElement | undefined, name: string, out: XmlElement[] = []): XmlElement[] {
+  for (const node of children(element)) {
+    if (node.name === name) {
+      out.push(node)
+    }
+
+    if (node.name !== 'w:txbxContent') {
+      outsideBoxes(node, name, out)
+    }
+  }
+
+  return out
+}
+
+const BOX_ALIGNS = new Set(['left', 'center', 'right'])
+
+const boxAlign = (value: string | undefined): TextBoxAttrs['align'] => (value && BOX_ALIGNS.has(value.trim()) ? (value.trim() as TextBoxAttrs['align']) : null)
+
+const emuPoints = (emus: string | undefined): number | null => {
+  const amount = intOf(emus)
+
+  return amount && amount > 0 ? round(amount / 12700) : null
+}
+
+/** A plain DrawingML colour; theme colours other than black and white, and changed ones, are not plain. */
+function drawingColor(fill: XmlElement | undefined): string | null {
+  const rgb = child(fill, 'a:srgbClr')
+  const preset = child(fill, 'a:prstClr')
+  const scheme = child(fill, 'a:schemeClr')
+
+  if (rgb) {
+    return hexColor(attr(rgb, 'val'))
+  }
+
+  if (preset) {
+    return hexColor(attr(preset, 'val'))
+  }
+
+  const value = attr(scheme, 'val')
+
+  return scheme && !children(scheme).length ? (value === 'lt1' || value === 'bg1' ? '#ffffff' : value === 'dk1' || value === 'tx1' ? '#000000' : null) : null
+}
+
+/** A DrawingML text box's size, place and colours; a box in a group has the size of its own shape. */
+function drawingBox(shape: XmlElement, extent: XmlElement | undefined, frame: XmlElement): TextBoxAttrs {
+  const properties = child(shape, 'wps:spPr')
+  const line = child(properties, 'a:ln')
+
+  return {
+    width: emuPoints(attr(extent, 'cx')),
+    height: emuPoints(attr(extent, 'cy')),
+    align: frame.name === 'wp:anchor' ? boxAlign(textOf(child(child(frame, 'wp:positionH'), 'wp:align'))) : null,
+    border: line && !child(line, 'a:noFill') ? drawingColor(child(line, 'a:solidFill')) : null,
+    fill: drawingColor(child(properties, 'a:solidFill'))
+  }
+}
+
 /** A DrawingML drawing (w:drawing): its pictures, text boxes and shapes. */
 export function readDrawing(drawing: XmlElement, story: Story, found: Set<NoteKey>): Drawn {
   const out: Drawn = { images: [], boxes: [], rule: false }
@@ -134,7 +204,7 @@ export function readDrawing(drawing: XmlElement, story: Story, found: Set<NoteKe
 
     const data = child(child(frame, 'a:graphic'), 'a:graphicData')
     const docPr = child(frame, 'wp:docPr')
-    const pictures = findAll(data, 'pic:pic')
+    const pictures = outsideBoxes(data, 'pic:pic')
     // A picture on its own takes the frame's size and alternative text; pictures in a group their own.
     const single = pictures.length === 1 && child(data, 'pic:pic') === pictures[0]
 
@@ -155,12 +225,21 @@ export function readDrawing(drawing: XmlElement, story: Story, found: Set<NoteKe
       }
     }
 
-    const boxes = findAll(data, 'w:txbxContent').filter(hasText)
-    const shapes = findAll(data, 'wps:wsp').length + findAll(data, 'wps:wgp').length
-    out.boxes.push(...boxes)
+    const shapes = outsideBoxes(data, 'wps:wsp')
 
-    if (boxes.length || shapes > boxes.length) {
-      found.add('textBoxes')
+    for (const shape of shapes) {
+      const content = child(child(shape, 'wps:txbx'), 'w:txbxContent')
+
+      if (content && hasText(content)) {
+        const extent = child(data, 'wps:wsp') === shape ? child(frame, 'wp:extent') : find(child(shape, 'wps:spPr'), 'a:ext')
+        out.boxes.push({ content, attrs: drawingBox(shape, extent, frame), inline: frame.name === 'wp:inline' })
+
+        if (frame.name === 'wp:anchor') {
+          found.add('textBoxes')
+        }
+      } else {
+        found.add('shapes')
+      }
     }
 
     if (!pictures.length && /chart|diagram/i.test(attr(data, 'uri') ?? '')) {
@@ -171,12 +250,39 @@ export function readDrawing(drawing: XmlElement, story: Story, found: Set<NoteKe
   return out
 }
 
-/** A VML length ("100pt", "1.5in") in CSS pixels. */
-function vmlLength(style: string, name: string): number | null {
-  const match = new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'i').exec(style)
-  const amount = match ? points(match[1].trim()) : null
+const vmlStyle = (style: string, name: string): string | undefined => new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'i').exec(style)?.[1].trim()
 
-  return amount && amount > 0 ? Math.round(pointsToPixels(amount)) : null
+/** A VML length ("100pt", "1.5in") in points. */
+function vmlPoints(style: string, name: string): number | null {
+  const amount = points(vmlStyle(style, name))
+
+  return amount && amount > 0 ? round(amount) : null
+}
+
+/** A VML length in CSS pixels. */
+function vmlLength(style: string, name: string): number | null {
+  const amount = vmlPoints(style, name)
+
+  return amount ? Math.round(pointsToPixels(amount)) : null
+}
+
+const vmlOff = (value: string | undefined): boolean => /^(f|false|0|off)$/i.test(value?.trim() ?? '')
+
+/** A VML colour ("#4472c4", "red", "white [3212]"); system colours are not plain. */
+const vmlColor = (value: string | undefined): string | null => hexColor((value ?? '').replace(/\s*\[\d+\]\s*$/, ''))
+
+/** A VML text box's size, place and colours: VML draws a black line and a white fill unless told otherwise. */
+function vmlBox(shape: XmlElement, style: string, absolute: boolean): TextBoxAttrs {
+  const stroked = !vmlOff(attr(shape, 'stroked')) && !vmlOff(attr(child(shape, 'v:stroke'), 'on'))
+  const filled = !vmlOff(attr(shape, 'filled')) && !vmlOff(attr(child(shape, 'v:fill'), 'on'))
+
+  return {
+    width: vmlPoints(style, 'width'),
+    height: vmlPoints(style, 'height'),
+    align: absolute ? boxAlign(vmlStyle(style, 'mso-position-horizontal')) : null,
+    border: stroked ? (vmlColor(attr(shape, 'strokecolor')) ?? '#000000') : null,
+    fill: filled ? (vmlColor(attr(shape, 'fillcolor') ?? attr(child(shape, 'v:fill'), 'color')) ?? '#ffffff') : null
+  }
 }
 
 /** VML drawing (w:pict, or the shape of w:object): pictures, text boxes, horizontal lines and shapes. */
@@ -214,10 +320,14 @@ export function readVml(pict: XmlElement, story: Story, found: Set<NoteKey>, pic
       } else if (attr(shape, 'o:hr') === 't' || attr(shape, 'o:hr') === 'true') {
         out.rule = true
       } else if (box && hasText(box)) {
-        out.boxes.push(box)
-        found.add('textBoxes')
+        const absolute = /position\s*:\s*absolute/i.test(style)
+        out.boxes.push({ content: box, attrs: vmlBox(shape, style, absolute), inline: !absolute })
+
+        if (absolute) {
+          found.add('textBoxes')
+        }
       } else {
-        found.add('textBoxes')
+        found.add('shapes')
       }
     }
   }

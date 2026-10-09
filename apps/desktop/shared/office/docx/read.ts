@@ -1,7 +1,29 @@
-import { type DocJSON, type DocMark, type DocNode, HERALD_LOOKS, joinText, type PageSettings, paragraphNode, round, type StyleLook, type StyleLooks, type StyleName, textNode } from '../document.ts'
+import {
+  DEFAULT_HEADER_DISTANCE,
+  type DocJSON,
+  type DocMark,
+  type DocNode,
+  HEADER_KINDS,
+  type HeaderKind,
+  HERALD_LOOKS,
+  joinText,
+  type NoteKind,
+  type PageHeaders,
+  type PageSettings,
+  paragraphNode,
+  round,
+  type SectionKind,
+  type StyleLook,
+  type StyleLooks,
+  type StyleName,
+  textNode
+} from '../document.ts'
 import { assemble, type Entry, type ListMark } from './blocks.ts'
-import { alternative, type Drawn, type Picture, readDrawing, readObject, readVml, type Story } from './drawing.ts'
+import { readComments } from './comments.ts'
+import { alternative, type Box, type Drawn, type Picture, readDrawing, readObject, readVml, type Story, type StoryKind } from './drawing.ts'
+import { CROSS_REFERENCES, fieldOf, FORM_FIELDS, keywordOf, numberFormatOf, tokensOf } from './field-codes.ts'
 import { fidelityNotes, type NoteKey, packageNotes } from './fidelity.ts'
+import { readKept } from './kept.ts'
 import { listKind, numberLabel, type Numbering, readNumbering } from './numbering.ts'
 import { NOT_WORD, openPackage, type Relationship, relationshipKind, type WordPackage } from './package.ts'
 import {
@@ -24,6 +46,7 @@ import {
   type StyleRole,
   type Styles
 } from './styles.ts'
+import { commentMarks, isTitle, paragraphText, type TocField, tocField } from './toc.ts'
 import { measure, pointsToPixels, twipsToPoints } from './units.ts'
 import { attr, child, children, findAll, textOf, type XmlElement } from './xml.ts'
 
@@ -31,8 +54,10 @@ import { attr, child, children, findAll, textOf, type XmlElement } from './xml.t
  * Word documents (.docx) as Herald Docs documents. A paragraph in one of Word's styles Herald has
  * (Title, Subtitle, headings, Quote, code, callouts) takes that style, and other styles become the
  * formatting they give; numbering becomes lists, tables keep their spans, header rows and shading,
- * and pictures come in the line. What Herald Docs cannot show the way Word does (fields, text
- * boxes, footnotes, tracked changes) is shown as near as it can be, and said in the notes.
+ * and pictures come in the line. Headers and footers, fields, footnotes and endnotes, tables of
+ * contents, sections, text boxes and comments become Herald's own. What Herald Docs cannot show
+ * the way Word does (floating pictures, columns, tracked changes) is shown as near as it can be,
+ * and said in the notes.
  */
 
 interface Field {
@@ -40,11 +65,33 @@ interface Field {
   /** Whether the result, what Word last showed for the field, has begun. */
   result: boolean
   link: string | null
+  /** Herald keeps it as a field, which its instruction decides. */
+  kept: boolean
+  /** Another field begins in its instruction, so the instruction Herald reads is not whole. */
+  nested: boolean
+  /** It is in another field's instruction, which shows nothing of it. */
+  buried: boolean
+  /** It begins in hidden text. */
+  hidden: boolean
+  /** The marks it begins with, and where its result starts: the line and the index of the result's first node. */
+  marks: DocMark[]
+  line: Line | null
+  start: number
 }
 
-interface NoteReference {
-  kind: 'footnote' | 'endnote'
-  id: string
+/** A part with text of its own: the notes of one kind, or a header or footer. */
+interface Part {
+  xml: XmlElement
+  story: Story
+}
+
+interface Comments {
+  /** The thread each comment is in, by the comment's id. */
+  threadOf: Map<string, string>
+  /** The threads whose text this point of the text is in. */
+  open: string[]
+  /** The threads whose text has a start, rather than only a reference. */
+  ranged: Set<string>
 }
 
 interface Reader {
@@ -57,10 +104,11 @@ interface Reader {
   unknown: string[]
   /** Complex fields open at this point of the text, which can span paragraphs. */
   fields: Field[]
-  references: NoteReference[]
+  notes: Record<NoteKind, Part | null>
+  comments: Comments
   sections: XmlElement[]
-  /** The page break each section but the last ends with. */
-  breaks: Entry[]
+  /** The section break each section but the last ends with. */
+  breaks: DocNode[]
 }
 
 /** How the runs of one paragraph are read. */
@@ -75,8 +123,13 @@ interface Inline {
 /** A paragraph's content as read: inline nodes, with null where a page break splits it. */
 interface Line {
   nodes: (DocNode | null)[]
-  boxes: XmlElement[]
+  boxes: Box[]
   rule: boolean
+  code: boolean
+  /** The next text is a note's mark of its own, which Herald numbers instead. */
+  skipMark: boolean
+  /** Comments with no text of their own, to anchor to the word after where their reference is. */
+  anchors: { id: string; at: number }[]
 }
 
 const append = <T>(out: T[], items: readonly T[]): void => {
@@ -99,6 +152,95 @@ function lookFor(reader: Reader, name: StyleName, style: ParagraphStyle): StyleL
   return { bold: false, italic: false, ...HERALD_LOOKS.normal, ...reader.looks.normal, ...HERALD_LOOKS[name], ...reader.looks[name] }
 }
 
+/** Reads another part of the text (a note, a text box, a header) with its own open fields and comments. */
+function apart<T>(reader: Reader, read: () => T): T {
+  const { fields } = reader
+  const { open } = reader.comments
+  reader.fields = []
+  reader.comments.open = []
+
+  try {
+    return read()
+  } finally {
+    reader.fields = fields
+    reader.comments.open = open
+  }
+}
+
+// Comments.
+
+const commentMarksOf = (reader: Reader): DocMark[] => reader.comments.open.map((id) => ({ type: 'comment', attrs: { id } }))
+
+/** An inline node with the comments open where it is. */
+function commented(reader: Reader, node: DocNode): DocNode {
+  const marks = commentMarksOf(reader)
+
+  return marks.length ? { ...node, marks: [...(node.marks ?? []), ...marks] } : node
+}
+
+/** A comment's text starts or ends here; comments that answer another are on its text already. */
+function commentMark(reader: Reader, start: boolean, id: string | undefined): void {
+  const { comments } = reader
+
+  if (!id || comments.threadOf.get(id) !== id) {
+    return
+  }
+
+  comments.open = comments.open.filter((open) => open !== id)
+
+  if (start) {
+    comments.open.push(id)
+    comments.ranged.add(id)
+  }
+}
+
+/** Splits a text node around a word in it and puts a comment on the word. */
+function markWord(nodes: (DocNode | null)[], index: number, match: RegExpExecArray, id: string): void {
+  const node = nodes[index] as DocNode
+  const text = node.text ?? ''
+  const start = match.index + match[1].length
+  const end = start + match[2].length
+  const piece = (from: number, to: number, marks = node.marks): DocNode[] => (to > from ? [textNode(text.slice(from, to), marks)] : [])
+  nodes.splice(index, 1, ...piece(0, start), ...piece(start, end, [...(node.marks ?? []), { type: 'comment', attrs: { id } }]), ...piece(end, text.length))
+}
+
+/** A comment without text of its own goes on the word before its reference. */
+function anchorComment(reader: Reader, line: Line, id: string | undefined): void {
+  if (!id || reader.comments.threadOf.get(id) !== id || reader.comments.ranged.has(id)) {
+    return
+  }
+
+  reader.comments.ranged.add(id)
+
+  for (let index = line.nodes.length - 1; index >= 0; index--) {
+    const node = line.nodes[index]
+    const match = node?.type === 'text' ? /(\s*)(\S+)\s*$/.exec(node.text ?? '') : null
+
+    if (match) {
+      markWord(line.nodes, index, match, id)
+
+      return
+    }
+  }
+
+  line.anchors.push({ id, at: line.nodes.length })
+}
+
+/** Comments whose reference starts their paragraph go on the word after it. */
+function anchorAfter(line: Line): void {
+  for (const { id, at } of line.anchors) {
+    for (let index = at; index < line.nodes.length; index++) {
+      const node = line.nodes[index]
+      const match = node?.type === 'text' ? /^(\s*)(\S+)/.exec(node.text ?? '') : null
+
+      if (match) {
+        markWord(line.nodes, index, match, id)
+        break
+      }
+    }
+  }
+}
+
 // Links, fields and marks.
 
 const UNSAFE_LINK = /^\s*(javascript|vbscript|data):/i
@@ -108,65 +250,138 @@ const safeHref = (href: string | null): string | null => (href && !UNSAFE_LINK.t
 /** Colours Word and Google Docs give links, which the editor shows its own way. */
 const LINK_COLORS = new Set(['#0563c1', '#0000ff', '#0000ee', '#467886', '#1155cc', '#954f72'])
 
-const unquote = (token: string): string => (token.startsWith('"') && token.endsWith('"') && token.length > 1 ? token.slice(1, -1) : token)
-
-/** A field's kind, and for HYPERLINK its address and the place inside the document it points at. */
-function parseField(instruction: string): { kind: string; url: string | null; anchor: string | null } {
-  const tokens = instruction.match(/"[^"]*"|\S+/g) ?? []
+/** A HYPERLINK field's address, and the place inside the document it points at. */
+function linkOf(instruction: string): { url: string | null; anchor: string | null } {
+  const tokens = tokensOf(instruction)
   let url: string | null = null
   let anchor: string | null = null
 
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i]
 
-    if (token.startsWith('\\')) {
-      if (/^\\l$/i.test(token)) {
-        anchor = unquote(tokens[++i] ?? '')
-      } else if (/^\\[ot]$/i.test(token)) {
-        i++
-      }
-    } else {
-      url ??= unquote(token)
+    if (/^\\l$/i.test(token)) {
+      anchor = tokens[++i] ?? ''
+    } else if (/^\\[ot]$/i.test(token)) {
+      i++
+    } else if (!token.startsWith('\\')) {
+      url ??= token
     }
   }
 
-  return { kind: (tokens[0] ?? '').toUpperCase(), url: safeHref(url && anchor ? `${url}#${anchor}` : url), anchor }
+  return { url: safeHref(url && anchor ? `${url}#${anchor}` : url), anchor }
 }
 
 const inFieldResult = (reader: Reader): boolean => reader.fields.some((field) => field.result)
 
+/**
+ * What a field is to Herald, once its instruction is whole: a link, a form field shown as its
+ * text, or a field it keeps. A field Herald cannot read whole (one in another's instruction, or a
+ * table of contents it could not read as one) is shown as its last result.
+ */
 function interpret(field: Field, reader: Reader): void {
-  const parsed = parseField(field.instruction)
+  const keyword = keywordOf(field.instruction)
 
-  if (parsed.kind === 'HYPERLINK') {
-    field.link = parsed.url
+  if (keyword === 'HYPERLINK') {
+    const { url, anchor } = linkOf(field.instruction)
+    field.link = url
 
-    // A table of contents' links to its headings are part of the field, which has a note of its own.
-    if (!parsed.url && parsed.anchor && !reader.fields.some((other) => other !== field && other.result)) {
+    if (!url && anchor && !reader.fields.some((other) => other !== field && other.result)) {
       reader.found.add('internalLinks')
     }
-  } else if (parsed.kind) {
+  } else if (FORM_FIELDS.has(keyword)) {
+    reader.found.add('contentControls')
+  } else if (keyword === 'TOC' || field.nested) {
     reader.found.add('fields')
+  } else if (keyword) {
+    field.kept = true
   }
 }
 
-function fieldChar(element: XmlElement, reader: Reader): void {
+/** A field node for a field Herald keeps, with the notes for what the field has that Herald does not show. */
+function fieldNode(reader: Reader, instruction: string, text: string | null, marks: DocMark[] | undefined): DocNode {
+  const attrs = fieldOf(instruction, text)
+
+  if (CROSS_REFERENCES.has(keywordOf(instruction))) {
+    reader.found.add('crossReferences')
+  }
+
+  if ((attrs.kind === 'page' || attrs.kind === 'pages') && numberFormatOf(instruction)) {
+    reader.found.add('pageNumbers')
+  }
+
+  return marks?.length ? { type: 'field', attrs: { ...attrs }, marks } : { type: 'field', attrs: { ...attrs } }
+}
+
+/**
+ * Puts a field Herald keeps in the line in place of its last result, which must be text in one
+ * paragraph; a result that is not stays as it is.
+ */
+function settleField(field: Field, reader: Reader, line: Line): void {
+  if (field.buried) {
+    return
+  }
+
+  if (!field.result) {
+    interpret(field, reader)
+
+    if (field.kept && field.hidden) {
+      reader.found.add('hiddenText')
+    } else if (field.kept && !line.code) {
+      line.nodes.push(fieldNode(reader, field.instruction, null, field.marks))
+    }
+
+    return
+  }
+
+  if (!field.kept) {
+    return
+  }
+
+  const result = field.line === line && !line.code ? line.nodes.slice(field.start) : null
+
+  if (!result || result.some((node) => node?.type !== 'text')) {
+    reader.found.add('fields')
+
+    return
+  }
+
+  const text = result.map((node) => node?.text ?? '').join('')
+
+  if (field.hidden && !text) {
+    reader.found.add('hiddenText')
+
+    return
+  }
+
+  line.nodes.splice(field.start, result.length, fieldNode(reader, field.instruction, text, result[0]?.marks ?? field.marks))
+}
+
+function fieldChar(element: XmlElement, reader: Reader, line: Line, hidden: boolean, marks: () => DocMark[]): void {
   const type = attr(element, 'w:fldCharType')
 
   if (type === 'begin') {
-    reader.fields.push({ instruction: '', result: false, link: null })
+    const open = reader.fields.at(-1)
+
+    if (open && !open.result) {
+      open.nested = true
+    }
+
+    const buried = reader.fields.some((other) => !other.result)
+    reader.fields.push({ instruction: '', result: false, link: null, kept: false, nested: false, buried, hidden, marks: marks(), line: null, start: 0 })
   } else if (type === 'separate') {
     const field = reader.fields.at(-1)
 
     if (field && !field.result) {
       field.result = true
+      field.line = line
+      field.start = line.nodes.length
       interpret(field, reader)
     }
   } else if (type === 'end') {
     const field = reader.fields.pop()
 
-    if (field && !field.result) {
-      interpret(field, reader)
+    if (field) {
+      settleField(field, reader, line)
     }
   }
 }
@@ -251,23 +466,51 @@ function runText(element: XmlElement): string {
 
 const visible = (element: XmlElement): boolean => element.name === 'w:t' || element.name === 'w:drawing' || element.name === 'w:pict' || element.name === 'w:tab'
 
-function drawn(result: Drawn, line: Line, inline: Inline): void {
+function drawn(result: Drawn, reader: Reader, line: Line, inline: Inline): void {
   if (!inline.code) {
-    append(line.nodes, result.images)
+    append(
+      line.nodes,
+      result.images.map((image) => commented(reader, image))
+    )
   }
 
   append(line.boxes, result.boxes)
   line.rule ||= result.rule
 }
 
-function reference(element: XmlElement, reader: Reader, line: Line): void {
-  reader.found.add('notes')
-  reader.references.push({ kind: element.name === 'w:footnoteReference' ? 'footnote' : 'endnote', id: attr(element, 'w:id') ?? '' })
+/** A note's blocks, without the space Word puts after the note's number. */
+function noteContent(entries: readonly Entry[]): DocNode[] {
+  const blocks = withoutClosingParagraph(assemble(entries))
+  const first = blocks[0]
+  const lead = first?.type === 'paragraph' ? first.content?.[0] : undefined
 
-  // A note with a mark of its own has the mark as the text after it.
-  if (!isOn(attr(element, 'w:customMarkFollows'))) {
-    line.nodes.push(textNode(String(reader.references.length), [{ type: 'superscript' }]))
+  if (first && lead?.type === 'text') {
+    const text = (lead.text ?? '').trimStart()
+    const content = [...(text ? [{ ...lead, text }] : []), ...(first.content ?? []).slice(1)]
+    blocks[0] = paragraphNode(content, first.attrs)
   }
+
+  return blocks.length ? blocks : [paragraphNode()]
+}
+
+/** A footnote or endnote, read where its reference is; Word has notes in the body only. */
+function noteReference(element: XmlElement, reader: Reader, story: Story, line: Line): void {
+  const kind: NoteKind = element.name === 'w:footnoteReference' ? 'footnote' : 'endnote'
+  const part = reader.notes[kind]
+  const id = attr(element, 'w:id')
+  const note = children(part?.xml, `w:${kind}`).find((item) => attr(item, 'w:id') === id)
+
+  if (story.kind !== 'body') {
+    return
+  }
+
+  if (isOn(attr(element, 'w:customMarkFollows'))) {
+    reader.found.add('noteMarks')
+    line.skipMark = true
+  }
+
+  const content = note && part ? apart(reader, () => noteContent(readBlocks(note, reader, part.story))) : [paragraphNode()]
+  line.nodes.push(commented(reader, { type: 'note', attrs: { kind, content } }))
 }
 
 function readRunChild(element: XmlElement, reader: Reader, story: Story, inline: Inline, line: Line, marks: () => DocMark[]): void {
@@ -279,7 +522,12 @@ function readRunChild(element: XmlElement, reader: Reader, story: Story, inline:
 
   switch (element.name) {
     case 'w:t':
-      push(runText(element))
+      if (line.skipMark) {
+        line.skipMark = false
+      } else {
+        push(runText(element))
+      }
+
       break
     case 'w:tab':
     case 'w:ptab':
@@ -315,20 +563,23 @@ function readRunChild(element: XmlElement, reader: Reader, story: Story, inline:
       break
     }
     case 'w:drawing':
-      drawn(readDrawing(element, story, reader.found), line, inline)
+      drawn(readDrawing(element, story, reader.found), reader, line, inline)
       break
     case 'w:pict':
-      drawn(readVml(element, story, reader.found), line, inline)
+      drawn(readVml(element, story, reader.found), reader, line, inline)
       break
     case 'w:object':
-      drawn(readObject(element, story, reader.found), line, inline)
+      drawn(readObject(element, story, reader.found), reader, line, inline)
       break
     case 'w:footnoteReference':
     case 'w:endnoteReference':
-      reference(element, reader, line)
+      if (!inline.code) {
+        noteReference(element, reader, story, line)
+      }
+
       break
     case 'w:commentReference':
-      reader.found.add('comments')
+      anchorComment(reader, line, attr(element, 'w:id'))
       break
     case 'w:delText':
       reader.found.add('trackedChanges')
@@ -349,7 +600,7 @@ function readRun(run: XmlElement, reader: Reader, story: Story, inline: Inline, 
   const rPr = child(run, 'w:rPr')
   const style = reader.styles.character(attr(child(rPr, 'w:rStyle'), 'w:val'))
   const props = resolveRun(reader.styles.defaults.run, inline.paraRun, style?.run ?? null, runProps(rPr, reader.styles.theme))
-  const marks = (): DocMark[] => (inline.code ? [] : marksOf(props, style?.role === 'code', inline.look, inline.href ?? fieldLink(reader)))
+  const marks = (): DocMark[] => (inline.code ? [] : [...marksOf(props, style?.role === 'code', inline.look, inline.href ?? fieldLink(reader)), ...commentMarksOf(reader)])
 
   if (style?.role === 'custom') {
     remember(reader, style.name)
@@ -361,7 +612,7 @@ function readRun(run: XmlElement, reader: Reader, story: Story, inline: Inline, 
 
   for (const element of children(run)) {
     if (element.name === 'w:fldChar') {
-      fieldChar(element, reader)
+      fieldChar(element, reader, line, Boolean(props.hidden), marks)
     } else if (element.name === 'w:instrText') {
       const field = reader.fields.at(-1)
 
@@ -392,27 +643,38 @@ function readHyperlink(element: XmlElement, reader: Reader, story: Story, inline
   readContent(element, reader, story, href ? { ...inline, href } : inline, line)
 }
 
+/** A simple field: a link, or a field Herald keeps in place of its last result. */
 function readSimpleField(element: XmlElement, reader: Reader, story: Story, inline: Inline, line: Line): void {
-  const field = parseField(attr(element, 'w:instr') ?? '')
+  const instruction = attr(element, 'w:instr') ?? ''
 
-  if (field.kind === 'HYPERLINK') {
-    if (!field.url && field.anchor && !inFieldResult(reader)) {
+  if (keywordOf(instruction) === 'HYPERLINK') {
+    const { url, anchor } = linkOf(instruction)
+
+    if (!url && anchor && !inFieldResult(reader)) {
       reader.found.add('internalLinks')
     }
-  } else if (field.kind) {
-    reader.found.add('fields')
+
+    readContent(element, reader, story, url ? { ...inline, href: url } : inline, line)
+
+    return
   }
 
-  readContent(element, reader, story, field.url ? { ...inline, href: field.url } : inline, line)
+  const buried = reader.fields.some((other) => !other.result)
+  const field: Field = { instruction, result: true, link: null, kept: false, nested: false, buried, hidden: false, marks: commentMarksOf(reader), line, start: line.nodes.length }
+  interpret(field, reader)
+  readContent(element, reader, story, inline, line)
+  settleField(field, reader, line)
 }
 
 /** A content control's content; building blocks such as a table of contents are not form controls. */
 function controlled(sdt: XmlElement, reader: Reader): XmlElement | undefined {
-  if (!child(child(sdt, 'w:sdtPr'), 'w:docPartObj')) {
+  const content = child(sdt, 'w:sdtContent')
+
+  if (!child(child(sdt, 'w:sdtPr'), 'w:docPartObj') && !children(content).some((_, index, elements) => tocField(elements, index))) {
     reader.found.add('contentControls')
   }
 
-  return child(sdt, 'w:sdtContent')
+  return content
 }
 
 /** What a paragraph (or a hyperlink, field or content control in it) holds. */
@@ -462,7 +724,7 @@ function readContent(parent: XmlElement | undefined, reader: Reader, story: Stor
         break
       case 'w:commentRangeStart':
       case 'w:commentRangeEnd':
-        reader.found.add('comments')
+        commentMark(reader, element.name === 'w:commentRangeStart', attr(element, 'w:id'))
         break
     }
   }
@@ -670,9 +932,10 @@ function readParagraph(p: XmlElement, reader: Reader, story: Story): Entry[] {
     reader.found.add('trackedChanges')
   }
 
-  const look = lookFor(reader, heraldStyleOf(role), style)
-  const line: Line = { nodes: [], boxes: [], rule: false }
+  const look = lookIn(reader, story, role, style)
+  const line: Line = { nodes: [], boxes: [], rule: false, code: role.kind === 'code', skipMark: false, anchors: [] }
   readContent(p, reader, story, { look, paraRun: style.run, href: null, code: role.kind === 'code' }, line)
+  anchorAfter(line)
 
   const entries: Entry[] = []
   const container = role.kind === 'quote' ? 'quote' : role.kind === 'callout' ? role.callout : undefined
@@ -695,7 +958,7 @@ function readParagraph(p: XmlElement, reader: Reader, story: Story): Entry[] {
     }
 
     entries.push({ kind: 'block', node: { type: 'horizontalRule' }, container })
-  } else if (!(empty && deletedMark)) {
+  } else if (!(empty && (deletedMark || line.boxes.length))) {
     parts.forEach((part, index) => {
       const attached = index > 0
 
@@ -711,19 +974,30 @@ function readParagraph(p: XmlElement, reader: Reader, story: Story): Entry[] {
   }
 
   for (const box of line.boxes) {
-    append(entries, readBlocks(box, reader, story))
+    const content = apart(reader, () => withoutClosingParagraph(assemble(readBlocks(box.content, reader, story))))
+    // A box in the line is placed by its paragraph's alignment.
+    const align = box.attrs.align ?? (box.inline && (props.align === 'left' || props.align === 'center' || props.align === 'right') ? props.align : null)
+    const node: DocNode = { type: 'textBox', attrs: { ...box.attrs, align }, content: content.length ? content : [paragraphNode()] }
+    entries.push({ kind: 'block', node, container, attached: true })
   }
 
   const section = child(pPr, 'w:sectPr')
 
-  if (section) {
-    const pageBreak: Entry = { kind: 'block', node: { type: 'pageBreak' } }
+  if (section && story.kind === 'body') {
+    const node: DocNode = { type: 'sectionBreak', attrs: { kind: 'nextPage', page: null } }
     reader.sections.push(section)
-    reader.breaks.push(pageBreak)
-    entries.push(pageBreak)
+    reader.breaks.push(node)
+    entries.push({ kind: 'block', node })
   }
 
   return entries
+}
+
+/** The look a paragraph is measured against: a note's text in Word's note style is the note's own plain text. */
+function lookIn(reader: Reader, story: Story, role: StyleRole, style: ParagraphStyle): StyleLook {
+  const noteText = (story.kind === 'footnote' || story.kind === 'endnote') && /^(footnote|endnote) text$/i.test(style.name)
+
+  return noteText ? { bold: false, italic: false, ...HERALD_LOOKS.normal, ...reader.looks.normal, ...lookOf(style, reader.styles, 'normal') } : lookFor(reader, heraldStyleOf(role), style)
 }
 
 // Tables.
@@ -895,14 +1169,56 @@ function readTable(table: XmlElement, reader: Reader, story: Story): DocNode | n
   return borders ? { type: 'table', content: rows } : { type: 'table', attrs: { borders: false }, content: rows }
 }
 
+/** A table of contents that starts at element `index`, with the title before it in a "TOC Heading" paragraph when there is one. */
+function tocAt(elements: readonly XmlElement[], index: number, reader: Reader): { toc: TocField; title: string | null } | null {
+  const element = elements[index]
+  const style = reader.styles.paragraph(attr(child(child(element, 'w:pPr'), 'w:pStyle'), 'w:val'))
+
+  if (isTitle(style.name)) {
+    const toc = tocField(elements, index + 1)
+
+    return toc ? { toc, title: paragraphText(element) || null } : null
+  }
+
+  const toc = tocField(elements, index)
+
+  return toc ? { toc, title: null } : null
+}
+
 /** The blocks of a part of the text (the body, a cell, a text box, a note), as entries. */
 function readBlocks(parent: XmlElement | undefined, reader: Reader, story: Story): Entry[] {
   const entries: Entry[] = []
+  const elements = children(parent)
 
-  for (const element of children(parent)) {
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index]
+
     switch (element.name) {
-      case 'w:p':
-        append(entries, readParagraph(element, reader, story))
+      case 'w:p': {
+        const found = tocAt(elements, index, reader)
+
+        if (!found) {
+          append(entries, readParagraph(element, reader, story))
+          break
+        }
+
+        const marks = found.title === null ? found.toc.comments : [...commentMarks(element), ...found.toc.comments]
+
+        for (const mark of marks) {
+          commentMark(reader, mark.start, mark.id)
+        }
+
+        if (found.toc.approximate) {
+          reader.found.add('tocOptions')
+        }
+
+        entries.push({ kind: 'block', node: { type: 'tableOfContents', attrs: { ...found.toc.attrs, title: found.title } } })
+        index = found.toc.end
+        break
+      }
+      case 'w:commentRangeStart':
+      case 'w:commentRangeEnd':
+        commentMark(reader, element.name === 'w:commentRangeStart', attr(element, 'w:id'))
         break
       case 'w:tbl': {
         const table = readTable(element, reader, story)
@@ -939,7 +1255,7 @@ function readBlocks(parent: XmlElement | undefined, reader: Reader, story: Story
 
 // The document.
 
-async function loadStory(pkg: WordPackage, relationships: Map<string, Relationship>): Promise<Story> {
+async function loadStory(pkg: WordPackage, relationships: Map<string, Relationship>, kind: StoryKind): Promise<Story> {
   const pictures = new Map<string, Picture>()
   const images = [...relationships.values()].filter((item) => !item.external && relationshipKind(item) === 'image')
 
@@ -953,49 +1269,14 @@ async function loadStory(pkg: WordPackage, relationships: Map<string, Relationsh
     })
   )
 
-  return { relationships, pictures, sources: new Map() }
+  return { kind, relationships, pictures, sources: new Map() }
 }
 
-interface NotesPart {
-  xml: XmlElement
-  story: Story
-}
-
-async function loadNotes(pkg: WordPackage, path: string | undefined): Promise<NotesPart | null> {
+/** A part of its own (notes, a header or footer), with the pictures its relationships lead to. */
+async function loadPart(pkg: WordPackage, path: string | undefined, kind: StoryKind): Promise<Part | null> {
   const [xml, relationships] = path ? await Promise.all([pkg.xml(path), pkg.relationships(path)]) : [null, null]
 
-  return xml && relationships ? { xml, story: await loadStory(pkg, relationships) } : null
-}
-
-/** Footnotes and endnotes, numbered in the order the text refers to them, after a rule. */
-function notesAppendix(reader: Reader, parts: Record<NoteReference['kind'], NotesPart | null>): DocNode[] {
-  const references = [...reader.references]
-  const out: DocNode[] = references.length ? [{ type: 'horizontalRule' }] : []
-
-  references.forEach((item, index) => {
-    const part = parts[item.kind]
-    const note = children(part?.xml, item.kind === 'footnote' ? 'w:footnote' : 'w:endnote').find((element) => attr(element, 'w:id') === item.id)
-    const blocks = note && part ? assemble(readBlocks(note, reader, part.story)) : []
-    const first = blocks[0]
-    const number = textNode(`${index + 1}. `)
-
-    if (first?.type === 'paragraph') {
-      const content = first.content ?? []
-      const lead = content[0]
-
-      if (lead?.type === 'text') {
-        content[0] = { ...lead, text: (lead.text ?? '').trimStart() }
-      }
-
-      first.content = joinText([number, ...content])
-    } else {
-      blocks.unshift(paragraphNode([textNode(`${index + 1}.`)]))
-    }
-
-    append(out, blocks)
-  })
-
-  return out
+  return xml && relationships ? { xml, story: await loadStory(pkg, relationships, kind) } : null
 }
 
 function pageOf(section: XmlElement | undefined): PageSettings | null {
@@ -1010,20 +1291,89 @@ function pageOf(section: XmlElement | undefined): PageSettings | null {
   const height = points(size, 'w:h', 792)
   // Some programs mark a page landscape but give its sides the portrait way round.
   const turned = attr(size, 'w:orient') === 'landscape' && width < height
+  // The model leaves out Word's usual distance to a header or footer.
+  const distance = (name: string): number | null => {
+    const value = attr(margins, name) === undefined ? DEFAULT_HEADER_DISTANCE : points(margins, name, DEFAULT_HEADER_DISTANCE)
+
+    return value === DEFAULT_HEADER_DISTANCE ? null : value
+  }
+  const header = distance('w:header')
+  const footer = distance('w:footer')
 
   return {
     width: turned ? height : width,
     height: turned ? width : height,
-    margins: { top: points(margins, 'w:top', 72), right: points(margins, 'w:right', 72), bottom: points(margins, 'w:bottom', 72), left: points(margins, 'w:left', 72) }
+    margins: {
+      top: points(margins, 'w:top', 72),
+      right: points(margins, 'w:right', 72),
+      bottom: points(margins, 'w:bottom', 72),
+      left: points(margins, 'w:left', 72),
+      ...(header === null ? {} : { header }),
+      ...(footer === null ? {} : { footer })
+    }
   }
 }
 
-/** A section break is a page break unless the section after it starts on the same page. */
-function settleBreaks(reader: Reader): void {
-  reader.breaks.forEach((pageBreak, index) => {
-    const type = attr(child(reader.sections[index + 1], 'w:type'), 'w:val') ?? 'nextPage'
-    pageBreak.skip = type === 'continuous' || type === 'nextColumn'
+/** Word ends a section that ends with a table with an empty paragraph to hold the section's end, as it ends a document. */
+const withoutSectionParagraphs = (blocks: DocNode[]): DocNode[] =>
+  blocks.filter((block, index) => !(block.type === 'paragraph' && !block.content && !block.attrs && blocks[index - 1]?.type === 'table' && blocks[index + 1]?.type === 'sectionBreak'))
+
+const SECTION_KINDS: Readonly<Record<string, SectionKind>> = { continuous: 'continuous', nextColumn: 'continuous', evenPage: 'evenPage', oddPage: 'oddPage' }
+
+const samePage = (a: PageSettings, b: PageSettings): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/** Each section break takes the kind and page of the section after it; the document's page is the first section's. */
+function settleSections(reader: Reader): PageSettings | null {
+  let previous = pageOf(reader.sections[0])
+
+  reader.breaks.forEach((node, index) => {
+    const next = reader.sections[index + 1]
+    const page = pageOf(next)
+    node.attrs = { kind: SECTION_KINDS[attr(child(next, 'w:type'), 'w:val') ?? ''] ?? 'nextPage', page: page && !(previous && samePage(page, previous)) ? page : null }
+    previous = page ?? previous
   })
+
+  return pageOf(reader.sections[0])
+}
+
+/** Whether blocks show anything: an empty paragraph, as Word leaves in an empty header, does not. */
+const shows = (blocks: readonly DocNode[]): boolean => blocks.some((block) => block.type !== 'paragraph' || Boolean(block.content?.length))
+
+/** The first section's headers and footers, by kind; later sections' are not kept. */
+async function readHeaders(pkg: WordPackage, relationships: Map<string, Relationship>, section: XmlElement | undefined, settings: XmlElement | null, reader: Reader): Promise<PageHeaders | null> {
+  const references = (['header', 'footer'] as const).flatMap((part) => children(section, part === 'header' ? 'w:headerReference' : 'w:footerReference').map((reference) => ({ part, reference })))
+  const loaded = await Promise.all(
+    references.map(async ({ part, reference }) => {
+      const kind = (attr(reference, 'w:type') ?? 'default') as HeaderKind
+      const target = relationships.get(attr(reference, 'r:id') ?? '')
+
+      return HEADER_KINDS.includes(kind) && target && !target.external ? { part, kind, read: await loadPart(pkg, target.target, 'header') } : null
+    })
+  )
+  const headers: PageHeaders = { header: {}, footer: {} }
+
+  for (const part of ['header', 'footer'] as const) {
+    for (const kind of HEADER_KINDS) {
+      const read = loaded.find((item) => item?.part === part && item.kind === kind)?.read
+
+      if (read) {
+        const blocks = apart(reader, () => withoutClosingParagraph(assemble(readBlocks(read.xml, reader, read.story))))
+
+        if (shows(blocks)) {
+          headers[part][kind] = blocks
+        }
+      }
+    }
+  }
+
+  if (!Object.keys(headers.header).length && !Object.keys(headers.footer).length) {
+    return null
+  }
+
+  const differentFirst = flag(child(section, 'w:titlePg')) === true
+  const differentOddEven = flag(child(settings ?? undefined, 'w:evenAndOddHeaders')) === true
+
+  return { ...headers, ...(differentFirst ? { differentFirst } : {}), ...(differentOddEven ? { differentOddEven } : {}) }
 }
 
 /** A Herald Docs document from the bytes of a Word file, with what opening it approximated. */
@@ -1043,13 +1393,16 @@ export async function documentFromDocx(bytes: Uint8Array): Promise<{ doc: DocJSO
     return path ? pkg.xml(path) : Promise.resolve(null)
   }
 
-  const [stylesXml, numberingXml, themeXml, story, footnotes, endnotes] = await Promise.all([
+  const [stylesXml, numberingXml, themeXml, settingsXml, story, footnotes, endnotes, comments, kept] = await Promise.all([
     xmlOf('styles'),
     xmlOf('numbering'),
     xmlOf('theme'),
-    loadStory(pkg, relationships),
-    loadNotes(pkg, partOf('footnotes')),
-    loadNotes(pkg, partOf('endnotes'))
+    xmlOf('settings'),
+    loadStory(pkg, relationships, 'body'),
+    loadPart(pkg, partOf('footnotes'), 'footnote'),
+    loadPart(pkg, partOf('endnotes'), 'endnote'),
+    readComments(pkg, relationships),
+    readKept(pkg, relationships)
   ])
   const styles = readStyles(stylesXml, themeXml)
   const looks: StyleLooks = {}
@@ -1058,7 +1411,18 @@ export async function documentFromDocx(bytes: Uint8Array): Promise<{ doc: DocJSO
     looks[name] = lookOf(style, styles, name)
   }
 
-  const reader: Reader = { styles, numbering: readNumbering(numberingXml, styles.numberingOf), looks, found: new Set(), unknown: [], fields: [], references: [], sections: [], breaks: [] }
+  const reader: Reader = {
+    styles,
+    numbering: readNumbering(numberingXml, styles.numberingOf),
+    looks,
+    found: new Set(),
+    unknown: [],
+    fields: [],
+    notes: { footnote: footnotes, endnote: endnotes },
+    comments: { threadOf: comments.threadOf, open: [], ranged: new Set() },
+    sections: [],
+    breaks: []
+  }
   const entries = readBlocks(body, reader, story)
   const lastSection = child(body, 'w:sectPr')
 
@@ -1066,24 +1430,21 @@ export async function documentFromDocx(bytes: Uint8Array): Promise<{ doc: DocJSO
     reader.sections.push(lastSection)
   }
 
-  settleBreaks(reader)
-  const content = withoutClosingParagraph(assemble(entries))
+  const page = settleSections(reader)
+  const content = withoutSectionParagraphs(withoutClosingParagraph(assemble(entries)))
 
   // Word starts no blank page for a page break before the first paragraph.
   while (content[0]?.type === 'pageBreak') {
     content.shift()
   }
 
-  // A field the body never ends would otherwise hide the notes.
-  reader.fields = []
-  append(content, notesAppendix(reader, { footnote: footnotes, endnote: endnotes }))
+  const headers = await readHeaders(pkg, relationships, reader.sections[0], settingsXml, reader)
 
-  for (const key of await packageNotes(pkg, relationships, reader.sections)) {
+  for (const key of packageNotes(pkg, reader.sections)) {
     reader.found.add(key)
   }
 
-  const page = pageOf(lastSection)
-  const doc: DocJSON = { type: 'doc', attrs: { ...(page ? { page } : {}), styles: looks }, content: content.length ? content : [paragraphNode()] }
+  const attrs: DocJSON['attrs'] = { ...(page ? { page } : {}), styles: looks, ...(headers ? { headers } : {}), ...(comments.threads.length ? { comments: comments.threads } : {}), ...(kept ? { kept } : {}) }
 
-  return { doc, notes: fidelityNotes(reader.found, reader.unknown) }
+  return { doc: { type: 'doc', attrs, content: content.length ? content : [paragraphNode()] }, notes: fidelityNotes(reader.found, reader.unknown) }
 }
