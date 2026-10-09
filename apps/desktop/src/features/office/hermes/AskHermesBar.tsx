@@ -68,7 +68,7 @@ function Working({ docKey, ask }: { docKey: string; ask: AskState }) {
 
 /** Where an Office window takes requests for Hermes about the document in front, and shows how they went. */
 export function AskHermesBar({ app, docKey, noun, focusDocument }: { app: OfficeApp; docKey: string; noun: string; focusDocument?: () => void }) {
-  const ask = useStore($asks, { keys: [docKey] })[docKey] ?? askOf(docKey)
+  const ask = useStore($asks, { keys: [docKey], deps: [docKey] })[docKey] ?? askOf(docKey)
   const reach = useStore($hermesState)
   const draft = useStore($askDraft)
   const [text, setText] = useState('')

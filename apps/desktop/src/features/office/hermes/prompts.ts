@@ -280,7 +280,7 @@ export function stepLabel(tool: string, args?: Record<string, unknown> | null): 
 
 /** Whether a tool call works on an Office document, so the steps it adds to a document are Hermes's. */
 export function editsOffice(tool: string, args?: Record<string, unknown> | null): boolean {
-  return tool === 'docs' || tool === 'sheets' || (typeof args?.command === 'string' && /^(docs|sheets|slides)\./.test(args.command))
+  return ['docs', 'sheets', 'slides'].includes(tool) || (typeof args?.command === 'string' && /^(docs|sheets|slides)\./.test(args.command))
 }
 
 /** The text sent to Hermes for a request about a document. */

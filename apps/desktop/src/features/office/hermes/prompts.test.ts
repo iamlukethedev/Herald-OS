@@ -221,6 +221,7 @@ describe('what the bar says of Hermes’s work', () => {
   it('tells calls that change Office documents from the rest', () => {
     expect(editsOffice('docs', { action: 'write' })).toBe(true)
     expect(editsOffice('sheets', { action: 'clean' })).toBe(true)
+    expect(editsOffice('slides', { action: 'add_slide' })).toBe(true)
     expect(editsOffice('os_ui', { action: 'run', command: 'slides.addSlide' })).toBe(true)
     expect(editsOffice('os_ui', { action: 'run', command: 'page.open' })).toBe(false)
     expect(editsOffice('terminal', { command: 'ls' })).toBe(false)
