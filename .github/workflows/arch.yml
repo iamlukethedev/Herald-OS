@@ -18,7 +18,8 @@ jobs:
   package:
     name: herald-os-bin (x86_64)
     runs-on: ubuntu-24.04
-    container: archlinux:base-devel
+    # Docker Hub's official image, mirrored on ECR Public: Docker Hub rate-limits the shared runners' anonymous pulls.
+    container: public.ecr.aws/docker/library/archlinux:base-devel
     steps:
       - name: Tools and the package's dependencies
         run: pacman -Syu --noconfirm --needed git nodejs npm python namcap gtk3 nss alsa-lib libsecret libnotify curl wl-clipboard wtype grim slurp
