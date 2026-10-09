@@ -1,12 +1,15 @@
 import { useStore } from '@nanostores/react'
 import { IconArrowBackUp, IconShieldCheck, IconSparkles } from '@tabler/icons-react'
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { OfficeApp } from '../../../../shared/office/files.ts'
 import { GlassButton } from '../../../components/ui/glass.tsx'
 import { Spinner } from '../../../components/ui/primitives.tsx'
 import { cn } from '../../../lib/cn.ts'
-import { Markdown } from '../../chat/Markdown.tsx'
 import { $askDraft, $asks, $hermesState, askHermes, askOf, type AskState, cancelAsk, dismissAsk, openInHermes, undoAsk } from './ask.ts'
+
+// The Markdown renderer is most of what the bar would load; it comes when Hermes is asked something.
+const loadMarkdown = () => import('../../chat/Markdown.tsx')
+const Markdown = lazy(() => loadMarkdown().then((module) => ({ default: module.Markdown })))
 
 const WAITING: Record<NonNullable<AskState['waiting']>, string> = {
   approval: 'Hermes is waiting for your approval',
@@ -28,7 +31,13 @@ function Reply({ docKey, ask, focusDocument }: { docKey: string; ask: AskState; 
         <IconSparkles size={12} className="shrink-0" />
         <span className="min-w-0 truncate">{ask.words}</span>
       </div>
-      {ask.phase === 'error' ? <div className="max-h-60 overflow-y-auto text-[12.5px] text-danger select-text">{ask.error}</div> : <Markdown text={ask.answer} className="max-h-60 overflow-y-auto text-[12.5px] leading-relaxed" />}
+      {ask.phase === 'error' ? (
+        <div className="max-h-60 overflow-y-auto text-[12.5px] text-danger select-text">{ask.error}</div>
+      ) : (
+        <Suspense fallback={<div className="max-h-60 overflow-y-auto text-[12.5px] leading-relaxed whitespace-pre-wrap select-text">{ask.answer}</div>}>
+          <Markdown text={ask.answer} className="max-h-60 overflow-y-auto text-[12.5px] leading-relaxed" />
+        </Suspense>
+      )}
       <div className="flex items-center justify-end gap-1.5">
         {ask.undo > 0 && (
           <GlassButton size="sm" title={ask.undo === 1 ? 'Undo what Hermes changed' : `Undo what Hermes changed (${ask.undo} steps)`} onClick={() => close(undoAsk)}>
@@ -73,6 +82,12 @@ export function AskHermesBar({ app, docKey, noun, focusDocument }: { app: Office
   const draft = useStore($askDraft)
   const [text, setText] = useState('')
   const input = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (ask.phase !== 'idle') {
+      void loadMarkdown()
+    }
+  }, [ask.phase])
 
   // A menu asked for the bar: it takes the focus, with the text the menu started.
   useEffect(() => {

@@ -87,6 +87,25 @@ export function tildePath(file: string, home: string): string {
   return home && (file === home || file.startsWith(`${home}/`)) ? `~${file.slice(home.length)}` : file
 }
 
+/** A full path from what Hermes or the person typed (`~/…` works); trailing slashes go. */
+export function resolvePath(input: string, home: string): string {
+  let value = input.trim()
+
+  if (value === '~' || value.startsWith('~/')) {
+    if (!home) {
+      throw new Error('The home folder is not known yet; give the full path')
+    }
+
+    value = `${home}${value.slice(1)}`
+  }
+
+  if (!value.startsWith('/')) {
+    throw new Error(`Give the full path (starting with / or ~/): ${input}`)
+  }
+
+  return value.replace(/\/+/g, '/').replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/$/, '$1')
+}
+
 function describeEntry(entry: OfficeEntry, home: string): string {
   const where = entry.path ? tildePath(entry.path, home) : 'not saved yet'
   const parts = [`${entry.name} in ${OFFICE_APP_NAMES[entry.app]} (${where}${entry.modified ? ', unsaved edits' : ''})`]

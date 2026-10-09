@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OfficePresence } from '../../../shared/ipc.ts'
-import { describeOffice, documentFileName, findEntry, freePath, isPathLike, officeEntries, parseJsonArg, stepCount, summaryOf, tildePath } from './agent-model.ts'
+import { describeOffice, documentFileName, findEntry, freePath, isPathLike, officeEntries, parseJsonArg, resolvePath, stepCount, summaryOf, tildePath } from './agent-model.ts'
 
 const doc = (key: string, name: string, path: string | null, extra: Partial<OfficePresence['documents'][number]> = {}) => ({ key, name, path, format: '.docx', modified: false, ...extra })
 
@@ -58,6 +58,16 @@ describe('the open Office documents', () => {
 
     expect(await freePath('/d', 'Report.pdf', async (file) => taken.has(file))).toBe('/d/Report 3.pdf')
     expect(tildePath('/Users/sam/Documents/a.pdf', '/Users/sam')).toBe('~/Documents/a.pdf')
+  })
+
+  it('reads the paths people type as full paths', () => {
+    expect(resolvePath(' ~/Documents/a.docx ', '/Users/sam')).toBe('/Users/sam/Documents/a.docx')
+    expect(resolvePath('~', '/Users/sam')).toBe('/Users/sam')
+    expect(resolvePath('/tmp//notes/./b.xlsx', '/Users/sam')).toBe('/tmp/notes/b.xlsx')
+    expect(resolvePath('/tmp/folder/', '/Users/sam')).toBe('/tmp/folder')
+    expect(resolvePath('/', '/Users/sam')).toBe('/')
+    expect(() => resolvePath('Documents/a.docx', '/Users/sam')).toThrow(/full path/)
+    expect(() => resolvePath('~/a.docx', '')).toThrow(/home folder/)
   })
 
   it('reads steps and JSON arguments', () => {
