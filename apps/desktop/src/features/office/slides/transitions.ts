@@ -31,3 +31,7 @@ export function transitionFor(kind: Transition, duration = DEFAULT_TRANSITION_MS
 
 /** How a slide comes in: its own transition, or the deck's kind with its defaults. */
 export const transitionOf = (deck: Pick<Deck, 'transition'>, slide: Pick<Slide, 'transition'>): SlideTransition => slide.transition ?? transitionFor(deck.transition)
+
+/** Whether two transitions come in alike. */
+export const sameTransition = (a: SlideTransition | undefined, b: SlideTransition | undefined): boolean =>
+  a && b ? a.kind === b.kind && a.duration === b.duration && a.direction === b.direction && a.orientation === b.orientation : a === b
