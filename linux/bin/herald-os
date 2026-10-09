@@ -40,6 +40,12 @@ call the tools directly.
                 sheets add-sheet [name] | sheets rename-sheet <sheet> <name> | sheets remove-sheet <sheet>
                 sheets replace <find> <replacement> [--first] | sheets clean <range> dedupe|trim|numbers|dates|split|case
                 sheets save [workbook] [--to <file>] [--overwrite] | sheets pdf [workbook] | sheets undo|redo [--steps <n>]
+  Slides        slides open [file] | slides new [name] [--theme <t>] [--slides <json>|-] | slides list | slides read [deck]
+                slides add-slide [title] [--layout <l>] [--body <text>|-] [--notes <text>] | slides notes <slide> <text>|-
+                slides set-slide <slide> [--title <t>] [--body <text>|-] [--layout <l>] [--hidden|--shown] [--background <c>]
+                slides move <slide> <number|first|last> | slides remove <slide> | slides theme <name> | slides replace <find> <with>
+                slides from-doc [document] [--level <n>] [--notes] | slides insert-range [range] [--workbook <w>] [--slide <s>]
+                slides save [deck] [--to <file>] [--overwrite] | slides pdf [deck] [--to <file>] | slides undo|redo [--steps <n>]
   Crashes       crash list | crash diagnose [pid|name] | crash mute <name> [off]
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
@@ -120,6 +126,7 @@ COMMANDS: dict[str, str] = {
     "canvas": "canvas open [file] | new [name] [WxH] | status | layers [project] | history | text <words> [--x …] | resize <WxH> [--anchor …] | crop <x> <y> <w> <h> [--ratio …] [--angle …] | preview [project] | export <file> [--project …] [--overwrite] | undo | redo [--steps <n>] | auto [tone|contrast|color] | align <edges> [--layers …] | distribute <mode> --layers … | guides … | filter <kind> [--amount …] | mask <layer> <action> | remove-background [layer] [--cutout] | fill <x> <y> <w> <h> [--layer …] [--new-layer]: Herald Canvas, the image editor",
     "docs": "docs open [file] | new [name] [--template …] [--path …] [--content <markdown>|-] | list | read [document] [--part …] [--heading …] | find <text> | write <markdown>|- [--at …] [--heading …] [--mode …] | replace <find> <replacement> [--first] | format [--at …] [--bold] [--style …] [--color …] [--size …] [--align …] | table <json-rows> | image <file> [--width …] | insert-range [range] [--workbook …] | save [document] [--to …] [--overwrite] | pdf [document] [--to …] | undo | redo [--steps <n>]; --document picks the document: Herald Docs, the word processor",
     "sheets": "sheets open [file] | new [name] [--template …] [--path …] | list | read [range] [--sheet …] | find <text> | write <range> <value…|json-rows> | fill <range> [formula] | format <range> <json> | sort <range> --by <column> [--descending] [--header] | filter <range> --by <column> --values <json> | filter --clear | freeze <rows> [columns] | add-sheet [name] | rename-sheet <sheet> <name> | remove-sheet <sheet> | replace <find> <replacement> [--first] | clean <range> dedupe|trim|numbers|dates|split|case | save [workbook] [--to …] [--overwrite] | pdf [workbook] | undo | redo [--steps <n>]; --workbook picks the workbook: Herald Sheets, the spreadsheet",
+    "slides": "slides open [file] | new [name] [--theme …] [--size …] [--path …] [--slides <json>|-] | list | read [presentation] [--slide …] | add-slide [title] [--layout …] [--body <text>|-] [--notes …] [--after …] | set-slide <slide> [--title …] [--body …] [--layout …] [--hidden|--shown] | notes <slide> <text>|- | move <slide> <to> | remove <slide> | theme <name> | from-doc [document] [--level <n>] [--notes] | insert-range [range] [--workbook …] [--slide …] | replace <find> <replacement> [--first] | save [presentation] [--to …] [--overwrite] | pdf [presentation] | undo | redo [--steps <n>]; --presentation picks the deck: Herald Slides, the presentation editor",
     "voice": "Talk to Hermes: voice [toggle|start|stop|mute] (default toggle)",
     "dictate": "Start or finish dictation: what you say is typed into the focused app",
     "emoji": "Emoji picker; the pick is typed into the focused app",
@@ -1288,20 +1295,31 @@ SHEETS_USAGE = (
     "[--case upper|lower|title] [--overwrite] | save [<workbook>] [--to <file>] [--overwrite] | pdf [<workbook>] [--to <file>] [--overwrite] "
     "| undo|redo [<workbook>] [--steps <n>]; every command but open, new and list takes --workbook <workbook>, and the ones on cells --sheet <sheet>"
 )
+SLIDES_USAGE = (
+    "slides open [<file>] | new [<name>] [--theme <theme>] [--size wide|standard] [--path <file>] [--slides <json>|-] | list "
+    "| read [<presentation>] [--slide <slide>] "
+    "| add-slide [<title>] [--layout <layout>] [--body <text>|-] [--notes <text>] [--after <slide>] "
+    "| set-slide <slide> [--title <title>] [--body <text>|-] [--notes <text>] [--layout <layout>] [--hidden|--shown] [--background <colour>] "
+    "| notes <slide> <text>|- | move <slide> <number|first|last> | remove <slide> | theme <theme> "
+    "| from-doc [<document>] [--level <n>] [--notes] | insert-range [<range>] [--workbook <workbook>] [--sheet <sheet>] [--slide <slide>] "
+    "| replace <find> <replacement> [--first] | save [<presentation>] [--to <file>] [--overwrite] | pdf [<presentation>] [--to <file>] [--overwrite] "
+    "| undo|redo [<presentation>] [--steps <n>]; every command but open, new and list takes --presentation <presentation> "
+    "(for from-doc, the deck the slides are added to); a slide is its number, id or title"
+)
 
 # What `sheets clean` does, as sheets.clean names it.
 SHEETS_CLEAN_ACTIONS = ("dedupe", "trim", "numbers", "dates", "split", "case")
 # The flags that take no value; every other flag takes the word after it.
-OFFICE_SWITCHES = ("--json", "--overwrite", "--first", "--header", "--no-header", "--descending", "--clear", "--bold", "--no-bold", "--italic", "--no-italic", "--underline", "--no-underline", "--strike", "--no-strike")
+OFFICE_SWITCHES = ("--json", "--overwrite", "--first", "--header", "--no-header", "--descending", "--clear", "--bold", "--no-bold", "--italic", "--no-italic", "--underline", "--no-underline", "--strike", "--no-strike", "--hidden", "--shown")
 
 
-def _office_words(rest: list[str], usage: str) -> tuple[list[str], dict[str, str | bool]]:
+def _office_words(rest: list[str], usage: str, switches: tuple[str, ...] = OFFICE_SWITCHES) -> tuple[list[str], dict[str, str | bool]]:
     words: list[str] = []
     flags: dict[str, str | bool] = {}
     i = 0
     while i < len(rest):
         token = rest[i]
-        if token in OFFICE_SWITCHES:
+        if token in switches:
             flags[token[2:]] = True
         elif token.startswith("--"):
             if i + 1 == len(rest):
@@ -1623,6 +1641,126 @@ def sheets_cmd(args: list[str]) -> int:
             print(reply.get("summary") or "")
         elif data.get("truncated"):
             print(reply.get("summary") or "", file=sys.stderr)
+        return 0
+    print(reply.get("summary") or "done")
+    return 0
+
+
+def slides_request(args: list[str]) -> tuple[str, dict]:
+    """(command id, arguments) for `herald-os slides ...` (pure; tested)."""
+    sub, rest = (args[0], args[1:]) if args else ("open", [])
+    # from-doc's --notes is a yes or no; elsewhere it takes the notes.
+    words, flags = _office_words(rest, SLIDES_USAGE, (*OFFICE_SWITCHES, "--notes") if sub == "from-doc" else OFFICE_SWITCHES)
+    text = " ".join(words)
+    if sub == "open":
+        return "slides.open", ({"path": _absolute(text)} if words else {})
+    if sub == "new":
+        payload: dict = {"name": text} if words else {}
+        for key in ("theme", "size"):
+            if key in flags:
+                payload[key] = str(flags[key])
+        if "path" in flags:
+            payload["path"] = _absolute(str(flags["path"]))
+        if "slides" in flags:
+            payload["slides"] = _json_text(_stdin_or(str(flags["slides"])), list, '[{"layout": "title", "title": "Q3 review"}, {"title": "Results", "body": "Revenue up 12%"}]')
+        return "slides.new", payload
+    if sub == "list":
+        return "slides.list", {}
+    payload = {"presentation": _office_ref(str(flags["presentation"]))} if "presentation" in flags else {}
+    if sub in ("read", "save", "pdf", "undo", "redo") and words:
+        payload["presentation"] = _office_ref(text)
+    on_slide = {"slide": str(flags["slide"])} if "slide" in flags else {}
+    if sub == "read":
+        return "slides.read", {**payload, **on_slide}
+    if sub == "add-slide":
+        payload.update({key: str(flags[key]) for key in ("layout", "notes", "after") if key in flags})
+        if words:
+            payload["title"] = text
+        if "body" in flags:
+            payload["body"] = _stdin_or(str(flags["body"]))
+        return "slides.addSlide", payload
+    if sub == "set-slide":
+        changes: dict = {key: str(flags[key]) for key in ("title", "notes", "layout", "background") if key in flags}
+        if "body" in flags:
+            changes["body"] = _stdin_or(str(flags["body"]))
+        if flags.get("hidden") or flags.get("shown"):
+            changes["hidden"] = bool(flags.get("hidden"))
+        if len(words) != 1 or not changes:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        return "slides.setSlide", {**payload, "slide": words[0], **changes}
+    if sub == "notes":
+        if len(words) < 2:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        return "slides.setSlide", {**payload, "slide": words[0], "notes": _stdin_or(" ".join(words[1:]))}
+    if sub == "move":
+        if len(words) != 2:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        return "slides.moveSlide", {**payload, "slide": words[0], "to": words[1]}
+    if sub == "remove":
+        if not words:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        return "slides.removeSlide", {**payload, "slide": text}
+    if sub == "theme":
+        if len(words) != 1:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        return "slides.setTheme", {**payload, "theme": words[0]}
+    if sub == "from-doc":
+        if words:
+            payload["document"] = _office_ref(text)
+        if "level" in flags:
+            payload["level"] = _count(flags["level"], SLIDES_USAGE)
+        if flags.get("notes"):
+            payload["notes"] = True
+        return "slides.fromDocument", payload
+    if sub == "insert-range":
+        if words:
+            payload["range"] = text
+        if "workbook" in flags:
+            payload["workbook"] = _office_ref(str(flags["workbook"]))
+        if "sheet" in flags:
+            payload["sheet"] = str(flags["sheet"])
+        return "slides.insertRange", {**payload, **on_slide}
+    if sub == "replace":
+        if len(words) != 2:
+            die(f"herald-os {SLIDES_USAGE}", 2)
+        payload.update({"find": words[0], "replacement": words[1]})
+        if flags.get("first"):
+            payload["all"] = False
+        return "slides.replace", payload
+    if sub in ("save", "pdf"):
+        if "to" in flags:
+            payload["to"] = _absolute(str(flags["to"]))
+        if flags.get("overwrite"):
+            payload["overwrite"] = True
+        return ("slides.save" if sub == "save" else "slides.exportPdf"), payload
+    if sub in ("undo", "redo"):
+        if "steps" in flags:
+            payload["steps"] = _count(flags["steps"], SLIDES_USAGE)
+        return f"slides.{sub}", payload
+    die(f"herald-os {SLIDES_USAGE}", 2)
+    return "", {}
+
+
+def slides_cmd(args: list[str]) -> int:
+    command, payload = slides_request(args)
+    reply = run_os_wait(command, payload, timeout=120)
+    data = reply.get("data") or {}
+    if "--json" in args:
+        print(json.dumps(data, indent=2))
+        return 0
+    if command == "slides.list":
+        _office_listing(data.get("presentations") or [], reply.get("summary"), quote=False)
+        return 0
+    if command == "slides.read":
+        for slide in data.get("slides") or []:
+            marks = [str(slide.get("layout")), *(["hidden"] if slide.get("hidden") else [])]
+            print(f"{'*' if slide.get('number') == data.get('front') else ' '}{str(slide.get('number')).rjust(3)}. {slide.get('title') or '(no title)'}  ({', '.join(marks)})")
+            for line in "\n".join(str(slide[key]) for key in ("body", "body2") if slide.get(key)).splitlines():
+                print(f"       {line}")
+            if slide.get("notes"):
+                print(f"       notes: {' '.join(str(slide['notes']).split())}")
+        if not data.get("slides"):
+            print(reply.get("summary") or "")
         return 0
     print(reply.get("summary") or "done")
     return 0
@@ -2732,6 +2870,8 @@ def main(argv: list[str]) -> int:
         return docs_cmd(args)
     if cmd == "sheets":
         return sheets_cmd(args)
+    if cmd == "slides":
+        return slides_cmd(args)
     if cmd == "os":
         if not args:
             die("os <command.id> [json args]", 2)

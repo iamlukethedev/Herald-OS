@@ -217,6 +217,88 @@ def test_docs_and_sheets_print_what_they_read(monkeypatch, capsys):
     assert timeouts and all(timeout >= 60 for timeout in timeouts)
 
 
+def test_slides_words_become_slides_commands(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    here = tmp_path.resolve()
+    (tmp_path / "Q3.pptx").write_bytes(b"pptx")
+    (tmp_path / "Report.docx").write_bytes(b"docx")
+    deck = str(here / "Q3.pptx")
+    assert cli.slides_request([]) == ("slides.open", {})
+    assert cli.slides_request(["open", "Q3.pptx"]) == ("slides.open", {"path": deck})
+    command, payload = cli.slides_request(["new", "Q3", "review", "--theme", "midnight", "--size", "standard", "--slides", '[{"layout": "title", "title": "Q3 review"}]'])
+    assert command == "slides.new" and json.loads(payload.pop("slides")) == [{"layout": "title", "title": "Q3 review"}]
+    assert payload == {"name": "Q3 review", "theme": "midnight", "size": "standard"}
+    assert cli.slides_request(["list"]) == ("slides.list", {})
+    assert cli.slides_request(["read", "Q3.pptx", "--slide", "2"]) == ("slides.read", {"presentation": deck, "slide": "2"})
+    assert cli.slides_request(["read", "--presentation", "Q3 review"]) == ("slides.read", {"presentation": "Q3 review"})
+    assert cli.slides_request(["add-slide", "Next", "steps", "--layout", "title-content", "--notes", "Ask for a decision", "--after", "3"]) == ("slides.addSlide", {"title": "Next steps", "layout": "title-content", "notes": "Ask for a decision", "after": "3"})
+    assert cli.slides_request(["set-slide", "7", "--hidden"]) == ("slides.setSlide", {"slide": "7", "hidden": True})
+    assert cli.slides_request(["set-slide", "Risks", "--title", "Open risks", "--background", "accent1", "--shown"]) == ("slides.setSlide", {"slide": "Risks", "title": "Open risks", "background": "accent1", "hidden": False})
+    assert cli.slides_request(["notes", "2", "Lead", "with", "revenue"]) == ("slides.setSlide", {"slide": "2", "notes": "Lead with revenue"})
+    assert cli.slides_request(["move", "Risks", "last"]) == ("slides.moveSlide", {"slide": "Risks", "to": "last"})
+    assert cli.slides_request(["remove", "Thank", "you", "--presentation", "Q3.pptx"]) == ("slides.removeSlide", {"presentation": deck, "slide": "Thank you"})
+    assert cli.slides_request(["theme", "paper"]) == ("slides.setTheme", {"theme": "paper"})
+    # from-doc's --notes is a switch, and the deck it adds to is --presentation.
+    assert cli.slides_request(["from-doc", "Report.docx", "--level", "2", "--notes", "--presentation", "Q3 review"]) == ("slides.fromDocument", {"presentation": "Q3 review", "document": str(here / "Report.docx"), "level": 2, "notes": True})
+    assert cli.slides_request(["from-doc"]) == ("slides.fromDocument", {})
+    assert cli.slides_request(["insert-range", "A1:D6", "--workbook", "Budget.xlsx", "--slide", "Costs"]) == ("slides.insertRange", {"range": "A1:D6", "workbook": "Budget.xlsx", "slide": "Costs"})
+    assert cli.slides_request(["replace", "Q2", "Q3", "--first"]) == ("slides.replace", {"find": "Q2", "replacement": "Q3", "all": False})
+    assert cli.slides_request(["save", "--to", "Q3 final.pptx"]) == ("slides.save", {"to": str(here / "Q3 final.pptx")})
+    assert cli.slides_request(["pdf", "Q3.pptx", "--overwrite", "--to", "Q3.pdf"]) == ("slides.exportPdf", {"presentation": deck, "to": str(here / "Q3.pdf"), "overwrite": True})
+    assert cli.slides_request(["undo", "--steps", "2"]) == ("slides.undo", {"steps": 2})
+    wrongs = (
+        ["animate"], ["set-slide", "2"], ["set-slide", "--title", "x"], ["notes", "2"], ["move", "2"], ["remove"], ["theme"], ["theme", "a", "b"],
+        ["replace", "Q2"], ["new", "--slides", '{"title": "x"}'], ["from-doc", "--level", "two"], ["undo", "--steps", "x"], ["read", "--slide"], ["add-slide", "--notes"],
+    )
+    for wrong in wrongs:
+        with pytest.raises(SystemExit) as stopped:
+            cli.slides_request(wrong)
+        assert stopped.value.code == 2, wrong
+
+
+def test_slides_take_bodies_notes_and_decks_from_stdin(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Revenue up 12%\n  Subscriptions\nCosts flat\n"))
+    assert cli.slides_request(["add-slide", "Results", "--body", "-"]) == ("slides.addSlide", {"title": "Results", "body": "Revenue up 12%\n  Subscriptions\nCosts flat\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Lead with revenue.\n"))
+    assert cli.slides_request(["notes", "2", "-"]) == ("slides.setSlide", {"slide": "2", "notes": "Lead with revenue.\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO('[{"title": "One"}, {"title": "Two"}]'))
+    _, payload = cli.slides_request(["new", "Deck", "--slides", "-"])
+    assert json.loads(payload["slides"]) == [{"title": "One"}, {"title": "Two"}]
+
+
+def test_slides_print_what_they_read(monkeypatch, capsys):
+    replies = {
+        "slides.list": {"ok": True, "summary": "1 presentation open", "data": {"presentations": [{"name": "Q3 review", "path": None, "modified": True, "active": True, "selection": "slide 2"}]}},
+        "slides.read": {"ok": True, "summary": "Q3 review: 3 slides", "data": {"front": 2, "slides": [
+            {"number": 1, "layout": "title", "title": "Q3 review", "body": "Finance team"},
+            {"number": 2, "layout": "two-content", "title": "Mix", "body": "Subscriptions\n  Up 31%", "body2": "One-off\n  Down 6%", "notes": "The mix keeps\nmoving."},
+            {"number": 3, "layout": "blank", "hidden": True},
+        ]}},
+    }
+    timeouts = []
+
+    def run_os_wait(command, args=None, timeout=30):
+        timeouts.append(timeout)
+        return replies[command]
+
+    monkeypatch.setattr(cli, "run_os_wait", run_os_wait)
+    cli.slides_cmd(["list"])
+    assert capsys.readouterr().out == "* Q3 review  not saved  (edited)  slide 2\n"
+    cli.slides_cmd(["read"])
+    assert capsys.readouterr().out.splitlines() == [
+        "   1. Q3 review  (title)",
+        "       Finance team",
+        "*  2. Mix  (two-content)",
+        "       Subscriptions",
+        "         Up 31%",
+        "       One-off",
+        "         Down 6%",
+        "       notes: The mix keeps moving.",
+        "   3. (no title)  (blank, hidden)",
+    ]
+    assert all(timeout >= 60 for timeout in timeouts)
+
+
 def test_herald_keymap_is_the_template():
     assert cli.render_keymap(TEMPLATE, "herald") == TEMPLATE
 
