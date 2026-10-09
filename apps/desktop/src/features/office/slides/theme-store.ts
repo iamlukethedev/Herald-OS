@@ -62,6 +62,11 @@ const OWN_ID = /^custom-[a-z0-9-]+$/
 async function readThemes(home: string): Promise<Theme[]> {
   let preview: FilePreview
 
+  // Asked first, since main logs every read that fails and most people have no themes of their own.
+  if (!(await window.heraldOS.canvas.exists(customThemesPath(home)))) {
+    return []
+  }
+
   try {
     preview = await window.heraldOS.fs.readFile(customThemesPath(home))
   } catch (error) {

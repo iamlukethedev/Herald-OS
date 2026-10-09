@@ -131,6 +131,7 @@ describe('custom themes', () => {
     $env.set({ platform: 'darwin', hermesHome: '/home/me/.hermes/', homeDir: '/home/me', version: '0.0.0', isDev: false, shellMode: 'panels' })
     ;(globalThis as unknown as { window: unknown }).window = {
       heraldOS: {
+        canvas: { exists: async (path: string) => (files.has(path) ? 'file' : null) },
         fs: {
           readFile: async (path: string) => {
             const content = files.get(path)
