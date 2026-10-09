@@ -24,6 +24,48 @@ CATALOGUE = [
     {"id": "sheets.exportPdf", "title": "Export a workbook as a PDF", "tier": "act", "args": []},
 ]
 
+# The charts, summaries, data tools, names, validation, comments and notes, by action, with the
+# command and tier the shell registers for each.
+DEPTH = {
+    "recommend_charts": ("sheets.recommendCharts", "read"),
+    "insert_chart": ("sheets.insertChart", "act"),
+    "list_charts": ("sheets.listCharts", "read"),
+    "describe_chart": ("sheets.describeChart", "read"),
+    "update_chart": ("sheets.updateChart", "act"),
+    "move_chart": ("sheets.moveChart", "act"),
+    "remove_chart": ("sheets.removeChart", "mutate"),
+    "summarize": ("sheets.summarize", "act"),
+    "refresh_summary": ("sheets.refreshSummary", "act"),
+    "list_summaries": ("sheets.listSummaries", "read"),
+    "remove_duplicates": ("sheets.removeDuplicates", "act"),
+    "split_text": ("sheets.splitText", "act"),
+    "trim_text": ("sheets.trimText", "act"),
+    "change_case": ("sheets.changeCase", "act"),
+    "convert_to_numbers": ("sheets.convertToNumbers", "act"),
+    "convert_to_dates": ("sheets.convertToDates", "act"),
+    "fill_down": ("sheets.fillDown", "act"),
+    "highlight_duplicates": ("sheets.highlightDuplicates", "act"),
+    "sort_by": ("sheets.sortBy", "act"),
+    "list_names": ("sheets.listNames", "read"),
+    "create_name": ("sheets.createName", "act"),
+    "update_name": ("sheets.updateName", "act"),
+    "delete_name": ("sheets.deleteName", "mutate"),
+    "go_to_name": ("sheets.goToName", "act"),
+    "set_validation": ("sheets.setValidation", "act"),
+    "get_validation": ("sheets.getValidation", "read"),
+    "clear_validation": ("sheets.clearValidation", "mutate"),
+    "list_comments": ("sheets.listComments", "read"),
+    "add_comment": ("sheets.addComment", "act"),
+    "reply_to_comment": ("sheets.replyToComment", "act"),
+    "resolve_comment": ("sheets.resolveComment", "act"),
+    "delete_comment": ("sheets.deleteComment", "mutate"),
+    "list_notes": ("sheets.listNotes", "read"),
+    "set_note": ("sheets.setNote", "act"),
+    "remove_note": ("sheets.removeNote", "mutate"),
+}
+
+CATALOGUE += [{"id": command, "title": command, "tier": tier, "args": []} for command, tier in DEPTH.values()]
+
 
 @pytest.fixture
 def shell(plugin, monkeypatch):
@@ -213,3 +255,157 @@ def test_a_shell_without_herald_sheets_says_to_update(plugin, shell, monkeypatch
     tools._UI_CATALOGUE.clear()
     reply = json.loads(tools.handle_sheets({"action": "read"}))
     assert reply["success"] is False and "Herald Sheets" in reply["error"] and "update Herald OS" in reply["error"]
+
+
+def test_charts_summaries_tools_names_validation_comments_and_notes_map_to_their_commands(plugin):
+    tools = _mod(plugin, "tools")
+    for action, (command, _tier) in DEPTH.items():
+        assert tools.SHEETS_ACTIONS[action] == command
+        assert tools.sheets_command({"action": action})[:2] == (action, command)
+    assert set(tools.SHEETS_ACTIONS) >= {"list", "read", "write", "sort", "clean", "edit", "save"}
+
+
+def test_chart_actions_pass_their_settings_with_lists_and_objects_as_json(plugin):
+    tools = _mod(plugin, "tools")
+    series = [{"values": "B2:B13", "name": "Sales"}, {"values": "C2:C13", "nameCell": "C1", "type": "line", "secondary": True}]
+    _, command, args = tools.sheets_command({"action": "insert_chart", "range": "A1:C13", "kind": "combo", "title": "Sales and margin", "series": series, "axes": {"y": {"min": 0}}, "palette": "#4472c4, #ed7d31", "hole": 40, "at": "H2", "width": 600, "height": 320, "legend": "bottom", "chart": "x", "values": [["no"]]})
+    assert command == "sheets.insertChart"
+    assert json.loads(args.pop("series")) == series and json.loads(args.pop("axes")) == {"y": {"min": 0}}
+    assert args == {"range": "A1:C13", "kind": "combo", "title": "Sales and margin", "legend": "bottom", "palette": "#4472c4, #ed7d31", "hole": 40, "at": "H2", "width": 600, "height": 320}
+    assert tools.sheets_command({"action": "update_chart", "chart": "chart-1", "labels": "value", "stacking": "stacked", "range": "A1:D13", "at": "H2"}) == ("update_chart", "sheets.updateChart", {"chart": "chart-1", "labels": "value", "stacking": "stacked", "range": "A1:D13"})
+    assert tools.sheets_command({"action": "move_chart", "chart": "2", "at": "H20", "width": 480, "kind": "pie"}) == ("move_chart", "sheets.moveChart", {"chart": "2", "at": "H20", "width": 480})
+    assert tools.sheets_command({"action": "remove_chart", "chart": "Sales", "range": "A1"}) == ("remove_chart", "sheets.removeChart", {"chart": "Sales"})
+    assert tools.sheets_command({"action": "recommend_charts", "range": "selection", "kind": "bar"}) == ("recommend_charts", "sheets.recommendCharts", {"range": "selection"})
+
+
+def test_summaries_and_data_tools_pass_their_arguments_under_the_shells_names(plugin):
+    tools = _mod(plugin, "tools")
+    _, command, args = tools.sheets_command({"action": "summarize", "range": "A1", "rowFields": ["Region"], "columnFields": ["Quarter"], "valueFields": [{"field": "Amount", "fn": "sum"}], "filters": [{"field": "Status", "values": ["Paid"]}], "destination": "new", "preview": True, "values": [["x"]], "rows": 3})
+    assert command == "sheets.summarize"
+    assert [json.loads(args.pop(key)) for key in ("rowFields", "columnFields", "valueFields", "filters")] == [["Region"], ["Quarter"], [{"field": "Amount", "fn": "sum"}], [{"field": "Status", "values": ["Paid"]}]]
+    assert args == {"range": "A1", "destination": "new", "preview": True}
+    assert tools.sheets_command({"action": "refresh_summary", "summary": "summary-1", "sheet": "Summary"})[2] == {"summary": "summary-1", "sheet": "Summary"}
+    assert tools.sheets_command({"action": "remove_duplicates", "range": "A1:D90", "by": "A,C", "header": True, "preview": True})[2] == {"range": "A1:D90", "by": "A,C", "header": True, "preview": True}
+    assert tools.sheets_command({"action": "split_text", "range": "A2:A40", "delimiter": "space", "consecutive": True, "destination": "D2", "overwrite": False, "header": True})[2] == {"range": "A2:A40", "delimiter": "space", "consecutive": True, "destination": "D2", "overwrite": False, "header": True}
+    # Letter case travels as case, a date format as dateFormat: to is a file and format a cell format.
+    assert tools.sheets_command({"action": "change_case", "range": "B2:B40", "case": "title", "to": "~/x.xlsx"}) == ("change_case", "sheets.changeCase", {"range": "B2:B40", "case": "title"})
+    assert tools.sheets_command({"action": "convert_to_dates", "range": "C2:C40", "order": "dmy", "dateFormat": "d mmm yyyy", "format": {"bold": True}})[2] == {"range": "C2:C40", "order": "dmy", "dateFormat": "d mmm yyyy"}
+    assert tools.sheets_command({"action": "convert_to_numbers", "range": "D2:D40", "preview": True})[2] == {"range": "D2:D40", "preview": True}
+    assert tools.sheets_command({"action": "highlight_duplicates", "range": "A2:A90", "color": "#ffc7ce", "clear": False})[2] == {"range": "A2:A90", "color": "#ffc7ce", "clear": False}
+    for action in ("trim_text", "fill_down"):
+        assert tools.sheets_command({"action": action, "range": "A1:D9", "sheet": "Data", "case": "upper"})[2] == {"range": "A1:D9", "sheet": "Data"}
+    keys = [{"column": "Region", "ascending": True}, {"column": "C", "ascending": False}]
+    _, command, args = tools.sheets_command({"action": "sort_by", "range": "A1:D90", "keys": keys, "header": True, "by": "A"})
+    assert command == "sheets.sortBy" and json.loads(args.pop("keys")) == keys and args == {"range": "A1:D90", "header": True}
+
+
+def test_names_validation_comments_and_notes_pass_their_arguments(plugin):
+    tools = _mod(plugin, "tools")
+    assert tools.sheets_command({"action": "create_name", "name": "TaxRate", "refersTo": "=0.07", "scope": "workbook", "comment": "GST", "range": "A1"})[2] == {"name": "TaxRate", "refersTo": "=0.07", "scope": "workbook", "comment": "GST"}
+    assert tools.sheets_command({"action": "update_name", "name": "TaxRate", "newName": "GST"})[2] == {"name": "TaxRate", "newName": "GST"}
+    assert tools.sheets_command({"action": "go_to_name", "name": "Sales", "workbook": "Budget.xlsx"})[2] == {"workbook": "Budget.xlsx", "name": "Sales"}
+    assert tools.sheets_command({"action": "list_names", "sheet": "x"}) == ("list_names", "sheets.listNames", {})
+    rule = {"type": "list", "items": ["Yes", "No"]}
+    _, command, args = tools.sheets_command({"action": "set_validation", "range": "D2:D90", "rule": rule, "input": {"title": "Paid", "message": "Yes or No"}, "alert": {"style": "warning"}, "allowBlank": False, "dropdown": True})
+    assert command == "sheets.setValidation"
+    assert [json.loads(args.pop(key)) for key in ("rule", "input", "alert")] == [rule, {"title": "Paid", "message": "Yes or No"}, {"style": "warning"}]
+    assert args == {"range": "D2:D90", "allowBlank": False, "dropdown": True}
+    assert tools.sheets_command({"action": "clear_validation", "range": "D2:D90", "rule": rule}) == ("clear_validation", "sheets.clearValidation", {"range": "D2:D90"})
+    assert tools.sheets_command({"action": "add_comment", "cell": "B2", "text": "Is this right?", "commentId": "x"})[2] == {"cell": "B2", "text": "Is this right?"}
+    assert tools.sheets_command({"action": "reply_to_comment", "commentId": "c1", "text": "Yes"})[2] == {"commentId": "c1", "text": "Yes"}
+    assert tools.sheets_command({"action": "resolve_comment", "cell": "B2", "resolved": False})[2] == {"cell": "B2", "resolved": False}
+    assert tools.sheets_command({"action": "delete_comment", "commentId": "r2", "text": "x"})[2] == {"commentId": "r2"}
+    assert tools.sheets_command({"action": "set_note", "cell": "C3", "text": "Estimate"})[2] == {"cell": "C3", "text": "Estimate"}
+    assert tools.sheets_command({"action": "remove_note", "cell": "C3", "text": "x"})[2] == {"cell": "C3"}
+
+
+def test_reads_read_changes_act_and_removals_ask(plugin, tmp_path):
+    tools = _mod(plugin, "tools")
+    catalogue = {entry["id"]: entry for entry in CATALOGUE}
+    budget = tmp_path / "Budget.xlsx"
+    budget.write_bytes(b"xlsx")
+    for action, (command, tier) in DEPTH.items():
+        _, _, args = tools.sheets_command({"action": action, "range": "A1:D9", "chart": "1", "cell": "B2", "name": "Sales"})
+        assert tools.office_tier(action, command, args, catalogue, ()).value == tier, action
+        # A file that is not open is changed on disk, which asks every time; reading it does not.
+        on_disk = tools.office_tier(action, command, {**args, "workbook": str(budget)}, catalogue, ()).value
+        assert on_disk == ("read" if tier == "read" else "destructive"), action
+        assert tools.office_tier(action, command, {**args, "workbook": str(budget)}, catalogue, {str(budget)}).value == tier, action
+
+
+def test_an_edit_that_removes_a_chart_a_name_a_comment_or_rules_asks_as_the_removal_does(plugin):
+    tools = _mod(plugin, "tools")
+    catalogue = {entry["id"]: entry for entry in CATALOGUE}
+
+    def tier(*edits):
+        _, command, args = tools.sheets_command({"action": "edit", "edits": list(edits)})
+        return tools.office_tier("edit", command, args, catalogue, ()).value
+
+    chart = {"op": "insertChart", "range": "A1:B13", "kind": "line"}
+    assert tier(chart, {"op": "addComment", "cell": "B2", "text": "Peak"}, {"op": "sortBy", "range": "A1:D9", "keys": [{"column": "A"}]}) == "act"
+    for removal in ({"op": "removeChart", "chart": "1"}, {"op": "deleteName", "name": "Sales"}, {"op": "clearValidation", "range": "D2:D9"}, {"op": "deleteComment", "cell": "B2"}, {"op": "removeNote", "cell": "C3"}):
+        assert tier(chart, removal) == "mutate", removal["op"]
+    # The shell takes an op in any case and with spaces round it, and so does the tier.
+    for spelling in ("removechart", " RemoveChart ", "REMOVECHART"):
+        assert tier(chart, {"op": spelling, "chart": "1"}) == "mutate", spelling
+    assert tier({"op": "removeSheet ", "sheet": "Old"}) == "mutate"
+    assert tier({"op": "nonsense"}, {"op": None}, {"op": 3}) == "act"
+
+
+def test_a_preview_of_a_file_that_is_not_open_reads_it_and_asks_nothing_more(plugin, tmp_path):
+    tools = _mod(plugin, "tools")
+    catalogue = {entry["id"]: entry for entry in CATALOGUE}
+    budget = tmp_path / "Budget.xlsx"
+    budget.write_bytes(b"xlsx")
+    for action in ("remove_duplicates", "summarize", "convert_to_dates"):
+        command = tools.SHEETS_ACTIONS[action]
+        _, _, args = tools.sheets_command({"action": action, "workbook": str(budget), "range": "A1:D9", "preview": True})
+        assert tools.office_tier(action, command, args, catalogue, ()).value == "act", action
+        # Only a real yes counts as a preview here; anything else still asks as a change to the file.
+        for preview in (False, "true", None):
+            _, _, args = tools.sheets_command({"action": action, "workbook": str(budget), "range": "A1:D9", "preview": preview})
+            assert tools.office_tier(action, command, args, catalogue, ()).value == "destructive", (action, preview)
+
+
+def test_the_schema_describes_the_new_arguments_with_one_type_each(plugin):
+    tools = _mod(plugin, "tools")
+    properties = tools.SHEETS_SCHEMA["parameters"]["properties"]
+    for action in DEPTH:
+        for name in tools.SHEETS_ARGS[action]:
+            assert name in properties and properties[name].get("description"), f"{action} passes {name}, which the schema does not describe"
+    assert all(isinstance(prop.get("type"), str) for prop in properties.values())
+    assert [name for name, prop in properties.items() if "enum" in prop] == ["action"]
+    types = {name: prop["type"] for name, prop in properties.items()}
+    assert {name: types[name] for name in ("series", "valueFields", "filters", "keys", "rowFields", "columnFields")} == dict.fromkeys(("series", "valueFields", "filters", "keys", "rowFields", "columnFields"), "array")
+    assert properties["rowFields"]["items"]["type"] == "string" and properties["valueFields"]["items"]["type"] == "object" and properties["keys"]["items"]["type"] == "object"
+    assert {name: types[name] for name in ("axes", "rule", "input", "alert")} == dict.fromkeys(("axes", "rule", "input", "alert"), "object")
+    assert {name: types[name] for name in ("hole", "width", "height")} == dict.fromkeys(("hole", "width", "height"), "number")
+    assert {name: types[name] for name in ("preview", "consecutive", "allowBlank", "dropdown", "resolved")} == dict.fromkeys(("preview", "consecutive", "allowBlank", "dropdown", "resolved"), "boolean")
+    assert {name: types[name] for name in ("chart", "palette", "cell", "commentId", "refersTo", "destination", "case", "dateFormat", "order", "by")} == dict.fromkeys(("chart", "palette", "cell", "commentId", "refersTo", "destination", "case", "dateFormat", "order", "by"), "string")
+    # The Phase 3 shapes stay: rows of cells, a cell format, numbers for rows, columns and index, a file for to.
+    assert properties["values"]["items"]["type"] == "array" and types["format"] == "object" and types["to"] == "string"
+    assert (types["rows"], types["columns"], types["index"]) == ("number", "number", "number")
+    for words in ("insertChart", "removeChart", "summarize", "addComment", "setNote", "comments stay out of the undo step"):
+        assert words in properties["edits"]["description"]
+
+
+def test_the_description_names_the_new_capabilities(plugin):
+    tools = _mod(plugin, "tools")
+    description = tools.SHEETS_SCHEMA["description"]
+    for words in ("recommend_charts first", "insert_chart", "summarize", "named ranges", "dropdown lists", "signed Hermes", "remove duplicates", "preview=true", "comment threads aside"):
+        assert words in description
+
+
+def test_an_older_shell_without_the_new_commands_says_to_update_and_keeps_the_rest(plugin, shell, monkeypatch):
+    tools = _mod(plugin, "tools")
+    ui = _mod(plugin, "ui")
+    calls, _, _ = shell
+    older = [entry for entry in CATALOGUE if entry["id"] not in {command for command, _ in DEPTH.values()}]
+    monkeypatch.setattr(ui, "list_commands", lambda: older)
+    tools._UI_CATALOGUE.clear()
+    for action in ("insert_chart", "summarize", "add_comment", "remove_chart"):
+        reply = json.loads(tools.handle_sheets({"action": action, "range": "A1:B9", "cell": "B2", "text": "x", "chart": "1"}))
+        assert reply["success"] is False and "update Herald OS" in reply["error"], action
+    assert not [command for command, _, _ in calls if command != "office.list"]
+    reply = json.loads(tools.handle_sheets({"action": "read", "range": "A1:B3"}))
+    assert reply["success"] is True and calls[-1][0] == "sheets.read"

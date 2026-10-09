@@ -1664,12 +1664,49 @@ SHEETS_ACTIONS: dict[str, str] = {
     "remove_sheet": "sheets.removeSheet",
     "replace": "sheets.replace",
     "clean": "sheets.clean",
+    "recommend_charts": "sheets.recommendCharts",
+    "insert_chart": "sheets.insertChart",
+    "list_charts": "sheets.listCharts",
+    "describe_chart": "sheets.describeChart",
+    "update_chart": "sheets.updateChart",
+    "move_chart": "sheets.moveChart",
+    "remove_chart": "sheets.removeChart",
+    "summarize": "sheets.summarize",
+    "refresh_summary": "sheets.refreshSummary",
+    "list_summaries": "sheets.listSummaries",
+    "remove_duplicates": "sheets.removeDuplicates",
+    "split_text": "sheets.splitText",
+    "trim_text": "sheets.trimText",
+    "change_case": "sheets.changeCase",
+    "convert_to_numbers": "sheets.convertToNumbers",
+    "convert_to_dates": "sheets.convertToDates",
+    "fill_down": "sheets.fillDown",
+    "highlight_duplicates": "sheets.highlightDuplicates",
+    "sort_by": "sheets.sortBy",
+    "list_names": "sheets.listNames",
+    "create_name": "sheets.createName",
+    "update_name": "sheets.updateName",
+    "delete_name": "sheets.deleteName",
+    "go_to_name": "sheets.goToName",
+    "set_validation": "sheets.setValidation",
+    "get_validation": "sheets.getValidation",
+    "clear_validation": "sheets.clearValidation",
+    "list_comments": "sheets.listComments",
+    "add_comment": "sheets.addComment",
+    "reply_to_comment": "sheets.replyToComment",
+    "resolve_comment": "sheets.resolveComment",
+    "delete_comment": "sheets.deleteComment",
+    "list_notes": "sheets.listNotes",
+    "set_note": "sheets.setNote",
+    "remove_note": "sheets.removeNote",
     "edit": "sheets.edit",
     "save": "sheets.save",
     "export_pdf": "sheets.exportPdf",
     "undo": "sheets.undo",
     "redo": "sheets.redo",
 }
+
+_CHART_SETTINGS = ("kind", "title", "series", "categories", "legend", "labels", "axes", "stacking", "palette", "hole")
 
 SHEETS_ARGS: dict[str, tuple[str, ...]] = {
     "list": (),
@@ -1689,6 +1726,41 @@ SHEETS_ARGS: dict[str, tuple[str, ...]] = {
     "remove_sheet": ("workbook", "sheet"),
     "replace": ("workbook", "find", "replacement", "range", "sheet", "all", "caseSensitive", "wholeCell", "formulas"),
     "clean": ("workbook", "range", "clean", "header", "by", "delimiter", "overwrite", "dateFormat", "order", "case", "sheet"),
+    "recommend_charts": ("workbook", "range", "sheet"),
+    "insert_chart": ("workbook", "range", *_CHART_SETTINGS, "at", "width", "height", "sheet"),
+    "list_charts": ("workbook", "sheet"),
+    "describe_chart": ("workbook", "chart"),
+    "update_chart": ("workbook", "chart", *_CHART_SETTINGS, "range"),
+    "move_chart": ("workbook", "chart", "at", "width", "height"),
+    "remove_chart": ("workbook", "chart"),
+    "summarize": ("workbook", "range", "rowFields", "columnFields", "valueFields", "filters", "destination", "preview", "sheet"),
+    "refresh_summary": ("workbook", "summary", "sheet"),
+    "list_summaries": ("workbook", "sheet"),
+    "remove_duplicates": ("workbook", "range", "by", "header", "preview", "sheet"),
+    "split_text": ("workbook", "range", "delimiter", "consecutive", "destination", "overwrite", "header", "preview", "sheet"),
+    "trim_text": ("workbook", "range", "sheet"),
+    "change_case": ("workbook", "range", "case", "sheet"),
+    "convert_to_numbers": ("workbook", "range", "preview", "sheet"),
+    "convert_to_dates": ("workbook", "range", "order", "dateFormat", "preview", "sheet"),
+    "fill_down": ("workbook", "range", "sheet"),
+    "highlight_duplicates": ("workbook", "range", "color", "clear", "sheet"),
+    "sort_by": ("workbook", "range", "keys", "header", "sheet"),
+    "list_names": ("workbook",),
+    "create_name": ("workbook", "name", "refersTo", "scope", "comment"),
+    "update_name": ("workbook", "name", "newName", "refersTo", "comment", "scope"),
+    "delete_name": ("workbook", "name", "scope"),
+    "go_to_name": ("workbook", "name", "scope"),
+    "set_validation": ("workbook", "range", "rule", "allowBlank", "dropdown", "input", "alert", "sheet"),
+    "get_validation": ("workbook", "range", "sheet"),
+    "clear_validation": ("workbook", "range", "sheet"),
+    "list_comments": ("workbook", "sheet"),
+    "add_comment": ("workbook", "cell", "text", "sheet"),
+    "reply_to_comment": ("workbook", "cell", "commentId", "text", "sheet"),
+    "resolve_comment": ("workbook", "cell", "commentId", "resolved", "sheet"),
+    "delete_comment": ("workbook", "cell", "commentId", "sheet"),
+    "list_notes": ("workbook", "sheet"),
+    "set_note": ("workbook", "cell", "text", "sheet"),
+    "remove_note": ("workbook", "cell", "sheet"),
     "edit": ("workbook", "edits"),
     "save": ("workbook", "to", "overwrite"),
     "export_pdf": ("workbook", "to", "overwrite"),
@@ -1823,21 +1895,22 @@ SHEETS_SCHEMA = _schema(
     "Herald Sheets, the spreadsheet built into Herald OS: Excel workbooks (.xlsx) and CSV files, in the Sheets window the person watches or on disk. "
     "Read before you change anything: action=list shows the workbooks open in Herald Sheets (list_all: everything open in Herald Docs, Sheets and Slides, with what is selected in each), read gives the sheets and a range's values, formulas and what the cells show (without range, the cells that hold something; range=selection, what is selected), find finds text; open shows a file, and new starts a workbook (blank, from a template, or with rows of values and formulas). "
     "write puts rows of values from a cell (text starting with = is a formula, English function names and commas between arguments; plain numbers become numbers), fill copies a formula down or across, format sets number formats, fonts, colours and borders; sort, filter, freeze, replace, clean (dedupe, trim, numbers, dates, split, case), add_sheet, rename_sheet and remove_sheet do what they say. "
-    "Every call is one step the person can undo, so land a whole change in one call; action=edit makes several changes as ONE step. "
+    "It also makes charts (recommend_charts first, then insert_chart; the others take the chart's id), pivot-style summaries in live formulas (summarize), named ranges, validation (dropdown lists, input messages, error alerts), and comments and notes on cells (yours are signed Hermes); its data tools remove duplicates, split, trim, recase and convert text, fill down, highlight duplicates and sort by several columns, and preview=true shows a big change before it lands. "
+    "Every call is one step the person can undo (comment threads aside), so land a whole change in one call; action=edit makes several changes as ONE step. "
     "workbook is a file (~/... or /...) or an open workbook's name as its tab shows it; left out, the one in front. An open workbook changes in its window; a file that is not open is changed on disk, which asks the person first. "
     "Never save unless the person asks: saving over a file asks them, and the first time shows what Herald cannot keep; a CSV file keeps only values. A range goes into a document with the docs tool's insert_range. "
-    "Before building, cleaning or analysing a real spreadsheet read skill_view name=\"herald-os-bridge:herald-sheets\": the workflow, formulas, filling from examples, cleaning data and building a workbook.",
+    "Before building, cleaning or analysing a real spreadsheet read skill_view name=\"herald-os-bridge:herald-sheets\": the workflow, formulas, filling from examples, cleaning data, charts, summaries, names, validation, comments and building a workbook.",
     {
         "action": _enum(*SHEETS_ACTIONS, description="What to do"),
         "workbook": _desc(_STR, "The workbook: a file (full path or ~/...) or an open workbook's name as its tab shows it; the one in front in Herald Sheets when left out"),
         "path": _desc(_STR, "open: an .xlsx or .csv file to show; new: save the new workbook here at once (a new .xlsx or .csv file, never one that exists)"),
-        "name": _desc(_STR, "new: the tab's name, and the file name it is offered when saved; add_sheet: the new sheet's name (at most 31 characters, none of [ ] : * ? / \\); rename_sheet: the sheet's new name"),
+        "name": _desc(_STR, "new: the tab's name, and the file name it is offered when saved; add_sheet: the new sheet's name (at most 31 characters, none of [ ] : * ? / \\); rename_sheet: the sheet's new name; create_name, update_name, delete_name, go_to_name: the named range, like TaxRate (update_name: as it is now)"),
         "template": _desc(_STR, "new: budget, expenses, todo, schedule or invoice"),
         "values": _desc(_ROWS, "write, new: rows of cells from the first cell: [[\"Item\", \"Cost\"], [\"Rent\", \"1200\"], [\"Total\", \"=SUM(B2:B2)\"]]; text starting with = is a formula, plain numbers become numbers, a leading ' keeps text as text, and one value ([[\"0\"]]) fills every cell of a range. filter: what to keep, as the cells show it: [[\"Paid\", \"Due\"]]"),
-        "range": _desc(_STR, "The cells: like B2, B2:D9, C:C or 'Q1 sales'!A1:F20, or selection for what is selected. read: the cells that hold something when left out; write: the first cell (the rows go from there) or exactly the range's size; fill: the cells to fill, the first one included; filter: the rows, the header row first"),
-        "sheet": _desc(_STR, "The sheet, when the range does not name it (the one in front when left out); find, replace: only this sheet; rename_sheet, remove_sheet: the sheet to rename or remove"),
+        "range": _desc(_STR, "The cells: like B2, B2:D9, C:C or 'Q1 sales'!A1:F20, or selection for what is selected. read: the cells that hold something when left out; write: the first cell (the rows go from there) or exactly the range's size; fill: the cells to fill, the first one included; filter: the rows, the header row first; recommend_charts, insert_chart, summarize and the data tools: the data with its headers, where one cell stands for the table around it; update_chart: other cells to lay the chart's series out from; set_validation, get_validation, clear_validation: the cells the rules cover"),
+        "sheet": _desc(_STR, "The sheet, when the range does not name it (the one in front when left out); find, replace, list_charts, list_summaries, list_comments, list_notes: only this sheet; rename_sheet, remove_sheet: the sheet to rename or remove; insert_chart: the sheet the chart goes on (the data's when left out); refresh_summary: the summaries' sheet"),
         "formulas": _desc(_BOOL, "read: include formulas (true, the default); find: look in formulas too; replace: change formulas too"),
-        "text": _desc(_STR, "find: what to find"),
+        "text": _desc(_STR, "find: what to find; add_comment, reply_to_comment: the comment or the reply; set_note: the note"),
         "caseSensitive": _desc(_BOOL, "find, replace: match upper and lower case exactly"),
         "wholeCell": _desc(_BOOL, "find, replace: the whole cell has to match"),
         "formula": _desc(_STR, "fill: the first cell's formula, e.g. \"=B2*C2\"; its relative references move for each cell and $ keeps one fixed. Without it the first cell's own formula is filled"),
@@ -1846,15 +1919,15 @@ SHEETS_SCHEMA = _schema(
             "description": "format: what to set, e.g. {\"numberFormat\": \"#,##0.00\", \"bold\": true}: numberFormat (\"#,##0.00\", \"0%\", \"yyyy-mm-dd\", \"$#,##0\"), bold, italic, underline, strikethrough, font, size, color, background, align (left, center, right, general), verticalAlign (top, middle, bottom), wrap, border ({\"edges\": all, outside, inside, top, bottom, left, right or none, \"style\": thin, medium, thick, dashed, dotted or double, \"color\": \"#999999\"})",
             "additionalProperties": True,
         },
-        "by": _desc(_STR, "sort, filter: the column: a letter (C), a header in the first row (Cost) or a number from the range's first column (1); clean dedupe: the columns that make a row a repeat, comma-separated letters or headers (every column when left out)"),
+        "by": _desc(_STR, "sort, filter: the column: a letter (C), a header in the first row (Cost) or a number from the range's first column (1); clean dedupe, remove_duplicates: the columns that make a row a repeat, comma-separated letters or headers (every column when left out)"),
         "ascending": _desc(_BOOL, "sort: A to Z, smallest first (true, the default); false for descending"),
-        "header": _desc(_BOOL, "sort, clean: the first row is a header row and stays as it is"),
+        "header": _desc(_BOOL, "sort, clean, remove_duplicates, split_text, sort_by: the first row is a header row and stays as it is (remove_duplicates and sort_by read it from the data when left out)"),
         "condition": {
             "type": "object",
             "description": "filter: keep the rows whose cell meets this, e.g. {\"operator\": \"greaterThan\", \"value\": 100}; operator is equal, notEqual, greaterThan, greaterThanOrEqual, lessThan or lessThanOrEqual",
             "additionalProperties": True,
         },
-        "clear": _desc(_BOOL, "filter: take the sheet's filter off"),
+        "clear": _desc(_BOOL, "filter: take the sheet's filter off; highlight_duplicates: take the duplicate highlight off instead"),
         "rows": _desc(_NUM, "freeze: rows to keep in view from the top (0 with columns 0 unfreezes)"),
         "columns": _desc(_NUM, "freeze: columns to keep in view from the left (0)"),
         "index": _desc(_NUM, "add_sheet: its place among the sheets, from 0 (at the end when left out)"),
@@ -1862,12 +1935,64 @@ SHEETS_SCHEMA = _schema(
         "replacement": _desc(_STR, "replace: what goes in its place (left out deletes it)"),
         "all": _desc(_BOOL, "replace: every match (true, the default) or only the first"),
         "clean": _desc(_STR, "clean: what to do: dedupe (remove rows repeating an earlier one; the rest move up), trim (spaces at the ends and doubled inside), numbers (numbers kept as text, like \"1,200\", \"$5\", \"(300)\" or \"12%\", become numbers), dates (dates kept as text become real dates), split (one column split at delimiter into the columns to its right) or case (upper, lower or title); formulas are kept"),
-        "delimiter": _desc(_STR, "clean split: where to split: a character, or comma (the default), semicolon, space, tab or pipe"),
-        "overwrite": _desc(_BOOL, "clean split: write over data in the columns to the right; save, export_pdf: replace the file at to (asks the person first)"),
-        "dateFormat": _desc(_STR, "clean dates: the number format the dates get (yyyy-mm-dd)"),
-        "order": _desc(_STR, "clean dates: dmy (day first) or mdy (month first) for dates like 03/04/2025, when the data does not say"),
-        "case": _desc(_STR, "clean case: upper, lower or title (the default)"),
-        "edits": _desc(_OBJECTS, "edit: the changes, made in order as ONE step to undo; each has an op and that op's arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (range and action: dedupe, trim, numbers, dates, split or case, with the clean arguments) and replace (the replace arguments). E.g. [{\"op\": \"write\", \"range\": \"A1\", \"values\": [[\"Month\", \"Sales\"]]}, {\"op\": \"format\", \"range\": \"A1:B1\", \"format\": {\"bold\": true}}]"),
+        "delimiter": _desc(_STR, "clean split, split_text: where to split: a character, or comma (the default), semicolon, space, tab or pipe"),
+        "overwrite": _desc(_BOOL, "clean split, split_text: write over data where the parts go; save, export_pdf: replace the file at to (asks the person first)"),
+        "dateFormat": _desc(_STR, "clean dates, convert_to_dates: the date format the dates get (yyyy-mm-dd)"),
+        "order": _desc(_STR, "clean dates, convert_to_dates: dmy (day first), mdy (month first) or ymd for dates like 03/04/2025, when the data does not say"),
+        "case": _desc(_STR, "clean case: upper, lower, title (the default) or sentence; change_case: upper, lower, title or sentence"),
+        "chart": _desc(_STR, "describe_chart, update_chart, move_chart, remove_chart: the chart's id (from list_charts or insert_chart), its title, or its number in list_charts"),
+        "kind": _desc(_STR, "insert_chart, update_chart: column, bar, line, area, pie, doughnut, scatter or combo (columns and lines); insert_chart picks the best for the data when left out"),
+        "title": _desc(_STR, "insert_chart, update_chart: the chart's title (none takes it off; a one-series chart is titled from its data)"),
+        "series": _desc(_OBJECTS, "insert_chart, update_chart: the whole list of series, in place of those laid out from range: [{\"values\": \"B2:B13\", \"name\": \"Sales\", \"categories\": \"A2:A13\", \"color\": \"#4472c4\"}]; also nameCell (\"B1\"), and for combo charts type (column, line or area) and secondary (a second value axis); smooth and markers for lines"),
+        "categories": _desc(_STR, "insert_chart, update_chart: the category labels (a scatter chart's x values) for every series, cells like A2:A13 (none for none)"),
+        "legend": _desc(_STR, "insert_chart, update_chart: where the legend goes: top, bottom, left, right or none"),
+        "labels": _desc(_STR, "insert_chart, update_chart: data labels: none, value, percent or category"),
+        "axes": {
+            "type": "object",
+            "description": "insert_chart, update_chart: {\"x\": {...}, \"y\": {...}, \"y2\": {...}} (the category axis, the value axis, a combo chart's second value axis), each with title, min, max, gridlines, format (\"0%\", \"#,##0\"), hidden and reverse (the other way round); null for a key takes it off",
+            "additionalProperties": True,
+        },
+        "stacking": _desc(_STR, "insert_chart, update_chart: none, stacked or percent (columns, bars, lines and areas)"),
+        "palette": _desc(_STR, "insert_chart, update_chart: the series' colours in turn, comma-separated (\"#4472c4, #ed7d31\"), or workbook for the workbook theme's"),
+        "hole": _desc(_NUM, "insert_chart, update_chart: a doughnut's hole as a percentage of its size, 0 to 90 (50)"),
+        "at": _desc(_STR, "insert_chart, move_chart: a cell for the chart's top-left corner (H2), or cells for it to cover (H2:N18); insert_chart puts it beside the data when left out"),
+        "width": _desc(_NUM, "insert_chart, move_chart: the chart's width in pixels, 80 to 4000 (480 for a new one)"),
+        "height": _desc(_NUM, "insert_chart, move_chart: the chart's height in pixels, 80 to 4000 (288 for a new one)"),
+        "rowFields": {"type": "array", "items": _STR, "description": "summarize: the columns whose values go down the summary, by header or letter: [\"Region\"]"},
+        "columnFields": {"type": "array", "items": _STR, "description": "summarize: columns whose values go across it: [\"Quarter\"]"},
+        "valueFields": _desc(_OBJECTS, "summarize: what is worked out for each label: [{\"field\": \"Amount\", \"fn\": \"sum\"}]; fn is sum, count, average, min or max (sum for numbers, count for the rest, when left out)"),
+        "filters": _desc(_OBJECTS, "summarize: the rows to count in: [{\"field\": \"Status\", \"values\": [\"Paid\", \"Due\"]}]; \"(blank)\" stands for empty cells"),
+        "destination": _desc(_STR, "summarize: where the summary goes: new (a new sheet, the default), a sheet's name, or its first cell like 'Report'!B2; split_text: the first cell the parts go to (the column itself when left out)"),
+        "preview": _desc(_BOOL, "remove_duplicates, split_text, convert_to_numbers, convert_to_dates, summarize: say what would change, and change nothing"),
+        "summary": _desc(_STR, "refresh_summary: the summary's id (summary-1), its number on the sheet, or a cell inside it; every summary on the sheet when left out"),
+        "consecutive": _desc(_BOOL, "split_text: runs of the delimiter count as one"),
+        "color": _desc(_STR, "highlight_duplicates: the fill, like #ffc7ce (Excel's light red with dark red text when left out)"),
+        "keys": _desc(_OBJECTS, "sort_by: the columns to sort by, the first first: [{\"column\": \"Region\", \"ascending\": true}, {\"column\": \"C\", \"ascending\": false}]; a column is a header, a letter or a number from 1"),
+        "refersTo": _desc(_STR, "create_name, update_name: what the name stands for: cells like Data!B2:D9 (on the sheet in front without a sheet name), selection, or a constant or formula like =0.07"),
+        "scope": _desc(_STR, "create_name: workbook (the default) or a sheet's name, for a name only that sheet's formulas see; update_name, delete_name, go_to_name: which one, when a sheet and the workbook both have the name"),
+        "comment": _desc(_STR, "create_name, update_name: the name's comment, as the Name manager shows it (none takes it off); not a comment on a cell"),
+        "newName": _desc(_STR, "update_name: the name's new name"),
+        "rule": {
+            "type": "object",
+            "description": "set_validation: what the cells take: {\"type\": \"list\", \"items\": [\"Yes\", \"No\"]} or {\"type\": \"list\", \"source\": \"Lists!A2:A9\"}; {\"type\": \"whole\", \"operator\": \"between\", \"min\": 1, \"max\": 10}, or decimal, date (yyyy-mm-dd) or textLength with an operator (between, notBetween, equal, notEqual, greaterThan, lessThan, greaterThanOrEqual, lessThanOrEqual) and a value, or min and max (a bound can be a formula like =TODAY()); {\"type\": \"custom\", \"formula\": \"=B2<=C2\"} (TRUE for what is allowed); {\"type\": \"any\"} for an input message alone",
+            "additionalProperties": True,
+        },
+        "allowBlank": _desc(_BOOL, "set_validation: empty cells are allowed (true, the default)"),
+        "dropdown": _desc(_BOOL, "set_validation: a list shows its arrow in the cell (true, the default)"),
+        "input": {
+            "type": "object",
+            "description": "set_validation: the message shown when a cell is selected: {\"title\": \"Status\", \"message\": \"Pick one from the list\"}",
+            "additionalProperties": True,
+        },
+        "alert": {
+            "type": "object",
+            "description": "set_validation: the error alert after a value the rule does not allow: {\"style\": \"stop\", \"title\": \"Not on the list\", \"message\": \"Pick Yes or No\"}; style is stop (the value is refused, the default), warning (the person may keep it), information, or none for no alert",
+            "additionalProperties": True,
+        },
+        "cell": _desc(_STR, "add_comment, set_note, remove_note: the cell, like B2 or 'Q1 sales'!C3, or selection; reply_to_comment, resolve_comment, delete_comment: the comment's cell (or give commentId)"),
+        "commentId": _desc(_STR, "reply_to_comment, resolve_comment, delete_comment: a comment's id from list_comments, instead of cell; a reply's id deletes only that reply"),
+        "resolved": _desc(_BOOL, "resolve_comment: resolved (true, the default) or open again (false)"),
+        "edits": _desc(_OBJECTS, "edit: the changes, made in order as ONE step to undo; each has an op and that op's arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (range and action: dedupe, trim, numbers, dates, split or case, with the clean arguments) and replace (the replace arguments); and, each with the arguments of the action of the same words (no preview): insertChart, updateChart, moveChart, removeChart, summarize, refreshSummary, removeDuplicates, splitText, trimText, changeCase, convertToNumbers, convertToDates, fillDown, highlightDuplicates, sortBy, createName, updateName, deleteName, setValidation, clearValidation, addComment, replyToComment, resolveComment, deleteComment (comments stay out of the undo step), setNote and removeNote. E.g. [{\"op\": \"write\", \"range\": \"A1\", \"values\": [[\"Month\", \"Sales\"]]}, {\"op\": \"format\", \"range\": \"A1:B1\", \"format\": {\"bold\": true}}, {\"op\": \"insertChart\", \"range\": \"A1:B13\", \"kind\": \"line\"}]"),
         "to": _desc(_STR, "save: save as this new file instead (.xlsx or .csv; full path or ~/...); export_pdf: the PDF to write (a new file in ~/Documents when left out)"),
         "steps": _desc(_NUM, "undo, redo: how many steps (1)"),
     },
@@ -1942,8 +2067,9 @@ def _office_args(args: dict[str, Any], actions: dict[str, str], names: dict[str,
 
 def _office_json(command_args: dict[str, Any]) -> dict[str, Any]:
     # The shell takes table cells, edits, rows of values, cell formats, filter conditions, a deck's
-    # slides and a two-column slide's bodies as JSON text.
-    for key in ("cells", "edits", "values", "format", "condition", "slides", "body"):
+    # slides and a two-column slide's bodies as JSON text; and a chart's series and axes, a
+    # summary's fields and filters, sort keys, and a validation rule with its messages.
+    for key in ("cells", "edits", "values", "format", "condition", "slides", "body", "series", "axes", "rowFields", "columnFields", "valueFields", "filters", "keys", "rule", "input", "alert"):
         if isinstance(command_args.get(key), (dict, list)):
             command_args[key] = json.dumps(command_args[key])
     return command_args
@@ -1979,8 +2105,9 @@ _OFFICE_TARGETS = {"docs": "document", "sheets": "workbook", "slides": "presenta
 
 
 def _file_on_disk(action: str, command: str, command_args: dict[str, Any], catalogue: dict[str, dict[str, Any]]) -> Path | None:
-    """The existing file a change names by its path: unless it is open, the change is written to it on disk."""
-    if action in ("save", "export_pdf") or ui_tier_for(command, catalogue) is Tier.READ:
+    """The existing file a change names by its path: unless it is open, the change is written to it on disk.
+    A preview only says what the change would do, and the shell writes nothing for it."""
+    if action in ("save", "export_pdf") or ui_tier_for(command, catalogue) is Tier.READ or command_args.get("preview") is True:
         return None
     target = command_args.get(_OFFICE_TARGETS.get(command.split(".")[0], ""))
     if not isinstance(target, str) or not target.strip().startswith(("/", "~")):
@@ -1999,8 +2126,10 @@ def _edit_tier(command: str, command_args: dict[str, Any], catalogue: dict[str, 
         except json.JSONDecodeError:
             edits = None
     app = command.split(".")[0]
-    ops = {f"{app}.{edit.get('op')}" for edit in edits if isinstance(edit, dict)} if isinstance(edits, list) else set()
-    return max((ui_tier_for(op, catalogue) for op in ops if op in catalogue), key=_TIER_ORDER.index, default=Tier.READ)
+    # The shell takes an op in any case and with spaces round it, so the batch is matched the same way.
+    known = {name.lower(): name for name in catalogue}
+    ops = {known.get(f"{app}.{str(edit.get('op') or '').strip()}".lower()) for edit in edits if isinstance(edit, dict)} if isinstance(edits, list) else set()
+    return max((ui_tier_for(op, catalogue) for op in ops if op), key=_TIER_ORDER.index, default=Tier.READ)
 
 
 def office_tier(action: str, command: str, command_args: dict[str, Any], catalogue: dict[str, dict[str, Any]], open_paths: Iterable[str]) -> Tier:

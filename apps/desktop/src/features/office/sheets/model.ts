@@ -6,10 +6,11 @@ import { type CellRange, columnIndex, columnName, MAX_COLUMNS, MAX_ROWS, parseRa
 
 /*
  * What Hermes's commands do in a workbook, on the live one in a window or on one loaded from a file
- * with nothing drawn: read a range, write values and formulas, format, add and rename sheets, sort,
- * filter and freeze; and, from the feature folders, charts, data tools and summaries, named ranges,
- * validation, comments and notes. Each change is one step to undo, whatever number of Univer
- * commands it takes. Arguments are checked here, with messages that say what to give instead.
+ * with nothing drawn: read a range, write values and formulas, format, add and rename sheets,
+ * filter and freeze; and, from the feature folders, charts, data tools (sorting among them) and
+ * summaries, named ranges, validation, comments and notes. Each change is one step to undo,
+ * whatever number of Univer commands it takes. Arguments are checked here, with messages that say
+ * what to give instead.
  */
 
 export * from './charts/model.ts'
@@ -469,22 +470,6 @@ export function columnOf(range: FRange, cells: CellRange, by: unknown): number {
   }
 
   return cells.startColumn + found
-}
-
-export async function sortRange(target: SheetsTarget, args: { range: unknown; by: unknown; ascending?: unknown; header?: unknown; sheet?: unknown }): Promise<{ sheet: string; range: string; column: string; ascending: boolean }> {
-  const { sheet, range, cells } = rangeOf(target.workbook, args.range, args.sheet)
-  const column = columnOf(range, cells, args.by)
-  const ascending = args.ascending !== false && args.ascending !== 'false' && args.ascending !== 'descending'
-  const body = args.header === true ? { ...cells, startRow: cells.startRow + 1 } : cells
-
-  if (body.startRow > body.endRow) {
-    throw new Error(`${rangeName(cells)} has no rows under its header to sort`)
-  }
-
-  // Univer counts the sort column from the range's first column.
-  await oneStep(target, () => sheet.getRange(body.startRow, body.startColumn, body.endRow - body.startRow + 1, body.endColumn - body.startColumn + 1).sort({ column: column - body.startColumn, ascending }))
-
-  return { sheet: sheet.getSheetName(), range: rangeName(body), column: columnName(column), ascending }
 }
 
 const FILTER_OPERATORS = ['equal', 'notEqual', 'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual'] as const

@@ -1,16 +1,18 @@
 import { baseName, extensionOf, officeAppFor } from '../../../../shared/office/files.ts'
 import type { WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
 import { cellName, quoteSheet, rangeName } from '../../../../shared/office/xlsx/address.ts'
+import type { CommandContext } from '../../../store/os-commands.ts'
 import { isPanels } from '../../../store/shell.ts'
 import { openApp } from '../../../store/windows.ts'
 import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve, showDocument, withEditor } from '../agent.ts'
 import { documentFileName, fileName, freePath, parseJsonArg, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
 import { sheetsAdapter } from './adapter.ts'
-import { caseValues, cleanActionOf, columnRuns, dateValues, dayOrderOf, dedupeRows, delimiterOf, fillGrid, findInGrid, numberValues, replaceInGrid, sheetEditsOf, sheetTemplateOf, splitValues, trimTable, trimValues, valuesOf } from './agent-model.ts'
+import { cleanOn, DEPTH, type DepthCommand, type DepthWork, editOn, sortOn } from './agent-depth.ts'
+import { fillGrid, findInGrid, isDepthEdit, replaceInGrid, sheetEditsOf, sheetTemplateOf, trimTable, valuesOf } from './agent-model.ts'
 import { withHeadlessSheets } from './headless.ts'
 import { changeFile, liveTarget, selectionIn } from './live.ts'
-import { addSheet, cellFor, type CellInput, columnOf, describeWorkbook, filterRange, formatSteps, freeze, MAX_CELLS, oneStep, parseTarget, rangeOf, readRange, removeSheet, renameSheet, setFormat, settled, sheetOf, type SheetsTarget, sortRange, writeRange } from './model.ts'
+import { addSheet, cellFor, type CellInput, describeWorkbook, filterRange, formatSteps, freeze, MAX_CELLS, oneStep, parseTarget, rangeOf, readRange, removeSheet, renameSheet, setFormat, settled, sheetOf, type SheetsTarget, writeRange } from './model.ts'
 import { sheetsSession as session } from './store.ts'
 
 /*
@@ -111,6 +113,13 @@ function rangeArg(value: unknown, docKey: string | null): string {
   }
 
   return `${quoteSheet(selection.sheet)}!${selection.range}`
+}
+
+/** A command's arguments with the cells they name as selection read as what is selected. */
+function withSelection(args: Args, docKey: string | null): Args {
+  const named = ['range', 'cell', 'refersTo'].filter((key) => text(args[key]).toLowerCase() === 'selection')
+
+  return { ...args, ...Object.fromEntries(named.map((key) => [key, rangeArg(args[key], docKey)])) }
 }
 
 /** The cells of a sheet that hold something, from A1; null when it is empty. */
@@ -372,8 +381,7 @@ export async function format(args: Args): Promise<Outcome> {
 export async function sort(args: Args): Promise<Outcome> {
   const target = await located(args.workbook)
   const range = rangeArg(args.range, target.kind === 'live' ? target.doc.key : null)
-  const by = typeof args.by === 'string' && /^\d+$/.test(args.by) ? Number(args.by) : args.by
-  const { result, name, path } = await onWorkbook(target, (on) => sortRange(on, { range, by, ascending: args.ascending, header: args.header, sheet: args.sheet }), true)
+  const { result, name, path } = await onWorkbook(target, (on) => sortOn(on, args, range), true)
 
   return { summary: `Sorted ${result.sheet}!${result.range} of ${name} by ${result.column}, ${result.ascending ? 'ascending' : 'descending'}`, data: { name, path, ...result } }
 }
@@ -457,92 +465,6 @@ export async function replace(args: Args): Promise<Outcome> {
   return { summary: result.replaced ? `Replaced “${String(args.find)}” in ${result.replaced} cell${result.replaced === 1 ? '' : 's'} of ${name}` : `“${String(args.find)}” is in no cell of ${name} that can change`, data: { name, path, ...result } }
 }
 
-const fallbackOrder = (): 'dmy' | 'mdy' => {
-  const parts = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'numeric', year: 'numeric' }).formatToParts(new Date(2001, 1, 3))
-
-  return parts.findIndex((part) => part.type === 'month') < parts.findIndex((part) => part.type === 'day') ? 'mdy' : 'dmy'
-}
-
-/** One cleaning tool over a range: duplicates, spaces, numbers or dates kept as text, a column split, letter case. */
-async function cleanOn(on: SheetsTarget, args: Args, range: string): Promise<{ sheet: string; range: string; action: string; changed: number; detail: string }> {
-  const action = cleanActionOf(args.action)
-  const { sheet, cells } = rangeOf(on.workbook, range, args.sheet)
-  const read = readRange(on, { range, sheet: args.sheet })
-  const header = args.header === true
-  const name = sheet.getSheetName()
-  const all = rangeName(cells)
-  // Cells with formulas keep them: only values change.
-  const writeBack = async (values: CellInput[][]) => {
-    await writeRange(on, { range: `${quoteSheet(name)}!${all}`, values: values.map((row, r) => row.map((value, c) => read.formulas[r]?.[c] ?? value)) })
-  }
-
-  if (action === 'dedupe') {
-    if (hasFormulas(read.formulas)) {
-      throw new Error(`${all} has formulas; removing rows would break them: copy the values first, or remove duplicates from a range without formulas`)
-    }
-
-    const by = text(args.by)
-    const keys = by ? by.split(',').map((column) => columnOf(sheet.getRange(cells.startRow, cells.startColumn, cells.endRow - cells.startRow + 1, cells.endColumn - cells.startColumn + 1), cells, /^\d+$/.test(column.trim()) ? Number(column.trim()) : column.trim()) - cells.startColumn) : null
-    const result = dedupeRows(read.values, keys, header)
-
-    if (result.removed) {
-      await writeBack(result.values)
-    }
-
-    return { sheet: name, range: all, action, changed: result.removed, detail: `${result.removed} duplicate row${result.removed === 1 ? '' : 's'} removed` }
-  }
-
-  if (action === 'split') {
-    if (cells.startColumn !== cells.endColumn) {
-      throw new Error('Split one column at a time: give a range one column wide')
-    }
-
-    const result = splitValues(read.values.map((row) => row[0] ?? null), delimiterOf(args.delimiter), header)
-
-    if (result.columns <= 1) {
-      return { sheet: name, range: all, action, changed: 0, detail: 'nothing to split' }
-    }
-
-    const beside = { ...cells, startColumn: cells.startColumn + 1, endColumn: cells.startColumn + result.columns - 1 }
-    const besideRead = beside.endColumn < sheet.getMaxColumns() ? readRange(on, { range: `${quoteSheet(name)}!${rangeName(beside)}` }) : null
-
-    if (besideRead && args.overwrite !== true && besideRead.values.some((row) => row.some((value) => value !== null && value !== ''))) {
-      throw new Error(`The ${result.columns - 1} column${result.columns === 2 ? '' : 's'} right of ${all} (${rangeName(beside)}) hold data: clear them, or pass overwrite=true`)
-    }
-
-    await writeRange(on, { range: `${quoteSheet(name)}!${cellName(cells.startRow, cells.startColumn)}`, values: result.values })
-
-    return { sheet: name, range: rangeName({ ...cells, endColumn: beside.endColumn }), action, changed: read.values.length, detail: `split into ${result.columns} columns` }
-  }
-
-  if (action === 'dates') {
-    const order = text(args.order).toLowerCase() === 'mdy' ? 'mdy' : text(args.order).toLowerCase() === 'dmy' ? 'dmy' : dayOrderOf(read.values, fallbackOrder())
-    const result = dateValues(read.values, order)
-
-    const dates = result.cells.filter((cell) => !read.formulas[cell.row]?.[cell.column])
-
-    if (dates.length) {
-      await writeBack(result.values)
-      const [step] = formatSteps({ numberFormat: text(args.dateFormat) || 'yyyy-mm-dd' })
-
-      // One format call per run of cells down a column.
-      for (const run of columnRuns(dates)) {
-        step.apply(sheet.getRange(cells.startRow + run.row, cells.startColumn + run.column, run.rows, 1))
-      }
-    }
-
-    return { sheet: name, range: all, action, changed: dates.length, detail: `${dates.length} date${dates.length === 1 ? '' : 's'} read ${order === 'dmy' ? 'day first' : 'month first'}` }
-  }
-
-  const result = action === 'trim' ? trimValues(read.values) : action === 'numbers' ? numberValues(read.values) : caseValues(read.values, args.case)
-
-  if (result.changed) {
-    await writeBack(result.values)
-  }
-
-  return { sheet: name, range: all, action, changed: result.changed, detail: `${result.changed} cell${result.changed === 1 ? '' : 's'} changed` }
-}
-
 export async function clean(args: Args): Promise<Outcome> {
   const target = await located(args.workbook)
   const range = rangeArg(args.range, target.kind === 'live' ? target.doc.key : null)
@@ -556,8 +478,40 @@ export async function clean(args: Args): Promise<Outcome> {
   return { summary: `Cleaned ${result.sheet}!${result.range} of ${name}: ${result.detail}`, data: { name, path, ...result } }
 }
 
+/**
+ * A command for charts, summaries, data tools, names, validation, comments or notes (agent-depth.ts):
+ * a change is one step to undo, a preview changes nothing, and going to a name shows it in the
+ * window of the open workbook.
+ */
+export async function depth(command: DepthCommand, args: Args, context: Pick<CommandContext, 'source'>): Promise<Outcome> {
+  const work: DepthWork = DEPTH[command]
+  const target = await located(args.workbook)
+  const given = withSelection(args, target.kind === 'live' ? target.doc.key : null)
+
+  if (work.view) {
+    if (target.kind === 'file') {
+      throw new Error(`${fileName(target.path)} is not open in Herald Sheets: open it (sheets.open) first`)
+    }
+
+    const live = (await showDocument('sheets', session, target.doc)) ? liveTarget(target.doc.key) : null
+
+    if (!live) {
+      throw new Error(`${target.doc.name} is not showing in Herald Sheets`)
+    }
+
+    const { said, data } = await work.run(live, given, context.source)
+
+    return { summary: `${target.doc.name}: ${said}`, data: { name: target.doc.name, path: target.doc.path, ...data } }
+  }
+
+  const change = work.change && given.preview !== true && given.preview !== 'true'
+  const { result, name, path } = await onWorkbook(target, (on) => work.run(on, given, context.source), change)
+
+  return { summary: `${name}: ${result.said}`, data: { name, path, ...result.data } }
+}
+
 /** A batch of edits as one step to undo. */
-export async function edit(args: Args): Promise<Outcome> {
+export async function edit(args: Args, context?: Pick<CommandContext, 'source'>): Promise<Outcome> {
   const edits = sheetEditsOf(args.edits)
   const target = await located(args.workbook)
   const docKey = target.kind === 'live' ? target.doc.key : null
@@ -567,6 +521,11 @@ export async function edit(args: Args): Promise<Outcome> {
       const done: string[] = []
 
       for (const entry of edits) {
+        if (isDepthEdit(entry)) {
+          done.push(await editOn(on, withSelection(entry, docKey) as typeof entry, context?.source))
+          continue
+        }
+
         const range = rangeArg(entry.range, docKey)
         const sheet = entry.sheet
 
@@ -581,7 +540,7 @@ export async function edit(args: Args): Promise<Outcome> {
             done.push(`formatted ${(await setFormat(on, { range, format: parseJsonArg(entry.format, 'format'), sheet })).range}`)
             break
           case 'sort':
-            done.push(`sorted ${(await sortRange(on, { range, by: entry.by, ascending: entry.ascending, header: entry.header, sheet })).range}`)
+            done.push(`sorted ${(await sortOn(on, entry, range)).range}`)
             break
           case 'filter':
             await filterRange(on, { range: range || undefined, by: entry.by, values: parseJsonArg(entry.values, 'values'), condition: parseJsonArg(entry.condition, 'condition'), clear: entry.clear, sheet })
@@ -603,7 +562,7 @@ export async function edit(args: Args): Promise<Outcome> {
           case 'clean':
             done.push((await cleanOn(on, entry, range)).detail)
             break
-          default:
+          case 'replace':
             done.push(`replaced ${(await replaceOn(on, entry, range)).replaced} cells`)
         }
       }

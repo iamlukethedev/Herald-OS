@@ -33,6 +33,9 @@ export interface CellNote {
   shown: boolean
 }
 
+/** Who signs a comment, a reply or a new note: the person (commentAuthor) unless a command gives another. */
+type Author = ReturnType<typeof commentAuthor>
+
 /** A new note's box, in pixels, as Univer draws one. */
 const NOTE_SIZE = { width: 160, height: 72 }
 
@@ -130,7 +133,7 @@ async function run(target: SheetsTarget, command: string, params: object, failur
 }
 
 /** Start a comment thread on a cell. A cell holds a thread or a note, as in Excel. */
-export async function addComment(target: SheetsTarget, args: { cell: unknown; text: unknown; sheet?: unknown }): Promise<{ id: string; sheet: string; cell: string }> {
+export async function addComment(target: SheetsTarget, args: { cell: unknown; text: unknown; sheet?: unknown }, by?: Author): Promise<{ id: string; sheet: string; cell: string }> {
   const { sheet, row, column, name } = cellOf(target, args.cell, args.sheet)
   const text = textArg(args.text, 'comment')
 
@@ -142,7 +145,7 @@ export async function addComment(target: SheetsTarget, args: { cell: unknown; te
     throw new Error(`${name} has a note; a cell holds a note or a comment, as in Excel: remove the note first`)
   }
 
-  const author = commentAuthor()
+  const author = by ?? commentAuthor()
   const id = generateRandomId()
   const comment: IThreadComment = { id, threadId: id, ref: name, dT: getDT(), personId: author.id, authorName: author.name, text: bodyOf(text) as IThreadComment['text'], attachments: [], unitId: target.workbook.getId(), subUnitId: sheet.getSheetId() }
   await run(target, AddCommentCommand.id, { unitId: target.workbook.getId(), subUnitId: sheet.getSheetId(), comment }, `The comment on ${name} was not added`)
@@ -151,10 +154,10 @@ export async function addComment(target: SheetsTarget, args: { cell: unknown; te
 }
 
 /** Reply to the thread on a cell, or the thread of a comment's id. */
-export async function replyToComment(target: SheetsTarget, args: { cell?: unknown; id?: unknown; text: unknown; sheet?: unknown }): Promise<{ id: string; threadId: string; sheet: string; cell: string }> {
+export async function replyToComment(target: SheetsTarget, args: { cell?: unknown; id?: unknown; text: unknown; sheet?: unknown }, by?: Author): Promise<{ id: string; threadId: string; sheet: string; cell: string }> {
   const { sheet, thread } = threadOf(target, args)
   const text = textArg(args.text, 'reply')
-  const author = commentAuthor()
+  const author = by ?? commentAuthor()
   const id = generateRandomId()
   const reply: IThreadComment = { id, threadId: thread.threadId, parentId: thread.root.id, ref: thread.root.ref, dT: getDT(), personId: author.id, authorName: author.name, text: bodyOf(text) as IThreadComment['text'], attachments: [], unitId: target.workbook.getId(), subUnitId: sheet.getSheetId() }
   await run(target, AddCommentCommand.id, { unitId: target.workbook.getId(), subUnitId: sheet.getSheetId(), comment: reply }, 'The reply was not added')
@@ -196,7 +199,7 @@ export function listNotes(target: SheetsTarget, args: { sheet?: unknown } = {}):
 }
 
 /** Write a cell's note (replacing the note it had); one step to undo. A cell holds a note or a comment thread, as in Excel. */
-export async function setNote(target: SheetsTarget, args: { cell: unknown; text: unknown; sheet?: unknown }): Promise<CellNote> {
+export async function setNote(target: SheetsTarget, args: { cell: unknown; text: unknown; sheet?: unknown }, by?: Author): Promise<CellNote> {
   const { sheet, row, column, name } = cellOf(target, args.cell, args.sheet)
   const text = String(args.text ?? '')
 
@@ -209,7 +212,7 @@ export async function setNote(target: SheetsTarget, args: { cell: unknown; text:
   }
 
   const current = noteAt(target, sheet, row, column)
-  const note: Partial<UNote> = { ...NOTE_SIZE, ...current, note: text, author: current?.author ?? commentAuthor().name }
+  const note: Partial<UNote> = { ...NOTE_SIZE, ...current, note: text, author: current?.author ?? (by ?? commentAuthor()).name }
   await oneStep(target, () => injector(target).get(ICommandService).syncExecuteCommand(SheetUpdateNoteCommand.id, { unitId: target.workbook.getId(), subUnitId: sheet.getSheetId(), row, col: column, note }))
 
   return { sheet: sheet.getSheetName(), cell: name, text, author: note.author ?? '', shown: Boolean(note.show) }

@@ -90,6 +90,14 @@ describe('splitting text', () => {
     })
   })
 
+  it('leaves a header row as it is', async () => {
+    const result = await changeAndUndo(book([['Name, full'], ['Doe, Jane']]), async (target) => ({ done: await splitText(target, { range: 'A1:A2', delimiter: 'comma', header: true }), read: readRange(target, { range: 'A1:B2' }).values }))
+
+    expect(result.value.done).toMatchObject({ destination: 'A1:B2', columns: 2, rows: 1, changed: true })
+    expect(result.value.read).toEqual([['Name, full', null], ['Doe', 'Jane']])
+    expect(result.undone).toBe(true)
+  })
+
   it('splits at other text and into another place, runs of a delimiter as one', async () => {
     const result = await changeAndUndo(book([['a | b'], ['c |  | d']]), async (target) => {
       await splitText(target, { range: 'A1:A2', delimiter: 'other', other: '|', consecutive: true, destination: 'Other!B2' })

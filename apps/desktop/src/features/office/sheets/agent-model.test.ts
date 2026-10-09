@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { caseValues, cleanActionOf, coerceValue, columnRuns, dateSerial, dateValues, dayOrderOf, dedupeRows, delimiterOf, fillGrid, findInGrid, numberValues, parseDate, parseNumber, replaceInGrid, SHEET_TEMPLATES, sheetEditsOf, sheetTemplateOf, splitValues, trimTable, trimValues, valuesOf } from './agent-model.ts'
+import { cleanActionOf, coerceValue, DEPTH_EDIT_OPS, dayOrderOf, fillGrid, findInGrid, isDepthEdit, replaceInGrid, SHEET_EDIT_OPS, SHEET_TEMPLATES, sheetEditsOf, sheetTemplateOf, trimTable, valuesOf } from './agent-model.ts'
 
 describe('values as callers send them', () => {
   it('turns plain numbers in text into numbers, keeping ids with leading zeros and apostrophes as text', () => {
@@ -74,72 +74,11 @@ describe('cleaning data', () => {
     expect(() => cleanActionOf('sparkle')).toThrow(/action is one of/)
   })
 
-  it('removes repeated rows, by every column or by some, keeping the header', () => {
-    const rows = [
-      ['Name', 'Email'],
-      ['Sam', 'sam@x.io'],
-      ['sam ', 'SAM@x.io'],
-      ['Ana', 'ana@x.io'],
-      ['Sam', 'other@x.io']
-    ]
-    const all = dedupeRows(rows, null, true)
-
-    expect(all.removed).toBe(1)
-    expect(all.values).toEqual([['Name', 'Email'], ['Sam', 'sam@x.io'], ['Ana', 'ana@x.io'], ['Sam', 'other@x.io'], [null, null]])
-    expect(dedupeRows(rows, [0], true).removed).toBe(2)
-  })
-
-  it('trims spaces and changes case', () => {
-    expect(trimValues([['  a  b ', 3, '\u00a0c']])).toEqual({ values: [['a b', 3, 'c']], changed: 2 })
-    expect(caseValues([['new york', 'MARY-JANE o’neil']], 'title').values).toEqual([['New York', 'Mary-Jane O’neil']])
-    expect(caseValues([['abc']], 'upper').values).toEqual([['ABC']])
-    expect(() => caseValues([['a']], 'sponge')).toThrow(/case is/)
-  })
-
-  it('reads numbers kept as text', () => {
-    expect(parseNumber('1,200')).toBe(1200)
-    expect(parseNumber('$5.50')).toBe(5.5)
-    expect(parseNumber('(300)')).toBe(-300)
-    expect(parseNumber('12%')).toBe(0.12)
-    expect(parseNumber('AUD 40')).toBe(40)
-    expect(parseNumber('12a')).toBeNull()
-    expect(parseNumber('1,20')).toBeNull()
-    expect(numberValues([['1,200', 'x', 4]])).toEqual({ values: [[1200, 'x', 4]], changed: 1 })
-  })
-
-  it('reads dates kept as text, day or month first', () => {
-    expect(dateSerial(2025, 3, 4)).toBe(45720)
-    expect(dateSerial(2025, 2, 30)).toBeNull()
-    expect(parseDate('2025-03-04', 'mdy')).toBe(45720)
-    expect(parseDate('04/03/2025', 'dmy')).toBe(45720)
-    expect(parseDate('03/04/2025', 'mdy')).toBe(45720)
-    expect(parseDate('4 March 2025', 'mdy')).toBe(45720)
-    expect(parseDate('March 4th, 2025', 'dmy')).toBe(45720)
-    expect(parseDate('04-Mar-25', 'mdy')).toBe(45720)
-    expect(parseDate('soon', 'dmy')).toBeNull()
+  it('tells which way round day and month go in dates, from a number over 12', () => {
     expect(dayOrderOf([['13/02/2025']], 'mdy')).toBe('dmy')
-    expect(dayOrderOf([['02/13/2025']], 'dmy')).toBe('mdy')
+    expect(dayOrderOf([['Date'], ['02/13/2025']], 'dmy')).toBe('mdy')
     expect(dayOrderOf([['02/03/2025']], 'dmy')).toBe('dmy')
-    expect(dateValues([['Date'], ['2025-03-04'], ['n/a']], 'dmy')).toEqual({ values: [['Date'], [45720], ['n/a']], cells: [{ row: 1, column: 0 }] })
-  })
-
-  it('splits a column and groups cells into runs', () => {
-    expect(splitValues(['Full name', 'Ada Lovelace', 'Grace Brewster Hopper', 7], ' ', true)).toEqual({
-      values: [
-        ['Full name', null, null],
-        ['Ada', 'Lovelace', null],
-        ['Grace', 'Brewster', 'Hopper'],
-        [7, null, null]
-      ],
-      columns: 3
-    })
-    expect(delimiterOf('tab')).toBe('\t')
-    expect(delimiterOf(undefined)).toBe(',')
-    expect(columnRuns([{ row: 2, column: 0 }, { row: 1, column: 0 }, { row: 4, column: 0 }, { row: 1, column: 2 }])).toEqual([
-      { row: 1, column: 0, rows: 2 },
-      { row: 4, column: 0, rows: 1 },
-      { row: 1, column: 2, rows: 1 }
-    ])
+    expect(dayOrderOf([['02/03/2025']], 'mdy')).toBe('mdy')
   })
 })
 
@@ -147,6 +86,17 @@ describe('batches, templates and tables', () => {
   it('reads a batch of edits and refuses unknown ones', () => {
     expect(sheetEditsOf([{ op: 'WRITE', range: 'A1', values: [[1]] }, { op: 'addsheet' }]).map((edit) => edit.op)).toEqual(['write', 'addSheet'])
     expect(() => sheetEditsOf('[{"op": "chart"}]')).toThrow(/Edit 1: op is one of/)
+  })
+
+  it('takes the changing sheets commands as ops of their own, named as the commands, and no previews', () => {
+    const edits = sheetEditsOf([{ op: 'insertchart', range: 'A1:B5' }, { op: 'removeChart', chart: 1 }, { op: 'addComment', cell: 'B2', text: 'Check' }, { op: 'write', range: 'A1', values: [[1]] }])
+
+    expect(edits.map((edit) => edit.op)).toEqual(['insertChart', 'removeChart', 'addComment', 'write'])
+    expect(edits.map((edit) => isDepthEdit(edit))).toEqual([true, true, true, false])
+    expect(DEPTH_EDIT_OPS.every((op) => (SHEET_EDIT_OPS as readonly string[]).includes(op))).toBe(true)
+    expect(DEPTH_EDIT_OPS).not.toContain('listCharts')
+    expect(DEPTH_EDIT_OPS).not.toContain('goToName')
+    expect(() => sheetEditsOf([{ op: 'write', range: 'A1', values: [[1]] }, { op: 'removeDuplicates', range: 'A1:C9', preview: true }])).toThrow(/Edit 2: a batch makes its changes, so preview has no place in it: preview with sheets.removeDuplicates alone/)
   })
 
   it('starts workbooks from templates whose formulas add up', () => {

@@ -1,23 +1,17 @@
-import type { CommandArg, CommandContext, OsCommand } from '../store/os-commands.ts'
+import type { OsCommand } from '../store/os-commands.ts'
+import { range, run, sheet, workbook } from './sheets-shared.ts'
+import { sheetsDepthCommands } from './sheets-depth.ts'
 
 /*
  * Herald Sheets for Hermes, voice, the command bar and `herald-os sheets`. A command works on the
  * `workbook` it names (a file, or an open workbook's name) or on the one in front; open in a
  * window, each change is one step to undo there, and the person watches it land. Univer loads only
- * when one of these runs.
+ * when one of these runs. Charts, summaries, data tools, names, validation, comments and notes are
+ * in sheets-depth.ts.
  */
 
 const agent = () => import('../features/office/sheets/agent.ts')
 const office = () => import('../features/office/agent.ts')
-
-const workbook: CommandArg = { name: 'workbook', type: 'string', description: 'The workbook: a file (full path or ~/…) or the name of an open workbook as its tab shows it; the one in front in Herald Sheets when left out' }
-const sheet: CommandArg = { name: 'sheet', type: 'string', description: 'The sheet, when the range does not name it; the one in front when left out' }
-const range = (what: string, required = false): CommandArg => ({ name: 'range', type: 'string', description: `${what}: cells like B2, B2:D9, C:C or 'Q1 sales'!A1:F20, or selection for what is selected`, ...(required ? { required } : {}) })
-
-const run =
-  (id: string, work: (args: Record<string, unknown>) => Promise<{ summary: string; data?: Record<string, unknown> }>) =>
-  async (args: Record<string, unknown>, context: CommandContext) =>
-    (await office()).inOwnWindow('sheets', id, args, 'workbook', context, () => work(args))
 
 export const sheetsCommands: readonly OsCommand[] = [
   {
@@ -108,9 +102,16 @@ export const sheetsCommands: readonly OsCommand[] = [
   {
     id: 'sheets.sort',
     title: 'Sort cells',
-    description: 'Sort a range’s rows by one column as one step to undo; header=true keeps its first row in place.',
+    description: 'Sort a range’s rows by one column as one step to undo; header=true keeps its first row in place, and so does naming the column by its header. sheets.sortBy sorts by several columns.',
     tier: 'act',
-    args: [workbook, range('The rows to sort', true), { name: 'by', type: 'string', description: 'The column: a letter (C), a header in the first row (Cost), or a number from the range’s first column (1)', required: true }, { name: 'ascending', type: 'boolean', description: 'A to Z, smallest first (true, the default); false for descending' }, { name: 'header', type: 'boolean', description: 'The first row is a header row' }, sheet],
+    args: [
+      workbook,
+      range('The rows to sort, or one cell inside a table for all of it', true),
+      { name: 'by', type: 'string', description: 'The column: a letter (C), a header in the first row (Cost), or a number from the range’s first column (1)', required: true },
+      { name: 'ascending', type: 'boolean', description: 'A to Z, smallest first (true, the default); false for descending' },
+      { name: 'header', type: 'boolean', description: 'The first row is a header row (taken as one when by is a header)' },
+      sheet
+    ],
     run: run('sheets.sort', async (args) => (await agent()).sort(args))
   },
   {
@@ -183,19 +184,19 @@ export const sheetsCommands: readonly OsCommand[] = [
     id: 'sheets.clean',
     title: 'Clean data',
     description:
-      'Clean a range as one step to undo. action: dedupe (remove rows repeating an earlier one, by every column or the columns in by; the rest move up), trim (spaces at the ends and doubled inside), numbers (numbers kept as text, like "1,200", "$5", "(300)" or "12%", become numbers), dates (dates kept as text become real dates in dateFormat; day or month first is read from the data, or order), split (one column split at delimiter into the columns to its right) or case (upper, lower or title). Formulas are kept.',
+      'Clean a range as one step to undo, with the Data menu’s tools. action: dedupe (remove rows repeating an earlier one, by every column or the columns in by, text in any case; the rest move up, formulas with them), trim (spaces at the ends and doubled inside, and characters that print nothing), numbers (numbers kept as text, like "1,200", "$5", "(300)" or "12%", become numbers), dates (dates kept as text become real dates in dateFormat; day or month first is read from the data, or order), split (one column split at delimiter into the columns to its right) or case (upper, lower, title or sentence). Formulas stay as they are.',
     tier: 'act',
     args: [
       workbook,
-      range('The cells to clean', true),
+      range('The cells to clean, or one cell inside a table for all of it', true),
       { name: 'action', type: 'string', description: 'dedupe, trim, numbers, dates, split or case', required: true },
-      { name: 'header', type: 'boolean', description: 'The first row is a header row and stays as it is' },
+      { name: 'header', type: 'boolean', description: 'dedupe, split: the first row is a header row and stays as it is (dedupe takes one when by names a header)' },
       { name: 'by', type: 'string', description: 'dedupe: the columns that make a row a repeat, comma-separated letters or headers (every column when left out)' },
       { name: 'delimiter', type: 'string', description: 'split: where to split: a character, or comma (the default), semicolon, space, tab or pipe' },
       { name: 'overwrite', type: 'boolean', description: 'split: write over data in the columns to the right' },
-      { name: 'dateFormat', type: 'string', description: 'dates: the number format the dates get (yyyy-mm-dd)' },
-      { name: 'order', type: 'string', description: 'dates: dmy (day first) or mdy (month first) for dates like 03/04/2025, when the data does not say' },
-      { name: 'case', type: 'string', description: 'case: upper, lower or title (the default)' },
+      { name: 'dateFormat', type: 'string', description: 'dates: the date format the dates get (yyyy-mm-dd)' },
+      { name: 'order', type: 'string', description: 'dates: dmy (day first), mdy (month first) or ymd for dates like 03/04/2025, when the data does not say' },
+      { name: 'case', type: 'string', description: 'case: upper, lower, title (the default) or sentence' },
       sheet
     ],
     run: run('sheets.clean', async (args) => (await agent()).clean(args))
@@ -204,10 +205,10 @@ export const sheetsCommands: readonly OsCommand[] = [
     id: 'sheets.edit',
     title: 'Make several edits in a workbook at once',
     description:
-      'Make several changes to a workbook as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (the sheets.clean arguments) and replace (the sheets.replace arguments).',
+      'Make several changes to a workbook as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: write (range, values, sheet), fill (range, formula), format (range, format), sort (range, by, ascending, header), filter (range, by, values, condition, clear), freeze (rows, columns, sheet), addSheet (name, index), renameSheet (sheet, name), removeSheet (sheet), clean (the sheets.clean arguments) and replace (the sheets.replace arguments); and, each with the arguments of the sheets command of its name (preview has no place in a batch): insertChart, updateChart, moveChart, removeChart, summarize, refreshSummary, removeDuplicates, splitText, trimText, changeCase, convertToNumbers, convertToDates, fillDown, highlightDuplicates, sortBy, createName, updateName, deleteName, setValidation, clearValidation, addComment, replyToComment, resolveComment, deleteComment (comments stay out of the undo history), setNote and removeNote.',
     tier: 'act',
-    args: [workbook, { name: 'edits', type: 'string', description: 'JSON list: [{"op": "write", "range": "A1", "values": [["Month", "Sales"]]}, {"op": "format", "range": "A1:B1", "format": {"bold": true}}]', required: true }],
-    run: run('sheets.edit', async (args) => (await agent()).edit(args))
+    args: [workbook, { name: 'edits', type: 'string', description: 'JSON list: [{"op": "write", "range": "A1", "values": [["Month", "Sales"]]}, {"op": "format", "range": "A1:B1", "format": {"bold": true}}, {"op": "insertChart", "range": "A1:B13", "kind": "line"}]', required: true }],
+    run: run('sheets.edit', async (args, context) => (await agent()).edit(args, context))
   },
   {
     id: 'sheets.save',
@@ -242,5 +243,6 @@ export const sheetsCommands: readonly OsCommand[] = [
     tier: 'act',
     args: [workbook, { name: 'steps', type: 'number', description: 'How many steps (1)' }],
     run: run('sheets.redo', async (args) => (await agent()).step('redo', args))
-  }
+  },
+  ...sheetsDepthCommands
 ]

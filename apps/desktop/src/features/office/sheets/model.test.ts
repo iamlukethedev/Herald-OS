@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CELL_TYPE, newSheet, newWorkbook, type WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
 import { withHeadlessSheets } from './headless.ts'
-import { addSheet, cellFor, checkSheetName, describeWorkbook, filterRange, formatSteps, freeze, parseTarget, readRange, removeSheet, renameSheet, type SheetsTarget, setFormat, settled, sortRange, valuesGrid, writeRange } from './model.ts'
+import { addSheet, cellFor, checkSheetName, describeWorkbook, filterRange, formatSteps, freeze, parseTarget, readRange, removeSheet, renameSheet, type SheetsTarget, setFormat, settled, valuesGrid, writeRange } from './model.ts'
 
 function budget(): WorkbookSnapshot {
   const sheet = newSheet('s1', 'Budget', {
@@ -111,28 +111,6 @@ describe('changes, each one step to undo', () => {
     expect(renamed.result.result).toEqual({ from: 'Notes', to: 'Ideas' })
     expect(removed.result.after.sheetOrder).toEqual(['s1'])
     expect([added.result.undone, renamed.result.undone, removed.result.undone]).toEqual([true, true, true])
-  })
-
-  it('sorts under a header by a column named by its header', async () => {
-    const { result } = await changeAndUndo(async (target) => {
-      const sorted = await sortRange(target, { range: 'A1:C4', by: 'Cost', header: true, ascending: false })
-
-      return { sorted, read: readRange(target, { range: 'A1:A4' }).values }
-    })
-
-    expect(result.result.sorted).toEqual({ sheet: 'Budget', range: 'A2:C4', column: 'B', ascending: false })
-    expect(result.result.read).toEqual([['Item'], ['Rent'], ['Food'], ['Bus']])
-    expect(result.undone).toBe(true)
-  })
-
-  it('sorts a range that does not start in column A by the column named', async () => {
-    const { result } = await withHeadlessSheets(budget(), async ({ univer, workbook }) => {
-      await sortRange({ univer, workbook }, { range: 'B1:C4', by: 'Cost', header: true })
-
-      return readRange({ univer, workbook }, { range: 'B2:B4' }).values
-    })
-
-    expect(result).toEqual([[60], [310.5], [1200]])
   })
 
   it('filters by values and by a condition, and clears the filter', async () => {

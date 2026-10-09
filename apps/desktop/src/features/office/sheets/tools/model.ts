@@ -145,9 +145,10 @@ export interface SplitResult {
 /**
  * Split the text of one column at a delimiter into the columns to its right (or from
  * `destination`). Numbers become numbers (not ones with leading zeros); formulas, numbers and
- * linked text stay as they are. Cells with data in the way are not written over unless `overwrite`.
+ * linked text stay as they are, and so does a `header` row. Cells with data in the way are not
+ * written over unless `overwrite`.
  */
-export async function splitText(target: SheetsTarget, args: { range: unknown; delimiter: unknown; other?: unknown; consecutive?: unknown; destination?: unknown; overwrite?: unknown; preview?: unknown; sheet?: unknown }): Promise<SplitResult & { changed: boolean }> {
+export async function splitText(target: SheetsTarget, args: { range: unknown; delimiter: unknown; other?: unknown; consecutive?: unknown; destination?: unknown; overwrite?: unknown; header?: unknown; preview?: unknown; sheet?: unknown }): Promise<SplitResult & { changed: boolean }> {
   const area = areaOf(target.workbook, args.range, args.sheet, { column: true })
 
   if (area.cells.startColumn !== area.cells.endColumn) {
@@ -167,6 +168,7 @@ export async function splitText(target: SheetsTarget, args: { range: unknown; de
   }
 
   const consecutive = flag(args.consecutive, 'consecutive', false)
+  const header = flag(args.header, 'header', false)
   const overwrite = flag(args.overwrite, 'overwrite', false)
   const preview = flag(args.preview, 'preview', false)
   let to = { row: area.cells.startRow, column: area.cells.startColumn }
@@ -186,7 +188,7 @@ export async function splitText(target: SheetsTarget, args: { range: unknown; de
   let split = 0
 
   cells.forEach(([cell], index) => {
-    const text = textIn(cell)
+    const text = header && index === 0 ? null : textIn(cell)
     const parts = text === null ? null : splitParts(text, delimiter, consecutive).map(typedPart)
     const row = to.row + index
 

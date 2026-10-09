@@ -4,9 +4,9 @@ import type { CellInput } from './model.ts'
 
 /*
  * Herald Sheets for Hermes, without a window: values as callers send them, a formula filled across
- * a range, finding and replacing in cells, the data cleaning tools (duplicates, spaces, numbers and
- * dates kept as text, a column split in several, letter case), batches of edits, and the templates
- * a new workbook starts from. Tested directly.
+ * a range, finding and replacing in cells, which cleaning sheets.clean is asked for and which way
+ * round day and month go in dates (the cleaning itself is the data tools', in tools/), batches of
+ * edits, and the templates a new workbook starts from. Tested directly.
  */
 
 type Args = Record<string, unknown>
@@ -139,154 +139,7 @@ export function cleanActionOf(value: unknown): CleanAction {
   return found
 }
 
-/** Rows whose key cells repeat an earlier row's are dropped; the rest move up, and the rows freed at the bottom are emptied. */
-export function dedupeRows(values: readonly CellInput[][], keyColumns: readonly number[] | null, header: boolean): { values: CellInput[][]; removed: number } {
-  const seen = new Set<string>()
-  const width = Math.max(0, ...values.map((row) => row.length))
-  const kept: CellInput[][] = []
-  let removed = 0
-
-  values.forEach((row, index) => {
-    if (header && index === 0) {
-      kept.push([...row])
-
-      return
-    }
-
-    const key = JSON.stringify((keyColumns ?? row.map((_, column) => column)).map((column) => normalisedKey(row[column] ?? null)))
-
-    if (seen.has(key)) {
-      removed++
-    } else {
-      seen.add(key)
-      kept.push([...row])
-    }
-  })
-
-  while (kept.length < values.length) {
-    kept.push(Array.from({ length: width }, () => null))
-  }
-
-  return { values: kept, removed }
-}
-
-const normalisedKey = (value: CellInput): string => (typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLowerCase() : String(value))
-
-/** Spaces at either end of text go, and runs of spaces inside become one. */
-export function trimValues(values: readonly CellInput[][]): { values: CellInput[][]; changed: number } {
-  let changed = 0
-  const out = values.map((row) =>
-    row.map((value) => {
-      if (typeof value !== 'string') {
-        return value
-      }
-
-      const next = value.replace(/[\u00a0\s]+/g, ' ').trim()
-
-      if (next !== value) {
-        changed++
-      }
-
-      return next || null
-    })
-  )
-
-  return { values: out, changed }
-}
-
-/** A number written as text: "1,200", "$5.00", "(300)", "12%", "€ 4.5". Null when it is not one. */
-export function parseNumber(value: string): number | null {
-  let body = value.trim().replace(/\u00a0/g, ' ')
-
-  if (!body) {
-    return null
-  }
-
-  const negative = /^\(.*\)$/.test(body) || /^-/.test(body) || /-$/.test(body)
-  body = body.replace(/^\(|\)$/g, '').replace(/^-|-$/g, '').trim()
-  const percent = body.endsWith('%')
-  body = body.replace(/%$/, '').replace(/^[$€£¥₹]|[$€£¥₹]$/g, '').replace(/^(USD|AUD|EUR|GBP|NZD|CAD)\s*|\s*(USD|AUD|EUR|GBP|NZD|CAD)$/i, '').trim()
-
-  if (!/^(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/.test(body)) {
-    return null
-  }
-
-  const number = Number(body.replace(/,/g, '')) * (negative ? -1 : 1)
-
-  return percent ? number / 100 : number
-}
-
-/** Numbers kept as text become numbers. */
-export function numberValues(values: readonly CellInput[][]): { values: CellInput[][]; changed: number } {
-  let changed = 0
-  const out = values.map((row) =>
-    row.map((value) => {
-      const number = typeof value === 'string' ? parseNumber(value) : null
-
-      if (number === null) {
-        return value
-      }
-
-      changed++
-
-      return number
-    })
-  )
-
-  return { values: out, changed }
-}
-
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-
-const monthOf = (name: string): number => MONTHS.indexOf(name.slice(0, 3).toLowerCase()) + 1
-
-const fullYear = (year: number): number => (year < 100 ? (year < 50 ? 2000 + year : 1900 + year) : year)
-
-/** The serial number a spreadsheet keeps a date as: days since 30 December 1899. */
-export function dateSerial(year: number, month: number, day: number): number | null {
-  const date = new Date(Date.UTC(year, month - 1, day))
-
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-    return null
-  }
-
-  return Math.round((date.getTime() - Date.UTC(1899, 11, 30)) / 86_400_000)
-}
-
 export type DayOrder = 'dmy' | 'mdy'
-
-/** A date written as text, as its serial number: ISO, day and month either way round, or with the month's name. */
-export function parseDate(value: string, order: DayOrder): number | null {
-  const body = value.trim().replace(/(\d)(st|nd|rd|th)\b/gi, '$1').replace(/,/g, ' ').replace(/\s+/g, ' ')
-  let match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(body)
-
-  if (match) {
-    return dateSerial(Number(match[1]), Number(match[2]), Number(match[3]))
-  }
-
-  match = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/.exec(body)
-
-  if (match) {
-    const [first, second, year] = [Number(match[1]), Number(match[2]), fullYear(Number(match[3]))]
-    const [day, month] = order === 'dmy' ? [first, second] : [second, first]
-
-    return dateSerial(year, month, day)
-  }
-
-  match = /^(\d{1,2})[ -]([a-z]{3,9})\.?[ -](\d{2}|\d{4})$/i.exec(body)
-
-  if (match && monthOf(match[2])) {
-    return dateSerial(fullYear(Number(match[3])), monthOf(match[2]), Number(match[1]))
-  }
-
-  match = /^([a-z]{3,9})\.? (\d{1,2}) (\d{2}|\d{4})$/i.exec(body)
-
-  if (match && monthOf(match[1])) {
-    return dateSerial(fullYear(Number(match[3])), monthOf(match[1]), Number(match[2]))
-  }
-
-  return null
-}
 
 /** Which way round day and month go in these dates: a first number over 12 means day first, a second one month first, else `fallback`. */
 export function dayOrderOf(values: readonly CellInput[][], fallback: DayOrder): DayOrder {
@@ -307,91 +160,18 @@ export function dayOrderOf(values: readonly CellInput[][], fallback: DayOrder): 
   return fallback
 }
 
-/** Dates kept as text become dates; `cells` lists where, for the date format. */
-export function dateValues(values: readonly CellInput[][], order: DayOrder): { values: CellInput[][]; cells: { row: number; column: number }[] } {
-  const cells: { row: number; column: number }[] = []
-  const out = values.map((row, r) =>
-    row.map((value, c) => {
-      const serial = typeof value === 'string' ? parseDate(value, order) : null
-
-      if (serial === null) {
-        return value
-      }
-
-      cells.push({ row: r, column: c })
-
-      return serial
-    })
-  )
-
-  return { values: out, cells }
-}
-
-/** Cells grouped into runs down each column, so a format goes on in as few calls as it can. */
-export function columnRuns(cells: readonly { row: number; column: number }[]): { row: number; column: number; rows: number }[] {
-  const sorted = [...cells].sort((a, b) => a.column - b.column || a.row - b.row)
-  const runs: { row: number; column: number; rows: number }[] = []
-
-  for (const cell of sorted) {
-    const last = runs[runs.length - 1]
-
-    if (last && last.column === cell.column && last.row + last.rows === cell.row) {
-      last.rows++
-    } else {
-      runs.push({ row: cell.row, column: cell.column, rows: 1 })
-    }
-  }
-
-  return runs
-}
-
-/** Each cell of one column split at `delimiter` into as many columns as the longest needs. */
-export function splitValues(column: readonly CellInput[], delimiter: string, header: boolean): { values: CellInput[][]; columns: number } {
-  const parts = column.map((value, index) => (header && index === 0 ? [value] : typeof value === 'string' ? value.split(delimiter).map((part) => coerceValue(part.trim()) || null) : [value]))
-  const columns = Math.max(1, ...parts.map((row) => row.length))
-
-  return { values: parts.map((row) => Array.from({ length: columns }, (_, index) => row[index] ?? null)), columns }
-}
-
-export const delimiterOf = (value: unknown): string => {
-  const given = typeof value === 'string' ? value : ''
-
-  return ({ tab: '\t', space: ' ', comma: ',', semicolon: ';', pipe: '|', '': ',' } as Record<string, string>)[given.toLowerCase()] ?? given
-}
-
-/** Text in upper, lower or title case. */
-export function caseValues(values: readonly CellInput[][], mode: unknown): { values: CellInput[][]; changed: number } {
-  const wanted = text(mode).toLowerCase() || 'title'
-
-  if (!['upper', 'lower', 'title'].includes(wanted)) {
-    throw new Error(`case is upper, lower or title, not “${wanted}”`)
-  }
-
-  let changed = 0
-  const out = values.map((row) =>
-    row.map((value) => {
-      if (typeof value !== 'string') {
-        return value
-      }
-
-      const next = wanted === 'upper' ? value.toUpperCase() : wanted === 'lower' ? value.toLowerCase() : value.toLowerCase().replace(/(^|[\s\-/(])(\p{L})/gu, (_, before: string, letter: string) => `${before}${letter.toUpperCase()}`)
-
-      if (next !== value) {
-        changed++
-      }
-
-      return next
-    })
-  )
-
-  return { values: out, changed }
-}
-
 // Batches.
 
-export const SHEET_EDIT_OPS = ['write', 'fill', 'format', 'sort', 'filter', 'freeze', 'addSheet', 'renameSheet', 'removeSheet', 'clean', 'replace'] as const
+/** The ops of a batch that are sheets commands of their own (agent-depth.ts), named as the commands are, so a batch asks as they do. */
+export const DEPTH_EDIT_OPS = ['insertChart', 'updateChart', 'moveChart', 'removeChart', 'summarize', 'refreshSummary', 'removeDuplicates', 'splitText', 'trimText', 'changeCase', 'convertToNumbers', 'convertToDates', 'fillDown', 'highlightDuplicates', 'sortBy', 'createName', 'updateName', 'deleteName', 'setValidation', 'clearValidation', 'addComment', 'replyToComment', 'resolveComment', 'deleteComment', 'setNote', 'removeNote'] as const
+
+export type DepthEditOp = (typeof DEPTH_EDIT_OPS)[number]
+
+export const SHEET_EDIT_OPS = ['write', 'fill', 'format', 'sort', 'filter', 'freeze', 'addSheet', 'renameSheet', 'removeSheet', 'clean', 'replace', ...DEPTH_EDIT_OPS] as const
 
 export type SheetEditOp = (typeof SHEET_EDIT_OPS)[number]
+
+export const isDepthEdit = <T extends { op: SheetEditOp }>(edit: T): edit is T & { op: DepthEditOp } => (DEPTH_EDIT_OPS as readonly string[]).includes(edit.op)
 
 /** The edits of a batch: a list of objects, each with an `op` and that op's arguments. */
 export function sheetEditsOf(value: unknown): (Args & { op: SheetEditOp })[] {
@@ -411,6 +191,10 @@ export function sheetEditsOf(value: unknown): (Args & { op: SheetEditOp })[] {
 
     if (!found) {
       throw new Error(`Edit ${index + 1}: op is one of ${SHEET_EDIT_OPS.join(', ')}, not “${op}”`)
+    }
+
+    if ((edit as Args).preview === true || (edit as Args).preview === 'true') {
+      throw new Error(`Edit ${index + 1}: a batch makes its changes, so preview has no place in it: preview with sheets.${found} alone`)
     }
 
     return { ...(edit as Args), op: found }
