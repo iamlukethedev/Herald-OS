@@ -245,7 +245,8 @@ export function fieldFormat(kind: 'date' | 'time', locale = typeof navigator ===
   return monthFirst ? 'h:mm AM/PM' : 'HH:mm'
 }
 
-function fieldNodes(choice: FieldChoice, schema: Schema, options: FieldOptions, marks: readonly Mark[]): PMNode[] {
+/** The inline nodes a field choice puts in: its field, and the words around them for "Page X of Y". */
+export function fieldNodes(choice: FieldChoice, schema: Schema, options: FieldOptions, marks: readonly Mark[]): PMNode[] {
   const field = (kind: FieldKind, format: string | null = null) => schema.nodes.field.create({ kind, format, instruction: null, text: null }, null, marks)
 
   switch (choice) {

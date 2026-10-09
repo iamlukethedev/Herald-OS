@@ -1,19 +1,24 @@
 import { redoDepth, undoDepth } from '@tiptap/pm/history'
 import type { EditorState } from '@tiptap/pm/state'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { blankDocument, type DocJSON, type DocNode, IMAGE_TYPES } from '../../../../shared/office/document.ts'
+import { type DocJSON, type DocNode, IMAGE_TYPES } from '../../../../shared/office/document.ts'
 import { baseName, extensionOf, officeAppFor } from '../../../../shared/office/files.ts'
+import type { CommandContext } from '../../../store/os-commands.ts'
 import { isPanels } from '../../../store/shell.ts'
 import { openApp } from '../../../store/windows.ts'
 import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve, showDocument, withEditor } from '../agent.ts'
 import { documentFileName, fileName, freePath, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
 import { docsAdapter } from './adapter.ts'
-import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, templateOf, whereOf } from './agent-model.ts'
+import { batchOutcome, builtInTemplate, COMMENT_OPS, commentAuthor, CONTENT_OPS, depthEdit, extrasOf, isDepthPart, newDocumentModel, partReading, setPageChange, templateChoice, templateLabel, withBody } from './agent-depth-model.ts'
+import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, whereOf } from './agent-model.ts'
+import { $commentsShown } from './comments.ts'
 import { pictureFrom } from './editor.ts'
 import { markedRangeOf, writeMarked } from './marked.ts'
-import { applyLive, applyToJSON, clearFormatting, insert, insertImage, insertPageBreak, insertTable, jsonOf, type Op, replaceText, setAlignment, setLineSpacing, setMarks, setPage, setStyle, stateOf, textWidthOf } from './model.ts'
-import { docsSession as session, editorOf } from './store.ts'
+import { applyLive, applyToJSON, clearFormatting, insert, insertImage, insertPageBreak, insertTable, jsonOf, type Op, replaceText, setAlignment, setLineSpacing, setMarks, setStyle, stateOf, textWidthOf } from './model.ts'
+import { $pages, docsSession as session, editorOf } from './store.ts'
+import { freshName } from './templates/gallery.ts'
+import { savedTemplates } from './templates/saved.ts'
 
 /*
  * What Hermes (and voice, the command bar and `herald-os docs`) does in Herald Docs. A command
@@ -29,7 +34,7 @@ const text = (value: unknown): string => (typeof value === 'string' ? value.trim
 
 const where = (file: string | null): string => (file ? tildePath(file, homeDir()) : 'not saved yet')
 
-async function located(ref: unknown): Promise<Local<DocJSON>> {
+export async function located(ref: unknown): Promise<Local<DocJSON>> {
   const found = await locate('docs', session, ref)
 
   if (found.kind === 'remote') {
@@ -54,7 +59,7 @@ async function readFile(file: string) {
   return docsAdapter.read(data.bytes, extensionOf(file), baseName(file))
 }
 
-async function reading(target: Local<DocJSON>): Promise<Reading> {
+export async function reading(target: Local<DocJSON>): Promise<Reading> {
   if (target.kind === 'file') {
     return { name: fileName(target.path), path: target.path, state: stateOf((await readFile(target.path)).model), live: false, marked: null }
   }
@@ -71,7 +76,7 @@ async function reading(target: Local<DocJSON>): Promise<Reading> {
  * Make one change: built from the document as it is (and the text marked for Hermes), it is one step
  * to undo in an open document, or the file written back.
  */
-async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op, options: { intoMarked?: boolean } = {}): Promise<{ changed: boolean; name: string; path: string | null }> {
+export async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op, options: { intoMarked?: boolean } = {}): Promise<{ changed: boolean; name: string; path: string | null }> {
   if (target.kind === 'file') {
     const file = target.path
     const read = await readFile(file)
@@ -178,7 +183,7 @@ async function markdownBlocks(markdown: string, maxWidth: number): Promise<DocNo
 const TEXT_WIDTH = 624
 
 /** What a write puts in: Markdown (the default) or plain text. */
-async function contentOf(args: Args, maxWidth = TEXT_WIDTH): Promise<{ blocks: DocNode[] } | { text: string }> {
+export async function contentOf(args: Args, maxWidth = TEXT_WIDTH): Promise<{ blocks: DocNode[] } | { text: string }> {
   const content = typeof args.content === 'string' ? args.content : ''
   const format = text(args.format).toLowerCase() || 'markdown'
 
@@ -240,8 +245,9 @@ export async function open(args: Args): Promise<Outcome> {
 }
 
 export async function create(args: Args): Promise<Outcome> {
-  const template = args.template !== undefined && args.template !== '' ? templateOf(args.template) : null
-  const content = typeof args.content === 'string' && args.content.trim() ? args.content : (template?.markdown ?? '')
+  const asked = args.template !== undefined && args.template !== '' ? args.template : null
+  const template = asked === null ? null : templateChoice(asked, builtInTemplate(asked) ? [] : await savedTemplates().catch(() => []))
+  const content = typeof args.content === 'string' && args.content.trim() ? args.content : ''
   let file: string | null = null
 
   if (text(args.path)) {
@@ -257,13 +263,14 @@ export async function create(args: Args): Promise<Outcome> {
     }
   }
 
-  const model: DocJSON = content ? { ...blankDocument(), content: await markdownBlocks(content, TEXT_WIDTH) } : blankDocument()
-  const name = file ? baseName(file) : text(args.name) || template?.label
+  const base = newDocumentModel(template, text(args.size) || undefined)
+  const model = content ? withBody(base, await markdownBlocks(content, textWidthOf(stateOf(base).doc))) : base
+  const name = file ? baseName(file) : text(args.name) || (template ? freshName(template.name, session.$documents.get().map((doc) => doc.name)) : undefined)
 
   if (isPanels) {
     openInOffice('docs', { blank: true })
 
-    return { summary: 'Started a new document in Herald Docs; write into it with docs.write', data: { name: name ?? 'Untitled' } }
+    return { summary: `Started a new document in Herald Docs; write into it with docs.write${template ? ' (its window starts it blank, without the template)' : ''}`, data: { name: name ?? 'Untitled' } }
   }
 
   const doc = session.create({ name, model })
@@ -273,7 +280,12 @@ export async function create(args: Args): Promise<Outcome> {
     await session.save(doc, { to: file })
   }
 
-  return { summary: `Started ${doc.name}${doc.path ? ` (saved as ${where(doc.path)})` : ''}${template ? ` from the ${template.label.toLowerCase()} template` : ''}`, data: { name: doc.name, path: doc.path } }
+  const outline = readDocument(stateOf(model).doc, { part: 'outline', maxChars: 0 }).outline.slice(0, 40)
+
+  return {
+    summary: `Started ${doc.name}${doc.path ? ` (saved as ${where(doc.path)})` : ''}${template ? ` from ${templateLabel(template)}${content ? '' : ': replace its sample text (docs.read shows it)'}` : ''}`,
+    data: { name: doc.name, path: doc.path, ...(template ? { template: template.id } : {}), outline }
+  }
 }
 
 export async function list(): Promise<Outcome> {
@@ -291,6 +303,8 @@ export async function read(args: Args): Promise<Outcome> {
   const target = await located(args.document)
   const { name, path, state, live, marked } = await reading(target)
   const result = readDocument(state.doc, options)
+  const part = isDepthPart(options.part) ? partReading(state.doc, options.part, options.heading) : null
+  const extras = part ? null : extrasOf(state.doc)
   const selected = live && state.selection.to > state.selection.from ? state.doc.textBetween(state.selection.from, state.selection.to, '\n', ' ') : null
   const markedText = marked && marked.to > marked.from ? state.doc.textBetween(marked.from, marked.to, '\n', ' ') : null
 
@@ -299,8 +313,10 @@ export async function read(args: Args): Promise<Outcome> {
   }
 
   return {
-    summary: `${name}: ${result.words.toLocaleString('en-US')} words, ${result.outline.length} heading${result.outline.length === 1 ? '' : 's'}${result.truncated ? ` (the first ${options.maxChars.toLocaleString('en-US')} characters; read a section with heading)` : ''}`,
-    data: { name, path, ...result, ...(selected !== null ? { selection: selected } : {}), ...(markedText !== null ? { marked: markedText } : {}) }
+    summary: part
+      ? part.summary(name)
+      : `${name}: ${result.words.toLocaleString('en-US')} words, ${result.outline.length} heading${result.outline.length === 1 ? '' : 's'}${result.truncated ? ` (the first ${options.maxChars.toLocaleString('en-US')} characters; read a section with heading)` : ''}${extras ? `; ${extras.words}` : ''}`,
+    data: { name, path, ...result, ...part?.data, ...(extras ? { also: extras.also } : {}), ...(selected !== null ? { selection: selected } : {}), ...(markedText !== null ? { marked: markedText } : {}) }
   }
 }
 
@@ -446,51 +462,70 @@ export async function image(args: Args): Promise<Outcome> {
 }
 
 export async function page(args: Args): Promise<Outcome> {
-  const change_ = pageArgsOf(args)
+  const made = setPageChange(args)
 
-  if (!Object.keys(change_).length) {
-    throw new Error('Say what to change: size (a4 or letter), orientation (portrait or landscape) or margins (points, or "1in", "20mm")')
-  }
-
-  const result = await change(await located(args.document), () => setPage(change_))
-
-  return { summary: result.changed ? `Set up the page of ${result.name}` : `${result.name} already has that page setup`, data: { name: result.name, path: result.path, ...change_ } }
+  return made.outcome(await change(await located(args.document), made.build))
 }
 
-/** A batch of edits as one step to undo: write, replace, format, table, image, pageBreak and page. */
-export async function edit(args: Args): Promise<Outcome> {
+/** A batch's edit's work, its errors saying which edit they come from. */
+function numbered<T>(index: number, op: string, work: () => T): T {
+  try {
+    return work()
+  } catch (error) {
+    throw new Error(`Edit ${index + 1} (${op}): ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** A batch of edits as one step to undo: write, replace, format, table, image and pageBreak, and the ops named after the commands whose change they make. */
+export async function edit(args: Args, context?: CommandContext): Promise<Outcome> {
   const edits = editsOf(args.edits)
   const target = await located(args.document)
   const { state: first } = await reading(target)
+  const width = textWidthOf(first.doc)
   // Content and pictures are read before the change, which is then built in one go.
-  const contents = await Promise.all(edits.map((entry) => (entry.op === 'write' ? contentOf(entry, textWidthOf(first.doc)) : null)))
-  const pictures = await Promise.all(edits.map((entry) => (entry.op === 'image' ? picture(text(entry.source), textWidthOf(first.doc)) : null)))
+  const contents = await Promise.all(edits.map((entry) => (entry.op === 'write' || CONTENT_OPS.has(entry.op) ? contentOf(entry, width) : null)))
+  const pictures = await Promise.all(edits.map((entry) => (entry.op === 'image' ? picture(text(entry.source), width) : null)))
+  const prepared = { author: commentAuthor(context), headingPages: target.kind === 'live' ? ($pages.get()[target.doc.key]?.headings ?? null) : null }
+  const depth = edits.map((entry, index) => numbered(index, entry.op, () => depthEdit(entry, { ...prepared, content: contents[index] })))
   const result = await change(target, (_state, _marked, live) =>
     chainBuilt(
       edits.map((entry, index) => (state: EditorState) => {
         const marked = markedRangeOf(state)
+        const op = numbered(index, entry.op, (): Op => {
+          const made = depth[index]
 
-        switch (entry.op) {
-          case 'write':
-            return insert(contents[index]!, placeFor(live ? state : null, entry, marked))
-          case 'replace':
-            return replaceText(String(entry.find ?? ''), typeof entry.replacement === 'string' ? entry.replacement : '', { ...searchOptions(entry), all: entry.all !== false })
-          case 'format':
-            return chain(formatOps(entry, state, marked, live))
-          case 'table':
-            return tableOp(entry, state, marked, live)
-          case 'image':
-            return insertImage({ ...pictures[index]!, alt: text(entry.alt) || undefined }, placeFor(live ? state : null, entry, marked))
-          case 'pageBreak':
-            return insertPageBreak(placeFor(live ? state : null, { at: 'end', ...entry }, marked))
-          default:
-            return setPage(pageArgsOf(entry))
-        }
+          if (made) {
+            return made.build(state, marked, live)
+          }
+
+          switch (entry.op) {
+            case 'write':
+              return insert(contents[index]!, placeFor(live ? state : null, entry, marked))
+            case 'replace':
+              return replaceText(String(entry.find ?? ''), typeof entry.replacement === 'string' ? entry.replacement : '', { ...searchOptions(entry), all: entry.all !== false })
+            case 'format':
+              return chain(formatOps(entry, state, marked, live))
+            case 'table':
+              return tableOp(entry, state, marked, live)
+            case 'image':
+              return insertImage({ ...pictures[index]!, alt: text(entry.alt) || undefined }, placeFor(live ? state : null, entry, marked))
+            case 'pageBreak':
+              return insertPageBreak(placeFor(live ? state : null, { at: 'end', ...entry }, marked))
+            default:
+              throw new Error(`Herald Docs has no “${entry.op}” edit`)
+          }
+        })
+
+        return (current: EditorState) => numbered(index, entry.op, () => op(current))
       })
     )
   )
 
-  return { summary: result.changed ? `Made ${edits.length} edit${edits.length === 1 ? '' : 's'} to ${result.name} as one step` : `Nothing changed in ${result.name}`, data: { name: result.name, path: result.path, edits: edits.length, changed: result.changed } }
+  if (result.changed && target.kind === 'live' && edits.some((entry) => COMMENT_OPS.has(entry.op))) {
+    $commentsShown.setKey(target.doc.key, true)
+  }
+
+  return batchOutcome(edits.length, depth, result)
 }
 
 /** A range of a workbook (open, or a file) as a table in the document: the cells as they show. */

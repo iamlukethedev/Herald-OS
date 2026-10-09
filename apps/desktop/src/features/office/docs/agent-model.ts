@@ -1,14 +1,14 @@
 import type { Node as PMNode } from '@tiptap/pm/model'
 import type { EditorState } from '@tiptap/pm/state'
 import { markdownFromDocument } from '../../../../shared/office/doc-text.ts'
-import { type DocJSON, type DocNode, pageOf, PAGE_SIZES, type PageSizeName } from '../../../../shared/office/document.ts'
+import { type DocJSON, type DocNode, pageOf, PAGE_SIZES, type PageMargins, type PageSizeName } from '../../../../shared/office/document.ts'
 import { parseJsonArg } from '../agent-model.ts'
-import { type BlockStyle, BLOCK_STYLES, counts, documentText, findHeading, findText, jsonOf, type MarkChange, type Op, outline, type Place, type SearchOptions, sectionOf, type Target } from './model.ts'
+import { type BlockStyle, BLOCK_STYLES, counts, documentText, findHeading, findText, jsonOf, type MarkChange, type Op, outline, type PageChange, type Place, type SearchOptions, sectionOf, type Target } from './model.ts'
 
 /*
  * Herald Docs for Hermes, without a window: where a command's content goes and what it changes,
- * read from its arguments; a document read the way Hermes wants it; the batch of edits that lands
- * as one step; and the templates a new document starts from. Tested directly.
+ * read from its arguments; a document read the way Hermes wants it; and the batch of edits that
+ * lands as one step. Tested directly.
  */
 
 type Args = Record<string, unknown>
@@ -219,22 +219,27 @@ export function cellsOf(value: unknown): string[][] {
   return (parsed as unknown[][]).map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell))))
 }
 
+export const READ_PARTS = ['markdown', 'text', 'outline', 'selection', 'comments', 'notes', 'headers', 'sections', 'tocs'] as const
+
 export interface ReadOptions {
-  part: 'markdown' | 'text' | 'outline' | 'selection'
+  part: (typeof READ_PARTS)[number]
   heading?: string | number
   maxChars: number
 }
 
-export function readOptions(args: Args): ReadOptions {
-  const part = text(args.part).toLowerCase() || 'markdown'
+const PART_NAMES: Record<string, ReadOptions['part']> = { footnotes: 'notes', endnotes: 'notes', footers: 'headers', 'headers and footers': 'headers', contents: 'tocs', toc: 'tocs', 'tables of contents': 'tocs' }
 
-  if (!['markdown', 'text', 'outline', 'selection'].includes(part)) {
-    throw new Error(`part is markdown, text, outline or selection, not “${part}”`)
+export function readOptions(args: Args): ReadOptions {
+  const asked = text(args.part).toLowerCase() || 'markdown'
+  const part = READ_PARTS.find((name) => name === asked) ?? PART_NAMES[asked]
+
+  if (!part) {
+    throw new Error(`part is ${READ_PARTS.slice(0, -1).join(', ')} or ${READ_PARTS[READ_PARTS.length - 1]}, not “${asked}”`)
   }
 
   const max = args.maxChars === undefined || args.maxChars === '' ? 20000 : Math.round(Number(args.maxChars))
 
-  return { part: part as ReadOptions['part'], heading: args.heading === undefined || args.heading === '' ? undefined : headingRef(args.heading), maxChars: Number.isFinite(max) ? Math.max(200, Math.min(200000, max)) : 20000 }
+  return { part, heading: args.heading === undefined || args.heading === '' ? undefined : headingRef(args.heading), maxChars: Number.isFinite(max) ? Math.max(200, Math.min(200000, max)) : 20000 }
 }
 
 /** The blocks a heading's section holds, the heading first, as a document of their own. */
@@ -269,7 +274,7 @@ export function readDocument(doc: PMNode, options: ReadOptions): DocumentReading
     page: { width: page.width, height: page.height, orientation: page.width > page.height ? 'landscape' : 'portrait' }
   }
 
-  if (options.part === 'outline' || options.part === 'selection') {
+  if (options.part !== 'markdown' && options.part !== 'text') {
     return reading
   }
 
@@ -319,7 +324,38 @@ export function chainBuilt(builders: readonly ((state: EditorState) => Op)[]): O
 
 export const chain = (ops: readonly Op[]): Op => chainBuilt(ops.map((op) => () => op))
 
-export const EDIT_OPS = ['write', 'replace', 'format', 'table', 'image', 'pageBreak', 'page'] as const
+/** A batch's ops; one named after a command (`docs.<op>`) makes that command's change, and asks as it does. */
+export const EDIT_OPS = [
+  'write',
+  'replace',
+  'format',
+  'table',
+  'image',
+  'pageBreak',
+  'page',
+  'setPage',
+  'setHeader',
+  'setFooter',
+  'clearHeader',
+  'clearFooter',
+  'setHeaderOptions',
+  'insertField',
+  'insertNote',
+  'setNote',
+  'removeNote',
+  'insertSectionBreak',
+  'removeSectionBreak',
+  'addComment',
+  'addComments',
+  'replyToComment',
+  'editComment',
+  'resolveComment',
+  'deleteComment',
+  'insertToc',
+  'setToc',
+  'updateTocs',
+  'removeToc'
+] as const
 
 export type EditOp = (typeof EDIT_OPS)[number]
 
@@ -347,25 +383,60 @@ export function editsOf(value: unknown): (Args & { op: EditOp })[] {
   })
 }
 
-export interface PageArgs {
-  size?: PageSizeName
-  orientation?: 'portrait' | 'landscape'
-  margins?: number
+/** A page change as a command gives it: all four margins as a number, or some of them and the header and footer distances. */
+export type PageArgs = PageChange
+
+/** A length in points from points, inches ("1in"), centimetres ("2cm") or millimetres ("20mm"). */
+function pointsOf(value: string): number {
+  const raw = value.toLowerCase().replace(/\s+/g, '')
+  const number = Number.parseFloat(raw)
+
+  return raw.endsWith('in') ? number * 72 : raw.endsWith('mm') ? (number * 72) / 25.4 : raw.endsWith('cm') ? (number * 72) / 2.54 : number
 }
 
-/** Page size, orientation and margins (points, or inches as "1in", or millimetres as "20mm"). */
+const CUSTOM_SIZE = /^(\d+(?:\.\d+)?)\s*(in|mm|cm|pt)?\s*(?:x|×|by)\s*(\d+(?:\.\d+)?)\s*(in|mm|cm|pt)?$/i
+
+const MARGIN_ARGS = [
+  ['top', 'top'],
+  ['right', 'right'],
+  ['bottom', 'bottom'],
+  ['left', 'left'],
+  ['headerDistance', 'header'],
+  ['footerDistance', 'footer']
+] as const
+
+function marginOf(value: unknown, name: string): number {
+  const points = pointsOf(text(value))
+
+  if (!Number.isFinite(points) || points < 0 || points > 288) {
+    throw new Error(`${name} ${name === 'margins' ? 'are' : 'is'} points from 0 to 288 (or "1in", "20mm")`)
+  }
+
+  return Math.round(points * 10) / 10
+}
+
+/**
+ * Page size (a named one, or width by height: "8.5x11in", "210 x 297 mm"), orientation, all four
+ * margins, each margin (top, right, bottom, left) and the header and footer distances from the
+ * edges (headerDistance, footerDistance), in points or as "1in", "2cm", "20mm".
+ */
 export function pageArgsOf(args: Args): PageArgs {
   const out: PageArgs = {}
   const size = text(args.size)
 
   if (size) {
     const name = (Object.keys(PAGE_SIZES) as PageSizeName[]).find((entry) => entry.toLowerCase() === size.toLowerCase())
+    const custom = CUSTOM_SIZE.exec(size)
 
-    if (!name) {
-      throw new Error(`size is one of ${Object.keys(PAGE_SIZES).join(', ')}, not “${size}”`)
+    if (name) {
+      out.size = name
+    } else if (custom) {
+      const width = pointsOf(`${custom[1]}${custom[2] ?? custom[4] ?? ''}`)
+      const height = pointsOf(`${custom[3]}${custom[4] ?? custom[2] ?? ''}`)
+      out.size = { width: Math.round(width * 10) / 10, height: Math.round(height * 10) / 10 }
+    } else {
+      throw new Error(`size is one of ${Object.keys(PAGE_SIZES).join(', ')}, or width by height ("8.5x11in", "210x297mm"), not “${size}”`)
     }
-
-    out.size = name
   }
 
   const orientation = text(args.orientation).toLowerCase()
@@ -378,67 +449,20 @@ export function pageArgsOf(args: Args): PageArgs {
     out.orientation = orientation
   }
 
-  if (args.margins !== undefined && args.margins !== '') {
-    const raw = text(args.margins).toLowerCase()
-    const number = Number.parseFloat(raw)
-    const points = raw.endsWith('in') ? number * 72 : raw.endsWith('mm') ? (number * 72) / 25.4 : raw.endsWith('cm') ? (number * 72) / 2.54 : number
+  const all = args.margins !== undefined && args.margins !== '' ? marginOf(args.margins, 'margins') : undefined
+  const sides: Partial<PageMargins> = {}
 
-    if (!Number.isFinite(points) || points < 0 || points > 288) {
-      throw new Error('margins are points from 0 to 288 (or "1in", "20mm")')
+  for (const [arg, side] of MARGIN_ARGS) {
+    if (args[arg] !== undefined && args[arg] !== '') {
+      sides[side] = marginOf(args[arg], arg)
     }
+  }
 
-    out.margins = Math.round(points * 10) / 10
+  if (Object.keys(sides).length) {
+    out.margins = { ...(all === undefined ? {} : { top: all, right: all, bottom: all, left: all }), ...sides }
+  } else if (all !== undefined) {
+    out.margins = all
   }
 
   return out
-}
-
-/** Markdown each template starts a document with; the person, or Hermes, fills it in. */
-export const TEMPLATES: Record<string, { label: string; markdown: string }> = {
-  letter: {
-    label: 'Letter',
-    markdown: '[Your name]  \n[Street, city]  \n[Email · phone]\n\n[Date]\n\n[Recipient name]  \n[Organisation]  \n[Street, city]\n\nDear [name],\n\n[Why you are writing, in a sentence or two.]\n\n[The details.]\n\n[What you would like to happen next.]\n\nKind regards,\n\n[Your name]\n'
-  },
-  'cover letter': {
-    label: 'Cover letter',
-    markdown: '[Your name]  \n[Email · phone · city]\n\n[Date]\n\nDear [hiring manager],\n\nI am applying for the [role] position at [company]. [One line on why this role.]\n\n[What you have done that matters for this role, with a result.]\n\n[Why this company, and what you would bring in the first months.]\n\nThank you for your time. I would welcome the chance to talk.\n\nSincerely,\n\n[Your name]\n'
-  },
-  report: {
-    label: 'Report',
-    markdown: '# [Report title]\n\n[Author] · [Date]\n\n## Summary\n\n[The findings and the recommendation, in a paragraph.]\n\n## Background\n\n[Why this report, and what it covers.]\n\n## Findings\n\n[What was found, with the evidence.]\n\n## Recommendations\n\n- [First recommendation]\n- [Second recommendation]\n\n## Next steps\n\n[Who does what, by when.]\n'
-  },
-  memo: {
-    label: 'Memo',
-    markdown: '# Memo\n\n**To:** [names]  \n**From:** [name]  \n**Date:** [date]  \n**Subject:** [subject]\n\n[The point of the memo, first.]\n\n[The details and the reasons.]\n\n[What you need from the readers, and by when.]\n'
-  },
-  'meeting notes': {
-    label: 'Meeting notes',
-    markdown: '# [Meeting] notes\n\n**Date:** [date]  \n**Attendees:** [names]\n\n## Agenda\n\n1. [Item]\n2. [Item]\n\n## Decisions\n\n- [Decision]\n\n## Action items\n\n- [ ] [Task] ([owner], [due date])\n'
-  },
-  resume: {
-    label: 'Résumé',
-    markdown: '# [Your name]\n\n[City] · [email] · [phone] · [website]\n\n## Profile\n\n[Two lines on who you are and what you are good at.]\n\n## Experience\n\n### [Role], [Company]\n\n[Start] – [End]\n\n- [What you did, with a result]\n- [What you did, with a result]\n\n## Education\n\n### [Degree], [School]\n\n[Year]\n\n## Skills\n\n[Skill], [skill], [skill]\n'
-  },
-  proposal: {
-    label: 'Proposal',
-    markdown: '# [Proposal title]\n\nPrepared for [client] by [name] · [date]\n\n## The problem\n\n[What the client needs, in their words.]\n\n## What we propose\n\n[The approach.]\n\n## Timeline\n\n| Phase | What happens | When |\n| --- | --- | --- |\n| 1 | [Work] | [Dates] |\n| 2 | [Work] | [Dates] |\n\n## Cost\n\n[The price and what it includes.]\n\n## Next steps\n\n[How to go ahead.]\n'
-  },
-  essay: {
-    label: 'Essay',
-    markdown: '# [Title]\n\n[Opening: the question and your answer to it.]\n\n## [First point]\n\n[The argument and the evidence.]\n\n## [Second point]\n\n[The argument and the evidence.]\n\n## Conclusion\n\n[What it adds up to.]\n'
-  }
-}
-
-const TEMPLATE_ALIASES: Record<string, string> = { cv: 'resume', résumé: 'resume', notes: 'meeting notes', minutes: 'meeting notes', 'meeting minutes': 'meeting notes', coverletter: 'cover letter', 'cover-letter': 'cover letter', 'meeting-notes': 'meeting notes' }
-
-/** A template by its name, any case ("Cover letter", "cv", "minutes"). */
-export function templateOf(value: unknown): { id: string; label: string; markdown: string } {
-  const name = text(value).toLowerCase()
-  const id = TEMPLATES[name] ? name : TEMPLATE_ALIASES[name]
-
-  if (!id || !TEMPLATES[id]) {
-    throw new Error(`template is one of ${Object.keys(TEMPLATES).join(', ')}, not “${name}”`)
-  }
-
-  return { id, ...TEMPLATES[id] }
 }

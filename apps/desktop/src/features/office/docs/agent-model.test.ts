@@ -2,7 +2,7 @@ import { history, undo, undoDepth } from '@tiptap/pm/history'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import { describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { cellsOf, chain, chainBuilt, editsOf, findWithContext, headingRef, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, sectionDocument, styleOf, targetFor, templateOf, TEMPLATES, whereOf } from './agent-model.ts'
+import { cellsOf, chain, chainBuilt, editsOf, findWithContext, headingRef, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, sectionDocument, styleOf, targetFor, whereOf } from './agent-model.ts'
 import { markedKey, markedPlugin, markedRangeOf, writeMarked } from './marked.ts'
 import { applyLive, documentText, insert, jsonOf, replaceText, setMarks, setStyle } from './model.ts'
 import { docsSchema } from './schema.ts'
@@ -183,18 +183,5 @@ describe('one step to undo', () => {
     expect(editsOf('[{"op": "write", "content": "x"}, {"op": "PAGEBREAK"}]').map((edit) => edit.op)).toEqual(['write', 'pageBreak'])
     expect(() => editsOf('[{"op": "delete"}]')).toThrow(/Edit 1: op is one of/)
     expect(() => editsOf('[]')).toThrow(/edits is a list/)
-  })
-})
-
-describe('templates', () => {
-  it('starts documents from a template by name or alias', () => {
-    expect(templateOf('Cover letter').id).toBe('cover letter')
-    expect(templateOf('cv').id).toBe('resume')
-    expect(templateOf('minutes').label).toBe('Meeting notes')
-    expect(() => templateOf('novel')).toThrow(/template is one of/)
-
-    for (const template of Object.values(TEMPLATES)) {
-      expect(documentFromMarkdown(template.markdown).document.content?.length).toBeGreaterThan(1)
-    }
   })
 })

@@ -1,4 +1,6 @@
-import type { CommandArg, CommandContext, OsCommand } from '../store/os-commands.ts'
+import type { OsCommand } from '../store/os-commands.ts'
+import { docsDepthCommands } from './docs-depth.ts'
+import { document, office, placement, run, search } from './docs-shared.ts'
 
 /*
  * Herald Docs for Hermes, voice, the command bar and `herald-os docs`. A command works on the
@@ -8,27 +10,6 @@ import type { CommandArg, CommandContext, OsCommand } from '../store/os-commands
  */
 
 const agent = () => import('../features/office/docs/agent.ts')
-const office = () => import('../features/office/agent.ts')
-
-const document: CommandArg = { name: 'document', type: 'string', description: 'The document: a file (full path or ~/…) or the name of an open document as its tab shows it; the one in front in Herald Docs when left out' }
-
-const placement: readonly CommandArg[] = [
-  { name: 'at', type: 'string', description: 'Where: end (the default), start, selection (in place of what is selected, or at the caret), marked (in place of the text Herald marked for this request), after (under the paragraph the selection is in) or heading' },
-  { name: 'heading', type: 'string', description: 'A heading (its text, or its number in the outline from 1): the content goes in its section' },
-  { name: 'mode', type: 'string', description: 'With heading: append (at the end of the section, the default), prepend (right under the heading) or replace (in place of the section, keeping the heading)' }
-]
-
-const search: readonly CommandArg[] = [
-  { name: 'caseSensitive', type: 'boolean', description: 'Match upper and lower case exactly' },
-  { name: 'wholeWord', type: 'boolean', description: 'Match whole words only' },
-  { name: 'regex', type: 'boolean', description: 'The text is a regular expression' }
-]
-
-/** Run where the document lives: here, or in its own window (panels mode). */
-const run =
-  (id: string, work: (args: Record<string, unknown>) => Promise<{ summary: string; data?: Record<string, unknown> }>) =>
-  async (args: Record<string, unknown>, context: CommandContext) =>
-    (await office()).inOwnWindow('docs', id, args, 'document', context, () => work(args))
 
 export const docsCommands: readonly OsCommand[] = [
   {
@@ -44,12 +25,13 @@ export const docsCommands: readonly OsCommand[] = [
     id: 'docs.new',
     title: 'Start a new document',
     description:
-      'Start a new document in Herald Docs and show it: blank, from a template, or with content (Markdown: headings, lists, tables, pictures from files). With path it is saved there at once (never over a file that exists). Draft from a brief by writing the content yourself.',
+      'Start a new document in Herald Docs and show it: blank, from a template (Herald Docs’ own, with its page, styles, headers and footers and sample text to replace, or one the person saved: docs.listTemplates), or with content (Markdown: headings, lists, tables, pictures from files), which with a template takes the place of its sample text. With path it is saved there at once (never over a file that exists). Draft from a brief by writing the content yourself.',
     tier: 'act',
     args: [
       { name: 'name', type: 'string', description: 'The tab’s name, and the file name it is offered when saved' },
       { name: 'content', type: 'string', description: 'What it starts with, in Markdown' },
-      { name: 'template', type: 'string', description: 'A template to start from: letter, cover letter, report, memo, meeting notes, resume, proposal or essay' },
+      { name: 'template', type: 'string', description: 'A template’s id or name: blank, letter, cover-letter, cv, report, memo, meeting-notes, essay, project-proposal, newsletter, invoice, thank-you-note, recipe, or one the person saved' },
+      { name: 'size', type: 'string', description: 'The paper: a4, letter, legal or a5 (the locale’s when left out)' },
       { name: 'path', type: 'string', description: 'Save it here at once: a new .docx, .md or .txt file (full path or ~/…)' }
     ],
     phrases: ['new document', 'start a new document', 'new doc'],
@@ -67,12 +49,12 @@ export const docsCommands: readonly OsCommand[] = [
     id: 'docs.read',
     title: 'Read a document',
     description:
-      'Read a document: its outline (headings), word count, page, and content as Markdown (the default) or plain text, the whole of it or one heading’s section; part=selection gives just the selected and marked text of an open document. Long documents come back cut at maxChars: read them by section.',
+      'Read a document: its outline (headings), word count, page, and content as Markdown (the default) or plain text, the whole of it or one heading’s section; part=selection gives just the selected and marked text of an open document; part=comments, notes, headers (headers and footers, {page} and {pages} where those fields are), sections or tocs (tables of contents) gives those, and the answer to any other part says which of them the document has. Long documents come back cut at maxChars: read them by section.',
     tier: 'read',
     args: [
       document,
-      { name: 'part', type: 'string', description: 'markdown (the default), text, outline or selection' },
-      { name: 'heading', type: 'string', description: 'Only this heading’s section (its text, or its number in the outline from 1)' },
+      { name: 'part', type: 'string', description: 'markdown (the default), text, outline, selection, comments, notes, headers, sections or tocs' },
+      { name: 'heading', type: 'string', description: 'Only this heading’s section (its text, or its number in the outline from 1); with part=comments or notes, those in it' },
       { name: 'maxChars', type: 'number', description: 'At most this many characters of content (20000)' }
     ],
     run: run('docs.read', async (args) => (await agent()).read(args))
@@ -156,19 +138,32 @@ export const docsCommands: readonly OsCommand[] = [
   {
     id: 'docs.setPage',
     title: 'Set up the page of a document',
-    description: 'Change a document’s page as one step to undo: size (a4 or letter), orientation (portrait or landscape) and margins (points, or "1in", "20mm").',
+    description:
+      'Change a document’s page setup as one step to undo: size, orientation, margins (all four, or each side) and how far the header and footer sit from the edges; lengths are points, or with a unit ("1in", "2cm", "20mm"). It changes the document’s page (its first section’s, and that of the sections that keep it); section changes one section’s page alone (docs.listSections), section=all every section’s.',
     tier: 'act',
-    args: [document, { name: 'size', type: 'string', description: 'a4 or letter' }, { name: 'orientation', type: 'string', description: 'portrait or landscape' }, { name: 'margins', type: 'string', description: 'All four margins: points, or with a unit ("1in", "2cm", "20mm")' }],
+    args: [
+      document,
+      { name: 'size', type: 'string', description: 'a4, letter, legal, a5, or width by height ("8.5x11in", "210x297mm")' },
+      { name: 'orientation', type: 'string', description: 'portrait or landscape' },
+      { name: 'margins', type: 'string', description: 'All four margins: points, or with a unit ("1in", "2cm", "20mm")' },
+      { name: 'top', type: 'string', description: 'The top margin' },
+      { name: 'right', type: 'string', description: 'The right margin' },
+      { name: 'bottom', type: 'string', description: 'The bottom margin' },
+      { name: 'left', type: 'string', description: 'The left margin' },
+      { name: 'headerDistance', type: 'string', description: 'From the top edge of the page to the header' },
+      { name: 'footerDistance', type: 'string', description: 'From the bottom edge of the page to the footer' },
+      { name: 'section', type: 'string', description: 'A section’s number from 1, to change its page alone, or all for every section' }
+    ],
     run: run('docs.setPage', async (args) => (await agent()).page(args))
   },
   {
     id: 'docs.edit',
     title: 'Make several edits in a document at once',
     description:
-      'Make several changes to a document as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: write (content, format, at, heading, mode), replace (find, replacement, all, caseSensitive, wholeWord, regex), format (the docs.format arguments), table (cells or rows and cols, header, at, heading, mode), image (source, alt, at, heading, mode), pageBreak (at, heading, mode) and page (size, orientation, margins). Each edit sees the document as the ones before left it.',
+      'Make several changes to a document as ONE step to undo: edits is a JSON list of objects, each with an op and that op’s arguments: write (content, format, at, heading, mode), replace (find, replacement, all, caseSensitive, wholeWord, regex), format (the docs.format arguments), table (cells or rows and cols, header, at, heading, mode), image (source, alt, at, heading, mode), pageBreak (at, heading, mode) and page (the docs.setPage arguments); and setPage, setHeader, setFooter, clearHeader, clearFooter, setHeaderOptions, insertField, insertNote, setNote, removeNote, insertSectionBreak, removeSectionBreak, addComment, addComments, replyToComment, editComment, resolveComment, deleteComment, insertToc, setToc, updateTocs and removeToc, each with the arguments of the command docs.<op>. Each edit sees the document as the ones before left it.',
     tier: 'act',
-    args: [document, { name: 'edits', type: 'string', description: 'JSON list: [{"op": "write", "content": "## Summary\\n…", "at": "start"}, {"op": "replace", "find": "draft", "replacement": "final"}]', required: true }],
-    run: run('docs.edit', async (args) => (await agent()).edit(args))
+    args: [document, { name: 'edits', type: 'string', description: 'JSON list: [{"op": "write", "content": "## Summary\\n…", "at": "start"}, {"op": "replace", "find": "draft", "replacement": "final"}, {"op": "setFooter", "content": "Page {page} of {pages}", "align": "center"}]', required: true }],
+    run: run('docs.edit', async (args, context) => (await agent()).edit(args, context))
   },
   {
     id: 'docs.insertRange',
@@ -218,5 +213,6 @@ export const docsCommands: readonly OsCommand[] = [
     tier: 'act',
     args: [document, { name: 'steps', type: 'number', description: 'How many steps (1)' }],
     run: run('docs.redo', async (args) => (await agent()).step('redo', args))
-  }
+  },
+  ...docsDepthCommands
 ]
