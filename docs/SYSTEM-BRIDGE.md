@@ -21,8 +21,10 @@ unrestricted machine access.
 | `system_kill_process` | destructive | Terminate a process by pid or by listening port |
 | `system_files` | mutate / destructive | Create folders, move, rename, trash (never `rm`). `dry_run` plans say where each item lands and list clashes (nothing is ever overwritten, and a batch is checked before anything moves). `action=undo` replays the exact reverse of the conversation's last applied batch (kept per session in `$HERMES_HOME/herald-os/file-undo.json`, paths only) and asks again |
 | `system_documents` | read | Read PDFs page by page (scans and photos of documents through on-device OCR) with hints for filing: kind, vendor, dates, number, total, a suggested name and a fingerprint for duplicates; `places` lists the folders documents are already filed in, with their layout and naming. Used by the `file-documents` skill |
-| `os_ui` | per command | Operate the Herald OS interface: open pages and apps, add memories, run automations, start missions and Studio builds. Each command carries its own tier |
+| `os_ui` | per command | Operate the Herald OS interface: open pages and apps, add memories, run automations, start missions and Studio builds. Each command carries its own tier; `action=state` also lists the documents open in Herald Docs, Sheets and Slides (`office`) |
 | `canvas` | read / act / mutate | Herald Canvas, the layered image editor: new and open projects (`.comp`, images, PSD), layers, text, shapes, adjustments, effects, masks, guides, aligning, resizing and cropping, filters, on-device background removal and content-aware fill, previews, exports and undo. Each action is a `canvas.*` command that lands in the open window as one undoable step; saving a project, or exporting over an existing file, asks first. Used by the `herald-canvas` skill |
+| `docs` | read / act / mutate / destructive | Herald Docs, the word processor: what is open (`list_all` across Herald Docs, Sheets and Slides), opening and starting documents (blank, from a template, or with Markdown), reading, finding, writing Markdown where it belongs (the end, a heading's section, the selection, the text marked for the request), find and replace, formatting, tables, pictures, page setup, a Herald Sheets range as a table, several edits as one step, saving, PDFs and undo. Each action is a `docs.*` command; saving over a file, or changing a file that is not open, asks every time. Used by the `herald-docs` skill |
+| `sheets` | read / act / mutate / destructive | Herald Sheets, the spreadsheet: what is open, opening and starting workbooks, reading ranges (values, formulas and what the cells show), finding, writing values and formulas, filling, formatting, sorting, filtering, freezing, adding, renaming and removing sheets, replacing, cleaning data (duplicates, spaces, numbers and dates kept as text, splitting, case), several edits as one step, saving (`.xlsx`, `.csv`), PDFs and undo. Each action is a `sheets.*` command; removing a sheet asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-sheets` skill |
 | `system_os` | act / mutate | Herald OS Linux only: install apps and anything in the install catalog (`catalog_list`, `catalog_install`, `catalog_remove`), widget plugins (`plugin_list`, `plugin_add`, `plugin_update`, `plugin_disable`, `plugin_remove`; turning one on is left to the user), reminders, themes, screenshots, lock, suspend, update |
 
 "Start my development environment" is a skill: it composes `system_open` with Hermes's existing
@@ -48,6 +50,48 @@ person changes their mind.
   contract, order), the vendor (never the bill-to customer), the issue and due dates (`date_ambiguous`
   when day and month could swap), the invoice or receipt number and the total with its currency.
 - Nothing leaves the computer: no hosted OCR is used.
+
+## Herald Docs and Herald Sheets
+
+"Write a cover letter", "put the budget in the report" and "remove the duplicates" are the `docs`
+and `sheets` tools, with the `herald-docs` and `herald-sheets` skills. Like `canvas`, each action
+is one command of the shell's registry (`docs.*` and `sheets.*`, and `office.list` for
+`list_all`), run over the control socket with a long timeout (100 seconds; the shell gives these
+commands 90). Arguments the action does not take are dropped; table cells, rows of values, edits,
+cell formats and filter conditions travel as JSON text; `sheets action=clean` takes its own action
+as `clean`.
+
+- **Where a change lands.** `document` (docs) and `workbook` (sheets) name a file by its path or an
+  open document by its tab; left out, the one in front. A document open in a window changes
+  there, one step to undo per call (`edit` makes several changes one step). A file that is not
+  open is read, changed and written back to disk: the shell refuses when Herald cannot keep
+  everything in it, and the main process backs the original up the first time Herald writes over
+  a file.
+- **Tiers.** An action starts at its command's tier: listing, reading and finding are `read`;
+  opening, starting, writing, formatting, exporting and undo are `act`; saving and removing a sheet
+  are `mutate`. Three cases raise a call to `destructive`, so the person is asked every time and
+  "always" never sticks: saving over a file (`save` without `to`, which writes the document's own
+  file, `to` naming a file that exists, or `overwrite`), exporting a PDF over a file, and any
+  other change to a document named by the path of a file that exists and is not open, which
+  writes that file on disk. For the last one the tool asks the shell what is open
+  (`office.list`); when the shell cannot say, the file counts as closed. A tier is never lowered
+  (`office_tier` in `bridge/tools.py`).
+- **What is open.** `office.list` (`list_all` in both tools) lists every document open in Herald
+  Docs, Sheets and Slides: its app, name, path and unsaved edits, the one in front in each app
+  (`active`) and of them all (`front`), and what is selected in each (text, a range, a slide).
+  `os_ui action=state` carries the same list as `office`, so "this document" and "these cells"
+  need no other call.
+- Both tools run behind the same gate as the rest of the table: authorized by tier, audited, and
+  offered and run only in Herald OS sessions.
+
+On Herald OS Linux the same commands run from a terminal, through the shell like `herald-os
+canvas`: `herald-os docs read`, `herald-os docs write "## Next steps" --at end`, `herald-os docs
+write - --document ~/Documents/Report.docx < notes.md`, `herald-os docs save --to
+~/Documents/Report.docx`, `herald-os sheets read A1:D20`, `herald-os sheets write B7 "=SUM(B2:B6)"`,
+`herald-os sheets clean A1:D90 dedupe --header`. With no arguments they open the apps; `list`
+marks the one in front with `*`, `docs read` prints the outline and then the content, `sheets read`
+prints tab-separated rows of what the cells show, and `--json` prints a command's data instead.
+`herald-os commands` lists every form.
 
 ## Where the tools run
 
@@ -87,7 +131,7 @@ and refuses their calls everywhere, Herald OS sessions included.
 | `read` | Runs immediately, audited | info, processes, disk usage, search |
 | `act` | Runs immediately, audited, surfaced as a notification | open Safari, open a repo in VS Code |
 | `mutate` | Requires confirmation; `session` and `always` are honoured | mkdir, move, rename |
-| `destructive` | Always requires confirmation; per-call rule key so `always` cannot persist | kill process, trash files |
+| `destructive` | Always requires confirmation; per-call rule key so `always` cannot persist | kill process, trash files, save over a document |
 
 Confirmation goes through upstream's `tools.approval.request_tool_approval`, which the shell
 renders as its approval card. `approvals.mode: off` and yolo mode are honoured exactly as they are
