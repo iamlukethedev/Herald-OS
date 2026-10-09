@@ -1,12 +1,12 @@
-import { type Relationship, relationshipKind, type WordPackage } from './package.ts'
+import type { WordPackage } from './package.ts'
 import { intOf } from './styles.ts'
-import { attr, child, children, find, textOf, type XmlElement } from './xml.ts'
+import { attr, child, children, type XmlElement } from './xml.ts'
 
 /*
  * What opening a Word file approximates or leaves out, as sentences for the person opening it:
- * what reading the text finds (hidden text, fields, floating pictures) and what the package holds
- * beside it (comments, headers and footers, sections, columns, macros). Each is said once, only
- * when the file has it, and always in the same order.
+ * what reading the text finds (hidden text, fields Herald cannot keep, floating pictures) and what
+ * the sections and the package hold (later sections' headers, columns, macros). Each is said once,
+ * only when the file has it, and always in the same order.
  */
 
 export type NoteKey =
@@ -16,18 +16,21 @@ export type NoteKey =
   | 'hiddenText'
   | 'internalLinks'
   | 'fields'
+  | 'crossReferences'
+  | 'pageNumbers'
+  | 'tocOptions'
   | 'floatingPictures'
   | 'unshownPictures'
   | 'linkedPictures'
   | 'charts'
   | 'textBoxes'
+  | 'shapes'
   | 'equations'
-  | 'notes'
+  | 'noteMarks'
   | 'trackedChanges'
-  | 'comments'
-  | 'headersFooters'
+  | 'laterHeaders'
+  | 'sectionNumbers'
   | 'contentControls'
-  | 'sections'
   | 'columns'
   | 'objects'
   | 'macros'
@@ -39,20 +42,23 @@ export const NOTES: Readonly<Record<NoteKey, string>> = {
   listNumbers: 'Some list numbering (such as 01 or First) is shown as plain numbers.',
   hiddenText: 'Hidden text is left out.',
   internalLinks: 'Links to places inside the document are kept as plain text.',
-  fields: 'Fields (a table of contents, page numbers, dates) are shown as their last result and no longer update.',
+  fields: 'Fields whose result runs over several paragraphs or holds pictures are shown as their last result and no longer update.',
+  crossReferences: 'Cross-references keep their last result, but Word cannot update them, as the places they refer to are not kept.',
+  pageNumbers: 'Page numbers in letters or Roman numerals are shown as plain numbers.',
+  tocOptions: "Tables of contents list the document's headings by level; their other options (such as other styles) are not kept.",
   floatingPictures: 'Pictures placed beside the text are shown in line with it.',
   unshownPictures: 'Pictures in formats Herald Docs cannot show (EMF, WMF or TIFF) are left out.',
   linkedPictures: 'Pictures linked from outside the file are left out.',
   charts: 'Charts and SmartArt are shown as pictures, or left out when the file has no picture of them.',
-  textBoxes: 'Text boxes are shown as ordinary paragraphs after the text they were in, and shapes are left out.',
+  textBoxes: 'Text boxes placed beside the text are shown after the paragraph they are anchored to.',
+  shapes: 'Shapes other than pictures and text boxes are left out.',
   equations: 'Equations are shown as plain text.',
-  notes: 'Footnotes and endnotes are shown as numbered notes at the end.',
-  trackedChanges: 'Tracked changes are shown accepted, and saving keeps them that way.',
-  comments: 'Comments are left out, and saving does not keep them.',
-  headersFooters: 'Headers and footers are not shown, and saving does not keep them.',
+  noteMarks: 'Footnotes and endnotes with marks of their own (such as *) are numbered instead.',
+  trackedChanges: 'Tracked changes are shown accepted, and saving keeps them accepted.',
+  laterHeaders: "Headers and footers of later sections are not shown; the first section's are used on every page.",
+  sectionNumbers: 'Page numbering that starts again or changes its format in a section is not kept: pages are numbered on from the first.',
   contentControls: 'Content controls (form fields, checkboxes) are shown as their text.',
-  sections: 'Section breaks are shown as page breaks; the page size and margins are those of the last section.',
-  columns: 'Text in columns is shown in one column.',
+  columns: 'Text in columns is shown in one column, and saving keeps it in one column.',
   objects: 'Embedded objects (such as spreadsheets) are shown as their pictures and are not kept.',
   macros: 'Macros are not kept: Herald Docs saves Word documents without them.'
 }
@@ -77,42 +83,42 @@ export function fidelityNotes(found: ReadonlySet<NoteKey>, unknownStyles: readon
   return notes
 }
 
-const hasContent = (part: XmlElement | null): boolean =>
-  Boolean(part && (textOf(part).trim() || find(part, 'w:drawing') || find(part, 'w:pict') || find(part, 'w:fldSimple') || find(part, 'w:fldChar')))
-
 const columned = (section: XmlElement): boolean => {
   const columns = child(section, 'w:cols')
 
   return (intOf(attr(columns, 'w:num')) ?? 1) > 1 || children(columns, 'w:col').length > 1
 }
 
-/**
- * Notes for what a package holds beside its text: comments, headers and footers with something in
- * them, more than one section, columns, and macros. `sections` are all the document's w:sectPr.
- */
-export async function packageNotes(pkg: WordPackage, relationships: Map<string, Relationship>, sections: readonly XmlElement[]): Promise<NoteKey[]> {
-  const found: NoteKey[] = []
-  const internal = [...relationships.values()].filter((item) => !item.external)
-  const comments = internal.find((item) => relationshipKind(item) === 'comments')
+/** Whether a section numbers its pages its own way: starting again, or in letters or Roman numerals. */
+const ownPageNumbers = (section: XmlElement): boolean => {
+  const numbers = child(section, 'w:pgNumType')
+  const format = attr(numbers, 'w:fmt')
 
-  if (comments && find((await pkg.xml(comments.target)) ?? undefined, 'w:comment')) {
-    found.push('comments')
+  return attr(numbers, 'w:start') !== undefined || Boolean(format && format !== 'decimal')
+}
+
+/** Whether a section has headers or footers of its own, or a first page of its own. */
+const ownHeaders = (section: XmlElement): boolean =>
+  children(section, 'w:headerReference').length > 0 || children(section, 'w:footerReference').length > 0 || (child(section, 'w:titlePg') !== undefined && attr(child(section, 'w:titlePg'), 'w:val') !== '0')
+
+/**
+ * Notes for what the document's sections and package hold beside its text: later sections' own
+ * headers, page numbering of their own, columns, tracked section changes, and macros. `sections`
+ * are all the document's w:sectPr, in order.
+ */
+export function packageNotes(pkg: WordPackage, sections: readonly XmlElement[]): NoteKey[] {
+  const found: NoteKey[] = []
+
+  if (sections.slice(1).some(ownHeaders)) {
+    found.push('laterHeaders')
   }
 
-  const references = sections.flatMap((section) => [...children(section, 'w:headerReference'), ...children(section, 'w:footerReference')])
-  const parts = new Set(references.map((reference) => relationships.get(attr(reference, 'r:id') ?? '')?.target).filter((target): target is string => Boolean(target)))
-  const contents = await Promise.all([...parts].map((part) => pkg.xml(part)))
-
-  if (contents.some(hasContent)) {
-    found.push('headersFooters')
+  if (sections.some(ownPageNumbers)) {
+    found.push('sectionNumbers')
   }
 
   if (sections.some((section) => child(section, 'w:sectPrChange'))) {
     found.push('trackedChanges')
-  }
-
-  if (sections.length > 1) {
-    found.push('sections')
   }
 
   if (sections.some(columned)) {

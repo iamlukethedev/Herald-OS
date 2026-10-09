@@ -3,7 +3,7 @@ import { Fragment, type Mark, type Node as PMNode, type NodeType, type Schema, S
 import { EditorState, Selection, type Transaction } from '@tiptap/pm/state'
 import { findWrapping, liftTarget } from '@tiptap/pm/transform'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { countCharacters, countWords, type DocJSON, type DocNode, defaultPage, pageOf, type PageSettings, PAGE_SIZES, type PageSizeName } from '../../../../shared/office/document.ts'
+import { countCharacters, countWords, type DocJSON, type DocNode, pageOf } from '../../../../shared/office/document.ts'
 import { docsSchema } from './schema.ts'
 
 /*
@@ -193,14 +193,14 @@ export type Place = 'start' | 'end' | 'selection' | { heading: string | number; 
 /** What a change applies to: the selection, everything, a heading's section, matches of some text, or a range. */
 export type Target = 'selection' | 'all' | { heading: string | number; part?: 'heading' | 'section' | 'all' } | { text: string; all?: boolean; options?: SearchOptions } | { from: number; to: number }
 
-interface Range {
+export interface Range {
   from: number
   to: number
 }
 
 const isEmptyParagraph = (node: PMNode | null | undefined): boolean => Boolean(node && node.type.name === 'paragraph' && node.content.size === 0)
 
-function placeRange(state: EditorState, place: Place): Range & { inline: boolean } {
+export function placeRange(state: EditorState, place: Place): Range & { inline: boolean } {
   const { doc, selection } = state
   const size = doc.content.size
 
@@ -240,7 +240,7 @@ function placeRange(state: EditorState, place: Place): Range & { inline: boolean
   return place.mode === 'replace' ? { ...section, inline: false } : { from: section.to, to: section.to, inline: false }
 }
 
-function targetRanges(state: EditorState, target: Target): Range[] {
+export function targetRanges(state: EditorState, target: Target): Range[] {
   const { doc, selection } = state
 
   if (target === 'selection') {
@@ -777,7 +777,7 @@ export const insertList = (spec: ListSpec, place: Place = 'end'): Op => insertNo
 export const insertPageBreak = (place: Place = 'selection'): Op => insertNodes((schema) => [schema.nodes.pageBreak.create()], place)
 
 /** Blocks between blocks: at a caret in a paragraph, the paragraph is split around them. */
-function insertNodes(build: (schema: Schema) => PMNode[], place: Place): Op {
+export function insertNodes(build: (schema: Schema) => PMNode[], place: Place): Op {
   return (state) => {
     const tr = insertBlocks(state.tr, placeRange(state, place), build(state.schema), place)
 
@@ -785,24 +785,9 @@ function insertNodes(build: (schema: Schema) => PMNode[], place: Place): Op {
   }
 }
 
-// The page.
+// The page: headers, footers, notes, sections and page setup (setPage and PageChange among them).
 
-export interface PageChange {
-  size?: PageSizeName
-  orientation?: 'portrait' | 'landscape'
-  /** Margins in points, all of them or each side. */
-  margins?: number | Partial<PageSettings['margins']>
-}
-
-export function setPage(change: PageChange): Op {
-  return (state) => {
-    const current = (state.doc.attrs.page as PageSettings | null) ?? defaultPage()
-    const named = change.size ? PAGE_SIZES[change.size] : null
-    const [short, long] = named ? [named.width, named.height] : [Math.min(current.width, current.height), Math.max(current.width, current.height)]
-    const landscape = change.orientation ? change.orientation === 'landscape' : current.width > current.height
-    const margins = typeof change.margins === 'number' ? { top: change.margins, right: change.margins, bottom: change.margins, left: change.margins } : { ...current.margins, ...change.margins }
-    const page: PageSettings = { width: landscape ? long : short, height: landscape ? short : long, margins }
-
-    return JSON.stringify(page) === JSON.stringify(current) && state.doc.attrs.page ? null : state.tr.setDocAttribute('page', page)
-  }
-}
+export * from './page-ops.ts'
+export * from './review-ops.ts'
+export { documentFromTemplate, TEMPLATES, type TemplateInfo, type TemplateOptions } from './templates/index.ts'
+export { type DocumentStatistics, documentStatistics, type Readability, type StatisticsOptions } from './statistics.ts'

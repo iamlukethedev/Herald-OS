@@ -1,17 +1,19 @@
-import type { BlockContent, DefinitionContent, Heading, Html, List, ListItem, Paragraph, PhrasingContent, Root, RootContent, Table, TableCell, TableRow } from 'mdast'
+import type { BlockContent, DefinitionContent, FootnoteDefinition, Heading, Html, List, ListItem, Paragraph, PhrasingContent, Root, RootContent, Table, TableCell, TableRow } from 'mdast'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfmFromMarkdown, gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown } from 'mdast-util-to-markdown'
 import { gfm } from 'micromark-extension-gfm'
-import { type CalloutKind, type DocJSON, type DocMark, type DocNode, imageSize, joinText, type MarkName, markOf, paragraphNode, parseDataUrl, sameMarks, textNode, textOf, walk } from './document.ts'
+import { type CalloutKind, commentsOf, type DocJSON, type DocMark, type DocNode, headersOf, imageSize, joinText, type MarkName, markOf, paragraphNode, parseDataUrl, sameMarks, textNode, textOf, walk } from './document.ts'
+import { fieldText } from './fields.ts'
 
 /*
  * Plain text and Markdown as Herald Docs documents and back. Plain text keeps its lines as
- * paragraphs. Markdown is read as CommonMark with GitHub's tables, task lists, strikethrough and
- * autolinks: headings, emphasis, lists, links, pictures, tables, code blocks with their language,
- * quotes and rules. GitHub's alerts (> [!NOTE]) are Herald's callouts; underline, superscript,
- * subscript and highlight go through the HTML tags Markdown allows; a page break is an empty
- * marked div. What Markdown cannot hold is listed when saving.
+ * paragraphs. Markdown is read as CommonMark with GitHub's tables, task lists, strikethrough,
+ * autolinks and footnotes: headings, emphasis, lists, links, pictures, tables, code blocks with
+ * their language, quotes, rules and notes. GitHub's alerts (> [!NOTE]) are Herald's callouts;
+ * underline, superscript, subscript and highlight go through the HTML tags Markdown allows; a page
+ * break is an empty marked div. Fields are saved as the text they show, and text boxes as their
+ * blocks. What Markdown cannot hold is listed when saving.
  */
 
 export interface TextLayout {
@@ -61,45 +63,114 @@ export function documentFromText(input: string): ReadResult {
   return { document: documentOf(lines(text).map((line) => paragraphNode(line ? [textNode(line)] : []))), layout, notes: [] }
 }
 
-const PLAIN_FORMATTING = 'Formatting (headings, lists, bold, italic and fonts) is not saved in plain text.'
-const PLAIN_PICTURES = 'Pictures are not saved in plain text.'
+const PLAIN = {
+  formatting: 'Formatting (headings, lists, bold, italic and fonts) is not saved in plain text.',
+  pictures: 'Pictures are not saved in plain text.',
+  fields: 'Fields (page numbers, dates) are saved as the text they show.',
+  notes: 'Footnotes and endnotes are saved at the end, numbered in brackets.',
+  contents: 'Tables of contents are left out of plain text.',
+  comments: 'Comments are not kept in plain text.',
+  headers: 'Headers and footers are not saved in plain text.'
+} as const
 
-/** Lines of a block: its text, line breaks starting new lines, a table's cells separated by tabs. */
-function textLines(node: DocNode): string[] {
-  if (node.type === 'table') {
-    return (node.content ?? []).map((row) => (row.content ?? []).map((cell) => textOf(cell).replace(/\n/g, ' ')).join('\t'))
+const INLINE_PARENTS = new Set(['paragraph', 'heading', 'codeBlock'])
+
+/** A node's text, with what its fields show and its notes' numbers in brackets: its blocks on lines of their own and line breaks as new lines. */
+function plainOf(node: DocNode, notes: ReadonlyMap<DocNode, number>): string {
+  if (node.type === 'text') {
+    return node.text ?? ''
   }
 
-  if (node.type === 'horizontalRule' || node.type === 'pageBreak') {
+  if (node.type === 'hardBreak') {
+    return '\n'
+  }
+
+  if (node.type === 'field') {
+    return fieldText(node.attrs)
+  }
+
+  if (node.type === 'note') {
+    return `[${notes.get(node) ?? ''}]`
+  }
+
+  return (node.content ?? []).map((child) => plainOf(child, notes)).join(INLINE_PARENTS.has(node.type) ? '' : '\n')
+}
+
+/** Lines of a block: its text, line breaks starting new lines, a table's cells separated by tabs. */
+function textLines(node: DocNode, notes: ReadonlyMap<DocNode, number>): string[] {
+  if (node.type === 'table') {
+    return (node.content ?? []).map((row) => (row.content ?? []).map((cell) => plainOf(cell, notes).replace(/\n/g, ' ')).join('\t'))
+  }
+
+  if (node.type === 'horizontalRule' || node.type === 'pageBreak' || node.type === 'sectionBreak' || node.type === 'tableOfContents') {
     return []
   }
 
-  if (node.type === 'paragraph' || node.type === 'heading' || node.type === 'codeBlock') {
-    return textOf(node).split('\n')
+  if (INLINE_PARENTS.has(node.type)) {
+    return plainOf(node, notes).split('\n')
   }
 
-  return (node.content ?? []).flatMap(textLines)
+  return (node.content ?? []).flatMap((child) => textLines(child, notes))
+}
+
+/** A note's lines, the first starting with its number in brackets. */
+function noteLines(note: DocNode, number: number, notes: ReadonlyMap<DocNode, number>): string[] {
+  const [first = '', ...rest] = ((note.attrs?.content as DocNode[] | undefined) ?? []).flatMap((block) => textLines(block, notes))
+
+  return [`[${number}] ${first}`.trimEnd(), ...rest]
 }
 
 const hasAttrs = (node: DocNode): boolean => Object.values(node.attrs ?? {}).some((value) => value !== null && value !== undefined)
 
-export function textFromDocument(document: DocJSON, layout: Partial<TextLayout> = {}): WriteResult {
-  let styled = false
-  let pictures = false
+/** Whether a document has headers or footers with something in them. */
+const hasHeaders = (document: DocJSON): boolean => {
+  const headers = headersOf(document)
+
+  return [...Object.values(headers?.header ?? {}), ...Object.values(headers?.footer ?? {})].some((blocks) => Boolean(blocks?.length))
+}
+
+/** What a document has that a text format leaves out or writes as text, beside its formatting. */
+function textContent(document: DocJSON) {
+  const found = { pictures: false, fields: false, contents: false, comments: commentsOf(document).length > 0, notes: new Map<DocNode, number>() }
 
   walk(document, (node) => {
-    if (node.type === 'image') {
-      pictures = true
-    } else if (node.type === 'text') {
-      styled ||= Boolean(node.marks?.length)
-    } else if (node.type === 'paragraph') {
-      styled ||= hasAttrs(node)
-    } else if (node.type !== 'doc' && node.type !== 'hardBreak') {
-      styled = true
+    found.comments ||= Boolean(node.marks?.some((mark) => mark.type === 'comment'))
+    found.pictures ||= node.type === 'image'
+    found.fields ||= node.type === 'field'
+    found.contents ||= node.type === 'tableOfContents'
+
+    if (node.type === 'note') {
+      found.notes.set(node, found.notes.size + 1)
     }
   })
 
-  return { text: write(document.content.flatMap(textLines), layout), losses: [...(styled ? [PLAIN_FORMATTING] : []), ...(pictures ? [PLAIN_PICTURES] : [])] }
+  return found
+}
+
+/** Node types a text format keeps as text or leaves out, and says so, rather than as formatting. */
+const TEXT_KINDS = new Set(['doc', 'hardBreak', 'text', 'image', 'field', 'note', 'tableOfContents'])
+
+export function textFromDocument(document: DocJSON, layout: Partial<TextLayout> = {}): WriteResult {
+  const found = textContent(document)
+  let styled = false
+
+  walk(document, (node) => {
+    styled ||= Boolean(node.marks?.some((mark) => mark.type !== 'comment')) || (node.type === 'paragraph' ? hasAttrs(node) : !TEXT_KINDS.has(node.type))
+  })
+
+  const body = document.content.flatMap((node) => textLines(node, found.notes))
+  const notes = [...found.notes].flatMap(([note, number]) => noteLines(note, number, found.notes))
+  const losses = [
+    ...(styled ? [PLAIN.formatting] : []),
+    ...(found.pictures ? [PLAIN.pictures] : []),
+    ...(found.fields ? [PLAIN.fields] : []),
+    ...(notes.length ? [PLAIN.notes] : []),
+    ...(found.contents ? [PLAIN.contents] : []),
+    ...(found.comments ? [PLAIN.comments] : []),
+    ...(hasHeaders(document) ? [PLAIN.headers] : [])
+  ]
+
+  return { text: write(notes.length ? [...body, '', ...notes] : body, layout), losses }
 }
 
 // Markdown: reading.
@@ -119,13 +190,18 @@ const NOTE = {
   joined: 'Lines of a paragraph that were broken in the file are joined.',
   html: 'HTML in the file is shown as its source.',
   references: 'Reference-style links are saved as inline links.',
-  footnotes: 'Footnotes are shown as their Markdown text.',
+  footnotes: 'Footnotes the file does not both refer to and define are shown as their Markdown text.',
   beside: 'Pictures stored beside the file are not shown yet; saving keeps their links.'
 } as const
 
 interface Reader {
   notes: Set<string>
   definitions: Map<string, { url: string; title: string | null }>
+  /** The footnotes the file defines, and those its text refers to, by identifier. */
+  footnotes: Map<string, FootnoteDefinition>
+  referenced: Set<string>
+  /** Footnotes being read, so one that refers to itself is not read again. */
+  reading: Set<string>
 }
 
 const isLocalPicture = (url: string): boolean => !/^(data:|https?:|blob:)/i.test(url)
@@ -211,10 +287,22 @@ function inlineFrom(nodes: readonly PhrasingContent[], marks: DocMark[], reader:
 
         break
       }
-      case 'footnoteReference':
-        reader.notes.add(NOTE.footnotes)
-        out.push(textNode(`[^${node.label ?? node.identifier}]`, all()))
+      case 'footnoteReference': {
+        const id = node.identifier.toLowerCase()
+        const definition = reader.footnotes.get(id)
+
+        if (definition && !reader.reading.has(id)) {
+          reader.reading.add(id)
+          const content = blocksFrom(definition.children, reader)
+          reader.reading.delete(id)
+          out.push({ type: 'note', attrs: { kind: 'footnote', content: content.length ? content : [paragraphNode()] } })
+        } else {
+          reader.notes.add(NOTE.footnotes)
+          out.push(textNode(`[^${node.label ?? node.identifier}]`, all()))
+        }
+
         break
+      }
     }
   }
 
@@ -322,6 +410,10 @@ function blocksFrom(nodes: readonly RootContent[], reader: Reader): DocNode[] {
 
         return []
       case 'footnoteDefinition': {
+        if (reader.referenced.has(node.identifier.toLowerCase())) {
+          return []
+        }
+
         reader.notes.add(NOTE.footnotes)
         const [first, ...rest] = blocksFrom(node.children, reader)
         const label = textNode(`[^${node.label ?? node.identifier}]: `)
@@ -337,13 +429,21 @@ function blocksFrom(nodes: readonly RootContent[], reader: Reader): DocNode[] {
 export function documentFromMarkdown(input: string): ReadResult {
   const { text, layout } = layoutOf(input)
   const tree = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] })
-  const reader: Reader = { notes: new Set(), definitions: new Map() }
+  const reader: Reader = { notes: new Set(), definitions: new Map(), footnotes: new Map(), referenced: new Set(), reading: new Set() }
 
   const collect = (nodes: readonly RootContent[]) => {
     for (const node of nodes) {
       if (node.type === 'definition') {
         reader.definitions.set(node.identifier.toLowerCase(), { url: node.url, title: node.title ?? null })
-      } else if ('children' in node) {
+      } else if (node.type === 'footnoteReference') {
+        reader.referenced.add(node.identifier.toLowerCase())
+      }
+
+      if (node.type === 'footnoteDefinition') {
+        reader.footnotes.set(node.identifier.toLowerCase(), node)
+      }
+
+      if ('children' in node) {
         collect(node.children as RootContent[])
       }
     }
@@ -369,7 +469,13 @@ const LOSS = {
   cells: 'Lists, code and other blocks inside table cells are saved as plain text in Markdown.',
   shading: 'Table borders and cell shading are not saved in Markdown.',
   data: 'Pictures are saved inside the Markdown file as data, which some Markdown viewers do not show.',
-  sizes: 'Picture sizes are not saved in Markdown.'
+  sizes: 'Picture sizes are not saved in Markdown.',
+  fields: 'Fields (page numbers, dates) are saved as the text they show.',
+  endnotes: 'Endnotes are saved as footnotes in Markdown.',
+  boxes: 'Text boxes are saved as their text, without their size, border and fill.',
+  contents: 'Tables of contents are left out of Markdown.',
+  comments: 'Comments are not kept in Markdown.',
+  headers: 'Headers and footers are not saved in Markdown.'
 } as const
 
 type Loss = keyof typeof LOSS
@@ -387,6 +493,8 @@ const raw = (value: string): Html => ({ type: 'html', value })
 
 class Writer {
   readonly losses = new Set<Loss>()
+  /** The notes referred to so far, numbered from 1 in the order they come. */
+  readonly notes: DocNode[] = []
 
   blocks(nodes: readonly DocNode[] = []): RootContent[] {
     return nodes.flatMap((node) => this.block(node))
@@ -414,6 +522,7 @@ class Writer {
       case 'horizontalRule':
         return [{ type: 'thematicBreak' }]
       case 'pageBreak':
+      case 'sectionBreak':
         return [raw(PAGE_BREAK_HTML)]
       case 'bulletList':
       case 'orderedList':
@@ -421,9 +530,29 @@ class Writer {
         return [this.list(node)]
       case 'table':
         return [this.table(node)]
+      case 'tableOfContents':
+        this.losses.add('contents')
+
+        return []
+      case 'textBox':
+        this.losses.add('boxes')
+
+        return this.blocks(node.content)
       default:
         return node.content ? this.blocks(node.content) : []
     }
+  }
+
+  /** The definitions of the notes referred to, which may refer to notes of their own. */
+  definitions(): RootContent[] {
+    const out: RootContent[] = []
+
+    for (let index = 0; index < this.notes.length; index++) {
+      const content = (this.notes[index].attrs?.content as DocNode[] | undefined) ?? []
+      out.push({ type: 'footnoteDefinition', identifier: String(index + 1), label: String(index + 1), children: this.blocks(content) as BlockContent[] })
+    }
+
+    return out
   }
 
   layout(node: DocNode): void {
@@ -535,9 +664,10 @@ class Writer {
     const out: PhrasingContent[] = []
 
     for (const block of cell.content ?? []) {
-      const inline = block.type === 'paragraph' || block.type === 'heading' ? this.inline(block.content) : textOf(block) ? [{ type: 'text' as const, value: textOf(block).replace(/\n/g, ' ') }] : []
+      const plain = plainOf(block, new Map())
+      const inline = block.type === 'paragraph' || block.type === 'heading' ? this.inline(block.content) : plain ? [{ type: 'text' as const, value: plain.replace(/\n/g, ' ') }] : []
 
-      if (block.type !== 'paragraph' && block.type !== 'heading' && textOf(block)) {
+      if (block.type !== 'paragraph' && block.type !== 'heading' && plain) {
         this.losses.add('cells')
       }
 
@@ -642,6 +772,23 @@ class Writer {
       return [{ type: 'image', url: src, alt: typeof node.attrs?.alt === 'string' ? node.attrs.alt : null, title: typeof node.attrs?.title === 'string' && node.attrs.title ? node.attrs.title : null }]
     }
 
+    if (node.type === 'field') {
+      const shown = fieldText(node.attrs)
+      this.losses.add('fields')
+
+      return shown ? [{ type: 'text', value: shown }] : []
+    }
+
+    if (node.type === 'note') {
+      this.notes.push(node)
+
+      if (node.attrs?.kind === 'endnote') {
+        this.losses.add('endnotes')
+      }
+
+      return [{ type: 'footnoteReference', identifier: String(this.notes.length), label: String(this.notes.length) }]
+    }
+
     if (node.type !== 'text' || !node.text) {
       return []
     }
@@ -672,10 +819,20 @@ class Writer {
 
 export function markdownFromDocument(document: DocJSON, layout: Partial<TextLayout> = {}): WriteResult {
   const writer = new Writer()
-  const root: Root = { type: 'root', children: writer.blocks(document.content) }
+  const body = writer.blocks(document.content)
+  const root: Root = { type: 'root', children: [...body, ...writer.definitions()] }
+  const found = textContent(document)
 
   if (document.attrs?.styles) {
     writer.losses.add('styles')
+  }
+
+  if (found.comments) {
+    writer.losses.add('comments')
+  }
+
+  if (hasHeaders(document)) {
+    writer.losses.add('headers')
   }
 
   const text = root.children.length

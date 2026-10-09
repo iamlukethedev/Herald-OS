@@ -969,6 +969,11 @@ export const IPC = {
   officeExportPdf: 'herald-os:office:export-pdf',
   /** A file converted by headless LibreOffice, as the converted file's bytes. */
   officeConvert: 'herald-os:office:convert',
+  /** Templates the person saved from an Office app, in the Herald OS data folder (office-templates/<app>/). */
+  officeTemplates: 'herald-os:office:templates',
+  officeTemplateSave: 'herald-os:office:template-save',
+  officeTemplateRename: 'herald-os:office:template-rename',
+  officeTemplateRemove: 'herald-os:office:template-remove',
   /** Main -> renderer: an open file changed on disk (Hermes, another app); its new digest, or null once it is gone. */
   officeChanged: 'herald-os:office:changed',
   /** Panels mode: run a command in the Office window that has a document open, and wait for its result. */
@@ -1120,6 +1125,18 @@ export interface OfficePdfRequest {
   landscape?: boolean
   /** A named paper size, or one in inches. */
   pageSize?: 'A4' | 'Letter' | { width: number; height: number }
+}
+
+/** A template the person saved from an Office app; `savedAt` is an ISO date. */
+export interface OfficeTemplateInfo {
+  id: string
+  name: string
+  savedAt: string
+}
+
+export interface OfficeTemplate extends OfficeTemplateInfo {
+  /** The document, as the app's model. */
+  model: unknown
 }
 
 export type PowerAction = 'suspend' | 'reboot' | 'poweroff' | 'logout' | 'lock'

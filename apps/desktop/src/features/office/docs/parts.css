@@ -1,0 +1,35 @@
+/*
+ * A header, footer or note edited in place: an editor over where the page draws it, on the page's
+ * paper, so that it covers the drawing while what is typed reaches the page.
+ */
+
+.docs-part-box {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-paper);
+  outline: 1px dashed rgb(47 125 255 / 0.7);
+  outline-offset: 2px;
+  cursor: text;
+}
+
+/* A footer, and a footnote at its page's foot, grow up from where they end, as the page draws them. */
+.docs-part-box[data-anchor='end'] {
+  justify-content: flex-end;
+  transform: translateY(-100%);
+}
+
+.docs-part-box > .tiptap {
+  outline: none;
+}
+
+/* A note's number before its text, as the page and the PDF put it. */
+.docs-part-box[data-note] > .tiptap > :first-child::before {
+  content: var(--docs-note-label);
+  margin-right: 2pt;
+  font-size: 0.7em;
+  line-height: 0;
+  vertical-align: super;
+}

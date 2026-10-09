@@ -43,6 +43,8 @@ import {
   type OfficeRunReply,
   type OfficeRunRequest,
   type OfficeSaveTarget,
+  type OfficeTemplate,
+  type OfficeTemplateInfo,
   type OfficeWriteResult,
   type OsControlReply,
   type OsControlRequest,
@@ -274,7 +276,13 @@ const api = {
     /** Print a print view to a PDF the person names; resolves with its path (null when cancelled). */
     exportPdf: (request: OfficePdfRequest): Promise<string | null> => ipcRenderer.invoke(IPC.officeExportPdf, request),
     /** A file converted by LibreOffice to `to` (an extension without its dot), as bytes. */
-    convert: (file: string, to: string): Promise<Uint8Array> => ipcRenderer.invoke(IPC.officeConvert, file, to)
+    convert: (file: string, to: string): Promise<Uint8Array> => ipcRenderer.invoke(IPC.officeConvert, file, to),
+    /** The templates the person saved from an app, by name, with their documents. */
+    templates: (app: OfficeApp): Promise<OfficeTemplate[]> => ipcRenderer.invoke(IPC.officeTemplates, app),
+    /** Save a document as a template called `name`: a new one, or over the template `id`. */
+    saveTemplate: (app: OfficeApp, name: string, model: unknown, id?: string): Promise<OfficeTemplateInfo> => ipcRenderer.invoke(IPC.officeTemplateSave, app, name, model, id),
+    renameTemplate: (app: OfficeApp, id: string, name: string): Promise<OfficeTemplateInfo> => ipcRenderer.invoke(IPC.officeTemplateRename, app, id, name),
+    removeTemplate: (app: OfficeApp, id: string): Promise<void> => ipcRenderer.invoke(IPC.officeTemplateRemove, app, id)
   },
   catalog: {
     /** The install catalog with each entry's state on this machine (Linux: everything; macOS: what installs here). */

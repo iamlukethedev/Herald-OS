@@ -25,9 +25,14 @@ export type NodeName =
   | 'callout'
   | 'image'
   | 'hardBreak'
+  | 'field'
+  | 'note'
+  | 'tableOfContents'
+  | 'sectionBreak'
+  | 'textBox'
   | 'text'
 
-export type MarkName = 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'subscript' | 'superscript' | 'link' | 'textStyle' | 'highlight'
+export type MarkName = 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'subscript' | 'superscript' | 'link' | 'textStyle' | 'highlight' | 'comment'
 
 export interface DocMark {
   type: MarkName | string
@@ -47,6 +52,9 @@ export interface PageMargins {
   right: number
   bottom: number
   left: number
+  /** From the top edge to the header and from the bottom edge to the footer; Word's 0.5 inch when missing. */
+  header?: number
+  footer?: number
 }
 
 /** A page in points (1/72 inch), as Word's section keeps it in twentieths of a point. */
@@ -81,6 +89,11 @@ export interface DocAttrs {
   page: PageSettings | null
   /** Looks that differ from Herald's own (a Word file's styles); null keeps Herald's. */
   styles: StyleLooks | null
+  headers: PageHeaders | null
+  /** Review comments; the text each one is on carries a `comment` mark with its id. */
+  comments: CommentThread[] | null
+  /** Parts of a Word file Herald keeps without showing them, to write back; only the Word converters read it. */
+  kept: unknown
 }
 
 export interface DocJSON extends DocNode {
@@ -99,12 +112,16 @@ export type ParagraphStyle = 'title' | 'subtitle'
 
 export const PAGE_SIZES = {
   a4: { width: 595.3, height: 841.9, label: 'A4' },
-  letter: { width: 612, height: 792, label: 'Letter' }
+  letter: { width: 612, height: 792, label: 'Letter' },
+  legal: { width: 612, height: 1008, label: 'Legal' },
+  a5: { width: 419.5, height: 595.3, label: 'A5' }
 } as const
 
 export type PageSizeName = keyof typeof PAGE_SIZES
 
 export const DEFAULT_MARGIN = 72
+
+export const DEFAULT_HEADER_DISTANCE = 36
 
 /** The monospace face Herald gives code in Word documents. */
 export const CODE_FONT = 'Consolas'
@@ -152,6 +169,202 @@ export function pageSizeName(page: PageSettings): PageSizeName | null {
 export function blankDocument(page: PageSettings | null = defaultPage()): DocJSON {
   return { type: 'doc', attrs: { page, styles: null }, content: [{ type: 'paragraph' }] }
 }
+
+// Headers and footers, fields, notes, tables of contents, sections, text boxes and comments.
+
+/** Which header or footer a page shows: the usual one, the first page's, or even pages'. */
+export type HeaderKind = 'default' | 'first' | 'even'
+
+export const HEADER_KINDS: readonly HeaderKind[] = ['default', 'first', 'even']
+
+/** A document's headers and footers, each a list of blocks that can hold fields. */
+export interface PageHeaders {
+  header: Partial<Record<HeaderKind, DocNode[]>>
+  footer: Partial<Record<HeaderKind, DocNode[]>>
+  /** The first page has a header and footer of its own (Word's "different first page"). */
+  differentFirst?: boolean
+  /** Even pages have their own, and the usual ones are for odd pages. */
+  differentOddEven?: boolean
+}
+
+export const headersOf = (doc: DocNode): PageHeaders | null => (doc.attrs?.headers as PageHeaders | null | undefined) ?? null
+
+/** The kind of header and footer page `number` (from 1) shows. */
+export function headerKindFor(headers: PageHeaders | null, number: number): HeaderKind {
+  if (headers?.differentFirst && number === 1) {
+    return 'first'
+  }
+
+  return headers?.differentOddEven && number % 2 === 0 ? 'even' : 'default'
+}
+
+/** The blocks of the header or footer page `number` shows, or null when it has none. */
+export function pagePart(headers: PageHeaders | null, part: 'header' | 'footer', number: number): DocNode[] | null {
+  const blocks = headers?.[part][headerKindFor(headers, number)]
+
+  return blocks?.length ? blocks : null
+}
+
+/**
+ * A field's attrs. Page, page count, date and time are worked out where they are shown; `other` is a
+ * Word field Herald does not work out, kept with its instruction and shown as its last result.
+ */
+export type FieldKind = 'page' | 'pages' | 'date' | 'time' | 'other'
+
+export interface FieldAttrs {
+  kind: FieldKind
+  /** A date or time picture in Word's terms (`d MMMM yyyy`, `HH:mm`); null for the locale's own. */
+  format: string | null
+  /** Word's field instruction, for `other`. */
+  instruction: string | null
+  /** The last result shown. */
+  text: string | null
+}
+
+export type NoteKind = 'footnote' | 'endnote'
+
+/** A note's attrs: the reference in the text holds the note's blocks. */
+export interface NoteAttrs {
+  kind: NoteKind
+  content: DocNode[]
+}
+
+/** The notes of a document in the order their references come, numbered by kind from 1. */
+export function notesOf(doc: DocNode): { kind: NoteKind; number: number; content: DocNode[] }[] {
+  const out: { kind: NoteKind; number: number; content: DocNode[] }[] = []
+  const counts: Record<NoteKind, number> = { footnote: 0, endnote: 0 }
+
+  walk(doc, (node) => {
+    if (node.type === 'note') {
+      const kind: NoteKind = node.attrs?.kind === 'endnote' ? 'endnote' : 'footnote'
+      out.push({ kind, number: ++counts[kind], content: (node.attrs?.content as DocNode[] | undefined) ?? [] })
+    }
+  })
+
+  return out
+}
+
+const ROMAN: [number, string][] = [
+  [1000, 'm'],
+  [900, 'cm'],
+  [500, 'd'],
+  [400, 'cd'],
+  [100, 'c'],
+  [90, 'xc'],
+  [50, 'l'],
+  [40, 'xl'],
+  [10, 'x'],
+  [9, 'ix'],
+  [5, 'v'],
+  [4, 'iv'],
+  [1, 'i']
+]
+
+/** How a note's number is shown: footnotes 1, 2, 3 and endnotes i, ii, iii, as Word numbers them. */
+export function noteLabel(kind: NoteKind, number: number): string {
+  if (kind === 'footnote') {
+    return String(number)
+  }
+
+  let rest = number
+  let out = ''
+
+  for (const [value, letters] of ROMAN) {
+    while (rest >= value) {
+      out += letters
+      rest -= value
+    }
+  }
+
+  return out
+}
+
+/** A table of contents' attrs: the heading levels it lists, its title, and the page each entry was last on. */
+export interface TocAttrs {
+  levels: number
+  title: string | null
+  pages: (number | null)[] | null
+}
+
+export interface TocEntry {
+  level: number
+  text: string
+  /** Which heading of the document it is, counting every heading from 0. */
+  heading: number
+}
+
+/** The entries a table of contents listing `levels` levels has: the document's headings down to that level. */
+export function tocEntries(doc: DocNode, levels: number): TocEntry[] {
+  const out: TocEntry[] = []
+  let heading = 0
+
+  walk(doc, (node) => {
+    if (node.type === 'heading') {
+      const level = Math.min(6, Math.max(1, Number(node.attrs?.level ?? 1)))
+      const text = textOf(node).replace(/\s+/g, ' ').trim()
+
+      if (level <= levels && text) {
+        out.push({ level, text, heading })
+      }
+
+      heading++
+
+      return false
+    }
+
+    return node.type === 'note' || node.type === 'tableOfContents' ? false : undefined
+  })
+
+  return out
+}
+
+/** How a section starts: on a new page, on the same page, or on the next even or odd page. */
+export type SectionKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage'
+
+/** A section break's attrs: how the section after it starts, and its page (null keeps the page before it). */
+export interface SectionBreakAttrs {
+  kind: SectionKind
+  page: PageSettings | null
+}
+
+/** Each section's page and the index of the top-level block it starts at; the document's page is the first section's. */
+export function sectionsOf(doc: DocJSON): { page: PageSettings; start: number }[] {
+  const out = [{ page: pageOf(doc), start: 0 }]
+
+  doc.content.forEach((node, index) => {
+    if (node.type === 'sectionBreak') {
+      out.push({ page: (node.attrs?.page as PageSettings | null | undefined) ?? out[out.length - 1].page, start: index + 1 })
+    }
+  })
+
+  return out
+}
+
+/** A text box's attrs: its size in points (null fits its text), where it sits, and its border and fill colours. */
+export interface TextBoxAttrs {
+  width: number | null
+  height: number | null
+  align: 'left' | 'center' | 'right' | null
+  border: string | null
+  fill: string | null
+}
+
+/** A reply to a comment, or a comment itself; dates are ISO strings. */
+export interface CommentReply {
+  id: string
+  author: string
+  initials?: string | null
+  date: string | null
+  /** Plain text, its paragraphs on lines of their own. */
+  text: string
+}
+
+export interface CommentThread extends CommentReply {
+  resolved?: boolean
+  replies?: CommentReply[]
+}
+
+export const commentsOf = (doc: DocNode): CommentThread[] => (doc.attrs?.comments as CommentThread[] | null | undefined) ?? []
 
 export const pageOf = (doc: DocNode): PageSettings => ((doc.attrs?.page as PageSettings | null | undefined) ?? defaultPage())
 

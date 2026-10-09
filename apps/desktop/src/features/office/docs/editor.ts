@@ -3,19 +3,23 @@ import { Placeholder } from '@tiptap/extensions'
 import type { EditorView } from '@tiptap/pm/view'
 import { dataUrl, type DocJSON, IMAGE_TYPES, imageSize } from '../../../../shared/office/document.ts'
 import { openWebWindow } from '../../../store/web-windows.ts'
+import { Comments } from './comments.ts'
 import { FindHighlight } from './find.ts'
 import { WordKeys } from './keys.ts'
 import { HermesMarked } from './marked.ts'
 import { applyLive, insertImage, type Place } from './model.ts'
 import { revealInDesk } from './overlay.ts'
+import { withPageViews } from './pages/fields.ts'
+import { Pages, type PagesOptions } from './pages/paginator.ts'
 import { docsExtensions } from './schema.ts'
 import { SlashCommand } from './slash.ts'
+import { TocLive, tocView } from './toc-view.ts'
 import { DocsTableView, imageView } from './views.ts'
 
 /*
- * One document's TipTap editor: the document schema with the editor's own views, the '/' menu,
- * find, Word's keys, spelling, and pictures pasted or dropped in. A link opens with ⌘-click, in a
- * Herald web window.
+ * One document's TipTap editor: the document schema with the editor's own views, its pages, the
+ * '/' menu, find, Word's keys, spelling, comments, live tables of contents, and pictures pasted or
+ * dropped in. A link opens with ⌘-click, in a Herald web window.
  */
 
 export interface EditorEvents {
@@ -71,12 +75,15 @@ async function fromFiles(view: EditorView, files: File[], place: Place): Promise
   await insertPictures(view, read, place)
 }
 
-export function createDocsEditor(element: HTMLElement, content: DocJSON, events: EditorEvents): Editor {
+export function createDocsEditor(element: HTMLElement, content: DocJSON, events: EditorEvents, pages: Partial<PagesOptions> = {}): Editor {
   return new Editor({
     element,
     content,
     extensions: [
-      ...docsExtensions({ views: { image: imageView, table: DocsTableView } }),
+      ...withPageViews(docsExtensions({ views: { image: imageView, table: DocsTableView } }), { tableOfContents: tocView }),
+      Pages.configure(pages),
+      TocLive,
+      Comments,
       Placeholder.configure({
         showOnlyCurrent: true,
         placeholder: ({ editor, node }) => (node.type.name === 'heading' ? 'Heading' : node.type.name !== 'paragraph' ? '' : editor.isEmpty ? 'Start writing, or type / to add a heading, list, table or picture' : 'Type / to insert')

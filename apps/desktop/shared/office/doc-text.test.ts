@@ -87,10 +87,34 @@ describe('Markdown: reading', () => {
   })
 
   it('keeps code inside a link, and says what it shows differently', () => {
-    const { document, notes } = documentFromMarkdown('Run [`npm test`][run] or see<span>this</span>.\n\n[run]: https://example.com/run\n\n![map](images/map.png)\n\nA note.[^1]\n\n[^1]: The note.\n')
+    const { document, notes } = documentFromMarkdown('Run [`npm test`][run] or see<span>this</span>.\n\n[run]: https://example.com/run\n\n![map](images/map.png)\n\nA note.[^1] And [^2].\n\n[^1]: The note.\n\n[^3]: Never used.\n')
 
     expect(document.content[0].content?.[1]).toEqual(textNode('npm test', [{ type: 'link', attrs: { href: 'https://example.com/run' } }, { type: 'code' }]))
-    expect(notes).toEqual(['HTML in the file is shown as its source.', 'Reference-style links are saved as inline links.', 'Footnotes are shown as their Markdown text.', 'Pictures stored beside the file are not shown yet; saving keeps their links.'])
+    expect(document.content.slice(2)).toEqual([
+      paragraphNode([textNode('A note.'), { type: 'note', attrs: { kind: 'footnote', content: [paragraphNode([textNode('The note.')])] } }, textNode(' And [^2].')]),
+      paragraphNode([textNode('[^3]: Never used.')])
+    ])
+    expect(notes).toEqual([
+      'HTML in the file is shown as its source.',
+      'Reference-style links are saved as inline links.',
+      'Footnotes the file does not both refer to and define are shown as their Markdown text.',
+      'Pictures stored beside the file are not shown yet; saving keeps their links.'
+    ])
+  })
+
+  it('reads footnotes as notes where they are referred to, with their blocks', () => {
+    const { document, notes } = documentFromMarkdown('Revenue rose[^growth] in May.[^2]\n\n[^growth]: Source: **the plan**.\n\n    Read it twice.\n\n[^2]: See [^growth] again.\n')
+    const growth = [paragraphNode([textNode('Source: '), textNode('the plan', [{ type: 'bold' }]), textNode('.')]), paragraphNode([textNode('Read it twice.')])]
+
+    expect(document.content).toEqual([
+      paragraphNode([
+        textNode('Revenue rose'),
+        { type: 'note', attrs: { kind: 'footnote', content: growth } },
+        textNode(' in May.'),
+        { type: 'note', attrs: { kind: 'footnote', content: [paragraphNode([textNode('See '), { type: 'note', attrs: { kind: 'footnote', content: growth } }, textNode(' again.')])] } }
+      ])
+    ])
+    expect(notes).toEqual([])
   })
 })
 
@@ -190,6 +214,64 @@ describe('Markdown: writing', () => {
       'Table borders and cell shading are not saved in Markdown.',
       'Pictures are saved inside the Markdown file as data, which some Markdown viewers do not show.',
       'Picture sizes are not saved in Markdown.'
+    ])
+  })
+})
+
+const field = (kind: string, text: string | null, extra: Record<string, unknown> = {}): DocNode => ({ type: 'field', attrs: { kind, format: null, instruction: null, text, ...extra } })
+const note = (kind: 'footnote' | 'endnote', value: string): DocNode => ({ type: 'note', attrs: { kind, content: [paragraphNode([textNode(value)])] } })
+
+/** A document with every kind of node Word files bring: fields, notes, a table of contents, sections, a text box, comments, headers. */
+const WORDISH: DocJSON = {
+  type: 'doc',
+  attrs: {
+    page: null,
+    styles: null,
+    headers: { header: { default: [paragraphNode([textNode('Report')])] }, footer: {} },
+    comments: [{ id: 'c1', author: 'Ann Example', date: null, text: 'Check' }]
+  },
+  content: [
+    { type: 'tableOfContents', attrs: { levels: 3, title: 'Contents', pages: null } },
+    paragraphNode([textNode('Revenue '), textNode('rose', [{ type: 'comment', attrs: { id: 'c1' } }]), note('footnote', 'Source: the plan.'), textNode(' on page '), field('page', '2'), textNode(', see '), field('other', 'Figure 1', { instruction: 'REF _Ref1 \\h' }), note('endnote', 'An endnote.')]),
+    { type: 'sectionBreak', attrs: { kind: 'nextPage', page: null } },
+    { type: 'textBox', attrs: { width: 144, height: null, align: null, border: '#000000', fill: null }, content: [paragraphNode([textNode('Boxed')])] }
+  ]
+}
+
+describe('Word nodes in Markdown and plain text', () => {
+  it('writes notes as footnotes, fields as their text and the rest as near as Markdown goes, and says what it leaves out', () => {
+    const { text, losses } = markdownFromDocument(WORDISH)
+
+    expect(text).toBe('Revenue rose[^1] on page 2, see Figure 1[^2]\n\n<div data-page-break></div>\n\nBoxed\n\n[^1]: Source: the plan.\n\n[^2]: An endnote.\n')
+    expect(losses).toEqual([
+      'Fields (page numbers, dates) are saved as the text they show.',
+      'Endnotes are saved as footnotes in Markdown.',
+      'Text boxes are saved as their text, without their size, border and fill.',
+      'Tables of contents are left out of Markdown.',
+      'Comments are not kept in Markdown.',
+      'Headers and footers are not saved in Markdown.'
+    ])
+  })
+
+  it('reads back the footnotes it writes as the same notes', () => {
+    const document = doc(paragraphNode([textNode('One'), note('footnote', 'First note.'), textNode(' two'), note('footnote', 'Second note.')]))
+    const { text, losses } = markdownFromDocument(document)
+
+    expect(documentFromMarkdown(text).document.content).toEqual(document.content)
+    expect(losses).toEqual([])
+  })
+
+  it('writes plain text with what fields show, notes numbered at the end, and no table of contents', () => {
+    const { text, losses } = textFromDocument(WORDISH)
+
+    expect(text).toBe('Revenue rose[1] on page 2, see Figure 1[2]\nBoxed\n\n[1] Source: the plan.\n[2] An endnote.\n')
+    expect(losses).toEqual([
+      'Formatting (headings, lists, bold, italic and fonts) is not saved in plain text.',
+      'Fields (page numbers, dates) are saved as the text they show.',
+      'Footnotes and endnotes are saved at the end, numbered in brackets.',
+      'Tables of contents are left out of plain text.',
+      'Comments are not kept in plain text.',
+      'Headers and footers are not saved in plain text.'
     ])
   })
 })

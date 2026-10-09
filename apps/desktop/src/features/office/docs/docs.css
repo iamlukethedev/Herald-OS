@@ -1,7 +1,8 @@
 /*
- * Herald Docs' page: white paper on a desk a little darker than the window's glass. What the
+ * Herald Docs' pages: white paper on a desk a little darker than the window's glass. What the
  * document's text looks like comes from its styles (doc-html.ts), the same rules its PDF uses;
- * these are the editor's own marks on the page: the caret, selection, find, handles and guides.
+ * these are the editor's own marks on the page: the paper and its headers and footers, the caret,
+ * selection, find, handles and guides.
  */
 
 .docs-desk {
@@ -13,26 +14,124 @@
 }
 
 .docs-sheet {
+  position: relative;
   flex: none;
   box-sizing: border-box;
-  background: var(--color-paper);
   color: var(--color-ink);
   color-scheme: light;
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.28),
-    0 10px 30px rgb(0 0 0 / 0.34);
   cursor: text;
   user-select: text;
 }
 
+/* Paper behind the text, a sheet a page, with the header, footer and footnotes each page shows. */
+.docs-pages {
+  position: absolute;
+  inset: 0;
+}
+
+.docs-page {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.28),
+    0 10px 30px rgb(0 0 0 / 0.34);
+}
+
+.docs-page-area {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 2px;
+  cursor: default;
+}
+
+.docs-page-area:hover {
+  outline: 1px dashed rgb(47 125 255 / 0.45);
+  outline-offset: 2px;
+}
+
+.docs-page-area[data-page-part='footer'] {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.docs-page-notes {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: default;
+}
+
+.docs-page-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout style;
+}
+
+/* The text runs down one column over the pages; a clip shows it only on them. */
+.docs-mount {
+  position: relative;
+  z-index: 1;
+}
+
+/* Where a page starts: room down to the next page's text. Hidden while the text is measured. */
+.docs-sheet .docs-page-spacer {
+  display: block;
+  height: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.docs-sheet tr.docs-page-spacer {
+  display: table-row;
+}
+
+.docs-sheet tr.docs-page-spacer > td {
+  padding: 0 !important;
+  border: 0 !important;
+  min-width: 0 !important;
+  background: none !important;
+}
+
+.docs-mount.docs-measuring .docs-page-spacer {
+  display: none !important;
+}
+
+/* A spacer between list items keeps the space a list item has after another. */
+.docs-sheet .tiptap .docs-page-spacer + li {
+  margin-top: 2pt;
+}
+
 .docs-sheet .tiptap {
-  min-height: 100%;
   outline: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   tab-size: 36pt;
   caret-color: #000;
   font-variant-ligatures: common-ligatures;
+  font-feature-settings: normal;
+  counter-reset: docs-footnote docs-endnote;
+}
+
+/* Note references number themselves in the order they come: footnotes 1, 2, 3 and endnotes i, ii, iii. */
+.docs-sheet .tiptap .doc-note-ref[data-note='footnote']::after {
+  counter-increment: docs-footnote;
+  content: counter(docs-footnote);
+}
+
+.docs-sheet .tiptap .doc-note-ref[data-note='endnote']::after {
+  counter-increment: docs-endnote;
+  content: counter(docs-endnote, lower-roman);
+}
+
+.docs-sheet .tiptap .doc-note-ref.ProseMirror-selectednode,
+.docs-sheet .tiptap .doc-field.ProseMirror-selectednode {
+  border-radius: 2px;
+  background: rgb(47 125 255 / 0.18);
 }
 
 .docs-sheet .tiptap ::selection,
@@ -181,7 +280,6 @@
   cursor: pointer;
 }
 
-.docs-sheet .ProseMirror-selectednode.doc-page-break,
 .docs-sheet hr.ProseMirror-selectednode {
   border-top-color: var(--color-accent);
 }

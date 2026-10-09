@@ -1,0 +1,10 @@
+/* The navigation pane's rows fill its scrolling list, so their focus ring goes inside them, at their own rounding. */
+.docs-nav-row:focus-visible {
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+/* The filter's field shows its own focus, around the icon and the box together. */
+.docs-nav-filter:focus-visible {
+  outline: none;
+}

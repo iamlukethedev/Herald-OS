@@ -35,6 +35,8 @@ export interface MenuSource<Model> {
   /** Whether the app opens and saves any format here (Slides does neither until .pptx). */
   canOpen?: boolean
   canSave: boolean
+  /** What File > New does instead of making a blank document (Herald Docs' template gallery). */
+  onNew?: () => void
 }
 
 export function officeMenus<Model>(source: MenuSource<Model>): OfficeMenu[] {
@@ -47,7 +49,7 @@ export function officeMenus<Model>(source: MenuSource<Model>): OfficeMenu[] {
       id: 'file',
       label: 'File',
       items: [
-        { id: 'new', label: 'New', shortcut: 'mod+n', run: () => session.create() },
+        { id: 'new', label: 'New', shortcut: 'mod+n', run: source.onNew ?? (() => session.create()) },
         { id: 'open', label: 'Open…', shortcut: 'mod+o', enabled: () => source.canOpen !== false, run: () => void session.openPicked() },
         { id: 'save', label: 'Save', shortcut: 'mod+s', enabled: () => hasDoc() && source.canSave, run: () => void session.save().catch(() => {}), dividerBefore: true },
         { id: 'save-as', label: 'Save As…', shortcut: 'mod+shift+s', enabled: () => hasDoc() && source.canSave, run: () => void session.save(doc(), { as: true }).catch(() => {}) },

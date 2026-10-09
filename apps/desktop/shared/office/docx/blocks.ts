@@ -33,10 +33,8 @@ export interface Entry {
   indent?: number
   /** A List Paragraph without a number of its own. */
   listParagraph?: boolean
-  /** The rest of the paragraph before, after a page break inside it. */
+  /** Part of the paragraph before: the rest of it after a page break inside it, or a text box in it. */
   attached?: boolean
-  /** Left out after all, as a section break that turns out to be continuous is. */
-  skip?: boolean
 }
 
 interface OpenList {
@@ -195,19 +193,18 @@ function flow(entries: readonly Entry[]): DocNode[] {
 
 /** Herald Docs blocks from the entries of a part of the file, in order. */
 export function assemble(entries: readonly Entry[]): DocNode[] {
-  const live = entries.filter((entry) => !entry.skip)
   const out: DocNode[] = []
   let start = 0
 
-  while (start < live.length) {
-    const container = live[start].container
+  while (start < entries.length) {
+    const container = entries[start].container
     let end = start + 1
 
-    while (end < live.length && live[end].container === container) {
+    while (end < entries.length && entries[end].container === container) {
       end++
     }
 
-    const blocks = flow(live.slice(start, end))
+    const blocks = flow(entries.slice(start, end))
 
     if (container === 'quote') {
       out.push({ type: 'blockquote', content: blocks })
