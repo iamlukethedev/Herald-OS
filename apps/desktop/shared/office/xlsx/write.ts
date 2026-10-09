@@ -3,7 +3,9 @@ import JSZip from 'jszip'
 import { CELL_TYPE, type CellSnapshot, cellsOf, type SheetSnapshot, type WorkbookSnapshot } from '../workbook.ts'
 import { cellName, rangeName } from './address.ts'
 import { argbOf } from './colors.ts'
+import { finishPackage } from './finish.ts'
 import { ERROR_VALUES, formulaToExcel, slideFormula } from './formula.ts'
+import { placeInWorksheet } from './opc.ts'
 import type { SheetExtras } from './read.ts'
 import { conditionalToExcel, definedNamesXml, fileLinkTarget, filterXml, linksXml, readResource, RESOURCES, type SheetLink, type UAutoFilter, type UConditionalRule, type UDefinedName, type UValidation, validationsXml } from './rules.ts'
 import { type BaseFont, composeStyles, differentDiagonals, excelFont, excelStyle, type UStyle } from './styles.ts'
@@ -13,8 +15,9 @@ import { encodeXml } from './xml.ts'
 /*
  * A Univer workbook snapshot as an .xlsx file. ExcelJS writes the cells, styles and layout into a
  * package left uncompressed; then the parts ExcelJS cannot write right (the Normal font, data
- * validation, filter conditions, links, defined names) are put in, and the package is compressed
- * once.
+ * validation, filter conditions, links, defined names) are put in, then what ExcelJS has no model
+ * for (charts, comments, the untouched parts of the file it was opened from: finish.ts), and the
+ * package is compressed once.
  */
 
 export interface XlsxWriteResult {
@@ -324,7 +327,7 @@ function writeSheet(book: ExcelJS.Workbook, workbook: WorkbookSnapshot, sheet: S
     ws.autoFilter = rangeName(filter.ref)
   }
 
-  const { xml: validations, losses: validationLosses } = validationsXml(resources.validations[sheet.id] ?? [], unitId)
+  const { xml: validations, losses: validationLosses } = validationsXml(resources.validations[sheet.id] ?? [], unitId, { date1904: workbook.dateSystem === 'date1904' })
   validationLosses.forEach((loss) => losses.add(loss))
 
   return { validations, filter: filter?.ref ? filterXml(filter) : null, links }
@@ -337,25 +340,13 @@ function normalFontXml(base: BaseFont): string {
   return `<font><sz val="${base.size}"/>${argb ? `<color rgb="${argb}"/>` : '<color theme="1"/>'}<name val="${encodeXml(base.name)}"/><family val="2"/></font>`
 }
 
-const LATER_ELEMENTS = ['printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst']
-
-/** Put `xml` into a worksheet where the schema has it: before the first of the elements that follow it. */
-function insertBeforeLater(sheetXml: string, xml: string): string {
-  if (!xml) {
-    return sheetXml
-  }
-
-  const at = LATER_ELEMENTS.map((name) => sheetXml.search(new RegExp(`<${name}[\\s/>]`))).filter((index) => index >= 0)
-  const position = at.length ? Math.min(...at) : sheetXml.lastIndexOf('</worksheet>')
-
-  return `${sheetXml.slice(0, position)}${xml}${sheetXml.slice(position)}`
-}
+/** Put data validations and hyperlinks into a worksheet where the schema has them: before the first of the elements that follow them. */
+const insertBeforeLater = (sheetXml: string, xml: string): string => (xml ? placeInWorksheet(sheetXml, 'hyperlinks', xml) : sheetXml)
 
 const RELATIONSHIPS = 'http://schemas.openxmlformats.org/package/2006/relationships'
 const HYPERLINK_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
 
-async function patchPackage(buffer: ArrayBuffer | Uint8Array, base: BaseFont, patches: SheetPatch[], definedNames: string): Promise<Uint8Array> {
-  const zip = await JSZip.loadAsync(buffer)
+async function patchPackage(zip: JSZip, base: BaseFont, patches: SheetPatch[], definedNames: string): Promise<void> {
   const styles = await zip.file('xl/styles.xml')?.async('string')
 
   if (styles && (base.name !== 'Calibri' || base.size !== 11 || base.color)) {
@@ -416,11 +407,10 @@ async function patchPackage(buffer: ArrayBuffer | Uint8Array, base: BaseFont, pa
       zip.file('xl/workbook.xml', workbook.includes('<definedNames>') ? workbook.replace('<definedNames>', definedNames.replace('</definedNames>', '')) : workbook.replace('</sheets>', `</sheets>${definedNames}`))
     }
   }
-
-  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
 }
 
-export async function xlsxFromWorkbook(workbook: WorkbookSnapshot): Promise<XlsxWriteResult> {
+/** The workbook as an .xlsx file; with the file it was opened from, the parts of that file Herald does not model come along. */
+export async function xlsxFromWorkbook(workbook: WorkbookSnapshot, options: { original?: Uint8Array } = {}): Promise<XlsxWriteResult> {
   const book = new ExcelJS.Workbook()
   const losses = new Set<string>()
   const base = baseFont(workbook)
@@ -461,7 +451,15 @@ export async function xlsxFromWorkbook(workbook: WorkbookSnapshot): Promise<Xlsx
   book.views = [{ x: 0, y: 0, width: 28800, height: 17600, firstSheet: 0, activeTab: Math.max(0, active), visibility: 'visible' }]
   const names = readResource<Record<string, UDefinedName>>(workbook.resources, RESOURCES.definedNames)
   const buffer = await book.xlsx.writeBuffer({ zip: { compression: 'STORE' } } as never)
-  const bytes = await patchPackage(buffer as ArrayBuffer, base, patches, definedNamesXml(names, order, workbook.id))
+  const zip = await JSZip.loadAsync(buffer as ArrayBuffer)
+  await patchPackage(zip, base, patches, definedNamesXml(names, order, workbook.id, losses))
+  await finishPackage(
+    zip,
+    workbook,
+    order.map((id, index) => ({ id, name: sheetNames[index], path: `xl/worksheets/sheet${index + 1}.xml` })),
+    { original: options.original, losses }
+  )
+  const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
 
   return { bytes, losses: [...losses] }
 }

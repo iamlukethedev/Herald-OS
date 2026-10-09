@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { featureWorkbook, handmadePackage } from '../../../../shared/office/xlsx/fixtures.ts'
+import { DASHBOARD, keptWorkbook } from '../../../../shared/office/xlsx/keep/fixtures.ts'
+import { openPackage } from '../../../../shared/office/xlsx/package.ts'
 import { workbookFromXlsx } from '../../../../shared/office/xlsx/read.ts'
 import { sheetsAdapter } from './adapter.ts'
 import { changeFile, type FileAccess } from './live.ts'
@@ -45,12 +47,24 @@ describe('changing a file that is not open', () => {
     await expect(changeFile('/tmp/features.xlsx', (target) => writeRange(target, { range: 'A1', values: [[1]] }), sheetsAdapter, io)).rejects.toThrow(/Patterned cell fills/)
   })
 
-  it('will not rewrite a file holding what Herald Sheets cannot keep, or lose sheets of a CSV', async () => {
-    const charted = await handmadePackage({ extraParts: { 'xl/charts/chart1.xml': '<c:chartSpace xmlns:c="c"/>' } })
-    const io = memoryFiles({ '/tmp/chart.xlsx': charted, '/tmp/list.csv': new TextEncoder().encode('a,b\n1,2\n') })
+  it('changes a file with a pivot table, pictures and charts made elsewhere, and keeps them', async () => {
+    const io = memoryFiles({ '/tmp/kept.xlsx': await keptWorkbook({ pivot: true, dashboard: DASHBOARD }) })
+    await changeFile('/tmp/kept.xlsx', (target) => writeRange(target, { range: 'C2', sheet: 'Sales', values: [[150]] }), sheetsAdapter, io)
+    const pkg = await openPackage(io.files['/tmp/kept.xlsx'])
+    const caches = await Promise.all(pkg.files.filter((file) => /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/.test(file)).map((file) => pkg.read(file)))
 
-    await expect(changeFile('/tmp/chart.xlsx', (target) => writeRange(target, { range: 'A1', values: [[1]] }), sheetsAdapter, io)).rejects.toThrow(/One chart is not kept.*open it in Herald Sheets/)
-    expect(io.files['/tmp/chart.xlsx']).toBe(charted)
+    expect(pkg.files.filter((file) => /^xl\/pivotTables\/pivotTable\d+\.xml$/.test(file))).toHaveLength(1)
+    expect(caches.every((xml) => /refreshOnLoad="1"/.test(xml ?? ''))).toBe(true)
+    expect(pkg.files.some((file) => /^xl\/media\/.+\.png$/.test(file))).toBe(true)
+    expect(pkg.files.filter((file) => /^xl\/charts\/chart(Ex)?\d+\.xml$/.test(file)).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('will not rewrite a file holding what Herald Sheets cannot keep, or lose sheets of a CSV', async () => {
+    const macros = await handmadePackage({ extraParts: { 'xl/vbaProject.bin': 'not really a project' } })
+    const io = memoryFiles({ '/tmp/macros.xlsx': macros, '/tmp/list.csv': new TextEncoder().encode('a,b\n1,2\n') })
+
+    await expect(changeFile('/tmp/macros.xlsx', (target) => writeRange(target, { range: 'A1', values: [[1]] }), sheetsAdapter, io)).rejects.toThrow(/Macros \(VBA\) are not kept.*open it in Herald Sheets/)
+    expect(io.files['/tmp/macros.xlsx']).toBe(macros)
     await expect(
       changeFile('/tmp/list.csv', async ({ univer, workbook }) => {
         workbook.insertSheet('Second')

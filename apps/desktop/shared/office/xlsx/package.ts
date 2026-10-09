@@ -12,7 +12,7 @@ export interface PackageSheet {
   path: string
   state: 'visible' | 'hidden' | 'veryHidden'
   kind: 'worksheet' | 'chartsheet' | 'dialogsheet' | 'macrosheet' | 'other'
-  /** The worksheet's XML around its cells: before `<sheetData>` and after `</sheetData>`. */
+  /** The worksheet's XML around its cells: before `<sheetData>`, and from `</sheetData>` (or after an empty `<sheetData/>`) on. */
   head: string
   tail: string
   /** The sheet's own relationships, by type (the last part of the type URI). */
@@ -38,6 +38,8 @@ export interface XlsxPackage {
   themeXml?: string
   stylesXml?: string
   read: (path: string) => Promise<string | undefined>
+  /** A part as it is stored, for pictures and other binary parts. */
+  binary: (path: string) => Promise<Uint8Array | undefined>
 }
 
 const relationshipType = (type: string): string => type.split('/').pop() ?? type
@@ -109,7 +111,9 @@ export async function openPackage(bytes: Uint8Array | ArrayBuffer): Promise<Xlsx
     const kind = (['worksheet', 'chartsheet', 'dialogsheet', 'macrosheet'] as const).find((type) => type === rel?.type || (type === 'macrosheet' && rel?.type === 'xlMacrosheet')) ?? 'other'
     const xml = kind === 'worksheet' ? ((await read(path)) ?? '') : ''
     const start = xml.indexOf('<sheetData')
-    const end = xml.lastIndexOf('</sheetData>')
+    // A sheet without cells has an empty <sheetData/>: its tail is what follows it.
+    const empty = start >= 0 ? /^<sheetData\b[^>]*\/>/.exec(xml.slice(start, start + 256)) : null
+    const end = empty ? start + empty[0].length : xml.lastIndexOf('</sheetData>')
     const state = attributes.state === 'hidden' || attributes.state === 'veryHidden' ? attributes.state : 'visible'
 
     sheets.push({
@@ -145,6 +149,7 @@ export async function openPackage(bytes: Uint8Array | ArrayBuffer): Promise<Xlsx
     workbookXml,
     themeXml: themePath ? await read(themePath) : undefined,
     stylesXml: stylesPath ? await read(stylesPath) : undefined,
-    read
+    read,
+    binary: async (path) => zip.file(path)?.async('uint8array')
   }
 }

@@ -1,5 +1,5 @@
 import type { ConditionalFormattingOptions, ConditionalFormattingRule, Style } from 'exceljs'
-import { type CellRange, cellName, parseRange, parseRanges, rangeName, splitSheet } from './address.ts'
+import { type CellRange, cellName, parseCell, parseRange, parseRanges, rangeName, splitSheet } from './address.ts'
 import { argbOf, type ExcelColor, type Palette, resolveColor } from './colors.ts'
 import { formulaFromExcel, formulaToExcel } from './formula.ts'
 import { excelFont, fontStyle, type UStyle } from './styles.ts'
@@ -143,30 +143,107 @@ export function validationsFromXml(tail: string): UValidation[] {
 
 const sqref = (ranges: CellRange[]): string => ranges.map(rangeName).join(' ')
 
-/** A rule's formula as the file writes it: a list as `"a,b"`, a formula without its "=". */
-function validationFormula(rule: UValidation, formula: string, unitId: string): string {
+/** Text for an attribute value: line breaks and tabs as character references, as a parser would turn them into spaces. */
+export const attributeXml = (text: string): string => encodeXml(text).replace(/\r/g, '&#13;').replace(/\n/g, '&#10;').replace(/\t/g, '&#9;')
+
+const DAY = 86400000
+const EPOCH = { date1900: Date.UTC(1899, 11, 30), date1904: Date.UTC(1904, 0, 1) }
+
+/** "2024-01-31" (or with slashes, or a time after it) as Excel's day number; null for anything else. */
+export function serialOfDate(text: string, date1904 = false): number | null {
+  const match = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(text.trim())
+
+  if (!match) {
+    return null
+  }
+
+  const [year, month, day, hours, minutes, seconds] = match.slice(1).map((part) => Number(part ?? 0))
+  const time = Date.UTC(year, month - 1, day, hours, minutes, seconds)
+  const date = new Date(time)
+
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day || hours > 23 || minutes > 59 || seconds > 59) {
+    return null
+  }
+
+  return (time - (date1904 ? EPOCH.date1904 : EPOCH.date1900)) / DAY
+}
+
+/** Excel's day number as "2024-01-31", with the time when it has one ("2024-01-31 08:30"). */
+export function dateOfSerial(serial: number, date1904 = false): string {
+  const date = new Date(Math.round((date1904 ? EPOCH.date1904 : EPOCH.date1900) + serial * DAY))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const day = `${String(date.getUTCFullYear()).padStart(4, '0')}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+  const time = date.getUTCHours() || date.getUTCMinutes() || date.getUTCSeconds() ? ` ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}${date.getUTCSeconds() ? `:${pad(date.getUTCSeconds())}` : ''}` : ''
+
+  return `${day}${time}`
+}
+
+/** "08:30" or "08:30:15" as the part of a day Excel keeps a time as; null for anything else. */
+function serialOfTime(text: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim())
+  const [hours, minutes, seconds] = (match?.slice(1) ?? []).map((part) => Number(part ?? 0))
+
+  return match && hours < 24 && minutes < 60 && seconds < 60 ? (hours * 3600 + minutes * 60 + seconds) / 86400 : null
+}
+
+const numberText = (n: number): string => String(Number(n.toFixed(10)))
+
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/** A list rule's items, as Univer keeps them (a JSON list, or text with commas). */
+export function listOf(formula: string): string[] {
+  const parsed = parsedJson(formula)
+
+  return (Array.isArray(parsed) ? parsed.map(String) : formula.split(',')).map((item) => item.trim()).filter(Boolean)
+}
+
+/** The most characters Excel keeps of a rule's texts, and of a list written into the rule. */
+const MESSAGE_LIMITS = { promptTitle: 32, prompt: 255, errorTitle: 32, error: 225 } as const
+const LIST_LIMIT = 255
+
+/** A rule's formula as the file writes it: a list as `"a,b"`, a date or time as Excel's number, a formula without its "="; null when the file cannot hold it. */
+function validationFormula(rule: UValidation, formula: string, unitId: string, date1904: boolean, losses: Set<string>): string | null {
   if (formula.startsWith('=')) {
     return formulaToExcel(formula, unitId)
   }
 
   if (rule.type === 'list' || rule.type === 'listMultiple') {
-    let items: string[]
+    const items = listOf(formula)
 
-    try {
-      const parsed = JSON.parse(formula)
-      items = Array.isArray(parsed) ? parsed.map(String) : formula.split(',')
-    } catch {
-      items = formula.split(',')
+    if (items.some((item) => item.includes(','))) {
+      losses.add('List items with commas in them are split at the commas: Excel separates a list’s items with commas.')
     }
 
-    return `"${items.map((item) => item.trim()).filter(Boolean).join(',').replace(/"/g, '""')}"`
+    if (items.join(',').length > LIST_LIMIT) {
+      losses.add(`Dropdown lists longer than ${LIST_LIMIT} characters written into a rule are not saved: put the items in cells and make the list from them.`)
+
+      return null
+    }
+
+    return `"${items.join(',').replace(/"/g, '""')}"`
+  }
+
+  if ((rule.type === 'date' || rule.type === 'time') && !NUMBER.test(formula)) {
+    const serial = rule.type === 'time' ? (serialOfTime(formula) ?? serialOfDate(formula, date1904)) : serialOfDate(formula, date1904)
+
+    if (serial === null) {
+      losses.add(`A ${rule.type} validation rule with a ${rule.type} Excel cannot read (“${formula}”) is not saved.`)
+    }
+
+    return serial === null ? null : numberText(serial)
   }
 
   return formula
 }
 
-/** A sheet's rules as a `<dataValidations>` element, and what it could not keep. */
-export function validationsXml(rules: UValidation[], unitId: string): { xml: string; losses: string[] } {
+/** A sheet's rules as a `<dataValidations>` element, and what it could not keep; dates count from 1904 in a workbook that does. */
+export function validationsXml(rules: UValidation[], unitId: string, options: { date1904?: boolean } = {}): { xml: string; losses: string[] } {
   const losses = new Set<string>()
   const written: string[] = []
 
@@ -190,24 +267,44 @@ export function validationsXml(rules: UValidation[], unitId: string): { xml: str
       continue
     }
 
+    const texts = Object.fromEntries(
+      (Object.keys(MESSAGE_LIMITS) as (keyof typeof MESSAGE_LIMITS)[]).map((key) => {
+        const text = rule[key]
+
+        if (text && text.length > MESSAGE_LIMITS[key]) {
+          losses.add('Validation messages longer than Excel keeps (32 characters for a title, 255 for an input message, 225 for an error message) are shortened.')
+
+          return [key, text.slice(0, MESSAGE_LIMITS[key])]
+        }
+
+        return [key, text || undefined]
+      })
+    ) as Partial<Record<keyof typeof MESSAGE_LIMITS, string>>
+    const twoValues = !['list', 'custom', 'none'].includes(type) && (rule.operator === undefined || rule.operator === 'between' || rule.operator === 'notBetween')
+    const formulas = (['formula1', 'formula2'] as const)
+      .filter((key) => type !== 'none' && rule[key] !== undefined && rule[key] !== '' && (key === 'formula1' || twoValues))
+      .map((key) => ({ key, text: validationFormula({ ...rule, type }, rule[key]!, unitId, Boolean(options.date1904), losses) }))
+
+    // A rule whose values the file cannot hold is left out whole rather than saved meaning something else.
+    if (formulas.some((formula) => formula.text === null)) {
+      continue
+    }
+
     const attributes: [string, string | undefined][] = [
       ['type', type === 'none' ? undefined : type],
       ['errorStyle', rule.errorStyle === 2 ? 'warning' : rule.errorStyle === 0 ? 'information' : undefined],
-      ['operator', rule.operator && rule.operator !== 'between' && type !== 'list' && type !== 'custom' ? rule.operator : undefined],
+      ['operator', rule.operator && rule.operator !== 'between' && type !== 'list' && type !== 'custom' && type !== 'none' ? rule.operator : undefined],
       ['allowBlank', rule.allowBlank ? '1' : undefined],
       ['showDropDown', type === 'list' && rule.showDropDown === false ? '1' : undefined],
       ['showInputMessage', rule.showInputMessage ? '1' : undefined],
       ['showErrorMessage', rule.showErrorMessage ? '1' : undefined],
-      ['errorTitle', rule.errorTitle],
-      ['error', rule.error],
-      ['promptTitle', rule.promptTitle],
-      ['prompt', rule.prompt],
+      ['errorTitle', texts.errorTitle],
+      ['error', texts.error],
+      ['promptTitle', texts.promptTitle],
+      ['prompt', texts.prompt],
       ['sqref', sqref(rule.ranges)]
     ]
-    const formulas = (['formula1', 'formula2'] as const)
-      .filter((key) => rule[key] !== undefined && rule[key] !== '' && !(key === 'formula2' && (type === 'list' || type === 'custom')))
-      .map((key) => `<${key}>${encodeXml(validationFormula({ ...rule, type }, rule[key]!, unitId))}</${key}>`)
-    written.push(`<dataValidation${attributes.map(([key, value]) => (value !== undefined ? ` ${key}="${encodeXml(value)}"` : '')).join('')}>${formulas.join('')}</dataValidation>`)
+    written.push(`<dataValidation${attributes.map(([key, value]) => (value !== undefined ? ` ${key}="${attributeXml(value)}"` : '')).join('')}>${formulas.map(({ key, text }) => `<${key}>${encodeXml(text!)}</${key}>`).join('')}</dataValidation>`)
   }
 
   return { xml: written.length ? `<dataValidations count="${written.length}">${written.join('')}</dataValidations>` : '', losses: [...losses] }
@@ -620,6 +717,46 @@ export interface UDefinedName {
 
 export const WORKBOOK_SCOPE = 'AllDefaultWorkbook'
 
+const NAME_START = /^[\p{L}\p{Nl}_\\]/u
+const NAME_OTHER = /[^\p{L}\p{M}\p{Nl}\p{Nd}\p{Pc}\\.?]/gu
+
+/** Why Excel does not take `name` as a defined name (as ECMA-376 has names), or null when it does. */
+export function nameProblem(name: string): string | null {
+  if (!name) {
+    return 'Give the name'
+  }
+
+  const shown = name.length > 40 ? `${name.slice(0, 40)}…` : name
+
+  if (name.length > 255) {
+    return `“${shown}” is ${name.length} characters long; a name has at most 255`
+  }
+
+  if (!NAME_START.test(name)) {
+    return `“${shown}” cannot be a name: a name starts with a letter, an underscore (_) or a backslash (\\)`
+  }
+
+  const others = [...new Set(name.slice(1).match(NAME_OTHER) ?? [])]
+
+  if (others.length) {
+    return `“${shown}” cannot be a name: it has ${others.map((char) => (char === ' ' ? 'a space' : `“${char}”`)).join(' and ')}, and after its first character a name has only letters, digits, periods, underscores, backslashes and question marks`
+  }
+
+  if (parseCell(name)) {
+    return `“${name}” cannot be a name: it is a cell reference`
+  }
+
+  if (/^(R\d*C\d*|R\d*|C\d*)$/i.test(name)) {
+    return /^[RC]$/i.test(name) ? `“${name}” cannot be a name: R and C stand for the current row and column` : `“${name}” cannot be a name: it is a cell reference in R1C1 style`
+  }
+
+  if (/^(TRUE|FALSE)$/i.test(name)) {
+    return `“${name}” cannot be a name: it is a logical value`
+  }
+
+  return null
+}
+
 const isReference = (text: string): boolean => {
   const { ref } = splitSheet(text)
 
@@ -665,16 +802,34 @@ export function definedNamesFromPackage(names: { name: string; formula: string; 
   return { names: found, print }
 }
 
-/** Univer's defined names as a `<definedNames>` element for workbook.xml. */
-export function definedNamesXml(names: Record<string, UDefinedName> | null, sheetOrder: string[], unitId: string): string {
-  const entries = Object.values(names ?? {})
-    .filter((entry) => entry?.name && entry.formulaOrRefString)
-    .map((entry) => {
-      const local = entry.localSheetId && entry.localSheetId !== WORKBOOK_SCOPE ? sheetOrder.indexOf(entry.localSheetId) : -1
-      const formula = entry.formulaOrRefString.startsWith('=') ? formulaToExcel(entry.formulaOrRefString, unitId) : entry.formulaOrRefString
+/** Univer's defined names as a `<definedNames>` element for workbook.xml; names Excel would not open the file with are left out, in `losses`. */
+export function definedNamesXml(names: Record<string, UDefinedName> | null, sheetOrder: string[], unitId: string, losses?: Set<string>): string {
+  const seen = new Set<string>()
+  const entries: string[] = []
 
-      return `<definedName name="${encodeXml(entry.name)}"${local >= 0 ? ` localSheetId="${local}"` : ''}${entry.hidden ? ' hidden="1"' : ''}${entry.comment ? ` comment="${encodeXml(entry.comment)}"` : ''}>${encodeXml(formula)}</definedName>`
-    })
+  for (const entry of Object.values(names ?? {})) {
+    if (!entry?.name || !entry.formulaOrRefString) {
+      continue
+    }
+
+    const scoped = Boolean(entry.localSheetId) && entry.localSheetId !== WORKBOOK_SCOPE
+    const local = scoped ? sheetOrder.indexOf(entry.localSheetId!) : -1
+    const key = `${local}\u0000${entry.name.toLowerCase()}`
+
+    // A name of a sheet that is gone goes with it.
+    if (scoped && local < 0) {
+      continue
+    }
+
+    if (nameProblem(entry.name) || seen.has(key)) {
+      losses?.add(seen.has(key) ? 'Two names spelled alike for the same sheet or the whole workbook are saved as one.' : `The name “${entry.name}” is not saved: Excel does not allow it.`)
+      continue
+    }
+
+    seen.add(key)
+    const formula = entry.formulaOrRefString.startsWith('=') ? formulaToExcel(entry.formulaOrRefString, unitId) : entry.formulaOrRefString
+    entries.push(`<definedName name="${attributeXml(entry.name)}"${local >= 0 ? ` localSheetId="${local}"` : ''}${entry.hidden ? ' hidden="1"' : ''}${entry.comment ? ` comment="${attributeXml(entry.comment)}"` : ''}>${encodeXml(formula)}</definedName>`)
+  }
 
   return entries.length ? `<definedNames>${entries.join('')}</definedNames>` : ''
 }

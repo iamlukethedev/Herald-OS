@@ -4,9 +4,11 @@ import { quoteSheet } from '../../../../shared/office/xlsx/address.ts'
 import type { EditorHandle, OfficeDocument } from '../types.ts'
 import { type Mounted, mountIn, unmount } from '../univer/mount.ts'
 import { createSheetsEngine, type SheetsEngine } from '../univer/sheets.ts'
+import { attachFeatures, setupFeatures } from './features.ts'
 import { setLiveEngine } from './live.ts'
 import { activeSheetOf } from './print.ts'
 import { sheetsSession } from './store.ts'
+import { SheetsDialog, SheetsPanel } from './ui/overlay.tsx'
 
 /** One workbook in Univer Sheets, its formulas worked out in a worker. */
 export function SheetsEditor({ doc }: { doc: OfficeDocument<WorkbookSnapshot> }) {
@@ -15,9 +17,10 @@ export function SheetsEditor({ doc }: { doc: OfficeDocument<WorkbookSnapshot> })
   useEffect(() => {
     let mounted: Mounted<SheetsEngine> | null = null
     let off = () => {}
+    let detach = () => {}
     let changedAt = -Infinity
     const start = (model: WorkbookSnapshot) => {
-      mounted = mountIn(host.current!, (element) => createSheetsEngine(element, model, { worker: true }))
+      mounted = mountIn(host.current!, (element) => createSheetsEngine(element, model, { worker: true, setup: setupFeatures }))
       const { engine } = mounted
       const active = activeSheetOf(model)
 
@@ -31,9 +34,11 @@ export function SheetsEditor({ doc }: { doc: OfficeDocument<WorkbookSnapshot> })
         sheetsSession.changed(doc)
       })
       setLiveEngine(doc.key, engine)
+      detach = attachFeatures(engine, doc.key)
     }
     const stop = (later: boolean) => {
       off()
+      detach()
       setLiveEngine(doc.key, null)
       unmount(mounted, later)
       mounted = null
@@ -87,5 +92,11 @@ export function SheetsEditor({ doc }: { doc: OfficeDocument<WorkbookSnapshot> })
     }
   }, [doc.key])
 
-  return <div ref={host} className="relative min-w-0 flex-1" />
+  return (
+    <div className="relative flex min-w-0 flex-1">
+      <div ref={host} className="relative min-w-0 flex-1" />
+      <SheetsPanel docKey={doc.key} />
+      <SheetsDialog docKey={doc.key} />
+    </div>
+  )
 }

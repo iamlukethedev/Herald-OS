@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { CELL_TYPE, type CellMatrix, type CellSnapshot, type SheetSnapshot, type WorkbookSnapshot } from '../workbook.ts'
 import { parseRange } from './address.ts'
 import { type ExcelColor, indexedColors, type Palette, resolveColor, themeColors } from './colors.ts'
+import { readExtras } from './extras.ts'
 import { inspectPackage } from './fidelity.ts'
 import { ERROR_VALUES, formulaFromExcel } from './formula.ts'
 import { openPackage, type PackageSheet } from './package.ts'
@@ -595,6 +596,16 @@ export async function workbookFromXlsx(input: Uint8Array | ArrayBuffer, options:
   addResource(RESOURCES.filter, filters)
   addResource(RESOURCES.validation, validations)
   addResource(RESOURCES.conditional, conditional)
+  const extras = await readExtras(pkg, { unitId: options.id, ids, notes })
+  resources.push(...extras.resources)
+
+  for (const sheet of sheets) {
+    const custom = sheet.custom as { herald?: Record<string, unknown> } | undefined
+
+    if (extras.sheets[sheet.id]) {
+      sheet.custom = { ...custom, herald: { ...extras.sheets[sheet.id], ...custom?.herald } }
+    }
+  }
 
   const activeTab = ids[pkg.activeTab] ? pkg.activeTab : ids.findIndex((sheetId, index) => sheetId && pkg.sheets[index].state === 'visible')
   const properties = Object.fromEntries(
@@ -618,7 +629,13 @@ export async function workbookFromXlsx(input: Uint8Array | ArrayBuffer, options:
     ...(pkg.date1904 ? { dateSystem: 'date1904' } : {}),
     ...(resources.length ? { resources } : {}),
     ...(activeTab >= 0 && ids[activeTab] ? { activeSheetId: ids[activeTab] } : {}),
-    ...(Object.keys(properties).length || created ? { custom: { herald: { properties: { ...properties, ...(created ? { created } : {}) } } } } : {})
+    custom: {
+      herald: {
+        ...(Object.keys(properties).length || created ? { properties: { ...properties, ...(created ? { created } : {}) } } : {}),
+        // Charts made later take the file's theme colours, which the cells only hold resolved.
+        theme: { accents: palette.theme.slice(4, 10).map((rgb) => `#${rgb}`) }
+      }
+    }
   }
 
   return { workbook, notes: [...report.notes, ...notes] }

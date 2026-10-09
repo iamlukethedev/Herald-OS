@@ -13,7 +13,7 @@ self.onmessage = async (event: MessageEvent<XlsxRequest>) => {
     if (request.kind === 'read') {
       post({ id: request.id, ok: true, read: await workbookFromXlsx(request.bytes, request.options) })
     } else {
-      const written = await xlsxFromWorkbook(request.workbook)
+      const written = await xlsxFromWorkbook(request.workbook, { original: request.original })
       post({ id: request.id, ok: true, written }, [written.bytes.buffer as ArrayBuffer])
     }
   } catch (error) {

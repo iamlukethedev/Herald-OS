@@ -8,7 +8,7 @@ import type { XlsxWriteResult } from '../../../../shared/office/xlsx/write.ts'
  * Where there are no workers (tests), the same converters run here.
  */
 
-type Work = { kind: 'read'; bytes: Uint8Array; options: { id: string; name: string; extension?: string } } | { kind: 'write'; workbook: WorkbookSnapshot }
+type Work = { kind: 'read'; bytes: Uint8Array; options: { id: string; name: string; extension?: string } } | { kind: 'write'; workbook: WorkbookSnapshot; original?: Uint8Array }
 
 export type XlsxRequest = Work & { id: number }
 
@@ -17,6 +17,9 @@ export type XlsxResponse = { id: number; ok: true; read?: XlsxReadResult; writte
 let worker: Worker | null = null
 let nextId = 0
 const waiting = new Map<number, { resolve: (response: XlsxResponse) => void; reject: (error: Error) => void }>()
+/** The file each workbook was read from, by the workbook's id: saving it carries over the parts Herald does not model. */
+const originals = new Map<string, Uint8Array>()
+const KEPT_ORIGINALS = 24
 
 function start(): Worker | null {
   if (typeof Worker === 'undefined') {
@@ -60,6 +63,16 @@ function ask(request: Work): Promise<XlsxResponse> | null {
 
 /** Read an .xlsx file into a workbook snapshot, with what Herald Sheets could not keep. */
 export async function readXlsx(bytes: Uint8Array, options: { id: string; name: string; extension?: string }): Promise<XlsxReadResult> {
+  originals.set(options.id, bytes)
+
+  for (const id of originals.keys()) {
+    if (originals.size <= KEPT_ORIGINALS) {
+      break
+    }
+
+    originals.delete(id)
+  }
+
   const response = await ask({ kind: 'read', bytes, options })?.catch(() => null)
 
   if (!response) {
@@ -75,10 +88,11 @@ export async function readXlsx(bytes: Uint8Array, options: { id: string; name: s
 
 /** Write a workbook snapshot as an .xlsx file, with what the file cannot keep. */
 export async function writeXlsx(workbook: WorkbookSnapshot): Promise<XlsxWriteResult> {
-  const response = await ask({ kind: 'write', workbook })?.catch(() => null)
+  const original = originals.get(workbook.id)
+  const response = await ask({ kind: 'write', workbook, original })?.catch(() => null)
 
   if (!response) {
-    return (await import('../../../../shared/office/xlsx/write.ts')).xlsxFromWorkbook(workbook)
+    return (await import('../../../../shared/office/xlsx/write.ts')).xlsxFromWorkbook(workbook, { original })
   }
 
   if (!response.ok) {
