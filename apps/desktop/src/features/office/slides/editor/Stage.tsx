@@ -407,6 +407,7 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
     <div
       ref={scroller}
       tabIndex={0}
+      data-slides-stage=""
       role="application"
       aria-label={`Slide ${doc.index + 1} of ${deck.slides.length}`}
       className="relative min-h-0 min-w-0 flex-1 overflow-auto outline-none"

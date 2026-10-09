@@ -8,6 +8,7 @@ import { type CellRef, fitRow, withCell } from '../tables.ts'
 import { fitText } from '../view/fit.ts'
 import { flowCss, styleText } from '../view/text-style.ts'
 import { $textRevision, $textSession, editStartFor, requestEditStart, type TextSession } from './active.ts'
+import { keepFocusHome, STAGE } from './focus.ts'
 import { bodyToDoc, paragraphsFromDoc, sameParagraphs } from './rich-text.ts'
 import { slideTextExtensions } from './tiptap.ts'
 
@@ -226,6 +227,8 @@ export function TextEditor({ doc, slideId, elementId, cell = null, onTab, body, 
         done = true
         record()
       }
+
+      keepFocusHome(mount.closest<HTMLElement>(STAGE), mount)
 
       if ($textSession.get() === session) {
         $textSession.set(null)
