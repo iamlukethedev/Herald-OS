@@ -416,9 +416,9 @@ Compositor lacks. What only Herald has goes in fields of its own beside a record
 
 ## ADR-021: Herald Office: Sheets on Univer, Docs on TipTap, Slides on a slide editor of its own
 
-**Status: Proposed.** Rewritten for what Herald Office's second phase built, and extended with
-the depth phases of Sheets, Docs and Slides; it becomes final once the three apps have been polished
-and shipped.
+**Status: Accepted.** Rewritten for what Herald Office's second phase built, extended with the
+depth phases of Sheets, Docs and Slides, and final with the polish phase: printing, the
+measurements below on the Mac and on Herald OS Linux under software rendering, and the licences.
 
 Herald OS needs documents, spreadsheets and presentations that Hermes can work in while the person
 watches, and that open and save the files people already have. Herald Docs, Herald Sheets and
@@ -755,6 +755,35 @@ themselves go through the command registry (ADR-014).
   and header and footer panels and the presenter view, PptxGenJS with the finishing pass from
   0.29 MB to 0.31 MB, and the reader from 44 KB to 61 KB; the shell's main chunk grew by 0.06 MB,
   the commands for all three apps included.
+- **Printing through the print view.** File > Print (Cmd or Ctrl+P) prints the same print view as
+  Export as PDF: main writes it to a file, loads it in a hidden window with scripts off, and hands
+  it to the system's print dialog instead of to `printToPDF`, so paper and PDF cannot differ. The
+  page's CSS sets each page's size and margins and the printer's paper takes them, scaled to fit:
+  Docs prints its pages with their headers and footers, Slides one slide a page, and Sheets
+  follows the sheet's page setup from its file (paper, orientation, margins, scale or fitting to
+  so many pages, centring across, and the header and footer as page margin boxes with page
+  numbers). Where the system has no printer, as on Herald OS Linux without a print server,
+  Electron shows no dialog at all, so Print asks where a PDF goes and writes the page it loaded
+  there. Printing needs no library: Chromium lays the pages out as it does for the PDF.
+- **What polish measured, and changed.** On the Mac, with the production bundle: a window is up
+  with its document 0.21 s (Docs), 0.31 s (Sheets) and 0.20 s (Slides) after the first open, and
+  under 0.1 s when opened again; a 51-page document opens in 0.12 s, a 50,000-cell workbook in
+  0.22 s with its formulas worked out by 0.9 s, and a 40-slide deck in 0.05 s. What a window
+  loads to open fell where the depth phases had grown it: Docs from 1.0 MB to 0.81 MB (0.33 MB to
+  0.27 MB compressed), its panels and dialogs loading when first opened; Slides from 0.95 MB to
+  0.41 MB (0.31 MB to 0.14 MB), TipTap loading once the deck is up; and the formula worker every
+  workbook starts from 7.2 MB to 2.8 MB, built as an ES module so Univer's lazily loaded
+  hyphenation dictionaries stay out of it. A workbook gets its Univer and worker the first time
+  its tab is shown, and a closed one lets them go (Univer's toolbar had kept every closed workbook
+  alive): reopening Sheets with ten workbooks open builds one editor instead of ten (0.08 s
+  instead of 0.63 s), and each further workbook costs 30 MB of the window's processes instead of
+  46 MB. Typing in a long document lays out only what moved when a keystroke changes no height:
+  15 ms from key to frame at 211 pages instead of 37 ms, 10 ms at 51 pages instead of 13 ms. On
+  Herald OS Linux in a QEMU VM under software rendering, in panels mode, each app opens in about
+  0.5 s, files of the same sizes in 0.31 s, 0.87 s and 0.30 s, a keystroke at 50 pages reaches the
+  screen in 64 ms (80 ms at the 95th percentile, 7 ms of it the window's work), and a window with
+  the 50,000-cell workbook holds 340 MB; Hermes's commands land in the window that has the
+  document, in under 0.1 s.
 - **Hermes in the depth features.** Each depth feature is a command on its app's model API (35
   for Sheets, 26 for Docs, 25 for Slides), so Hermes, voice, the command bar and `herald-os os`
   reach them alike, and the bridge's `sheets`, `docs` and `slides` tools have an action for each.
@@ -798,7 +827,14 @@ themselves go through the command registry (ADR-014).
   licensed MIT or GPL-3.0, is used under MIT). JSZip brings pako, which is MIT and Zlib; the zlib
   licence is permissive, and Herald already ships pako with Herald Canvas. Everything else they
   bring in is MIT, Apache-2.0, ISC or BSD: ExcelJS's old unzipper is pinned to the 0.12 line and
-  its uuid to 11.1.1, so npm audit finds nothing new.
+  its uuid to 11.1.1, so npm audit finds nothing new. NOTICE lists every package the renderer,
+  main and the prebuilt ExcelJS, docx and JSZip files bundle, with its licence and copyright line,
+  and `build/licenses` carries the texts that BSD-3-Clause and Apache-2.0 code asks for (ECharts
+  with the d3 code it declares, ZRender, Univer). The polish phase left three more renderer-only
+  libraries out of `app.asar` the same way, though not Office's: onnxruntime-web (138 MB), the
+  Tabler icon sets (67 MB) and ag-psd, with an 18 MB cache in `app.asar.unpacked`. An unsigned,
+  unpacked macOS build went from 709 MB to 477 MB, `app.asar` from 400 MB to 186 MB and
+  `app.asar.unpacked` from 21 MB to 2.6 MB.
 
 Alternatives considered:
 
