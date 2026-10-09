@@ -165,6 +165,7 @@ export function SheetsWindow({ payload }: { payload?: Record<string, unknown> })
       onDropFile={onDropFile}
       start={{ icon: 'sheets', blurb: 'Excel workbooks and CSV files, with formulas, number formats, sorting and filters worked out as you type.', newLabel: 'New spreadsheet', hint: 'Or drop an Excel or CSV file here.' }}
       renderEditor={(doc) => <SheetsEditor doc={doc} />}
+      mountWhenShown
     />
   )
 }

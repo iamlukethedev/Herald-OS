@@ -101,13 +101,17 @@ export async function showDocument<Model>(app: OfficeApp, session: OfficeSession
   return waitForEditor(doc)
 }
 
-/** A document closed with its window (desktop mode keeps it until Herald quits) gets its editor back before a change, so the change is one step to undo there. */
+/**
+ * A document closed with its window (desktop mode keeps it until Herald quits), or one its window
+ * has not shown yet, gets its editor before a change, so the change is one step to undo there.
+ */
 export async function withEditor<Model>(app: OfficeApp, doc: OfficeDocument<Model>): Promise<boolean> {
   if (doc.editor) {
     return true
   }
 
   openApp(app)
+  loadedSessions.get(app)?.wake(doc.key)
 
   return waitForEditor(doc)
 }

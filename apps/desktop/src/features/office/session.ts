@@ -21,8 +21,8 @@ export { officeAbilities }
 
 export type OfficeSession<Model> = ReturnType<typeof createSession<Model>>
 
-/** The Office sessions loaded in this window, as Hermes's commands read them: what is open, and what is in front. */
-export const loadedSessions = new Map<OfficeApp, { active: () => string | null; summaries: () => OfficeDocSummary[] }>()
+/** The Office sessions loaded in this window, as Hermes's commands read them: what is open, what is in front, and a way to give a document its editor. */
+export const loadedSessions = new Map<OfficeApp, { active: () => string | null; summaries: () => OfficeDocSummary[]; wake: (key: string) => void }>()
 
 export function createSession<Model>(adapter: OfficeAdapter<Model>) {
   const appName = OFFICE_APP_NAMES[adapter.app]
@@ -32,6 +32,8 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
   const $notice = atom<Notice | null>(null)
   const $conflict = atom<Conflict | null>(null)
   const $dialog = atom<OfficeDialog | null>(null)
+  /** Documents a command wants an editor for though they are not in front (a window that mounts editors only when shown gives them one). */
+  const $awake = atom<ReadonlySet<string>>(new Set())
   /** Per document: its watch on disk, its autosave timer, the save in flight, and how many edits it has had. */
   const tracked = new Map<string, { watchId: string | null; timer: ReturnType<typeof setTimeout> | null; saving: Promise<boolean> | null; edits: number }>()
   let untitled = 0
@@ -140,6 +142,12 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     if (find(key)) {
       $activeKey.set(key)
       report(true)
+    }
+  }
+
+  function wake(key: string): void {
+    if (find(key) && !$awake.get().has(key)) {
+      $awake.set(new Set([...$awake.get(), key]))
     }
   }
 
@@ -410,6 +418,10 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
       $conflict.set(null)
     }
 
+    if ($awake.get().has(key)) {
+      $awake.set(new Set([...$awake.get()].filter((awake) => awake !== key)))
+    }
+
     // The view unmounts with the tab; its editor goes after this frame, outside React's commit.
     if (doc?.editor) {
       const editor = doc.editor
@@ -481,7 +493,7 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
   }
 
   window.heraldOS.office.onChanged((event) => void onChanged(event))
-  loadedSessions.set(adapter.app, { active: () => $activeKey.get(), summaries })
+  loadedSessions.set(adapter.app, { active: () => $activeKey.get(), summaries, wake })
 
-  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, active, find, notify, report, summaries, create, open, openPicked, activate, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf, print }
+  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, $awake, active, find, notify, report, summaries, create, open, openPicked, activate, wake, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf, print }
 }

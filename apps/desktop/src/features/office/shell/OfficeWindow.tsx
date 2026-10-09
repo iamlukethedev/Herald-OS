@@ -180,20 +180,34 @@ export interface OfficeWindowProps<Model> {
   onDropFile?: (file: string) => void
   /** What the person's New does (the tab bar's + and the start screen); a blank document without one. A `command: 'new'` payload is always blank. */
   onNew?: () => void
-  /** One document's editor. Every open document keeps its editor; only the active one shows. */
+  /** One document's editor. Every open document keeps its editor once it has one; only the active one shows. */
   renderEditor: (doc: OfficeDocument<Model>, active: boolean) => ReactNode
+  /**
+   * A document gets its editor the first time it is in front (or a command wants one), not when the
+   * window opens: for editors that cost a lot each, as a workbook's Univer and its worker do.
+   */
+  mountWhenShown?: boolean
   /** A bar under the menus for the active document (formatting tools and the like). */
   toolbar?: (doc: OfficeDocument<Model>) => ReactNode
 }
 
 /** The frame Herald Docs, Sheets and Slides share: menus, tabs, the editors, the status bar and dialogs. */
-export function OfficeWindow<Model>({ session, menus, payload, start, noun, canOpen, onDropFile, onNew, renderEditor, toolbar }: OfficeWindowProps<Model>) {
+export function OfficeWindow<Model>({ session, menus, payload, start, noun, canOpen, onDropFile, onNew, renderEditor, mountWhenShown = false, toolbar }: OfficeWindowProps<Model>) {
   const documents = useStore(session.$documents)
   const activeKey = useStore(session.$activeKey)
   const dialog = useStore(session.$dialog)
   const conflict = useStore(session.$conflict)
+  const awake = useStore(session.$awake)
   const root = useRef<HTMLDivElement>(null)
   const doc = documents.find((entry) => entry.key === activeKey) ?? null
+  // Documents this window has shown keep their editors (and their undo) until they close.
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set(activeKey ? [activeKey] : []))
+
+  if (activeKey && !shown.has(activeKey)) {
+    setShown(new Set([...shown, activeKey]))
+  }
+
+  const hasEditor = (entry: OfficeDocument<Model>) => !mountWhenShown || entry === doc || shown.has(entry.key) || awake.has(entry.key)
   const requested = typeof payload?.path === 'string' ? payload.path : null
   const command = typeof payload?.command === 'string' ? payload.command : null
   const requestedAt = payload?.at
@@ -298,7 +312,7 @@ export function OfficeWindow<Model>({ session, menus, payload, start, noun, canO
       <div className="relative flex min-h-0 flex-1">
         {documents.map((entry) => (
           <div key={entry.key} className={cn('absolute inset-0 flex', entry !== doc && 'pointer-events-none invisible')} aria-hidden={entry !== doc}>
-            {renderEditor(entry, entry === doc)}
+            {hasEditor(entry) && renderEditor(entry, entry === doc)}
           </div>
         ))}
         {!doc && <StartScreen session={session} start={start} canOpen={canOpen} onNew={newDocument} />}
