@@ -1,10 +1,31 @@
 import { history, undo } from '@tiptap/pm/history'
 import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { documentFromMarkdown } from '../../../shared/office/doc-text.ts'
 import { applyLive, findText } from './docs/model.ts'
 import { docsSchema } from './docs/schema.ts'
-import { addsNothing, characterBefore, columnPlacement, dictatedLines, quoted, typed } from './typing.ts'
+import { SlidesDocument } from './slides/document.ts'
+import { $textSession, editStartFor, requestEditStart, type TextSession } from './slides/editor/active.ts'
+import { addText, newDeck } from './slides/model.ts'
+import { decks } from './slides/store.ts'
+import { plainText } from './slides/text.ts'
+import { addsNothing, characterBefore, columnPlacement, dictatedLines, quoted, typed, typeIntoOffice } from './typing.ts'
+
+const slidesInFront = vi.hoisted(() => ({ presenting: null as { key: string; index: number } | null }))
+
+vi.mock('../../store/windows.ts', async () => {
+  const { atom } = await import('nanostores')
+
+  return { $focusedWindowId: atom('slides'), $windows: atom({ slides: { phase: 'open', appId: 'slides' } }) }
+})
+
+vi.mock('./session.ts', () => ({ loadedSessions: new Map([['slides', { active: () => 'deck' }]]) }))
+
+vi.mock('./slides/store.ts', () => ({ decks: new Map(), slidesSession: { active: () => ({ key: 'deck', name: 'Pitch' }) }, $presenting: { get: () => slidesInFront.presenting } }))
+
+vi.mock('./slides/Present.tsx', () => ({ startPresenting: vi.fn() }))
+
+vi.mock('../../store/edit-target.ts', () => ({ isEditable: (element: { editable?: boolean } | null) => Boolean(element?.editable) }))
 
 /** A document with the editor's history, the caret after the first match of `text` (or the match selected). */
 function at(markdown: string, text: string, select = false): EditorState {
@@ -135,5 +156,109 @@ describe('dictation into Herald Docs', () => {
     expect(addsNothing(at('Hello', 'Hello'), ',')).toBe(false)
     expect(addsNothing(at('Hello,', 'Hello,'), ',', true)).toBe(false)
     expect(addsNothing(at('Hello,', 'Hello,'), ',\nnext')).toBe(false)
+  })
+})
+
+describe('dictation into Herald Slides', () => {
+  let doc: SlidesDocument
+  let box: string
+
+  beforeEach(() => {
+    const deck = newDeck('Pitch')
+    const added = addText(deck, deck.slides[0].id, { text: 'Hello' })
+    doc = new SlidesDocument(added.deck, () => {})
+    box = added.elementId
+    decks.set('deck', doc)
+    vi.stubGlobal('document', { activeElement: null })
+  })
+
+  afterEach(() => {
+    decks.clear()
+    $textSession.set(null)
+    requestEditStart(null)
+    slidesInFront.presenting = null
+    vi.unstubAllGlobals()
+  })
+
+  /** The editor Herald Slides shows for a text box being typed into: its words, its root, and the words each flush recorded. */
+  function editorFor(elementId: string, words: string) {
+    const root = { editable: true }
+    const view = {
+      state: at(words, words),
+      dom: { contains: (element: unknown) => element === root },
+      dispatch(tr: Transaction) {
+        view.state = view.state.apply(tr)
+      }
+    }
+    const flushed: string[] = []
+    const session = { editor: { isDestroyed: false, view }, doc, elementId, flush: () => flushed.push(view.state.doc.textContent), finish: () => {} } as unknown as TextSession
+
+    return { session, root, flushed, text: () => view.state.doc.textContent }
+  }
+
+  it('types at the caret of the text box being edited, what was typed before it a step of its own', async () => {
+    const editor = editorFor(box, 'Hello')
+    doc.edit(box)
+    $textSession.set(editor.session)
+    vi.stubGlobal('document', { activeElement: editor.root })
+
+    expect(await typeIntoOffice('and welcome')).toBe('Typed "and welcome" in Pitch')
+    expect(editor.text()).toBe('Hello and welcome')
+    expect(editor.flushed).toEqual(['Hello', 'Hello and welcome'])
+  })
+
+  it('opens the selected text box, shape or table and types at its end', async () => {
+    const editor = editorFor(box, 'Hello')
+    doc.select([box])
+    // The text box's editor comes up a moment after editing starts, as React mounts it.
+    doc.subscribe(() => {
+      if (doc.editing === box) {
+        setTimeout(() => $textSession.set(editor.session))
+      }
+    })
+
+    expect(await typeIntoOffice('and welcome')).toBe('Typed "and welcome" in Pitch')
+    expect(editStartFor(box)).toEqual({ elementId: box, select: 'end' })
+    expect(doc.editing).toBe(box)
+    expect(editor.text()).toBe('Hello and welcome')
+    expect(editor.flushed).toEqual(['Hello', 'Hello and welcome'])
+  })
+
+  it('puts the words in a new text box when nothing on the slide takes them, as one step to undo', async () => {
+    expect(await typeIntoOffice('Dear Sam,\nthanks for coming')).toBe('Typed "Dear Sam, thanks for coming" in a new text box in Pitch')
+
+    const [added] = doc.selection
+
+    expect(added.id).not.toBe(box)
+    expect(added.kind === 'text' && plainText(added.body)).toBe('Dear Sam,\nthanks for coming')
+    expect(doc.editing).toBe(added.id)
+    expect(editStartFor(added.id)).toEqual({ elementId: added.id, select: 'end' })
+    expect(doc.history.undo()).toBe('New Text Box')
+    expect(doc.history.canUndo).toBe(false)
+  })
+
+  it('leaves the words to the caller while presenting, in the speaker notes and for a bare press enter on the slide', async () => {
+    slidesInFront.presenting = { key: 'deck', index: 0 }
+    expect(await typeIntoOffice('hello')).toBeNull()
+
+    slidesInFront.presenting = null
+    vi.stubGlobal('document', { activeElement: { editable: true } })
+    expect(await typeIntoOffice('hello')).toBeNull()
+
+    vi.stubGlobal('document', { activeElement: null })
+    doc.select([box])
+    expect(await typeIntoOffice('', { submit: true })).toBeNull()
+    expect(doc.editing).toBeNull()
+    expect(doc.history.canUndo).toBe(false)
+  })
+
+  it('does not type a mark the caret follows already', async () => {
+    const editor = editorFor(box, 'Hello,')
+    doc.edit(box)
+    $textSession.set(editor.session)
+
+    expect(await typeIntoOffice(',')).toBe('Already after "," in Pitch')
+    expect(editor.text()).toBe('Hello,')
+    expect(editor.flushed).toEqual([])
   })
 })

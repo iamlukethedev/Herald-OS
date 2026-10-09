@@ -294,9 +294,11 @@ A1:D20`, `herald-os sheets write B7 "=SUM(B2:B6)"`, `herald-os slides from-doc
 - **Dictation.** Press `Cmd+Ctrl+X` (`Super+Ctrl+X` on Linux), or say "start dictation", and speak;
   a pause ends it. In Herald Docs the words go in at the caret; in Herald Sheets into the selected
   cell and on down the column (a number becomes a number, and the selection moves down so you can
-  carry on); in Herald Slides into the text box you are editing. Each dictation is one step to undo.
-  Pressing the voice key and saying "type" with the words does the same. On a Mac the words go
-  straight into the document; on Herald OS Linux they are typed as keys into the window in front.
+  carry on); in Herald Slides into the text box you are editing, at the end of the selected text
+  box, shape or table, or else in a new text box, left open to carry on typing. Each dictation is
+  one step to undo. Pressing the voice key and saying "type" with the words does the same. On a Mac
+  the words go straight into the document; on Herald OS Linux they are typed as keys into the window
+  in front.
 - **Spoken punctuation.** Say "comma", "period" (or "full stop"), "question mark", "exclamation
   mark", "colon", "semicolon", "new line" (a new paragraph, or the next item of a list, in Docs; the
   next cell down in Sheets) and "new paragraph". End with "press enter" to press `Enter` after the
