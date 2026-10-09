@@ -703,6 +703,13 @@ describe('Word files: sections', () => {
       ['oddPage', 'portrait', 0]
     ])
   })
+
+  it('gives back an empty section as it was, without the paragraph Word needs to hold its end', async () => {
+    const doc: DocJSON = { type: 'doc', attrs: { page: A4, styles: null }, content: [paragraph('Before'), { type: 'sectionBreak', attrs: { kind: 'nextPage', page: null } }, { type: 'sectionBreak', attrs: { kind: 'evenPage', page: null } }, paragraph('After')] }
+    const { doc: back } = await roundTrip(doc)
+
+    expect(back.content).toEqual(doc.content)
+  })
 })
 
 /** A DrawingML text box placed beside the text, with VML for older programs. */
@@ -752,10 +759,17 @@ describe('Word files: text boxes', () => {
     const { bytes, doc: back } = await roundTrip(doc)
     const document = await (await partsOf(bytes)).read('word/document.xml')
 
-    expect(normalized(back).content).toEqual(normalized({ ...doc, content: doc.content.map((node, index) => (index === 2 ? { ...node, attrs: { ...node.attrs, width: 468 } } : node)) }).content)
+    expect(normalized(back).content).toEqual(normalized(doc).content)
     expect(document).toContain('<v:shape id="_x0000_s1025" type="#_x0000_t202" style="width:200pt;height:80pt" stroked="t" strokecolor="#c00000" strokeweight="0.75pt" filled="t" fillcolor="#fff2cc">')
-    expect(document).toContain('stroked="f"')
+    expect(document).toContain('style="width:468pt;mso-width-percent:1000;mso-width-relative:margin" stroked="f"')
     expect(document).toContain('<v:textbox style="mso-fit-shape-to-text:t">')
+  })
+
+  it('reads a DrawingML text box as wide as the margins as one without a width of its own', async () => {
+    const box = floatingBox(para(run('Wide')), '', 'left').replace('<wp:docPr', '<wp14:sizeRelH xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" relativeFrom="margin"><wp14:pctWidth>100000</wp14:pctWidth></wp14:sizeRelH><wp:docPr')
+    const { doc } = await read(await word({ body: para(box) }))
+
+    expect(doc.content).toEqual([{ type: 'textBox', attrs: { width: null, height: 72, align: 'left', border: null, fill: null }, content: [paragraph('Wide')] }])
   })
 })
 

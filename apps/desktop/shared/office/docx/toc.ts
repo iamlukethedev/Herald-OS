@@ -244,14 +244,14 @@ export function tocParagraphs(node: DocNode, entries: readonly TocEntry[], bookm
   }
 
   entries.forEach((entry, index) => {
-    const bookmark = bookmarks.get(entry.heading) ?? ''
-    const page = pageAt(index)
+    const bookmark = bookmarks.get(entry.heading)
+    const page = bookmark === undefined ? null : pageAt(index)
     const children = [textRun(entry.text), ...(page === null ? [] : [new TextRun({ children: [new Element('w:tab')] }), ...fieldRuns(`PAGEREF ${bookmark} \\h`, String(page))])]
     out.push(
       new Paragraph({
         style: `TOC${entry.level}`,
         tabStops: [{ type: TabStopType.RIGHT, position: textWidth, leader: LeaderType.DOT }],
-        children: [...(index ? [] : start), new InternalHyperlink({ anchor: bookmark, children })]
+        children: [...(index ? [] : start), ...(bookmark === undefined ? children : [new InternalHyperlink({ anchor: bookmark, children })])]
       })
     )
   })

@@ -358,8 +358,9 @@ function note(writer: Writer, node: DocNode): ParagraphChild[] {
     children.unshift(new Paragraph({ style }))
   }
 
+  const first = children[0] as Paragraph
   // Word puts a space between a note's number and its text.
-  ;(children[0] as Paragraph).addRunToFront(textRun(' '))
+  first.addRunToFront(textRun(' '))
   // The docx package types a note's blocks as paragraphs; a table among them is written as Word reads it.
   writer.notes[kind][id] = { children: children as Paragraph[] }
 
@@ -673,7 +674,8 @@ const textBoxType = (): Element =>
  */
 function textBox(writer: Writer, node: DocNode, place: Place): Paragraph {
   const attrs = node.attrs ?? {}
-  const width = finite(attrs.width) ?? writer.textWidth / 20
+  const given = finite(attrs.width)
+  const width = given ?? writer.textWidth / 20
   const height = finite(attrs.height)
   const border = hexColor(attrs.border)
   const fill = hexColor(attrs.fill)
@@ -691,7 +693,8 @@ function textBox(writer: Writer, node: DocNode, place: Place): Paragraph {
     {
       id: `_x0000_s${1025 + writer.boxes++}`,
       type: '#_x0000_t202',
-      style: `width:${width}pt${height ? `;height:${height}pt` : ''}`,
+      // A box without a width of its own is as wide as the text, which Word keeps as a share of the margins.
+      style: `width:${width}pt${height ? `;height:${height}pt` : ''}${given === null ? ';mso-width-percent:1000;mso-width-relative:margin' : ''}`,
       stroked: border ? 't' : 'f',
       strokecolor: border ?? undefined,
       strokeweight: border ? '0.75pt' : undefined,
@@ -991,7 +994,10 @@ function commentsFor(writer: Writer): ICommentOptions[] {
 
     const resolved = thread.resolved ? { resolved: true } : {}
     out.push(commentOptions(thread, own, resolved))
-    ;(thread.replies ?? []).forEach((reply, index) => out.push(commentOptions(reply, replies[index], { parentId: own, ...resolved })))
+
+    for (const [index, reply] of (thread.replies ?? []).entries()) {
+      out.push(commentOptions(reply, replies[index], { parentId: own, ...resolved }))
+    }
   }
 
   // Word keeps whether a thread is resolved by its comments' paragraph ids, which the docx package only writes for threads with replies or with ids.

@@ -179,13 +179,20 @@ function drawingColor(fill: XmlElement | undefined): string | null {
   return scheme && !children(scheme).length ? (value === 'lt1' || value === 'bg1' ? '#ffffff' : value === 'dk1' || value === 'tx1' ? '#000000' : null) : null
 }
 
+/** Whether a frame is as wide as the text between the margins, which Word gives as a share of them. */
+const fullWidth = (frame: XmlElement): boolean => {
+  const relative = child(frame, 'wp14:sizeRelH')
+
+  return attr(relative, 'relativeFrom') === 'margin' && textOf(child(relative, 'wp14:pctWidth')).trim() === '100000'
+}
+
 /** A DrawingML text box's size, place and colours; a box in a group has the size of its own shape. */
 function drawingBox(shape: XmlElement, extent: XmlElement | undefined, frame: XmlElement): TextBoxAttrs {
   const properties = child(shape, 'wps:spPr')
   const line = child(properties, 'a:ln')
 
   return {
-    width: emuPoints(attr(extent, 'cx')),
+    width: fullWidth(frame) ? null : emuPoints(attr(extent, 'cx')),
     height: emuPoints(attr(extent, 'cy')),
     align: frame.name === 'wp:anchor' ? boxAlign(textOf(child(child(frame, 'wp:positionH'), 'wp:align'))) : null,
     border: line && !child(line, 'a:noFill') ? drawingColor(child(line, 'a:solidFill')) : null,
@@ -277,7 +284,7 @@ function vmlBox(shape: XmlElement, style: string, absolute: boolean): TextBoxAtt
   const filled = !vmlOff(attr(shape, 'filled')) && !vmlOff(attr(child(shape, 'v:fill'), 'on'))
 
   return {
-    width: vmlPoints(style, 'width'),
+    width: vmlStyle(style, 'mso-width-percent') === '1000' && vmlStyle(style, 'mso-width-relative') === 'margin' ? null : vmlPoints(style, 'width'),
     height: vmlPoints(style, 'height'),
     align: absolute ? boxAlign(vmlStyle(style, 'mso-position-horizontal')) : null,
     border: stroked ? (vmlColor(attr(shape, 'strokecolor')) ?? '#000000') : null,

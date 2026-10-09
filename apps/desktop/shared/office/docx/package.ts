@@ -34,6 +34,7 @@ const PREFIXES: Readonly<Record<string, string>> = {
   [`${TRANSITIONAL}/package/2006/relationships`]: '',
   [`${TRANSITIONAL}/package/2006/content-types`]: '',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingShape': 'wps',
+  'http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing': 'wp14',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup': 'wpg',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas': 'wpc',
   'http://schemas.microsoft.com/office/word/2010/wordml': 'w14',

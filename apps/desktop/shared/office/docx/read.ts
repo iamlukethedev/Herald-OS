@@ -1314,9 +1314,16 @@ function pageOf(section: XmlElement | undefined): PageSettings | null {
   }
 }
 
-/** Word ends a section that ends with a table with an empty paragraph to hold the section's end, as it ends a document. */
+/**
+ * A section that ends with a table, or has nothing in it, ends with an empty paragraph that holds
+ * the section's end, as a document that ends with a table ends with one.
+ */
 const withoutSectionParagraphs = (blocks: DocNode[]): DocNode[] =>
-  blocks.filter((block, index) => !(block.type === 'paragraph' && !block.content && !block.attrs && blocks[index - 1]?.type === 'table' && blocks[index + 1]?.type === 'sectionBreak'))
+  blocks.filter((block, index) => {
+    const before = blocks[index - 1]
+
+    return !(block.type === 'paragraph' && !block.content && !block.attrs && blocks[index + 1]?.type === 'sectionBreak' && (!before || before.type === 'table' || before.type === 'sectionBreak'))
+  })
 
 const SECTION_KINDS: Readonly<Record<string, SectionKind>> = { continuous: 'continuous', nextColumn: 'continuous', evenPage: 'evenPage', oddPage: 'oddPage' }
 
