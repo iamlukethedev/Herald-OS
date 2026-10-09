@@ -29,6 +29,7 @@ export type NoteKey =
   | 'noteMarks'
   | 'trackedChanges'
   | 'laterHeaders'
+  | 'sectionNumbers'
   | 'contentControls'
   | 'columns'
   | 'objects'
@@ -43,7 +44,7 @@ export const NOTES: Readonly<Record<NoteKey, string>> = {
   internalLinks: 'Links to places inside the document are kept as plain text.',
   fields: 'Fields whose result runs over several paragraphs or holds pictures are shown as their last result and no longer update.',
   crossReferences: 'Cross-references keep their last result, but Word cannot update them, as the places they refer to are not kept.',
-  pageNumbers: 'Page numbers in letters or Roman numerals, or starting again in a section, are shown as plain numbers counting from the first page.',
+  pageNumbers: 'Page numbers in letters or Roman numerals are shown as plain numbers.',
   tocOptions: "Tables of contents list the document's headings by level; their other options (such as other styles) are not kept.",
   floatingPictures: 'Pictures placed beside the text are shown in line with it.',
   unshownPictures: 'Pictures in formats Herald Docs cannot show (EMF, WMF or TIFF) are left out.',
@@ -55,6 +56,7 @@ export const NOTES: Readonly<Record<NoteKey, string>> = {
   noteMarks: 'Footnotes and endnotes with marks of their own (such as *) are numbered instead.',
   trackedChanges: 'Tracked changes are shown accepted, and saving keeps them accepted.',
   laterHeaders: "Headers and footers of later sections are not shown; the first section's are used on every page.",
+  sectionNumbers: 'Page numbering that starts again or changes its format in a section is not kept: pages are numbered on from the first.',
   contentControls: 'Content controls (form fields, checkboxes) are shown as their text.',
   columns: 'Text in columns is shown in one column, and saving keeps it in one column.',
   objects: 'Embedded objects (such as spreadsheets) are shown as their pictures and are not kept.',
@@ -112,7 +114,7 @@ export function packageNotes(pkg: WordPackage, sections: readonly XmlElement[]):
   }
 
   if (sections.some(ownPageNumbers)) {
-    found.push('pageNumbers')
+    found.push('sectionNumbers')
   }
 
   if (sections.some((section) => child(section, 'w:sectPrChange'))) {

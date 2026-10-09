@@ -235,8 +235,8 @@ describe('Word files: headers and footers', () => {
 
     expect(doc.attrs?.headers).toEqual({ header: { default: [paragraph('Front matter')] }, footer: {} })
     expect(notes).toEqual([
-      'Page numbers in letters or Roman numerals, or starting again in a section, are shown as plain numbers counting from the first page.',
-      "Headers and footers of later sections are not shown; the first section's are used on every page."
+      "Headers and footers of later sections are not shown; the first section's are used on every page.",
+      'Page numbering that starts again or changes its format in a section is not kept: pages are numbered on from the first.'
     ])
   })
 
@@ -321,7 +321,7 @@ describe('Word files: fields', () => {
       'Hidden text is left out.',
       'Fields whose result runs over several paragraphs or holds pictures are shown as their last result and no longer update.',
       'Cross-references keep their last result, but Word cannot update them, as the places they refer to are not kept.',
-      'Page numbers in letters or Roman numerals, or starting again in a section, are shown as plain numbers counting from the first page.',
+      'Page numbers in letters or Roman numerals are shown as plain numbers.',
       'Content controls (form fields, checkboxes) are shown as their text.'
     ])
   })
