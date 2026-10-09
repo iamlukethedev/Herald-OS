@@ -31,6 +31,7 @@ import { UniverSheetsSortPlugin } from '@univerjs/sheets-sort'
 import { UniverSheetsThreadCommentPlugin } from '@univerjs/sheets-thread-comment'
 import { UniverThreadCommentPlugin } from '@univerjs/thread-comment'
 import type { WorkbookSnapshot } from '../../../../shared/office/workbook.ts'
+import { trackChartRanges } from './charts/track.ts'
 
 /*
  * A workbook in Univer with nothing drawn, for changing a file that is not open in a window. Every
@@ -81,6 +82,7 @@ export async function withHeadlessSheets<T>(snapshot: WorkbookSnapshot, work: (s
     const { activeSheetId: _active, ...data } = structuredClone(snapshot)
     univer.createUnit(UniverInstanceType.UNIVER_SHEET, data as unknown as Partial<IWorkbookData>)
     settle(univer)
+    trackChartRanges(univer)
     const api = FUniver.newAPI(univer)
     const workbook = api.getWorkbook(snapshot.id) ?? api.getActiveWorkbook()
 
@@ -99,6 +101,8 @@ export async function withHeadlessSheets<T>(snapshot: WorkbookSnapshot, work: (s
 
     return { result, snapshot: { ...saved, activeSheetId: workbook.getActiveSheet().getSheetId() } }
   } finally {
+    // Plugins finish work they put off (comments, drawings) on a timer, which must not find the instance gone.
+    await new Promise((resolve) => setTimeout(resolve, 50))
     univer.dispose()
   }
 }
