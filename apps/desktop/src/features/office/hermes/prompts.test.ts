@@ -154,6 +154,34 @@ describe('the inline actions', () => {
     expect(prompt).not.toContain('at=marked content')
   })
 
+  it('reviews the whole document with one add_comments call on exact quotes, changing no text', () => {
+    const prompt = buildPrompt(docs({ selection: marked, action: { id: 'review' }, others: [{ app: 'docs', name: 'Notes', path: null }] }))
+
+    expect(prompt).toContain('asks: Review this document for clarity, grammar and tone, with a comment on each passage to improve.\n')
+    expect(prompt).toContain('- Read it first (docs action=read document="~/Documents/Report.docx"); when its content comes back cut short, read it section by section with heading=<each heading of its outline>, all of it before commenting.')
+    expect(prompt).toContain('read them (docs action=read document="~/Documents/Report.docx" part=comments) and do not repeat one.')
+    expect(prompt).toContain('- Clarity is what is vague, wordy or hard to follow; Grammar is spelling, grammar and punctuation; Tone is what does not suit its readers or the rest of the text.')
+    expect(prompt).toContain(
+      '- Then add every comment with ONE docs call, so the whole review is one step to undo: action=add_comments document="~/Documents/Report.docx" comments=[{"text": "<Clarity, Grammar or Tone>: <what is wrong>. Suggest: <the fix>", "quote": "<the exact words it is on>"}, …]; make no second call, even for quotes it did not find.'
+    )
+    expect(prompt).toContain('- Each quote is a few words copied exactly from one paragraph (no Markdown marks), enough to tell the place apart')
+    expect(prompt).toContain('if nothing needs one, make no call and say so.')
+    expect(prompt).toContain('- Never change the text: make no other call that changes the document (no write, replace, format or edit). Do not save.')
+    expect(prompt).toContain('- Reply with one line summing up the review: how many comments of each kind, and what most needs work.')
+    expect(prompt).not.toContain('Selected text')
+    expect(prompt).not.toContain('no need to read the document first')
+    expect(prompt).not.toContain('at=marked')
+    expect(prompt).not.toContain('action=write')
+    expect(prompt).not.toContain('Also open')
+  })
+
+  it('reviews a document that is not saved yet by its tab name', () => {
+    const prompt = buildPrompt(docs({ document: { name: 'Untitled 2', path: null }, action: { id: 'review' } }))
+
+    expect(prompt).toContain('working on “Untitled 2” (not saved yet: call it "Untitled 2") in Herald Docs')
+    expect(prompt).toContain('action=add_comments document="Untitled 2" comments=[')
+  })
+
   it('reads a long selection before rewriting it', () => {
     const prompt = buildPrompt(docs({ selection: { kind: 'text', text: 'x'.repeat(MAX_TEXT + 1), marked: true }, action: { id: 'shorten' } }))
 
@@ -304,7 +332,19 @@ describe('what the bar says of Hermes’s work', () => {
     expect(stepLabel('terminal', null)).toBe('terminal')
   })
 
+  it('counts the comments a review adds, given as a list or as JSON text', () => {
+    const eight = Array.from({ length: 8 }, (_, n) => ({ text: `Grammar: comment ${n + 1}`, quote: `passage ${n + 1}` }))
+
+    expect(stepLabel('docs', { action: 'add_comments', document: 'Report.docx', comments: eight })).toBe('Adding 8 comments')
+    expect(stepLabel('docs', { action: 'add_comments', comments: '[{"text": "Tone: too casual", "quote": "hey all"}]' })).toBe('Adding 1 comment')
+    expect(stepLabel('docs', { action: 'add_comments', comments: '[{"text": "cut off' })).toBe('Adding comments')
+    expect(stepLabel('docs', { action: 'add_comments' })).toBe('Adding comments')
+    expect(stepLabel('os_ui', { action: 'run', command: 'docs.addComments', args: { comments: eight.slice(0, 2) } })).toBe('Adding 2 comments')
+  })
+
   it('tells calls that change Office documents from the rest', () => {
+    expect(editsOffice('docs', { action: 'add_comments', comments: [{ text: 'Clarity: which results?', quote: 'the results' }] })).toBe(true)
+    expect(editsOffice('os_ui', { action: 'run', command: 'docs.addComments' })).toBe(true)
     expect(editsOffice('docs', { action: 'write' })).toBe(true)
     expect(editsOffice('sheets', { action: 'clean' })).toBe(true)
     expect(editsOffice('slides', { action: 'add_slide' })).toBe(true)

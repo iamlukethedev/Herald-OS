@@ -43,6 +43,8 @@ export function actionName(action: HermesAction): string {
       return 'Fix spelling and grammar'
     case 'summarise':
       return 'Summarise'
+    case 'review':
+      return 'Review for clarity, grammar and tone'
     case 'explain':
       return 'Explain this formula'
     case 'fill':
@@ -67,7 +69,7 @@ export function actionName(action: HermesAction): string {
 }
 
 /** Whether an action can start on a document now: Hermes is reachable and not working on it already. */
-const free = (docKey: string | null): docKey is string => Boolean(docKey) && $hermesState.get() === 'ready' && askOf(docKey!).phase !== 'working'
+export const free = (docKey: string | null): docKey is string => Boolean(docKey) && $hermesState.get() === 'ready' && askOf(docKey!).phase !== 'working'
 
 function runAction(app: OfficeApp, docKey: string | null, action: HermesAction): void {
   if (free(docKey)) {

@@ -78,7 +78,7 @@ export interface OpenDocument {
 
 export type CleanKind = 'dedupe' | 'dates' | 'split' | 'trim' | 'numbers'
 
-export type DocsAction = { id: 'rewrite' | 'shorten' | 'expand' | 'fix' | 'summarise' } | { id: 'tone'; tone: string } | { id: 'translate'; language: string }
+export type DocsAction = { id: 'rewrite' | 'shorten' | 'expand' | 'fix' | 'summarise' | 'review' } | { id: 'tone'; tone: string } | { id: 'translate'; language: string }
 
 export type SheetsAction = { id: 'explain' | 'fill' | 'insights' } | { id: 'clean'; clean: CleanKind }
 
@@ -228,6 +228,20 @@ function docsRequest(action: DocsAction, target: string): { ask: string; rules: 
         ask: 'Summarise the marked text.',
         rules: [`Put the summary under its paragraph with ONE docs call: action=write ${target} at=after content=<a short paragraph in Markdown, in the text’s language>.`, 'Leave the marked text as it is; change nothing else.', 'Do not save.', 'Reply with one short sentence.']
       }
+    case 'review':
+      return {
+        ask: 'Review this document for clarity, grammar and tone, with a comment on each passage to improve.',
+        rules: [
+          `Read it first (docs action=read ${target}); when its content comes back cut short, read it section by section with heading=<each heading of its outline>, all of it before commenting.`,
+          `When the read says it has comments already, read them (docs action=read ${target} part=comments) and do not repeat one.`,
+          'Clarity is what is vague, wordy or hard to follow; Grammar is spelling, grammar and punctuation; Tone is what does not suit its readers or the rest of the text.',
+          `Then add every comment with ONE docs call, so the whole review is one step to undo: action=add_comments ${target} comments=[{"text": "<Clarity, Grammar or Tone>: <what is wrong>. Suggest: <the fix>", "quote": "<the exact words it is on>"}, …]; make no second call, even for quotes it did not find.`,
+          'Each quote is a few words copied exactly from one paragraph (no Markdown marks), enough to tell the place apart: a comment goes on the first match of its quote.',
+          'Comment only where a change would help, at most 30 comments, in the document’s language; if nothing needs one, make no call and say so.',
+          'Never change the text: make no other call that changes the document (no write, replace, format or edit). Do not save.',
+          'Reply with one line summing up the review: how many comments of each kind, and what most needs work.'
+        ]
+      }
   }
 }
 
@@ -347,7 +361,7 @@ function slidesRequest(action: SlidesAction, target: string, slide: SlideSelecti
   }
 }
 
-const DOCS_ACTIONS: readonly string[] = ['rewrite', 'shorten', 'expand', 'tone', 'translate', 'fix', 'summarise']
+const DOCS_ACTIONS: readonly string[] = ['rewrite', 'shorten', 'expand', 'tone', 'translate', 'fix', 'summarise', 'review']
 const SHEETS_ACTIONS: readonly string[] = ['explain', 'fill', 'insights', 'clean']
 
 const isDocsAction = (action: HermesAction): action is DocsAction => DOCS_ACTIONS.includes(action.id)
@@ -363,6 +377,21 @@ function actionRequest(action: HermesAction, target: string, selection: PromptSe
 
 const READING: Record<string, string> = { docs: 'Reading the document', sheets: 'Reading the cells', slides: 'Reading the presentation' }
 
+/** How many items a list argument holds, given as a list or as JSON text; 0 when it cannot say. */
+function listLength(value: unknown): number {
+  let list = value
+
+  if (typeof value === 'string') {
+    try {
+      list = JSON.parse(value)
+    } catch {
+      return 0
+    }
+  }
+
+  return Array.isArray(list) ? list.length : 0
+}
+
 /** What the bar says Hermes is doing, from its latest tool call: "docs · write", "slides · setSlide". */
 export function stepLabel(tool: string, args?: Record<string, unknown> | null): string {
   const action = typeof args?.action === 'string' ? args.action : ''
@@ -370,6 +399,13 @@ export function stepLabel(tool: string, args?: Record<string, unknown> | null): 
 
   if (action === 'read' && READING[tool]) {
     return READING[tool]
+  }
+
+  if ((tool === 'docs' && action === 'add_comments') || command === 'docs.addComments') {
+    const inner = args?.args && typeof args.args === 'object' ? (args.args as Record<string, unknown>) : null
+    const comments = listLength(args?.comments ?? inner?.comments)
+
+    return comments ? `Adding ${count(comments, 'comment')}` : 'Adding comments'
   }
 
   if (action === 'list_all') {
@@ -394,7 +430,7 @@ export function buildPrompt(context: PromptContext): string {
   const appName = OFFICE_APP_NAMES[app]
   const ref = doc.path ? tildePath(doc.path, home) : doc.name
   const target = `${({ docs: 'document', sheets: 'workbook', slides: 'presentation' } as const)[app]}=${JSON.stringify(ref)}`
-  const selection = context.selection ?? null
+  const selection = action?.id === 'review' ? null : (context.selection ?? null)
   const request = action ? actionRequest(action, target, selection, home) : null
   const parts = [`[${appName}] The person is working on “${doc.name}” (${doc.path ? ref : `not saved yet: call it "${doc.name}"`}) in ${appName} and asks: ${request?.ask ?? context.words.trim()}`]
   const block = !selection ? null : selection.kind === 'text' ? textBlock(selection) : selection.kind === 'cells' ? cellsBlock(selection) : slideBlock(selection)

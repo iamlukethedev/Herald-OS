@@ -12,6 +12,8 @@ import { editorOf } from './store.ts'
 export interface ReviewProvider {
   label: string
   run: (docKey: string) => void | Promise<void>
+  /** Whether it can review the document now (its reviewer is reachable and free); left out, it always can. */
+  enabled?: (docKey: string) => boolean
 }
 
 export const $reviewProvider = atom<ReviewProvider | null>(null)

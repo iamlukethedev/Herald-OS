@@ -5,6 +5,7 @@ import type { CalloutKind } from '../../../../shared/office/document.ts'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
 import { docsHermesMenu } from '../hermes/actions.ts'
+import { offerHermesReview } from '../hermes/docs-review.ts'
 import { officeAbilities } from '../session.ts'
 import { type OfficeCommand, type OfficeMenu, officeMenus } from '../shell/commands.ts'
 import { OfficeWindow } from '../shell/OfficeWindow.tsx'
@@ -153,6 +154,8 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
 
   // The '/' menu and Insert > Picture ask for a file.
   useEffect(() => $pickImage.listen(() => picker.current?.click()), [])
+
+  useEffect(offerHermesReview, [])
 
   const menus = useMemo(docsMenus, [])
 

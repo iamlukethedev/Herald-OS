@@ -107,7 +107,11 @@ export function reviewMenuItems(): { insert: OfficeCommand[]; menu: OfficeMenu |
         const review: OfficeCommand = {
           id: 'review-ai',
           label: provider.label,
-          enabled: has,
+          enabled: () => {
+            const key = activeKey()
+
+            return Boolean(key && has() && (provider.enabled?.(key) ?? true))
+          },
           dividerBefore: true,
           run: () => {
             const key = activeKey()
