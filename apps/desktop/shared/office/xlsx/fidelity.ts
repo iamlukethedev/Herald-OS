@@ -113,6 +113,10 @@ export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Pro
     notes.push('Grouped rows and columns are shown ungrouped; rows and columns that were collapsed stay hidden.')
   }
 
+  if (/<(?:\w+:)?legacyDrawingHF[\s/>]/.test(sheetParts)) {
+    notes.push('Pictures in page headers and footers are not kept.')
+  }
+
   if (count(/^xl\/(ctrlProps|activeX)\//i) || /<(?:\w+:)?controls[\s>]/.test(sheetParts)) {
     notes.push('Form controls (buttons, check boxes, lists) are not kept.')
   }

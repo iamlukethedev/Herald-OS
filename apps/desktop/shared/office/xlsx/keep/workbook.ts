@@ -6,15 +6,16 @@ import { appendToChild, childNamed, innerElements, placeChild, withAttribute, wi
 /*
  * What the source file holds for the whole workbook that Herald keeps: its theme (over ExcelJS's
  * default, so theme colours in kept parts and in the Normal font look as they did), its custom
- * document properties, its links to other workbooks (formulas name them by their place in the list),
- * and its chart sheets, put back among the sheets where they were. Then the workbook gets what the
- * steps gave it.
+ * properties and sensitivity labels, its links to other workbooks (formulas name them by their
+ * place in the list), and its chart sheets, put back among the sheets where they were. Then the
+ * workbook gets what the steps gave it.
  */
 
 const OFFICE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-const RELATIONSHIPS = OFFICE
 const THEME = `${OFFICE}/theme`
-const CUSTOM_PROPERTIES = `${OFFICE}/custom-properties`
+
+/** The package's own parts Herald keeps: custom document properties, and sensitivity labels as Office writes them now. */
+const DOCUMENT_PARTS = [`${OFFICE}/custom-properties`, 'http://schemas.microsoft.com/office/2020/02/relationships/classificationlabels']
 
 /** Write the source's theme over the one ExcelJS wrote. */
 export async function keepTheme(keep: Keep): Promise<void> {
@@ -26,18 +27,20 @@ export async function keepTheme(keep: Keep): Promise<void> {
   }
 }
 
-/** Keep the source's custom document properties. */
-export async function keepCustomProperties(keep: Keep): Promise<void> {
-  const source = (await keep.copier.relationships('')).find((rel) => rel.type === CUSTOM_PROPERTIES && !rel.external)
+/** Keep the source's custom document properties and sensitivity labels. */
+export async function keepDocumentProperties(keep: Keep): Promise<void> {
+  const written = await keep.ctx.writer.relationships('')
 
-  if (!source || (await keep.ctx.writer.relationships('')).some((rel) => rel.type === CUSTOM_PROPERTIES)) {
-    return
-  }
+  for (const source of (await keep.copier.relationships('')).filter((rel) => DOCUMENT_PARTS.includes(rel.type) && !rel.external)) {
+    if (written.some((rel) => rel.type === source.type)) {
+      continue
+    }
 
-  const target = keep.ctx.writer.has('docProps/custom.xml') ? keep.ctx.writer.freshName((n) => `docProps/custom${n}.xml`) : 'docProps/custom.xml'
+    const target = keep.ctx.writer.has(source.target) ? keep.ctx.writer.freshName((n) => source.target.replace(/(\.\w+)$/, `${n}$1`)) : source.target
 
-  if (await keep.copier.copyTo(source.target, target)) {
-    await keep.ctx.writer.relate('', CUSTOM_PROPERTIES, target)
+    if (await keep.copier.copyTo(source.target, target)) {
+      await keep.ctx.writer.relate('', source.type, target)
+    }
   }
 }
 
@@ -157,5 +160,5 @@ export async function finishWorkbook(keep: Keep): Promise<void> {
   }
 
   xml = withExtensions(xml, WORKBOOK_ORDER, extensions)
-  await keep.ctx.writer.put(keep.workbookPath, withNamespace(chartSheets.length ? withChartSheets(xml, chartSheets) : xml, 'r', RELATIONSHIPS))
+  await keep.ctx.writer.put(keep.workbookPath, withNamespace(chartSheets.length ? withChartSheets(xml, chartSheets) : xml, 'r', OFFICE))
 }

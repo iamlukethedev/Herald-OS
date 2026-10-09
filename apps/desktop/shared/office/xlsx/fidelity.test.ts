@@ -31,7 +31,7 @@ describe('fidelity report', () => {
         'xl/metadata.xml': '<metadata><dynamicArrayProperties fDynamic="1" fCollapsed="0"/></metadata>',
         '_xmlsignatures/sig1.xml': '<Signature/>'
       },
-      sheetTail: '<sheetProtection sheet="1" objects="1"/><rowBreaks count="1"><brk id="10" max="16383" man="1"/></rowBreaks><oleObjects><oleObject progId="Word.Document.12" shapeId="1025" r:id="rId1"/></oleObjects>',
+      sheetTail: '<sheetProtection sheet="1" objects="1"/><rowBreaks count="1"><brk id="10" max="16383" man="1"/></rowBreaks><legacyDrawingHF r:id="rId2"/><oleObjects><oleObject progId="Word.Document.12" shapeId="1025" r:id="rId1"/></oleObjects>',
       sheetRels: relationships([['rId1', 'oleObject', '../embeddings/oleObject1.bin']]),
       workbookExtra: '<definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">\'Hand Made\'!$A$1:$C$6</definedName><definedName name="Rate">0.07</definedName></definedNames>'
     })
@@ -42,6 +42,7 @@ describe('fidelity report', () => {
       'Macros (VBA) are not kept: Herald Sheets does not run them, and a copy it saves has none.',
       'Protection (locked sheets, structure or a password to open for editing) is not kept: a saved copy is unprotected.',
       'Print areas, print titles and page breaks are not kept; page size, orientation, margins, scaling and headers stay.',
+      'Pictures in page headers and footers are not kept.',
       'Form controls (buttons, check boxes, lists) are not kept.',
       'Embedded objects (other documents inside the workbook) are not kept.',
       'Data connections, queries and the data model are not kept; their last results stay as values.',

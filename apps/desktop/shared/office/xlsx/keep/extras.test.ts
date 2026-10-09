@@ -34,17 +34,22 @@ const workbookExtras = {
   files: {
     'xl/externalLinks/externalLink1.xml': `${HEAD}<externalLink xmlns="${MAIN}" xmlns:r="${R}"><externalBook r:id="rId1"><sheetNames><sheetName val="Prices"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>2.5</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>`,
     'docProps/custom.xml': `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Department"><vt:lpwstr>Fixtures</vt:lpwstr></property></Properties>`,
+    'docMetadata/LabelInfo.xml': `${HEAD}<clbl:labelList xmlns:clbl="http://schemas.microsoft.com/office/2020/mipLabelMetadata"><clbl:label id="{00000000-0000-0000-0000-000000000001}" enabled="1" method="Standard" siteId="{00000000-0000-0000-0000-000000000002}" removed="0"/></clbl:labelList>`,
     'xl/media/image2.png': PNG
   },
   relationships: {
     'xl/externalLinks/externalLink1.xml': [['rId1', `${R}/externalLinkPath`, 'Prices.xlsx', true]] as [string, string, string, boolean][],
     'xl/workbook.xml': [['rId20', `${R}/externalLink`, 'externalLinks/externalLink1.xml']] as [string, string, string][],
-    '': [['rId4', `${R}/custom-properties`, 'docProps/custom.xml']] as [string, string, string][],
+    '': [
+      ['rId4', `${R}/custom-properties`, 'docProps/custom.xml'],
+      ['rId5', 'http://schemas.microsoft.com/office/2020/02/relationships/classificationlabels', 'docMetadata/LabelInfo.xml']
+    ] as [string, string, string][],
     'xl/worksheets/sheet3.xml': [['rId2', `${R}/image`, '../media/image2.png']] as [string, string, string][]
   },
   types: {
     'xl/externalLinks/externalLink1.xml': 'application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml',
-    'docProps/custom.xml': 'application/vnd.openxmlformats-officedocument.custom-properties+xml'
+    'docProps/custom.xml': 'application/vnd.openxmlformats-officedocument.custom-properties+xml',
+    'docMetadata/LabelInfo.xml': 'application/vnd.ms-office.classificationlabels+xml'
   },
   change: {
     'xl/workbook.xml': (xml: string) => xml.replace('<definedNames>', '<externalReferences><externalReference r:id="rId20"/></externalReferences><definedNames>'),
@@ -114,7 +119,7 @@ const smartArt = {
 }
 
 describe('what else the source file holds', () => {
-  it('keeps links to other workbooks in their order, custom properties and a background picture', async () => {
+  it('keeps links to other workbooks in their order, custom properties, sensitivity labels and a background picture', async () => {
     const original = await withParts(await keptWorkbook(), workbookExtras)
     const { bytes, losses } = await xlsxFromWorkbook(await read(original), { original })
     const file = await opened(bytes)
@@ -127,6 +132,7 @@ describe('what else the source file holds', () => {
     expect(await file.text(file.sheet('Sales'))).toContain('<f>[1]Prices!A1</f>')
     expect(await file.related('', 'custom-properties')).toEqual(['docProps/custom.xml'])
     expect(await file.text('docProps/custom.xml')).toContain('<vt:lpwstr>Fixtures</vt:lpwstr>')
+    expect(await file.related('', 'classificationlabels')).toEqual(['docMetadata/LabelInfo.xml'])
     const [picture] = await file.related(file.sheet('Dashboard'), 'image')
     expect(await file.zip.file(picture)!.async('uint8array')).toEqual(PNG)
     expect(await file.text(file.sheet('Dashboard'))).toMatch(/<drawing r:id="rId\d+"\/><picture r:id="rId\d+"\/>/)

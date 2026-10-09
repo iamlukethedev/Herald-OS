@@ -7,7 +7,7 @@ import { keepPivots, pivotCachePart, pivotTablePart } from './pivots.ts'
 import { finishSheets, keepBackgrounds, keepSparklines } from './sheets.ts'
 import { keepSlicers, slicerCachePart, slicersPart } from './slicers.ts'
 import { keepTables, tablePart } from './tables.ts'
-import { finishWorkbook, keepChartSheets, keepCustomProperties, keepExternalLinks, keepTheme } from './workbook.ts'
+import { finishWorkbook, keepChartSheets, keepDocumentProperties, keepExternalLinks, keepTheme } from './workbook.ts'
 
 /*
  * The parts of the file a workbook was opened from that Herald does not model (pivot tables and
@@ -64,7 +64,7 @@ export async function finishKept(ctx: FinishContext): Promise<void> {
 
   const keep = await Keep.open(ctx, ctx.source, transform)
   await keepTheme(keep)
-  await keepCustomProperties(keep)
+  await keepDocumentProperties(keep)
   await keepExternalLinks(keep)
   await keepTables(keep)
   await keepPivots(keep)
