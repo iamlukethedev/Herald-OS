@@ -254,6 +254,7 @@ function officeCall(sessionId: string): void {
 }
 
 const prompts = () => edges.requests.filter(request => request.method === 'prompt.submit').map(request => request.params.text)
+const officeCallRunning = () => Object.values($chats.get())[0]?.messages.some(message => message.role === 'tool' && message.toolId === 'deck' && message.running) ?? false
 const toasts = () => $notifications.get().map(notification => `${notification.title}: ${notification.body ?? ''}`)
 const frame = (level: number) => ({ pcm: new Int16Array(1600), level, ms: 100 })
 
@@ -333,7 +334,9 @@ describe('a spoken request with Herald Slides in front', () => {
     hermes.turn = (sessionId, text) => (text === REQUEST ? notesTurn(sessionId) : officeCall(sessionId))
     await createChat()
     await sendPrompt('Turn my report into slides.')
-    await vi.waitFor(() => expect(Object.values($chats.get())[0]?.streaming).toBe(true))
+    // The chat shows busy as soon as the prompt is sent, but the Office call starts on the real clock: it
+    // must be running before the fake clock takes over, or it can begin after Hermes has stopped it.
+    await vi.waitFor(() => expect(officeCallRunning()).toBe(true))
 
     await startVoice('button')
     vi.useFakeTimers()
