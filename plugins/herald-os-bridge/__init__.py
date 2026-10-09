@@ -32,6 +32,7 @@ SKILLS: dict[str, str] = {
     "herald-canvas": "Make and edit pictures in Herald Canvas: posters, banners, collages, photo fixes; the canvas tool, design habits, the .comp format and every adjustment setting.",
     "herald-docs": "Write and edit documents in Herald Docs: drafts from a brief, templates, rewriting marked text, formatting, tables, pictures, a sheet's figures in a report, saving and PDFs.",
     "herald-sheets": "Work in Herald Sheets: formulas from a description, explaining formulas, filling a column from examples, cleaning data, what stands out, building a workbook, sorting, filtering, saving.",
+    "herald-slides": "Make and change presentations in Herald Slides: a deck from a topic, a document or a sheet, layouts, themes, speaker notes, pictures, tables, reordering, saving and PDFs.",
 }
 
 
