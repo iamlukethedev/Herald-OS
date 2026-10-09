@@ -54,6 +54,9 @@ function selectionOf(doc: SlidesDocument): string {
   return `${place}${what ? `, ${what}` : ''}`
 }
 
+/** Speaker notes typed and not yet in the deck, by document; Ctrl+S runs before the notes lose focus. */
+const pendingNotes = new WeakMap<SlidesDocument, () => void>()
+
 function Notes({ doc }: { doc: SlidesDocument }) {
   useDeck(doc)
   const slide = doc.slide
@@ -61,11 +64,27 @@ function Notes({ doc }: { doc: SlidesDocument }) {
 
   useEffect(() => setText(slide.notes), [slide.id, slide.notes])
 
+  const commit = () => {
+    if (text !== slide.notes) {
+      commands.change((deck) => setNotes(deck, slide.id, text), doc)
+    }
+  }
+
+  useEffect(() => {
+    pendingNotes.set(doc, commit)
+
+    return () => {
+      if (pendingNotes.get(doc) === commit) {
+        pendingNotes.delete(doc)
+      }
+    }
+  })
+
   return (
     <textarea
       value={text}
       onChange={(event) => setText(event.target.value)}
-      onBlur={() => commands.change((deck) => setNotes(deck, slide.id, text), doc)}
+      onBlur={commit}
       onKeyDown={(event) => event.stopPropagation()}
       placeholder="Speaker notes"
       aria-label="Speaker notes"
@@ -134,6 +153,7 @@ export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
     const handle: EditorHandle<Deck> = {
       snapshot: () => {
         flushTyping(doc)
+        pendingNotes.get(doc)?.()
 
         return doc.presentation
       },
