@@ -5,7 +5,7 @@
 import { atom, computed } from 'nanostores'
 import type { AudioDevicePref } from '../../shared/ipc.ts'
 import { describeDeviceChoice, resolveAudioDevice, type AudioDeviceKind } from '../lib/audio-devices.ts'
-import { $inputDevices, refreshInputDevices, subscribeMicrophone } from '../lib/voice/audio-capture.ts'
+import { $inputDevices, $micLevel, $micOpen, refreshInputDevices, subscribeMicrophone } from '../lib/voice/audio-capture.ts'
 import { $prefs, updatePrefs } from './backend.ts'
 import { notify } from './notifications.ts'
 
@@ -47,6 +47,15 @@ export const MICROPHONE_TEST_MS = 5000
 
 /** True while the microphone test is listening. */
 export const $microphoneTest = atom(false)
+
+/**
+ * True when the microphone is open for something other than the test: a conversation, the armed wake
+ * word or dictation. The level meter is live then, and the test button would only be in the way.
+ */
+export const $micHeldElsewhere = computed([$micOpen, $microphoneTest], (open, testing) => open && !testing)
+
+/** The level meter's fill, 0 to 100. Frames carry RMS, so a quiet room reads nearly empty. */
+export const $micLevelPercent = computed($micLevel, level => Math.min(100, Math.round(level * 500)))
 
 let stopTest: (() => void) | null = null
 let testTimer: ReturnType<typeof setTimeout> | null = null
