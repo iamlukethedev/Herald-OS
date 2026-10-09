@@ -63,10 +63,14 @@ describe('the print view', () => {
 
     expect(html).toContain('<ol start="3" type="a"><li><p>c</p></li></ol>')
     expect(html).toContain('<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label>☑</label><div><p>done</p></div></li></ul>')
-    expect(html).toContain('<table data-borders="none" style="table-layout: fixed"><colgroup><col style="width: 100px"><col style="width: 50px"></colgroup><tbody><tr><th colspan="2"><p>H</p></th></tr><tr><td style="background-color: #eeeeee"><p><br></p></td><td><p><br></p></td></tr></tbody></table>')
+    // Tables and pictures are sized as the editor sizes them, so they take the same room on paper.
+    expect(html).toContain('<div class="tableWrapper"><table data-borders="none" style="width: 150px"><colgroup><col style="width: 100px"><col style="width: 50px"></colgroup><tbody><tr><th colspan="2"><p>H</p></th></tr><tr><td style="background-color: #eeeeee"><p><br></p></td><td><p><br></p></td></tr></tbody></table></div>')
     expect(html).toContain('<div class="doc-callout" data-callout="warning"><p>Mind</p></div>')
     expect(html).toContain('<pre><code>a &lt; b</code></pre>')
-    expect(html).toContain('<p><img src="data:image/png;base64,AA==" alt="A &quot;dot&quot;" width="40" height="20"></p>')
+    expect(html).toContain('<p><img src="data:image/png;base64,AA==" alt="A &quot;dot&quot;" style="width: 40.4px; height: 20px"></p>')
+    expect(htmlFromDocument(doc([{ type: 'table', content: [{ type: 'tableRow', content: [{ type: 'tableCell', attrs: { colwidth: [20] }, content: [paragraphNode()] }, { type: 'tableCell', content: [paragraphNode()] }] }] }]))).toContain(
+      '<table style="min-width: 56px"><colgroup><col style="width: 36px"><col style="min-width: 36px"></colgroup>'
+    )
   })
 })
 
@@ -85,8 +89,8 @@ describe('typography', () => {
     expect(fontStack(null)).toBe('"Helvetica Neue", Arial, "Liberation Sans", sans-serif')
   })
 
-  it('draws borderless tables with guides on screen and none on paper', () => {
+  it('draws borderless tables with guides on screen and none on paper, taking the same room', () => {
     expect(contentCss('.p', 'screen')).toContain('.p table[data-borders="none"] td, .p table[data-borders="none"] th { border: 0.75pt dashed #d5dae2 }')
-    expect(contentCss('.p', 'print')).toContain('.p table[data-borders="none"] td, .p table[data-borders="none"] th { border: 0 }')
+    expect(contentCss('.p', 'print')).toContain('.p table[data-borders="none"] td, .p table[data-borders="none"] th { border: 0.75pt solid transparent }')
   })
 })
