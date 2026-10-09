@@ -6,11 +6,13 @@ import {
   IconBatteryCharging,
   IconBluetooth,
   IconBluetoothConnected,
+  IconCheck,
   IconDeviceDesktop,
   IconDeviceSpeaker,
   IconHeadphones,
   IconLock,
   IconMicrophone,
+  IconPlayerPlay,
   IconRefresh,
   IconSettings,
   IconSun,
@@ -24,15 +26,20 @@ import {
 import { useCallback, useEffect, useState } from 'react'
 import type { AudioDevice, CalendarEvent, ControlAction, DisplayInfo, StatusPanelId, StatusPanelState } from '../../../shared/ipc.ts'
 import { Chips, GlassButton, Toggle } from '../../components/ui/glass.tsx'
+import { Meter } from '../../components/ui/primitives.tsx'
+import { describeDeviceChoice } from '../../lib/audio-devices.ts'
 import { cn } from '../../lib/cn.ts'
-import { $env } from '../../store/backend.ts'
+import { audioScope } from '../../lib/platform-labels.ts'
+import { $inputDevices, $micLevel, $micOpen } from '../../lib/voice/audio-capture.ts'
+import { $inputChoice, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../store/audio-devices.ts'
+import { $env, $prefs } from '../../store/backend.ts'
 import { runCommand } from '../../store/os-commands.ts'
 import { $panelStates, loadPanel, PANEL_TITLES, panelAction } from '../../store/status-panel.ts'
 
 /*
  * The menu bar's quick panels: Wi-Fi, Bluetooth, sound, displays, battery and power, and the
  * calendar. On Herald OS Linux they change things; on macOS they only show what Control Center
- * would, plus the volume.
+ * would, plus the volume and — when Herald owns its own audio path — which microphone its voice uses.
  */
 
 type LivePanel = Exclude<StatusPanelId, 'clock'>
@@ -376,7 +383,67 @@ function AudioPanel() {
           {devices('input', audio.inputs)}
         </>
       )}
+      {audioScope() === 'app' && <HeraldVoiceRows />}
       {error && <Note tone="danger">{error}</Note>}
+    </>
+  )
+}
+
+/**
+ * The microphone Herald's own voice uses, shown only where Herald owns its audio path (macOS and the
+ * other desktop hosts). On Herald OS Linux the rows above already set the machine's devices, and the
+ * shell is the session there, so a second set of rows would be the same control twice.
+ */
+function HeraldVoiceRows() {
+  const prefs = useStore($prefs)
+  const devices = useStore($inputDevices)
+  const choice = useStore($inputChoice)
+  const level = useStore($micLevel)
+  const open = useStore($micOpen)
+  const testing = useStore($microphoneTest)
+
+  useEffect(() => watchAudioDevices(), [])
+
+  const automatic = devices.devices.find(device => device.isSystem)
+  const chosen = prefs.voice.inputDevice
+
+  return (
+    <>
+      <div className="px-2 pt-3 pb-1 text-[11.5px] text-fg-4">Herald voice</div>
+      {!prefs.voice.enabled ? (
+        <Note>Voice is off, so the microphone is never opened. Turn it on in Settings &gt; Voice.</Note>
+      ) : !devices.labelsAvailable ? (
+        <Note>Allow microphone access in Settings &gt; Voice to see the microphones by name.</Note>
+      ) : (
+        <>
+          <Row icon={<IconMicrophone />} label="Microphone" detail={describeDeviceChoice(choice, 'input')} />
+          <Row label="Automatic" detail={automatic ? `Follow the system: ${automatic.label}` : 'Follow the system'} active={!chosen} disabled={!chosen} onClick={() => void chooseInputDevice(null)} right={!chosen ? <IconCheck size={14} className="text-accent-strong" /> : undefined} />
+          {devices.devices.map(device => {
+            const selected = chosen?.id === device.id || (!chosen && device.isSystem)
+
+            return (
+              <Row
+                key={device.id}
+                label={device.label}
+                active={selected}
+                disabled={selected}
+                onClick={() => void chooseInputDevice({ id: device.id, label: device.label })}
+                right={selected ? <IconCheck size={14} className="text-accent-strong" /> : undefined}
+              />
+            )
+          })}
+          <div className="flex items-center gap-2.5 px-2 py-2">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-fg-2">
+              <IconPlayerPlay size={14} />
+            </span>
+            <Meter value={Math.min(100, Math.round(level * 500))} className="flex-1" />
+            <GlassButton size="sm" onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())} aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}>
+              {testing || open ? 'Listening…' : 'Test'}
+            </GlassButton>
+          </div>
+          {chosen && choice.reason === 'missing' && <Note>{choice.absent?.label} is not connected. It is used again the moment it comes back.</Note>}
+        </>
+      )}
     </>
   )
 }

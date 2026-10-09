@@ -35,3 +35,17 @@ export function shortcutLabel(key: string, { shift = false } = {}): string {
 export function voiceKeyLabel(hotkey: string): string | undefined {
   return hostPlatform() === 'linux' ? 'Super+V' : hotkey.trim() || undefined
 }
+
+/**
+ * Who owns the sound devices. On Herald OS Linux the shell *is* the session, so its panel sets the
+ * PipeWire default for the whole machine. Anywhere else Herald is one app among others, so a choice
+ * made in its panel belongs to Herald alone and the system default is left to the system.
+ */
+export function audioScope(): 'system' | 'app' {
+  return hostPlatform() === 'linux' ? 'system' : 'app'
+}
+
+/** True when the shell itself sets the machine's default device, rather than only its own. */
+export function ownsSystemAudio(): boolean {
+  return audioScope() === 'system'
+}

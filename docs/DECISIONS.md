@@ -857,3 +857,48 @@ Alternatives considered:
 - **Rejected: pivot tables for Sheets' summaries.** A real pivot table needs a cache that Excel
   works out and Univer's open-source packages cannot show; formulas over whole columns give the
   same table, stay live in every spreadsheet app, and need nothing of Herald's to read.
+## ADR-022: The voice's audio devices are Herald's own choice where Herald is one app among others
+
+Herald OS opened the system default microphone and played through the system default output, and
+neither could be chosen. A device that went away while the microphone was open left the graph silent
+(no `ended` handling, no `devicechange` handling), and the Sound panel on macOS showed one
+placeholder output and no inputs at all.
+
+- **Per app off Linux, per session on Linux.** On Herald OS Linux the shell *is* the session, so the
+  Sound panel keeps setting the machine's PipeWire default (`pactl`) and that is the microphone and
+  speaker the voice uses. Everywhere else Herald OS is one app among others: the choice is its own
+  (`voice.inputDevice`, `voice.outputDevice` in `prefs.json`) and the machine's default is left to
+  the system, as the Bluetooth panel already leaves pairing to Control Center.
+- **Automatic follows the system.** Both choices default to `null`, meaning "the system default".
+  Wearing a headset and letting the system pick it up therefore still works, and a person who never
+  opens the picker sees no change.
+- **A choice outlives its device.** A chosen device that is not connected falls back to the system
+  default and is *kept*: when it comes back it is used again. The fallback is quiet: the panel's
+  line names the device in use and the list says the chosen one comes back on its own — a device
+  that sleeps is no problem to report. Two states, not one — what was chosen
+  and what is in use — because an app that forgets the choice the moment a device sleeps (as Teams
+  does with Bluetooth headsets) never comes back to it.
+- **A choice wins over a new device; Automatic does not.** While a chosen device is connected,
+  plugging in another one does not take the microphone away from it. In Automatic the system decides,
+  so a device the system makes default becomes the one in use.
+- **A lost device is reopened, a system change waits.** `track.ended` from an unplugged device
+  reopens the stream at once; a change caused by the system is applied when the conversation ends,
+  so it never cuts into a sentence being listened to. Three reopen attempts in ten seconds is the
+  guard; after that Herald OS keeps the current device and says so.
+- **One microphone, one choice.** `audio-capture.ts` is the only owner of the mic (wake feed,
+  utterance recorder, barge-in monitor, WebRTC sender), so there is one setting, not one per
+  consumer. The decisions themselves are a pure table (`capture-policy.ts`), unit-tested without a
+  browser.
+- **Identity is the id, with the name as fallback.** `deviceId` is stable only for one origin, so a
+  choice stores `{ id, label }`: the label identifies the device after a cache clear or a switch from
+  a dev build to a packaged one, and the stored id is rewritten to the one found.
+- **The microphone is still only opened deliberately.** A conversation, the armed wake word, or the
+  explicit test button; never by opening a panel, and never while voice is off.
+- **Rejected: changing the macOS system default device.** It affects every other app and needs a
+  native helper; Herald OS already declines that for Bluetooth.
+- **Rejected: a separate microphone for the wake word.** The capture graph is deliberately single.
+- **Rejected: priority lists and transport classification.** "Chosen, then system" covers the case;
+  Chromium's label already marks `(Bluetooth)`, `(Built-in)` and `(Virtual)`, and Herald OS uses it
+  only to order the list, never to decide.
+- **Carried forward, not yet done:** a Herald-only output volume, the speaker picker itself, and a
+  "no sound from this device" warning after a warm-up window.
