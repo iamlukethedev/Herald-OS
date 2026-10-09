@@ -301,6 +301,13 @@ export async function read(args: Args): Promise<Outcome> {
   }
 }
 
+/** A document's content as it is now (open, or a file), for work elsewhere: a deck from its headings. */
+export async function documentJSON(ref: unknown): Promise<{ name: string; path: string | null; json: DocJSON }> {
+  const { name, path, state } = await reading(await located(ref))
+
+  return { name, path, json: jsonOf(state.doc) }
+}
+
 export async function find(args: Args): Promise<Outcome> {
   const query = text(args.text)
 
