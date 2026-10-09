@@ -11,6 +11,8 @@ platforms:
 provides_tools:
   - os_ui
   - canvas
+  - docs
+  - sheets
   - system_network
   - system_control
   - system_logs
