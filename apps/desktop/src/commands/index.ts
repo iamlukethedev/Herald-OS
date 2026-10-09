@@ -17,6 +17,7 @@ import { openCommands } from './open.ts'
 import { studioCommands } from './studio.ts'
 import { screenCommands } from './screen.ts'
 import { sheetsCommands } from './sheets.ts'
+import { slidesCommands } from './slides.ts'
 import { switchCommands } from './switches.ts'
 import { systemCommands } from './system.ts'
 import { themeCommands } from './themes.ts'
@@ -53,7 +54,8 @@ export const commandGroups: Record<string, readonly OsCommand[]> = {
   canvas: canvasCommands,
   office: officeCommands,
   docs: docsCommands,
-  sheets: sheetsCommands
+  sheets: sheetsCommands,
+  slides: slidesCommands
 }
 
 let registered = false
