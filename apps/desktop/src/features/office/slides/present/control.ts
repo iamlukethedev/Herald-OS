@@ -110,10 +110,44 @@ export const setPresentingShortcut = (handler: ((event: KeyboardEvent) => boolea
 }
 
 /**
- * Keys pressed in a window move the presentation, the same whichever view they are pressed in;
- * `first` may take a key before they do (true: taken). Keys without modifiers go no further, so
- * that the editor under the presentation never acts on them.
+ * The keydown listener of every view of a presentation: keys move it the same whichever view they
+ * are pressed in; `first` may take a key before they do (true: taken). Keys without modifiers go no
+ * further, so that the editor under the presentation never acts on them.
  */
+export function presentationKeys(first?: () => ((event: KeyboardEvent) => boolean) | undefined): (event: KeyboardEvent) => void {
+  return (event) => {
+    const state = $presentation.get()
+
+    if (!state || event.isComposing) {
+      return
+    }
+
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+      if (shortcut?.(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+
+      return
+    }
+
+    const taken = first?.()?.(event) ?? false
+    const after = taken ? state : press(state, event.key)
+    event.stopPropagation()
+
+    if (after === undefined) {
+      return
+    }
+
+    event.preventDefault()
+
+    if (!taken) {
+      act(() => after)
+    }
+  }
+}
+
+/** Keys pressed in a window move the presentation (see `presentationKeys`). */
 export function usePresentationKeys(win: Window | null, first?: (event: KeyboardEvent) => boolean): void {
   const before = useRef(first)
   before.current = first
@@ -123,36 +157,7 @@ export function usePresentationKeys(win: Window | null, first?: (event: Keyboard
       return
     }
 
-    const onKey = (event: KeyboardEvent) => {
-      const state = $presentation.get()
-
-      if (!state || event.isComposing) {
-        return
-      }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        if (shortcut?.(event)) {
-          event.preventDefault()
-          event.stopPropagation()
-        }
-
-        return
-      }
-
-      const taken = before.current?.(event) ?? false
-      const after = taken ? state : press(state, event.key)
-      event.stopPropagation()
-
-      if (after === undefined) {
-        return
-      }
-
-      event.preventDefault()
-
-      if (!taken) {
-        act(() => after)
-      }
-    }
+    const onKey = presentationKeys(() => before.current)
     win.addEventListener('keydown', onKey, true)
 
     return () => win.removeEventListener('keydown', onKey, true)
