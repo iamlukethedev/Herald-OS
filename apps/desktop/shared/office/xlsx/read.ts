@@ -629,7 +629,13 @@ export async function workbookFromXlsx(input: Uint8Array | ArrayBuffer, options:
     ...(pkg.date1904 ? { dateSystem: 'date1904' } : {}),
     ...(resources.length ? { resources } : {}),
     ...(activeTab >= 0 && ids[activeTab] ? { activeSheetId: ids[activeTab] } : {}),
-    ...(Object.keys(properties).length || created ? { custom: { herald: { properties: { ...properties, ...(created ? { created } : {}) } } } } : {})
+    custom: {
+      herald: {
+        ...(Object.keys(properties).length || created ? { properties: { ...properties, ...(created ? { created } : {}) } } : {}),
+        // Charts made later take the file's theme colours, which the cells only hold resolved.
+        theme: { accents: palette.theme.slice(4, 10).map((rgb) => `#${rgb}`) }
+      }
+    }
   }
 
   return { workbook, notes: [...report.notes, ...notes] }
