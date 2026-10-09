@@ -88,10 +88,10 @@ and without the clipboard: at the caret in a Docs page (each "new line" starts a
 list's next item), into the active Sheets cell and on down the column (a number becomes a number,
 "=SUM(B2:B9)" stays a formula, and the selection moves to the cell below so dictation carries on),
 or into Slides: at the caret of the text box being edited, at the end of the selected text box,
-shape or table, or else in a new text box on the slide, left open to carry on typing. A cell being
-edited, the find bar, the speaker notes or any other field takes the words as before; so does
-another app in front. In the Linux panels session the Office apps are
-windows of their own and get dictation as typed keys.
+shape or table, or else in a new text box on the slide, selected so more dictation carries on in
+it. A cell being edited, the find bar, the speaker notes or any other field takes the words as
+before; so does another app in front. In the Linux panels session the Office apps are windows of
+their own and get dictation as typed keys.
 
 **Files and apps stay inside Herald OS.** "Open hello.pdf" (or "open hello dot pdf", "open the file
 report") finds the file by name in your home folder (Spotlight on macOS, a bounded `find` on Linux;

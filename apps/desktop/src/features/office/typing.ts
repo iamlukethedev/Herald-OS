@@ -205,7 +205,7 @@ async function editorUp(find: () => TextSession | null): Promise<TextSession | n
 }
 
 async function typeIntoSlides(text: string, submit: boolean): Promise<string | null> {
-  const [{ $presenting, decks, slidesSession }, { requestEditStart, textSessionOf }, { change, editSelection }, { addText }, { applyLive }, { isEditable }] = await Promise.all([import('./slides/store.ts'), import('./slides/editor/active.ts'), import('./slides/editor/commands.ts'), import('./slides/model.ts'), import('./docs/model.ts'), import('../../store/edit-target.ts')])
+  const [{ $presenting, decks, slidesSession }, { textSessionOf }, { change, editSelection }, { addText }, { applyLive }, { isEditable }] = await Promise.all([import('./slides/store.ts'), import('./slides/editor/active.ts'), import('./slides/editor/commands.ts'), import('./slides/model.ts'), import('./docs/model.ts'), import('../../store/edit-target.ts')])
   const doc = slidesSession.active()
   const deck = doc ? decks.get(doc.key) : undefined
   const editing = textSessionOf(deck)
@@ -229,8 +229,11 @@ async function typeIntoSlides(text: string, submit: boolean): Promise<string | n
       return alreadyCaption(text, doc.name)
     }
 
-    // What the person typed before becomes a step of its own, so undo takes the dictation back alone.
-    session.flush()
+    // What the person typed before becomes a step of its own, so undo takes the dictation back alone;
+    // a text box only just opened has nothing typed yet, and its height fits with the words.
+    if (editing) {
+      session.flush()
+    }
 
     if (!applyLive(session.editor.view, typed(text, submit))) {
       return null
@@ -245,19 +248,11 @@ async function typeIntoSlides(text: string, submit: boolean): Promise<string | n
     return null
   }
 
-  // Nothing to type into: the words make a new text box, as pasting them does, left open to carry on typing.
+  // Nothing to type into: the words make a new text box, as pasting them does, selected so more
+  // dictation carries on in it. Opening it for typing would fit its height as a second step to undo.
   const added = change((current) => addText(current, deck.slideId, { text: lines.join('\n') }), deck)
 
-  if (!added) {
-    return null
-  }
-
-  afterwards(() => {
-    requestEditStart({ elementId: added.elementId, select: 'end' })
-    deck.edit(added.elementId)
-  })
-
-  return typedCaption(text, false, `a new text box in ${doc.name}`)
+  return added ? typedCaption(text, false, `a new text box in ${doc.name}`) : null
 }
 
 /**

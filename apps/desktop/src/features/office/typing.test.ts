@@ -196,6 +196,15 @@ describe('dictation into Herald Slides', () => {
     return { session, root, flushed, text: () => view.state.doc.textContent }
   }
 
+  /** The text box's editor comes up a moment after editing it starts, as React mounts it. */
+  function mountsOnEdit(editor: ReturnType<typeof editorFor>): void {
+    doc.subscribe(() => {
+      if (doc.editing === editor.session.elementId) {
+        setTimeout(() => $textSession.set(editor.session))
+      }
+    })
+  }
+
   it('types at the caret of the text box being edited, what was typed before it a step of its own', async () => {
     const editor = editorFor(box, 'Hello')
     doc.edit(box)
@@ -207,32 +216,34 @@ describe('dictation into Herald Slides', () => {
     expect(editor.flushed).toEqual(['Hello', 'Hello and welcome'])
   })
 
-  it('opens the selected text box, shape or table and types at its end', async () => {
+  it('opens the selected text box, shape or table and types at its end, the box fitting the words in the same step', async () => {
     const editor = editorFor(box, 'Hello')
     doc.select([box])
-    // The text box's editor comes up a moment after editing starts, as React mounts it.
-    doc.subscribe(() => {
-      if (doc.editing === box) {
-        setTimeout(() => $textSession.set(editor.session))
-      }
-    })
+    mountsOnEdit(editor)
 
     expect(await typeIntoOffice('and welcome')).toBe('Typed "and welcome" in Pitch')
     expect(editStartFor(box)).toEqual({ elementId: box, select: 'end' })
     expect(doc.editing).toBe(box)
     expect(editor.text()).toBe('Hello and welcome')
-    expect(editor.flushed).toEqual(['Hello', 'Hello and welcome'])
+    expect(editor.flushed).toEqual(['Hello and welcome'])
   })
 
-  it('puts the words in a new text box when nothing on the slide takes them, as one step to undo', async () => {
+  it('puts the words in a new text box when nothing on the slide takes them, as one step, selected so the next dictation carries on in it', async () => {
     expect(await typeIntoOffice('Dear Sam,\nthanks for coming')).toBe('Typed "Dear Sam, thanks for coming" in a new text box in Pitch')
 
     const [added] = doc.selection
 
     expect(added.id).not.toBe(box)
     expect(added.kind === 'text' && plainText(added.body)).toBe('Dear Sam,\nthanks for coming')
-    expect(doc.editing).toBe(added.id)
+    expect(doc.editing).toBeNull()
+    expect(editStartFor(added.id)).toBeNull()
+
+    const editor = editorFor(added.id, 'thanks for coming')
+    mountsOnEdit(editor)
+
+    expect(await typeIntoOffice('today')).toBe('Typed "today" in Pitch')
     expect(editStartFor(added.id)).toEqual({ elementId: added.id, select: 'end' })
+    expect(editor.text()).toBe('thanks for coming today')
     expect(doc.history.undo()).toBe('New Text Box')
     expect(doc.history.canUndo).toBe(false)
   })
