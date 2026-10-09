@@ -289,7 +289,7 @@ function Pane({ editor, docKey }: { editor: Editor; docKey: string }) {
                 placeholder="Filter headings"
                 aria-label="Filter headings"
                 aria-controls={listId}
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-fg-4"
+                className="docs-nav-filter min-w-0 flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-fg-4"
               />
               {query && (
                 <button type="button" aria-label="Clear the filter" onClick={() => setQuery('')} className="grid size-4 shrink-0 place-items-center rounded text-fg-3 hover:text-fg">
@@ -334,7 +334,7 @@ function Pane({ editor, docKey }: { editor: Editor; docKey: string }) {
                     style={{ paddingLeft: 4 + node.depth * INDENT }}
                     className={cn(
                       'docs-nav-row relative flex h-7 cursor-default items-center gap-1 rounded-md pr-2 text-[12px]',
-                      here ? 'bg-white/10 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent' : 'hover:bg-white/5',
+                      here ? 'bg-white/10 before:absolute before:inset-y-1.5 before:left-1 before:w-0.5 before:rounded-full before:bg-accent' : 'hover:bg-white/5',
                       row.context ? 'text-fg-3' : here || node.level <= 1 ? 'text-fg' : 'text-fg-2',
                       node.level === 0 ? 'font-semibold' : node.level === 1 && 'font-medium'
                     )}
