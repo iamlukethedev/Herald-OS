@@ -211,6 +211,22 @@ export function VoiceSection() {
             label="Microphone"
             description={describeDeviceChoice(micChoice, 'input')}
             keywords="microphone input device airpods bluetooth headset usb audio"
+            below={
+              voice.enabled ? (
+                <div className="flex items-center gap-2">
+                  <Meter value={micLevel} className="flex-1" />
+                  <GlassButton
+                    size="sm"
+                    onClick={() => (testingMic ? stopMicrophoneTest() : void startMicrophoneTest())}
+                    disabled={micHeldElsewhere}
+                    title={micHeldElsewhere ? 'The microphone is already open' : 'Hear the microphone for a few seconds'}
+                    aria-label={testingMic ? 'Stop the microphone test' : 'Test the microphone'}
+                  >
+                    {testingMic ? 'Stop' : 'Test'}
+                  </GlassButton>
+                </div>
+              ) : undefined
+            }
           >
             <MenuDropdown
               ariaLabel="Microphone"
@@ -221,30 +237,6 @@ export function VoiceSection() {
               disabled={!voice.enabled}
             />
           </SettingsRow>
-          {voice.enabled && (
-            <SettingsRow
-              icon={<IconEar />}
-              label="Microphone level"
-              description={
-                micHeldElsewhere
-                  ? 'The microphone is open for a conversation, so the bar is live.'
-                  : 'Test hears the microphone for a few seconds and lets it go; the bar fills as you speak.'
-              }
-            >
-              <div className="flex w-[200px] items-center gap-2">
-                <Meter value={micLevel} className="flex-1" />
-              </div>
-              <GlassButton
-                size="sm"
-                onClick={() => (testingMic ? stopMicrophoneTest() : void startMicrophoneTest())}
-                disabled={micHeldElsewhere}
-                title={micHeldElsewhere ? 'The microphone is already open' : undefined}
-                aria-label={testingMic ? 'Stop the microphone test' : 'Test the microphone'}
-              >
-                {testingMic ? 'Stop' : 'Test'}
-              </GlassButton>
-            </SettingsRow>
-          )}
         </SettingsGroup>
       )}
 

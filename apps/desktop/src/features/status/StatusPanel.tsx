@@ -12,7 +12,6 @@ import {
   IconHeadphones,
   IconLock,
   IconMicrophone,
-  IconPlayerPlay,
   IconRefresh,
   IconSettings,
   IconSun,
@@ -416,7 +415,25 @@ function HeraldVoiceRows() {
         <Note>Allow microphone access in Settings &gt; Voice to see the microphones by name.</Note>
       ) : (
         <>
-          <Row icon={<IconMicrophone />} label="Microphone" detail={describeDeviceChoice(choice, 'input')} />
+          <Row
+            icon={<IconMicrophone />}
+            label="Microphone"
+            detail={describeDeviceChoice(choice, 'input')}
+            right={
+              <>
+                <Meter value={level} className="w-[90px] shrink-0" />
+                <GlassButton
+                  size="sm"
+                  onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())}
+                  disabled={held}
+                  title={held ? 'The microphone is already open' : 'Hear the microphone for a few seconds'}
+                  aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}
+                >
+                  {testing ? 'Stop' : 'Test'}
+                </GlassButton>
+              </>
+            }
+          />
           <Row label="Automatic" detail={automatic ? `Follow the system: ${automatic.label}` : 'Follow the system'} active={!chosen} disabled={!chosen} onClick={() => void chooseInputDevice(null)} right={!chosen ? <IconCheck size={14} className="text-accent-strong" /> : undefined} />
           {devices.devices.map(device => {
             const selected = chosen?.id === device.id || (!chosen && device.isSystem)
@@ -432,21 +449,6 @@ function HeraldVoiceRows() {
               />
             )
           })}
-          <div className="flex items-center gap-2.5 px-2 py-2">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-fg-2">
-              <IconPlayerPlay size={14} />
-            </span>
-            <Meter value={level} className="flex-1" />
-            <GlassButton
-              size="sm"
-              onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())}
-              disabled={held}
-              title={held ? 'The microphone is already open' : undefined}
-              aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}
-            >
-              {testing ? 'Stop' : 'Test'}
-            </GlassButton>
-          </div>
           {chosen && choice.reason === 'missing' && <Note>{choice.absent?.label} is not connected. It is used again the moment it comes back.</Note>}
         </>
       )}
