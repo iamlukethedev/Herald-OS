@@ -3,6 +3,7 @@ import { PluginKey } from '@tiptap/pm/state'
 import Suggestion, { type SuggestionKeyDownProps, type SuggestionProps } from '@tiptap/suggestion'
 import { atom } from 'nanostores'
 import type { CalloutKind } from '../../../../shared/office/document.ts'
+import { isMac } from '../../../lib/shortcuts.ts'
 import { applyLive, insertPageBreak, insertTable, setStyle } from './model.ts'
 
 /*
@@ -45,7 +46,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
   { id: 'numbers', label: 'Numbered list', hint: 'A list with numbers', aliases: ['ordered', 'ol', 'number', 'numbers', '1.'], group: 'Lists', run: (editor) => editor.chain().focus().toggleOrderedList().run() },
   { id: 'tasks', label: 'Checklist', hint: 'Items to tick off', aliases: ['todo', 'to do', 'task', 'tasks', 'checkbox', 'check', '[]'], group: 'Lists', run: (editor) => editor.chain().focus().toggleTaskList().run() },
   { id: 'table', label: 'Table', hint: 'Three by three, with a header row', aliases: ['grid', 'tbl', 'columns', 'rows', 'spreadsheet'], group: 'Insert', run: (editor) => applyLive(editor.view, insertTable({ rows: 3, cols: 3 }, 'selection')) },
-  { id: 'image', label: 'Picture', hint: 'From a file on this Mac', aliases: ['image', 'img', 'photo', 'picture', 'screenshot'], group: 'Insert', run: () => $pickImage.set($pickImage.get() + 1) },
+  { id: 'image', label: 'Picture', hint: `From a file on this ${isMac ? 'Mac' : 'computer'}`, aliases: ['image', 'img', 'photo', 'picture', 'screenshot'], group: 'Insert', run: () => $pickImage.set($pickImage.get() + 1) },
   { id: 'divider', label: 'Divider', hint: 'A line across the page', aliases: ['hr', 'rule', 'line', 'separator', '---'], group: 'Insert', run: (editor) => editor.chain().focus().setHorizontalRule().run() },
   { id: 'pagebreak', label: 'Page break', hint: 'Start a new page', aliases: ['break', 'new page', 'newpage', 'page'], group: 'Insert', run: (editor) => applyLive(editor.view, insertPageBreak()) },
   { id: 'info', label: 'Info panel', hint: 'Blue panel', aliases: ['callout', 'panel', 'info', 'information', 'note'], group: 'Panels', run: callout('info') },
