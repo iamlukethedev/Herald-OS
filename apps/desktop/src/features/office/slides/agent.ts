@@ -324,12 +324,12 @@ export async function create(args: Args, context: CommandContext): Promise<Outco
 }
 
 export async function list(): Promise<Outcome> {
-  const open = (await openEntries()).filter((entry) => entry.app === 'slides')
-  const current = open.find((entry) => entry.active) ?? open[0]
+  const presentations = (await openEntries()).filter((entry) => entry.app === 'slides')
+  const current = presentations.find((entry) => entry.active) ?? presentations[0]
 
   return {
-    summary: open.length ? `${count(open.length, 'presentation')} open${current ? `; in front: ${current.name}${current.selection ? ` (${current.selection})` : ''}` : ''}` : 'Nothing is open in Herald Slides',
-    data: { presentations: open.map(({ key: _key, app: _app, front: _front, ...entry }) => entry), current: current ? (current.path ?? current.name) : null }
+    summary: presentations.length ? `${count(presentations.length, 'presentation')} open${current ? `; in front: ${current.name}${current.selection ? ` (${current.selection})` : ''}` : ''}` : 'Nothing is open in Herald Slides',
+    data: { presentations: presentations.map(({ key: _key, app: _app, front: _front, ...entry }) => entry), current: current ? (current.path ?? current.name) : null }
   }
 }
 

@@ -1090,7 +1090,8 @@ const BULLET = 120
 /** With notes: true, bullets are kept this short. */
 const SHORT_BULLET = 80
 const MAX_BULLETS = 8
-const MAX_TABLE_ROWS = 15
+/** As many rows of 18 point text as fit under a slide's title. */
+const MAX_TABLE_ROWS = 12
 
 const LISTS = new Set(['bulletList', 'orderedList', 'taskList'])
 
@@ -1310,8 +1311,9 @@ export function slidesFromDocument(doc: DocJSON, options: { name?: string; level
   }
 
   const titleSlide: SlideSpec = { layout: 'title', title, body: subtitle ? [subtitle] : [], notes: intro.join('\n') }
+  const content = starts ? slides : slides.filter((spec) => spec.body.length || spec.notes || spec.table)
 
-  return { title, slides: [titleSlide, ...slides.flatMap(split)] }
+  return { title, slides: [titleSlide, ...content.flatMap(split)] }
 }
 
 /** Slides a document made, added after `after` (at the end without one) as one change; a deck with a title slide of its own gets the document's as a section header. */

@@ -464,11 +464,11 @@ describe('slides from a document', () => {
     expect(made.slides.map((slide) => [slide.layout, slide.title, slide.body.length, slide.table?.length ?? 0])).toEqual([
       ['title', 'Plan', 0, 0],
       ['title-content', 'Budget', 1, 0],
-      ['title-only', 'Budget', 0, 15],
+      ['title-only', 'Budget', 0, 12],
       ['title-content', 'Many', 7, 0],
       ['title-content', 'Many (cont.)', 4, 0]
     ])
-    expect(made.slides[2].notes).toBe('The table has 20 rows; the first 15 are on the slide.')
+    expect(made.slides[2].notes).toBe('The table has 20 rows; the first 12 are on the slide.')
     expect(made.slides[4].body).toEqual(['8', '\t8a', '\t8b', '9'])
   })
 
@@ -481,6 +481,7 @@ describe('slides from a document', () => {
       ['Shop', []],
       ['Shop', ['Milk', '\tWhole']]
     ])
+    expect(slidesFromDocument(document(para('')), { name: 'Empty' }).slides).toEqual([{ layout: 'title', title: 'Empty', body: [], notes: '' }])
   })
 
   it('becomes a new deck, or slides added to a deck as one step with its title slide as a section header', () => {
