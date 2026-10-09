@@ -79,12 +79,17 @@ export function bindChatEvents(): () => void {
   })
 }
 
-export async function createChat(options: { cwd?: string; title?: string } = {}): Promise<ChatState> {
+/** A new chat; it becomes the one the Hermes window shows unless `activate` is false. */
+export async function createChat(options: { cwd?: string; title?: string; activate?: boolean } = {}): Promise<ChatState> {
   const cwd = options.cwd ?? $prefs.get().defaultCwd ?? $env.get()?.homeDir ?? null
   const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null })
   const state = adopt(result)
   $chats.setKey(state.sessionId, state)
-  $activeChatId.set(state.sessionId)
+
+  if (options.activate !== false) {
+    $activeChatId.set(state.sessionId)
+  }
+
   void refreshSessions()
 
   return state
