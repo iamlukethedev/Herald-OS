@@ -21,31 +21,49 @@ Nous Research product, and it is not affiliated with, sponsored by or endorsed
 by Nous Research.
 
 Third-party npm and Python packages keep their own licenses. A packaged build
-includes Electron (MIT, https://github.com/electron/electron/blob/main/LICENSE)
-and Chromium, whose component licenses are listed in LICENSES.chromium.html in
-every Electron release. It also includes ONNX Runtime Web (MIT,
-https://github.com/microsoft/onnxruntime), which runs Herald Canvas's on-device
-models, and ag-psd (MIT, https://github.com/Agamnentzar/ag-psd), which reads and
-writes Photoshop documents, with its dependencies pako (MIT and Zlib,
-https://github.com/nodeca/pako) and base64-js (MIT,
-https://github.com/beatgammit/base64-js). The models themselves are not
-distributed with Herald OS: Herald Canvas downloads each from where its
-publisher put it, only after the person allows it, and each keeps its own
-license (listed in apps/desktop/shared/canvas/models.ts).
+includes Electron (MIT, https://github.com/electron/electron/blob/main/LICENSE),
+Copyright (c) Electron contributors and Copyright (c) 2013-2020 GitHub Inc., and
+Chromium, whose component licenses are listed in LICENSES.chromium.html in every
+Electron release. It also includes ONNX Runtime Web (MIT,
+https://github.com/microsoft/onnxruntime), Copyright (c) Microsoft Corporation,
+which runs Herald Canvas's on-device models, and ag-psd (MIT,
+https://github.com/Agamnentzar/ag-psd), Copyright (c) 2016 Agamnentzar, which
+reads and writes Photoshop documents, with its dependencies pako (MIT and Zlib,
+https://github.com/nodeca/pako), Copyright (C) 2014-2017 by Vitaly Puzrin and
+Andrei Tuputcyn, and base64-js (MIT, https://github.com/beatgammit/base64-js),
+Copyright (c) 2014 Jameson Little. pako is a port of zlib, (C) 1995-2013
+Jean-loup Gailly and Mark Adler. ONNX Runtime Web's WebAssembly runtime also has
+third-party code compiled into it, such as Protocol Buffers, ONNX, Abseil, RE2,
+FlatBuffers and Eigen; a packaged build carries ONNX Runtime's license and its
+notices for that code in licenses/onnxruntime-LICENSE.txt and
+licenses/onnxruntime-ThirdPartyNotices.txt. Eigen is released under the Mozilla
+Public License 2.0, and its source is available at
+https://gitlab.com/libeigen/eigen. The models themselves are not distributed
+with Herald OS: Herald Canvas downloads each from where its publisher put it,
+only after the person allows it, and each keeps its own license (listed in
+apps/desktop/shared/canvas/models.ts).
 
 Herald Sheets is built on Univer (https://github.com/dream-num/univer),
 Copyright 2023-present DreamNum Co., Ltd., released under the Apache License,
 Version 2.0. Herald OS uses Univer's open-source packages without modifying
 them. They are compiled into the renderer, and a packaged build carries their
-license in licenses/univer-LICENSE.txt.
+license in licenses/univer-LICENSE.txt. The @univerjs/icons package is released
+under the MIT License, Copyright (c) 2023-present, DreamNum Co., Ltd.
 
 Herald Docs, and the text in Herald Slides, are edited with TipTap (MIT,
-https://github.com/ueberdosis/tiptap) and ProseMirror (MIT,
-https://prosemirror.net). Herald Office reads and writes Office files with
-ExcelJS (MIT, https://github.com/exceljs/exceljs), docx (MIT,
-https://github.com/dolanmiu/docx), PptxGenJS (MIT,
-https://github.com/gitbrent/PptxGenJS) and JSZip (used under its MIT license,
-https://github.com/Stuk/jszip), which also brings in pako.
+https://github.com/ueberdosis/tiptap), Copyright (c) 2025, Tiptap GmbH, and
+ProseMirror (MIT, https://prosemirror.net), Copyright (C) 2015-2017 by Marijn
+Haverbeke <marijn@haverbeke.berlin> and others. Herald Office reads and writes
+Office files with ExcelJS (MIT, https://github.com/exceljs/exceljs),
+Copyright (c) 2014-2019 Guyon Roche, docx (MIT,
+https://github.com/dolanmiu/docx), Copyright (c) 2016 Dolan, PptxGenJS (MIT,
+https://github.com/gitbrent/PptxGenJS), Copyright (c) 2015-2022 Brent Ely, and
+JSZip (used under its MIT license, https://github.com/Stuk/jszip), Copyright (c)
+2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso,
+which also brings in pako. PptxGenJS includes some code derived from officegen
+(MIT, https://github.com/Ziv-Barber/officegen), Copyright 2013 Ziv Barber.
+ExcelJS, docx and JSZip are compiled in from their prebuilt browser files, which
+contain further packages listed below.
 
 Herald Sheets draws its charts with Apache ECharts (https://echarts.apache.org),
 Copyright 2017-2026 The Apache Software Foundation, released under the Apache
@@ -53,4 +71,253 @@ License, Version 2.0. This product includes software developed at The Apache
 Software Foundation (https://www.apache.org/). ECharts brings in ZRender
 (BSD-3-Clause, https://github.com/ecomfe/zrender), Copyright (c) 2017, Baidu
 Inc., and tslib (0BSD, https://github.com/microsoft/tslib). They are compiled
-into the renderer without changes.
+into the renderer without changes. Parts of ECharts embed code from d3.js
+(BSD-3-Clause, https://github.com/d3/d3), Copyright 2010-2016 Mike Bostock. A
+packaged build carries the ECharts, d3.js and ZRender licenses in
+licenses/echarts-LICENSE.txt, licenses/echarts-LICENSE-d3.txt and
+licenses/zrender-LICENSE.txt.
+
+The renderer and main process are also compiled from the smaller npm packages
+below, some of which ExcelJS, docx and JSZip carry inside their prebuilt browser
+files. Each keeps its own license and is used without changes, and each is
+listed with the copyright notice from its license file, or from its readme where
+it ships no license file; the few listed without one ship none. The MIT License
+text is in LICENSE, the Apache License 2.0 text is in
+licenses/univer-LICENSE.txt and the ISC License text is in licenses/ISC.txt; the
+BSD licenses are carried in full in the files named with them.
+
+Compiled into the renderer:
+- aria-hidden, react-remove-scroll, react-style-singleton, use-callback-ref,
+  use-sidecar (MIT): Copyright (c) 2017 Anton Korzunov
+- async-lock (MIT): Copyright (c) 2016 Rogier Schouten
+  <github@workingcode.ninja>
+- bail, ccount, character-entities-html4, character-entities-legacy,
+  collapse-white-space, mdast-util-to-string, unified, unist-util-is,
+  unist-util-position, unist-util-visit, vfile (MIT): Copyright (c) 2015 Titus
+  Wormer <tituswormer@gmail.com>
+- class-variance-authority (Apache-2.0): Copyright 2022 Joe Bell
+- clsx (MIT): Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
+- cmdk (MIT): Copyright (c) 2022 Paco Coursey
+- comma-separated-tokens, hast-util-whitespace, html-void-elements,
+  mdast-util-to-hast, space-separated-tokens, trough,
+  unist-util-stringify-position, unist-util-visit-parents, zwitch (MIT):
+  Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+- decimal.js (MIT): Copyright (c) 2025 Michael Mclaughlin
+- decode-named-character-reference, hast-util-to-html, hast-util-to-jsx-runtime,
+  markdown-table, mdast-util-find-and-replace, mdast-util-from-markdown,
+  mdast-util-gfm, mdast-util-gfm-footnote, mdast-util-to-markdown, micromark,
+  micromark-core-commonmark, micromark-extension-gfm-table,
+  micromark-factory-destination, micromark-factory-label,
+  micromark-factory-space, micromark-factory-title,
+  micromark-factory-whitespace, micromark-util-character,
+  micromark-util-chunked, micromark-util-classify-character,
+  micromark-util-combine-extensions,
+  micromark-util-decode-numeric-character-reference,
+  micromark-util-decode-string, micromark-util-html-tag-name,
+  micromark-util-normalize-identifier, micromark-util-resolve-all,
+  micromark-util-sanitize-uri, micromark-util-subtokenize, remark-gfm,
+  remark-rehype, vfile-message (MIT): Copyright (c) Titus Wormer
+  <tituswormer@gmail.com>
+- devlop (MIT): Copyright (c) 2023 Titus Wormer <tituswormer@gmail.com>
+- escape-string-regexp, is-plain-obj (MIT): Copyright (c) Sindre Sorhus
+  <sindresorhus@gmail.com> (https://sindresorhus.com)
+- estree-util-is-identifier-name, mdast-util-gfm-autolink-literal,
+  mdast-util-gfm-strikethrough, mdast-util-gfm-table,
+  mdast-util-gfm-task-list-item, micromark-extension-gfm,
+  micromark-extension-gfm-autolink-literal,
+  micromark-extension-gfm-strikethrough, micromark-extension-gfm-task-list-item
+  (MIT): Copyright (c) 2020 Titus Wormer <tituswormer@gmail.com>
+- extend (MIT): Copyright (c) 2014 Stefan Thomas
+- fast-diff (Apache-2.0): Copyright 2014-2023 Jason Chen; it modifies Diff Match
+  and Patch by Neil Fraser, Copyright 2006 Google Inc. (Apache-2.0)
+- fast-equals (MIT): Copyright (c) 2025 Tony Quetano
+- @flatten-js/interval-tree (MIT): Copyright (c) 2017 alexbol99
+- @floating-ui/core, @floating-ui/dom, @floating-ui/react-dom,
+  @floating-ui/utils (MIT): Copyright (c) 2021-present Floating UI contributors
+- franc-min (MIT): © Titus Wormer
+- get-nonce (MIT): Copyright (c) 2020 Anton Korzunov
+- html-url-attributes (MIT): Copyright (c) Titus Wormer
+- inline-style-parser (MIT): Copyright (c) 2012 TJ Holowaychuk
+  <tj@vision-media.ca>
+- kdbush (ISC): Copyright (c) 2026, Vladimir Agafonkin
+- linkifyjs (MIT): Copyright (c) 2024 Nick Frasser
+- lodash-es (MIT): Copyright OpenJS Foundation and other contributors
+  <https://openjsf.org/>; based on Underscore.js, copyright Jeremy Ashkenas,
+  DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
+- longest-streak, stringify-entities, trim-lines (MIT): Copyright (c) 2015 Titus
+  Wormer <mailto:tituswormer@gmail.com>
+- mdast-util-phrasing (MIT): Copyright (c) 2017 Titus Wormer
+  <tituswormer@gmail.com>; Copyright (c) 2017 Victor Felder <victor@draft.li>
+- micromark-extension-gfm-footnote (MIT): Copyright (c) 2021 Titus Wormer
+  <tituswormer@gmail.com>
+- n-gram, remark-parse, trigram-utils (MIT): Copyright (c) 2014 Titus Wormer
+  <tituswormer@gmail.com>
+- nanostores (MIT): Copyright 2020 Andrey Sitnik <andrey@sitnik.es>
+- @nanostores/react (MIT): Copyright 2020 Andrey Sitnik <andrey@sitnik.ru>
+- oniguruma-parser (MIT): Copyright (c) 2025-2026 Steven Levithan
+- oniguruma-to-es (MIT): Copyright (c) 2024-2026 Steven Levithan
+- orderedmap, w3c-keyname (MIT): Copyright (C) 2016 by Marijn Haverbeke
+  <marijn@haverbeke.berlin> and others
+- ot-json1 (ISC): Copyright (c) 2013-2018, Joseph Gentle <me@josephg.com>
+- ot-text-unicode (MIT per its readme, ISC per its package.json): Copyright 2011
+  ottypes library contributors
+- property-information (MIT): Copyright (c) Titus Wormer
+  <mailto:tituswormer@gmail.com>
+- prosemirror-tables (MIT): Copyright (C) 2015-2016 by Marijn Haverbeke
+  <marijnh@gmail.com> and others
+- quickselect (ISC): Copyright (c) 2024, Vladimir Agafonkin
+- @radix-ui/primitive and 26 @radix-ui/react-* packages (MIT): Copyright (c)
+  2022 WorkOS
+- rbush (MIT): Copyright (c) 2024 Volodymyr Agafonkin
+- react, react-dom, scheduler, use-sync-external-store (MIT): Copyright (c) Meta
+  Platforms, Inc. and affiliates.
+- react-markdown (MIT): Copyright (c) Espen Hovlandsdal
+- react-remove-scroll-bar (MIT)
+- regex, regex-recursion (MIT): Copyright (c) 2025 Steven Levithan
+- regex-utilities (MIT): Copyright (c) 2024 Steven Levithan
+- rope-sequence (MIT): Copyright (C) 2016 by Marijn Haverbeke
+  <marijn@haverbeke.berlin>
+- rxjs (Apache-2.0): Copyright (c) 2015-2018 Google, Inc., Netflix, Inc.,
+  Microsoft Corp. and contributors
+- @shikijs/core, @shikijs/engine-javascript, @shikijs/langs, @shikijs/primitive,
+  @shikijs/themes, @shikijs/types (MIT): Copyright (c) 2021 Pine Wu;
+  Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
+- @shikijs/vscode-textmate (MIT): Copyright (c) Microsoft Corporation
+- sonner (MIT): Copyright (c) 2023 Emil Kowalski
+- style-to-js (MIT): Copyright (c) 2020 Menglin "Mark" Xu
+  <mark@remarkablemark.org>
+- style-to-object (MIT): Copyright (c) 2017 Menglin "Mark" Xu
+  <mark@remarkablemark.org>
+- @tabler/icons-react (MIT): Copyright (c) 2020-2026 Paweł Kuna
+- tailwindcss (MIT, compiled into the stylesheet): Copyright (c) Tailwind Labs,
+  Inc.
+- @ungap/structured-clone (ISC): Copyright (c) 2021, Andrea Giammarchi,
+  @WebReflection
+- unicount (ISC): Copyright 2019 Joseph Gentle
+- @wendellhu/redi (MIT): Copyright 2021 Wendell Hu
+- @xterm/addon-fit (MIT): Copyright (c) 2019, The xterm.js authors
+  (https://github.com/xtermjs/xterm.js)
+- @xterm/addon-webgl (MIT): Copyright (c) 2018, The xterm.js authors
+  (https://github.com/xtermjs/xterm.js)
+- @xterm/xterm (MIT): Copyright (c) 2017-2019, The xterm.js authors
+  (https://github.com/xtermjs/xterm.js); Copyright (c) 2014-2016, SourceLair
+  Private Company (https://www.sourcelair.com); Copyright (c) 2012-2013,
+  Christopher Jeffrey (https://github.com/chjj/)
+
+Inside the prebuilt browser files of ExcelJS, docx and JSZip, besides packages
+credited above:
+- asn1.js (MIT): Copyright (c) 2017 Fedor Indutny
+- available-typed-arrays (MIT): Copyright (c) 2020 Inspect JS
+- bn.js, des.js (MIT): Copyright Fedor Indutny, 2015.
+- brorand, elliptic, hash.js, miller-rabin (MIT): Copyright Fedor Indutny, 2014.
+- browserify-aes (MIT): Copyright (c) 2014-2017 browserify-aes contributors
+- browserify-cipher (MIT): Copyright (c) 2014-2017 Calvin Metcalf & contributors
+- browserify-des (MIT): Copyright (c) 2014-2017 Calvin Metcalf, Fedor Indutny &
+  contributors
+- browserify-rsa (MIT): Copyright (c) 2014-2016 Calvin Metcalf & contributors
+- browserify-sign (ISC): Copyright (c) 2014-2015 Calvin Metcalf and
+  browserify-sign contributors
+- buffer (MIT): Copyright (c) Feross Aboukhadijeh, and other contributors.
+- buffer-xor (MIT): Copyright (c) 2015 Daniel Cousens
+- call-bind, get-intrinsic (MIT): Copyright (c) 2020 Jordan Harband
+- call-bind-apply-helpers, call-bound, es-define-property, es-errors,
+  es-object-atoms, possible-typed-array-names (MIT): Copyright (c) 2024 Jordan
+  Harband
+- cipher-base, create-hash, create-hmac, evp_bytestokey (MIT): Copyright (c)
+  2017 crypto-browserify contributors
+- core-js (MIT): Copyright (c) 2014-2023 Denis Pushkarev
+- core-util-is (MIT): Copyright Node.js contributors. All rights reserved.
+- create-ecdh (MIT): Copyright (c) 2014-2017 createECDH contributors
+- crypto-browserify (MIT): Copyright (c) 2013 Dominic Tarr
+- dayjs (MIT): Copyright (c) 2018-present, iamkun
+- define-data-property (MIT): Copyright (c) 2023 Jordan Harband
+- diffie-hellman, public-encrypt (MIT): Copyright (c) 2017 Calvin Metcalf
+- dunder-proto, math-intrinsics (MIT): Copyright (c) 2024 ECMAScript Shims
+- events (MIT): Copyright Joyent, Inc. and other Node contributors.
+- @fast-csv/format, @fast-csv/parse, fast-csv (MIT): Copyright (c) 2011-2019
+  C2FO
+- for-each (MIT): Copyright (c) 2012 Raynos.
+- function-bind (MIT): Copyright (c) 2013 Raynos.
+- get-proto (MIT): Copyright (c) 2025 Jordan Harband
+- gopd (MIT): Copyright (c) 2022 Jordan Harband
+- has-property-descriptors (MIT): Copyright (c) 2022 Inspect JS
+- has-symbols (MIT): Copyright (c) 2016 Jordan Harband
+- has-tostringtag (MIT): Copyright (c) 2021 Inspect JS
+- hash-base, md5.js (MIT): Copyright (c) 2016 Kirill Fomichev
+- hasown, set-function-length (MIT): Copyright (c) Jordan Harband and
+  contributors
+- hmac-drbg, minimalistic-crypto-utils (MIT): Copyright Fedor Indutny, 2017.
+- ieee754 (BSD-3-Clause, in full in licenses/ieee754-LICENSE.txt): Copyright
+  2008 Fair Oaks Labs, Inc.
+- immediate (MIT): Copyright (c) 2012 Barnesandnoble.com, llc, Donavon West,
+  Domenic Denicola, Brian Cavalier
+- inherits (ISC): Copyright (c) Isaac Z. Schlueter
+- is-arguments, is-generator-function (MIT): Copyright (c) 2014 Jordan Harband
+- is-callable, is-typed-array, which-typed-array (MIT): Copyright (c) 2015
+  Jordan Harband
+- isarray (MIT): Copyright (c) 2013 Julian Gruber <julian@juliangruber.com>
+- lie (MIT): Copyright (c) 2014-2018 Calvin Metcalf, Jordan Harband
+- lodash.escaperegexp, lodash.groupby, lodash.uniq (MIT): Copyright jQuery
+  Foundation and other contributors <https://jquery.org/>; based on
+  Underscore.js, copyright Jeremy Ashkenas, DocumentCloud and Investigative
+  Reporters & Editors <http://underscorejs.org/>
+- lodash.isboolean, lodash.isnil (MIT): Copyright 2012-2016 The Dojo Foundation
+  <http://dojofoundation.org/>; based on Underscore.js, copyright 2009-2016
+  Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+  <http://underscorejs.org/>
+- lodash.isequal, lodash.isfunction (MIT): Copyright JS Foundation and other
+  contributors <https://js.foundation/>; based on Underscore.js, copyright
+  Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+  <http://underscorejs.org/>
+- lodash.isundefined (MIT): Copyright 2012-2015 The Dojo Foundation
+  <http://dojofoundation.org/>; based on Underscore.js, copyright 2009-2015
+  Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+  <http://underscorejs.org/>
+- minimalistic-assert (ISC): Copyright 2015 Calvin Metcalf
+- nanoid (MIT): Copyright 2017 Andrey Sitnik <andrey@sitnik.es>
+- parse-asn1 (ISC): Copyright (c) 2017, crypto-browserify contributors
+- pbkdf2 (MIT): Copyright (c) 2014 Daniel Cousens
+- process (MIT): Copyright (c) 2013 Roman Shtylman <shtylman@gmail.com>
+- process-nextick-args (MIT): Copyright (c) 2015 Calvin Metcalf
+- randombytes, randomfill (MIT): Copyright (c) 2017 crypto-browserify
+- readable-stream, string_decoder (MIT): Copyright Node.js contributors. All
+  rights reserved. Copyright Joyent, Inc. and other Node contributors. All
+  rights reserved.
+- regenerator-runtime (MIT): Copyright (c) 2014-present, Facebook, Inc.
+- ripemd160 (MIT): Copyright (c) 2016 crypto-browserify
+- safe-buffer (MIT): Copyright (c) Feross Aboukhadijeh
+- safer-buffer (MIT): Copyright (c) 2018 Nikita Skovoroda <chalkerx@gmail.com>
+- sax (Blue Oak Model License 1.0.0, https://blueoakcouncil.org/license/1.0.0)
+- saxes (ISC)
+- setimmediate (MIT): Copyright (c) 2012 Barnesandnoble.com, llc, Donavon West,
+  and Domenic Denicola
+- sha.js (MIT and BSD-3-Clause, in full in licenses/sha.js-LICENSE.txt):
+  Copyright (c) 2013-2018 sha.js contributors; Copyright (c) 1998 - 2009, Paul
+  Johnston & Contributors
+- stream-browserify (MIT): Copyright (c) James Halliday
+- timers-browserify (MIT): Copyright © 2012 J. Ryan Stinnett
+  <jryans@gmail.com>; Copyright Joyent, Inc. and other Node contributors. All
+  rights reserved.
+- util (MIT): Copyright Joyent, Inc. and other Node contributors. All rights
+  reserved.
+- util-deprecate (MIT): Copyright (c) 2014 Nathan Rajlich
+  <nathan@tootallnate.net>
+- uuid (MIT): Copyright (c) 2010-2020 Robert Kieffer and other contributors
+- vite-plugin-node-polyfills (MIT): Copyright (c) 2022 David R. Myers
+- xml (MIT): Copyright (c) 2011-2016 Dylan Greene <dylang@gmail.com>
+- xml-js (MIT): Copyright (c) 2016-2017 Yousuf Almarzooqi
+- xmlchars (MIT): Copyright Louis-Dominique Dubeau and contributors to xmlchars
+
+Compiled into the main process, besides packages credited above:
+- dbus-next (MIT)
+- duplexer (MIT): Copyright (c) 2012 Raynos.
+- event-stream, from, map-stream, split, through (MIT): Copyright (c) 2011
+  Dominic Tarr
+- jsbi (Apache-2.0)
+- long (Apache-2.0)
+- @nornagon/put (MIT): Copyright 2010 James Halliday (mail@substack.net)
+- pause-stream (MIT, also offered under Apache-2.0): Copyright (c) 2013 Dominic
+  Tarr
+- stream-combiner (MIT): Copyright (c) 2012 'Dominic Tarr'
+- xml2js (MIT): Copyright 2010, 2011, 2012, 2013. All rights reserved.
+- xmlbuilder (MIT): Copyright (c) 2013 Ozgur Ozcitak
