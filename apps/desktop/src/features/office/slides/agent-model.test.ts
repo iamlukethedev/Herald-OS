@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { DocJSON, DocNode } from '../../../../shared/office/document.ts'
 import {
   addImageStep,
   addShapeStep,
   addSlideStep,
-  addSpecs,
   addTableStep,
   addTextStep,
   alignOf,
   bodiesOf,
   colorArg,
   composeChanges,
-  deckFromSpecs,
   duplicateSlideStep,
   findInDeck,
   headingLevelOf,
@@ -25,12 +22,10 @@ import {
   setSlideStep,
   setThemeStep,
   shapeOf,
-  shortVersion,
   sizeOf,
   slideEditsOf,
   slideIdOf,
-  slideSpecsOf,
-  slidesFromDocument
+  slideSpecsOf
 } from './agent-model.ts'
 import { type Deck, SLIDE_SIZES, type Slide, type SlideElement, type TextElement } from './deck.ts'
 import { SlidesDocument } from './document.ts'
@@ -53,14 +48,6 @@ function sample(): Deck {
 
   return deck
 }
-
-// Documents as Herald Docs holds them.
-const words = (text: string): DocNode => ({ type: 'text', text })
-const para = (text: string, attrs?: Record<string, unknown>): DocNode => ({ type: 'paragraph', ...(attrs ? { attrs } : {}), content: [words(text)] })
-const heading = (level: number, text: string): DocNode => ({ type: 'heading', attrs: { level }, content: [words(text)] })
-const list = (...items: (string | [string, DocNode])[]): DocNode => ({ type: 'bulletList', content: items.map((item) => ({ type: 'listItem', content: typeof item === 'string' ? [para(item)] : [para(item[0]), item[1]] })) })
-const table = (rows: string[][]): DocNode => ({ type: 'table', content: rows.map((row) => ({ type: 'tableRow', content: row.map((cell) => ({ type: 'tableCell', content: [para(cell)] })) })) })
-const document = (...content: DocNode[]): DocJSON => ({ type: 'doc', content })
 
 describe('slides named by a command', () => {
   it('finds a slide by number, id, title, first or last, and falls back on the slide in front', () => {
@@ -385,132 +372,5 @@ describe('reading, finding and replacing', () => {
     expect(replaceInDeck(deck, 'world', 'Earth', { all: false }).replaced).toBe(1)
     expect(replaceInDeck(deck, 'World', 'Earth', { caseSensitive: true }).replaced).toBe(1)
     expect(replaceInDeck(deck, 'Mars', 'Earth').deck).toBe(deck)
-  })
-})
-
-describe('slides from a document', () => {
-  it('makes a title slide, a slide a heading with bullets from its lists, and notes from long paragraphs', () => {
-    const long = 'Next quarter we open two new offices. The first is in Lisbon, where most of the new team already lives, and the second is in Porto.'
-    const made = slidesFromDocument(
-      document(
-        para('Quarterly review', { docStyle: 'title' }),
-        para('Finance team', { docStyle: 'subtitle' }),
-        para('This review covers the third quarter.'),
-        heading(1, 'Results'),
-        list('Revenue up 12%', ['Costs flat', list('Rent', 'Payroll')]),
-        para('Short closing line.'),
-        heading(1, 'Next steps'),
-        para(long),
-        heading(1, 'Appendix')
-      ),
-      { name: 'Review' }
-    )
-
-    expect(made.title).toBe('Quarterly review')
-    expect(made.slides).toEqual([
-      { layout: 'title', title: 'Quarterly review', body: ['Finance team'], notes: 'This review covers the third quarter.' },
-      { layout: 'title-content', title: 'Results', body: ['Revenue up 12%', 'Costs flat', '\tRent', '\tPayroll', 'Short closing line.'], notes: '' },
-      { layout: 'title-content', title: 'Next steps', body: ['Next quarter we open two new offices.'], notes: long },
-      { layout: 'title-only', title: 'Appendix', body: [], notes: '' }
-    ])
-  })
-
-  it('takes a lone top heading as the title and a short first paragraph as the subtitle', () => {
-    const doc = document(heading(1, 'Launch plan'), para('Spring 2027'), heading(2, 'Goals'), list('Ship'), heading(2, 'Team'), list('Ana', 'Ben'))
-
-    expect(slidesFromDocument(doc).slides.map((slide) => [slide.layout, slide.title, slide.body])).toEqual([
-      ['title', 'Launch plan', ['Spring 2027']],
-      ['title-content', 'Goals', ['Ship']],
-      ['title-content', 'Team', ['Ana', 'Ben']]
-    ])
-    expect(slidesFromDocument(doc, { name: 'Plan', level: 1 }).slides.map((slide) => [slide.title, slide.body])).toEqual([
-      ['Plan', []],
-      ['Launch plan', ['Spring 2027', 'Goals', '\tShip', 'Team', '\tAna', '\tBen']]
-    ])
-  })
-
-  it('starts slides at the level asked for, deeper headings as bullets and higher ones as section slides', () => {
-    const doc = document(heading(1, 'Part one'), heading(2, 'Intro'), para('Hello there.'), heading(3, 'Detail'), list('A', 'B'), heading(1, 'Part two'), heading(2, 'Wrap'))
-
-    expect(slidesFromDocument(doc, { name: 'Course' }).slides.map((slide) => [slide.layout, slide.title, slide.body])).toEqual([
-      ['title', 'Course', []],
-      ['title-content', 'Part one', ['Intro', '\tHello there.', '\tDetail', '\t\tA', '\t\tB']],
-      ['title-content', 'Part two', ['Wrap']]
-    ])
-    expect(slidesFromDocument(doc, { name: 'Course', level: 2 }).slides.map((slide) => [slide.layout, slide.title, slide.body])).toEqual([
-      ['title', 'Course', []],
-      ['section', 'Part one', []],
-      ['title-content', 'Intro', ['Hello there.', 'Detail', '\tA', '\tB']],
-      ['section', 'Part two', []],
-      ['title-only', 'Wrap', []]
-    ])
-  })
-
-  it('with notes, puts paragraphs in the notes and keeps bullets short', () => {
-    const item = 'Hire engineers for the platform team as soon as the budget is approved by finance'
-    const made = slidesFromDocument(document(heading(1, 'Plan'), para('We will hire two engineers this quarter. They start in May.'), list(item), heading(1, 'Risks'), para('Supply chains are slow. Prices may rise.')), { name: 'Talk', notes: true })
-
-    expect(made.slides.slice(1)).toEqual([
-      { layout: 'title-content', title: 'Plan', body: ['Hire engineers for the platform team as soon as the budget is approved by…'], notes: `We will hire two engineers this quarter. They start in May.\n\n${item}` },
-      { layout: 'title-content', title: 'Risks', body: ['Supply chains are slow.'], notes: 'Supply chains are slow. Prices may rise.' }
-    ])
-  })
-
-  it('gives tables a slide of their own and continues long slides on another', () => {
-    const rows = [['Item', 'Cost'], ...Array.from({ length: 19 }, (_, index) => [`Item ${index + 1}`, String(index)])]
-    const items: (string | [string, DocNode])[] = ['1', '2', '3', '4', '5', '6', '7', ['8', list('8a', '8b')], '9']
-    const made = slidesFromDocument(document(heading(1, 'Budget'), para('Costs by item.'), table(rows), heading(1, 'Many'), list(...items)), { name: 'Plan' })
-
-    expect(made.slides.map((slide) => [slide.layout, slide.title, slide.body.length, slide.table?.length ?? 0])).toEqual([
-      ['title', 'Plan', 0, 0],
-      ['title-content', 'Budget', 1, 0],
-      ['title-only', 'Budget', 0, 12],
-      ['title-content', 'Many', 7, 0],
-      ['title-content', 'Many (cont.)', 4, 0]
-    ])
-    expect(made.slides[2].notes).toBe('The table has 20 rows; the first 12 are on the slide.')
-    expect(made.slides[4].body).toEqual(['8', '\t8a', '\t8b', '9'])
-  })
-
-  it('makes one slide of a document without headings to start slides', () => {
-    expect(slidesFromDocument(document(para('Groceries', { docStyle: 'title' }), list('Milk', 'Eggs'))).slides).toEqual([
-      { layout: 'title', title: 'Groceries', body: [], notes: '' },
-      { layout: 'title-content', title: 'Groceries', body: ['Milk', 'Eggs'], notes: '' }
-    ])
-    expect(slidesFromDocument(document(heading(2, 'Milk'), heading(3, 'Whole')), { name: 'Shop', level: 1 }).slides.map((slide) => [slide.title, slide.body])).toEqual([
-      ['Shop', []],
-      ['Shop', ['Milk', '\tWhole']]
-    ])
-    expect(slidesFromDocument(document(para('')), { name: 'Empty' }).slides).toEqual([{ layout: 'title', title: 'Empty', body: [], notes: '' }])
-  })
-
-  it('becomes a new deck, or slides added to a deck as one step with its title slide as a section header', () => {
-    const made = slidesFromDocument(document(para('Review', { docStyle: 'title' }), heading(1, 'Costs'), table([['Item', 'Cost'], ['Rent', '1200']])))
-    const fresh = deckFromSpecs(made.title, made.slides)
-    const deck = sample()
-    const doc = new SlidesDocument(deck, () => {})
-    const added = addSpecs(doc.history.present, made.slides, { asSection: true })
-    doc.commit(added)
-
-    expect(fresh.slides.map((slide) => [slide.layout, titleOf(slide)])).toEqual([
-      ['title', 'Review'],
-      ['title-only', 'Costs'],
-      ['title-only', 'Costs']
-    ])
-    expect(fresh.slides[2].elements.some((element) => element.kind === 'table')).toBe(true)
-    expect(doc.history.present.slides.slice(4).map((slide) => [slide.layout, titleOf(slide)])).toEqual([
-      ['section', 'Review'],
-      ['title-only', 'Costs'],
-      ['title-only', 'Costs']
-    ])
-    expect(added.added).toHaveLength(3)
-    expect(doc.undo()).toBe('New Slides')
-    expect(doc.history.present).toBe(deck)
-  })
-
-  it('shortens text to its first sentence, or at a word', () => {
-    expect(shortVersion('Short enough.', 20)).toBe('Short enough.')
-    expect(shortVersion('First one. Then a much longer second sentence follows.', 20)).toBe('First one.')
-    expect(shortVersion('one two three four five six seven', 16)).toBe('one two three…')
   })
 })

@@ -9,42 +9,42 @@ import { openInOffice } from '../open.ts'
 import { loadedSessions } from '../session.ts'
 import type { OfficeDocument } from '../types.ts'
 import { slidesAdapter } from './adapter.ts'
+import { batchPictures, batchWorkbooks, editsOf, runBatch } from './agent-depth-model.ts'
 import {
   addImageStep,
   addShapeStep,
   addSlideStep,
-  addSpecs,
   addTableStep,
   addTextStep,
-  deckFromSpecs,
+  documentOptionsOf,
+  documentSlidesStep,
   duplicateSlideStep,
   findInDeck,
-  headingLevelOf,
+  insertRangeStep,
   moveSlideStep,
   newDeckWith,
   type Picture,
   readDeck,
   removeSlideStep,
   replaceStep,
-  runEdits,
   setSlideStep,
   setThemeStep,
+  type SheetSource,
   sizeOf,
-  slideEditsOf,
   slideIdOf,
   slideNumber,
   slideSpecsOf,
-  slidesFromDocument,
   type Step,
   type StepContext,
   themeOf
 } from './agent-model.ts'
-import type { Deck } from './deck.ts'
+import type { Deck, Theme } from './deck.ts'
 import { flushTyping } from './editor/active.ts'
 import { isEmptyPlaceholder } from './layouts.ts'
 import { makeTargets, type SlidesTarget } from './live.ts'
 import * as model from './model.ts'
 import { decks, slidesSession as session } from './store.ts'
+import { loadCustomThemes } from './theme-store.ts'
 
 /*
  * What Hermes (and voice, the command bar and `herald-os slides`) does in Herald Slides. A command
@@ -62,13 +62,13 @@ const given = (value: unknown): boolean => value !== undefined && value !== null
 
 const where = (file: string | null): string => (file ? tildePath(file, homeDir()) : 'not saved yet')
 
-const count = (n: number, word: string, plural = `${word}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? word : plural}`
+export const count = (n: number, word: string, plural = `${word}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? word : plural}`
 
 const stem = (name: string): string => name.replace(/\.[a-z0-9]{1,5}$/i, '')
 
 const capitalised = (words: string): string => words.charAt(0).toUpperCase() + words.slice(1)
 
-async function located(ref: unknown): Promise<Local<Deck>> {
+export async function located(ref: unknown): Promise<Local<Deck>> {
   const found = await locate('slides', session, ref)
 
   if (found.kind === 'remote') {
@@ -93,7 +93,7 @@ function targetsFor(found: Local<Deck>) {
 }
 
 /** The deck as it is now: live in its window (typing folded in), as last held while its window is closed, or read from its file. */
-async function reading(found: Local<Deck>): Promise<{ name: string; path: string | null; on: SlidesTarget }> {
+export async function reading(found: Local<Deck>): Promise<{ name: string; path: string | null; on: SlidesTarget }> {
   const on = await targetsFor(found).target(found.kind === 'file' ? found.path : null)
 
   return { name: found.kind === 'file' ? fileName(found.path) : found.doc.name, path: on.path, on }
@@ -109,7 +109,7 @@ class Unchanged extends Error {
   }
 }
 
-interface Changed {
+export interface Changed {
   step: Step
   changed: boolean
   name: string
@@ -120,7 +120,7 @@ interface Changed {
  * Make one change, worked out from the deck as it is when it lands: one step to undo in an open
  * deck (its window comes back first if it was closed, so the person sees it), or the file written back.
  */
-async function change(found: Local<Deck>, make: (deck: Deck, front: string | null) => Step): Promise<Changed> {
+export async function change(found: Local<Deck>, make: (deck: Deck, front: string | null) => Step): Promise<Changed> {
   if (found.kind === 'live') {
     await withEditor('slides', found.doc)
   }
@@ -150,12 +150,18 @@ async function change(found: Local<Deck>, make: (deck: Deck, front: string | nul
   }
 }
 
-function outcomeOf({ step, changed, name, path }: Changed): Outcome {
+export function outcomeOf({ step, changed, name, path }: Changed): Outcome {
   return { summary: changed ? `${capitalised(step.done)} in ${name}` : `Nothing changed in ${name}: ${step.done}`, data: { name, path, changed, ...step.info } }
 }
 
-async function stepOn(found: Local<Deck>, make: (deck: Deck, context: StepContext) => Step, pictures?: ReadonlyMap<string, Picture>): Promise<Outcome> {
-  return outcomeOf(await change(found, (deck, front) => make(deck, { front, pictures })))
+/** A step made on the deck a command names, with what was read for it first (pictures, workbooks, the custom themes). */
+export async function stepOn(found: Local<Deck>, make: (deck: Deck, context: StepContext) => Step, read: Omit<StepContext, 'front'> = {}): Promise<Outcome> {
+  return outcomeOf(await change(found, (deck, front) => make(deck, { ...read, front })))
+}
+
+/** The custom themes the person made, from disk; none when they cannot be read, so Herald's own still work. */
+export async function customThemes(): Promise<Theme[]> {
+  return loadCustomThemes().catch(() => [])
 }
 
 /** A picture file as a slide holds it (PNG, JPEG or GIF; WebP and BMP become PNG, very large ones are scaled down), read before the change is made. */
@@ -188,8 +194,45 @@ async function picture(source: string): Promise<Picture> {
   }
 }
 
-async function picturesFor(sources: readonly string[]): Promise<Map<string, Picture>> {
+export async function picturesFor(sources: readonly string[]): Promise<Map<string, Picture>> {
   return new Map(await Promise.all([...new Set(sources.filter(Boolean))].map(async (source) => [source, await picture(source)] as const)))
+}
+
+/** A selection as an Office entry says it ("'Q1 sales'!B2:D9"), as its sheet and range. */
+function selectionOf(said: string | undefined): SheetSource['selection'] {
+  const found = said ? /^(?:'((?:[^']|'')+)'|([^!]+))!(\$?[A-Z]+\$?\d+(?::\$?[A-Z]+\$?\d+)?)$/i.exec(said.trim()) : null
+
+  return found ? { sheet: (found[1] ?? found[2]).replace(/''/g, "'"), range: found[3] } : null
+}
+
+/**
+ * A workbook a range comes from, as it is now: the live one open in this window (its formulas
+ * worked out), else its file read as Herald Sheets reads it. One open in Herald Sheets' own window
+ * (panels mode) is read from its file when that file has all of it, that is, nothing is unsaved.
+ */
+async function sheetSource(ref: unknown): Promise<SheetSource> {
+  const [{ sheetsSession }, { sheetsAdapter }, { selectionIn }] = await Promise.all([import('../sheets/store.ts'), import('../sheets/adapter.ts'), import('../sheets/live.ts')])
+  const found = await locate('sheets', sheetsSession, ref)
+
+  if (found.kind === 'live') {
+    await found.doc.editor?.settle?.()
+
+    return { name: found.doc.name, workbook: found.doc.editor?.snapshot() ?? found.doc.initial, selection: selectionIn(found.doc.key) }
+  }
+
+  if (found.kind === 'remote' && (!found.entry.path || found.entry.modified)) {
+    throw new Error(`${found.entry.name} is open in Herald Sheets' own window with ${found.entry.path ? 'unsaved changes' : 'nothing saved yet'}: save it there first (sheets.save), then ask again`)
+  }
+
+  const file = found.kind === 'remote' ? found.entry.path! : found.path
+  const read = await sheetsAdapter.read((await window.heraldOS.office.read(file)).bytes, extensionOf(file), baseName(file))
+
+  return { name: fileName(file), workbook: read.model, selection: found.kind === 'remote' ? selectionOf(found.entry.selection) : null }
+}
+
+/** The workbooks some steps take ranges from, read before the change is made, by the workbook as given. */
+export async function sheetSources(refs: readonly string[]): Promise<Map<string, SheetSource>> {
+  return new Map(await Promise.all([...new Set(refs)].map(async (ref) => [ref, await sheetSource(ref)] as const)))
 }
 
 // New presentations.
@@ -309,7 +352,8 @@ export async function create(args: Args, context: CommandContext): Promise<Outco
   }
 
   const name = file ? baseName(file) : text(args.name)
-  const deck = newDeckWith(name || 'Untitled', { ...(given(args.size) ? { size: sizeOf(args.size) } : {}), ...(given(args.theme) ? { theme: themeOf(args.theme) } : {}), ...(given(args.slides) ? { slides: slideSpecsOf(args.slides) } : {}) })
+  const theme = given(args.theme) ? themeOf(args.theme, await customThemes()) : undefined
+  const deck = newDeckWith(name || 'Untitled', { ...(given(args.size) ? { size: sizeOf(args.size) } : {}), ...(theme ? { theme } : {}), ...(given(args.slides) ? { slides: slideSpecsOf(args.slides) } : {}) })
 
   if (isPanels && isMainSurface) {
     return inSlidesWindow('slides.new', args, context)
@@ -375,7 +419,7 @@ export const addShape = async (args: Args): Promise<Outcome> => stepOn(await loc
 
 export const addTable = async (args: Args): Promise<Outcome> => stepOn(await located(args.presentation), (deck, context) => addTableStep(deck, args, context))
 
-export const setTheme = async (args: Args): Promise<Outcome> => stepOn(await located(args.presentation), (deck) => setThemeStep(deck, args))
+export const setTheme = async (args: Args): Promise<Outcome> => stepOn(await located(args.presentation), (deck, context) => setThemeStep(deck, args, context), { themes: await customThemes() })
 
 export const replace = async (args: Args): Promise<Outcome> => stepOn(await located(args.presentation), (deck) => replaceStep(deck, args))
 
@@ -388,15 +432,17 @@ export async function addImage(args: Args): Promise<Outcome> {
 
   const found = await located(args.presentation)
 
-  return stepOn(found, (deck, context) => addImageStep(deck, args, context), await picturesFor([source]))
+  return stepOn(found, (deck, context) => addImageStep(deck, args, context), { pictures: await picturesFor([source]) })
 }
 
-/** A batch of edits as one step to undo; pictures are read first, then every edit is made in one go. */
+/** A batch of edits as one step to undo; pictures, workbooks and custom themes are read first, then every edit is made in one go. */
 export async function edit(args: Args): Promise<Outcome> {
-  const edits = slideEditsOf(args.edits)
+  const edits = editsOf(args.edits)
   const found = await located(args.presentation)
-  const pictures = await picturesFor(edits.filter((entry) => entry.op === 'addImage').map((entry) => text(entry.source)))
-  const { step, changed, name, path } = await change(found, (deck, front) => runEdits(deck, edits, { front, pictures }))
+  const pictures = await picturesFor(batchPictures(edits))
+  const sheets = await sheetSources(batchWorkbooks(edits))
+  const themes = edits.some((entry) => entry.op === 'setTheme') ? await customThemes() : []
+  const { step, changed, name, path } = await change(found, (deck, front) => runBatch(deck, edits, { front, pictures, sheets, themes }))
 
   return {
     summary: changed ? `Made ${count(edits.length, 'edit')} to ${name} as one step: ${step.done}` : `Nothing changed in ${name}: ${step.done}`,
@@ -435,9 +481,12 @@ async function documentFor(ref: unknown, context: CommandContext): Promise<{ nam
   }
 }
 
-/** A Herald Docs document (open, or a file) as slides: in a new presentation named after it, or added to the end of one. */
+/**
+ * A Herald Docs document (open, or a file) as slides, made as File > New from Document and Insert >
+ * Slides from Document make them: in a new presentation named after it, or added to the end of one.
+ */
 export async function fromDocument(args: Args, context: CommandContext): Promise<Outcome> {
-  const level = given(args.level) ? headingLevelOf(args.level) : undefined
+  const options = documentOptionsOf(args)
   const fresh = !text(args.presentation)
 
   if (fresh && isPanels && isMainSurface) {
@@ -445,10 +494,9 @@ export async function fromDocument(args: Args, context: CommandContext): Promise
   }
 
   const source = await documentFor(args.document, context)
-  const made = slidesFromDocument(source.json, { name: stem(source.name), level, notes: args.notes === true })
 
   if (fresh) {
-    const deck = deckFromSpecs(made.title, made.slides)
+    const deck = model.deckFromDocument(source.json, { title: stem(source.name), ...options })
     const doc = await startDeck(deck, stem(source.name), null)
 
     return {
@@ -457,28 +505,14 @@ export async function fromDocument(args: Args, context: CommandContext): Promise
     }
   }
 
-  const found = await located(args.presentation)
-  const result = await change(found, (deck) => {
-    const added = addSpecs(deck, made.slides, { asSection: true })
-
-    return { ...added, label: `Slides from ${stem(source.name)}`, done: `added ${count(added.added.length, 'slide')} from ${source.name} at the end`, info: { from: source.path ?? source.name, first: slideNumber(added.deck, added.added[0]), slides: added.added.length } }
-  })
-
-  return outcomeOf(result)
+  return stepOn(await located(args.presentation), (deck) => documentSlidesStep(deck, source.json, { name: source.name, from: source.path ?? source.name }, options))
 }
 
-/** A range of a Herald Sheets workbook (open, or a file) as a table on a slide, as its cells show. */
+/** A range of a Herald Sheets workbook (open, or a file) as a table on a slide (or new slides), as its cells show, as Insert > Table from Sheet puts it in. */
 export async function insertRange(args: Args): Promise<Outcome> {
-  const { rangeTable } = await import('../sheets/agent.ts')
-  const source = await rangeTable({ workbook: args.workbook, range: args.range, sheet: args.sheet })
-  const found = await located(args.presentation)
-  const result = await change(found, (deck, front) => {
-    const step = addTableStep(deck, { slide: args.slide, x: args.x, y: args.y, width: args.width, cells: source.cells }, { front })
+  const sheets = await sheetSources([text(args.workbook)])
 
-    return { ...step, label: 'Table', done: `put ${source.range} of ${source.name} (${count(source.cells.length, 'row')}) on slide ${String(step.info?.slide)} as a table`, info: { ...step.info, from: { workbook: source.name, sheet: source.sheet, range: source.range } } }
-  })
-
-  return outcomeOf(result)
+  return stepOn(await located(args.presentation), (deck, context) => insertRangeStep(deck, args, context), { sheets })
 }
 
 export async function save(args: Args): Promise<Outcome> {

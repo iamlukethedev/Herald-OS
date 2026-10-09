@@ -890,16 +890,17 @@ export function insertSlides(deck: Deck, slides: readonly Slide[], after?: strin
 /**
  * A range of a sheet (the one in front unless `sheet` names one) as a table on a slide: in place of
  * its empty text placeholder, else under its title, else in its content area, or in `box`, at a
- * text size its rows fit. The range's first row is the header unless `header` is false.
+ * text size its rows fit. The range's first row is the header unless `header` is false. Says which
+ * sheet and range (A1 style) it took.
  */
-export function addTableFromSheet(deck: Deck, slideId: string, workbook: WorkbookSnapshot, options: { sheet?: string; range?: string; header?: boolean; box?: Box } = {}): DeckChange & { elementId: string } {
+export function addTableFromSheet(deck: Deck, slideId: string, workbook: WorkbookSnapshot, options: { sheet?: string; range?: string; header?: boolean; box?: Box } = {}): DeckChange & { elementId: string; sheet: string; range: string } {
   const slide = findSlide(deck, slideId)
 
   if (!slide) {
     throw new Error(`There is no slide ${slideId} in this presentation`)
   }
 
-  const { taken } = takeRange(workbook, options)
+  const { sheet, taken } = takeRange(workbook, options)
   const { box, replaces } = options.box ? { box: options.box, replaces: undefined } : contentArea(deck, slide)
   const [table] = tablesFor(taken.cells, taken.merges, box, { header: options.header ?? true, split: false })
   const placed = keepOnSlide(table, deck.size)
@@ -908,6 +909,8 @@ export function addTableFromSheet(deck: Deck, slideId: string, workbook: Workboo
     deck: withSlide(deck, slideId, (entry) => ({ ...entry, elements: [...entry.elements.filter((element) => element.id !== replaces?.id), placed] })),
     label: 'Table from Sheet',
     elementId: placed.id,
+    sheet: sheet.name,
+    range: taken.ref,
     focus: { slideId, selected: [placed.id] }
   }
 }
@@ -915,9 +918,9 @@ export function addTableFromSheet(deck: Deck, slideId: string, workbook: Workboo
 /**
  * A range of a sheet on a new Title Only slide after `after` (at the end without one), titled with
  * the sheet's name unless `title` is given. A range too tall for the slide goes on over further
- * slides titled "… (continued)", the header row repeated on each.
+ * slides titled "… (continued)", the header row repeated on each. Says which sheet and range it took.
  */
-export function addSlideFromSheet(deck: Deck, workbook: WorkbookSnapshot, options: { sheet?: string; range?: string; title?: string; header?: boolean; after?: string | null } = {}): DeckChange & { slideIds: string[] } {
+export function addSlideFromSheet(deck: Deck, workbook: WorkbookSnapshot, options: { sheet?: string; range?: string; title?: string; header?: boolean; after?: string | null } = {}): DeckChange & { slideIds: string[]; sheet: string; range: string } {
   const { sheet, taken } = takeRange(workbook, options)
   const title = options.title ?? sheet.name
   const slideFor = (index: number) => withPlaceholderText(newSlide('title-only', deck.size, deck.master), 'title', index ? `${title} (continued)` : title)
@@ -933,6 +936,8 @@ export function addSlideFromSheet(deck: Deck, workbook: WorkbookSnapshot, option
     deck: insertSlides(deck, slides, options.after),
     label: slides.length > 1 ? 'Slides from Sheet' : 'Slide from Sheet',
     slideIds: slides.map((slide) => slide.id),
+    sheet: sheet.name,
+    range: taken.ref,
     focus: { slideId: slides[0].id, selected: [] }
   }
 }

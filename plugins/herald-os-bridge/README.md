@@ -28,7 +28,7 @@ skills/
   herald-canvas/     how to make and edit pictures with the canvas tool: workflow, design habits, .comp format
   herald-docs/       how to write and edit documents with the docs tool: drafts, marked text, formatting, pages, comments and reviews, saving
   herald-sheets/     how to work in spreadsheets with the sheets tool: formulas, cleaning data, charts, summaries, building workbooks
-  herald-slides/     how to make presentations with the slides tool: outlines, layouts, themes, speaker notes
+  herald-slides/     how to make presentations with the slides tool: outlines, layouts, the master, themes, transitions, diagrams, speaker notes
 tests/               pytest suite: `npm run test:bridge` from the repository root
 ```
 
