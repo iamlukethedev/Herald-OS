@@ -179,8 +179,7 @@ memory, pause an automation, change a setting) runs and is shown in the caption;
 
 Settings > Voice: enable, microphone permission, engine, wake word, hotkey (Electron accelerator
 syntax), follow-up window, speak notifications aloud, speech providers, Live limits, the microphone
-the voice listens through (with a level meter and a test button), and two test buttons ("Say hello",
-"Start talking").
+the voice listens through with a level bar, and two test buttons ("Say hello", "Start talking").
 
 Preferences live in Herald OS's `prefs.json` (`voice.*`). Speech providers and the wake word's
 enabled flag are written to the Hermes runtime's `config.yaml` (`stt.provider`, `tts.provider`,
@@ -206,9 +205,8 @@ belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Ch
   but a device with the same name is there, that device is used (and the stored id is rewritten).
 - The picker shows the devices as Chromium reports them, with its own `(Bluetooth)`, `(Built-in)`
   and `(Virtual)` suffixes; virtual devices are ordered last but never hidden.
-- The microphone is only ever opened by a conversation, by the armed wake word, or by the explicit
-  test button. The level meter has nothing to show while the mic is closed, and "voice off" still
-  means the microphone is never opened.
+- The microphone is only ever opened by a conversation or by the armed wake word, so the level bar
+  is live exactly while the microphone is open, and "voice off" still means it is never opened.
 
 The same control is in the menu bar's Sound panel (macOS and the other desktop hosts) and in
 Settings > Voice, and the `audio.input` and `audio.devices` commands reach it without the mouse.

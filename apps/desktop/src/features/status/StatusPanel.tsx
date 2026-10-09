@@ -30,7 +30,7 @@ import { describeDeviceChoice } from '../../lib/audio-devices.ts'
 import { cn } from '../../lib/cn.ts'
 import { audioScope } from '../../lib/platform-labels.ts'
 import { $inputDevices } from '../../lib/voice/audio-capture.ts'
-import { $inputChoice, $micHeldElsewhere, $micLevelPercent, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../store/audio-devices.ts'
+import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../store/audio-devices.ts'
 import { $env, $prefs } from '../../store/backend.ts'
 import { runCommand } from '../../store/os-commands.ts'
 import { $panelStates, loadPanel, PANEL_TITLES, panelAction } from '../../store/status-panel.ts'
@@ -398,8 +398,6 @@ function HeraldVoiceRows() {
   const devices = useStore($inputDevices)
   const choice = useStore($inputChoice)
   const level = useStore($micLevelPercent)
-  const testing = useStore($microphoneTest)
-  const held = useStore($micHeldElsewhere)
 
   useEffect(() => watchAudioDevices(), [])
 
@@ -415,25 +413,12 @@ function HeraldVoiceRows() {
         <Note>Allow microphone access in Settings &gt; Voice to see the microphones by name.</Note>
       ) : (
         <>
-          <Row
-            icon={<IconMicrophone />}
-            label="Microphone"
-            detail={describeDeviceChoice(choice, 'input')}
-            right={
-              <>
-                <Meter value={level} className="w-[90px] shrink-0" />
-                <GlassButton
-                  size="sm"
-                  onClick={() => (testing ? stopMicrophoneTest() : void startMicrophoneTest())}
-                  disabled={held}
-                  title={held ? 'The microphone is already open' : 'Hear the microphone for a few seconds'}
-                  aria-label={testing ? 'Stop the microphone test' : 'Test the microphone'}
-                >
-                  {testing ? 'Stop' : 'Test'}
-                </GlassButton>
-              </>
-            }
-          />
+          <Row icon={<IconMicrophone />} label="Microphone" detail={describeDeviceChoice(choice, 'input')} />
+          {/* The bar sits under the microphone it belongs to, and fills only while the microphone is
+              open: a conversation or the armed wake word. */}
+          <div className="px-2 pb-1.5">
+            <Meter value={level} />
+          </div>
           <Row label="Automatic" detail={automatic ? `Follow the system: ${automatic.label}` : 'Follow the system'} active={!chosen} disabled={!chosen} onClick={() => void chooseInputDevice(null)} right={!chosen ? <IconCheck size={14} className="text-accent-strong" /> : undefined} />
           {devices.devices.map(device => {
             const selected = chosen?.id === device.id || (!chosen && device.isSystem)
