@@ -5,7 +5,7 @@ import { officeMenus, runShortcut } from './commands.ts'
 
 /** The parts of a session the shared menus use. */
 function fakeSession(active: object | null) {
-  return { active: () => active, create: vi.fn(), openPicked: vi.fn(async () => {}), save: vi.fn(async () => true), exportPdf: vi.fn(async () => null), $dialog: { set: vi.fn() } }
+  return { active: () => active, create: vi.fn(), openPicked: vi.fn(async () => {}), save: vi.fn(async () => true), exportPdf: vi.fn(async () => null), print: vi.fn(async () => true), $dialog: { set: vi.fn() } }
 }
 
 const press = (key: string, shift = false) => ({ key, code: `Key${key.toUpperCase()}`, metaKey: isMac, ctrlKey: !isMac, shiftKey: shift, altKey: false }) as KeyboardEvent
@@ -22,7 +22,17 @@ describe('officeMenus and runShortcut', () => {
     expect(runShortcut(press('s', true), menus)).toBe(true)
     expect(session.save).toHaveBeenLastCalledWith(expect.anything(), { as: true })
     expect(runShortcut(press('p'), menus)).toBe(true)
-    expect(session.exportPdf).toHaveBeenCalledOnce()
+    expect(session.print).toHaveBeenCalledOnce()
+    expect(session.exportPdf).not.toHaveBeenCalled()
+  })
+
+  it('puts Print beside Export as PDF in File, with the print shortcut', () => {
+    const menus = officeMenus({ session: fakeSession({ key: 'docs-1', notes: [] }) as unknown as OfficeSession<unknown>, canSave: true })
+    const file = menus.find((menu) => menu.id === 'file')!.items
+
+    expect(file.map((item) => item.id)).toEqual(['new', 'open', 'save', 'save-as', 'export-pdf', 'print', 'notes', 'close'])
+    expect(file.find((item) => item.id === 'print')).toMatchObject({ label: 'Print…', shortcut: 'mod+p' })
+    expect(file.find((item) => item.id === 'export-pdf')?.shortcut).toBeUndefined()
   })
 
   it('leaves alone what does not apply: saving without a format, opening without one, closing with nothing open', () => {

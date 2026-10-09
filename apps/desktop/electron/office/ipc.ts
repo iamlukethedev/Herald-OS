@@ -4,13 +4,14 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { dialogFilters, extensionOf, OFFICE_APP_NAMES, OFFICE_APPS, OFFICE_NOUNS, type OfficeAbilities, type OfficeApp, openFormats, saveFormats } from '../../shared/office/files.ts'
-import { IPC, type OfficeChangedEvent, type OfficeFileData, type OfficePdfRequest, type OfficePresence, type OfficeRunReply, type OfficeRunRequest, type OfficeSaveTarget, type OfficeWriteResult } from '../../shared/ipc.ts'
+import { IPC, type OfficeChangedEvent, type OfficeFileData, type OfficePdfRequest, type OfficePresence, type OfficePrintRequest, type OfficePrintResult, type OfficeRunReply, type OfficeRunRequest, type OfficeSaveTarget, type OfficeWriteResult } from '../../shared/ipc.ts'
 import { assertWritable } from '../ipc/fs.ts'
 import { log } from '../log.ts'
 import { heraldOsDataDir } from '../paths.ts'
 import { OfficeBackups } from './backups.ts'
 import { convertWithLibreOffice, findSoffice } from './convert.ts'
 import { digestOfBytes, FileWatcher, stampOf } from './file-watch.ts'
+import { printOnPaper, printToPdf } from './print.ts'
 import { registerSpellingMenus } from './spelling.ts'
 import { OfficeTemplates } from './templates.ts'
 import { OfficeWatches } from './watches.ts'
@@ -77,26 +78,6 @@ function windowFor(sender: WebContents, fallback: () => BrowserWindow | null): B
 }
 
 const documentsFolder = () => path.join(os.homedir(), 'Documents')
-
-/** Print `html` (no scripts run) to PDF bytes. */
-async function printToPdf(request: OfficePdfRequest): Promise<Uint8Array> {
-  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'herald-office-print-'))
-  const page = path.join(work, 'print.html')
-  const printer = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, javascript: false } })
-
-  try {
-    // A file, not a data: URL, so a print view with many pictures is not limited in length.
-    await fs.writeFile(page, String(request.html))
-    await printer.loadFile(page)
-    // Print views set their page size and margins in CSS (@page), as the document has them.
-    const pdf = await printer.webContents.printToPDF({ printBackground: true, landscape: Boolean(request.landscape), pageSize: request.pageSize ?? 'A4', preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
-
-    return new Uint8Array(pdf)
-  } finally {
-    printer.destroy()
-    await fs.rm(work, { recursive: true, force: true })
-  }
-}
 
 export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
   const backups = new OfficeBackups(path.join(heraldOsDataDir(), 'office-backups'))
@@ -308,6 +289,8 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
 
     return file
   })
+
+  ipcMain.handle(IPC.officePrint, (_event, request: OfficePrintRequest): Promise<OfficePrintResult> => printOnPaper(request))
 
   ipcMain.handle(IPC.officeConvert, async (_event, target: string, to: string) => convertWithLibreOffice(officePath(target), String(to)))
 

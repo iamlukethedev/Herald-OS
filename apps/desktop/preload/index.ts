@@ -40,6 +40,8 @@ import {
   type OfficeFileData,
   type OfficePdfRequest,
   type OfficePresence,
+  type OfficePrintRequest,
+  type OfficePrintResult,
   type OfficeRunReply,
   type OfficeRunRequest,
   type OfficeSaveTarget,
@@ -275,6 +277,8 @@ const api = {
     runReply: (reply: OfficeRunReply): void => ipcRenderer.send(IPC.officeRunReply, reply),
     /** Print a print view to a PDF the person names; resolves with its path (null when cancelled). */
     exportPdf: (request: OfficePdfRequest): Promise<string | null> => ipcRenderer.invoke(IPC.officeExportPdf, request),
+    /** Print a print view on paper through the system's print dialog; resolves once it is sent or cancelled. */
+    print: (request: OfficePrintRequest): Promise<OfficePrintResult> => ipcRenderer.invoke(IPC.officePrint, request),
     /** A file converted by LibreOffice to `to` (an extension without its dot), as bytes. */
     convert: (file: string, to: string): Promise<Uint8Array> => ipcRenderer.invoke(IPC.officeConvert, file, to),
     /** The templates the person saved from an app, by name, with their documents. */

@@ -969,6 +969,8 @@ export const IPC = {
   officePresence: 'herald-os:office:presence',
   /** Print a window's print view to a PDF the person names. */
   officeExportPdf: 'herald-os:office:export-pdf',
+  /** Print a window's print view on paper, through the system's print dialog. */
+  officePrint: 'herald-os:office:print',
   /** A file converted by headless LibreOffice, as the converted file's bytes. */
   officeConvert: 'herald-os:office:convert',
   /** Templates the person saved from an Office app, in the Herald OS data folder (office-templates/<app>/). */
@@ -1127,6 +1129,19 @@ export interface OfficePdfRequest {
   landscape?: boolean
   /** A named paper size, or one in inches. */
   pageSize?: 'A4' | 'Letter' | { width: number; height: number }
+}
+
+export interface OfficePrintRequest {
+  html: string
+  /** The document's name, which the print dialog offers when printing to a file. */
+  name: string
+  landscape?: boolean
+}
+
+/** Whether the job went to the printer; a cancelled dialog is not printed and not an error. */
+export interface OfficePrintResult {
+  printed: boolean
+  error?: string
 }
 
 /** A template the person saved from an Office app; `savedAt` is an ISO date. */

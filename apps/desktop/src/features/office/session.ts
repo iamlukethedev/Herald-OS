@@ -420,6 +420,13 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     report()
   }
 
+  /** The document's print view as it is now, which Export as PDF and Print both use. */
+  async function printViewOf(doc: OfficeDocument<Model>) {
+    await doc.editor?.settle?.()
+
+    return adapter.print(doc.editor?.snapshot() ?? doc.initial, doc.name)
+  }
+
   /** Print the document to a PDF, at `path` or where the person picks. */
   async function exportPdf(doc: OfficeDocument<Model> | null = active(), path?: string): Promise<string | null> {
     if (!doc) {
@@ -427,8 +434,7 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     }
 
     try {
-      await doc.editor?.settle?.()
-      const view = await adapter.print(doc.editor?.snapshot() ?? doc.initial, doc.name)
+      const view = await printViewOf(doc)
       const file = await window.heraldOS.office.exportPdf({ html: view.html, suggestedName: doc.name, landscape: view.landscape, path })
 
       if (file) {
@@ -443,8 +449,39 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     }
   }
 
+  /** The print dialog this window has open; another press of Print waits for it. */
+  let printing: Promise<boolean> | null = null
+
+  /** Print the document on paper through the system's print dialog; true once it went to the printer. */
+  function print(doc: OfficeDocument<Model> | null = active()): Promise<boolean> {
+    if (!doc) {
+      return Promise.resolve(false)
+    }
+
+    printing ??= (async () => {
+      try {
+        const view = await printViewOf(doc)
+        const result = await window.heraldOS.office.print({ html: view.html, name: doc.name, landscape: view.landscape })
+
+        if (result.error) {
+          notify(`Could not print ${doc.name}: ${result.error}`, 'error')
+        }
+
+        return result.printed
+      } catch (error) {
+        notify(`Could not print ${doc.name}: ${messageOf(error)}`, 'error')
+
+        return false
+      } finally {
+        printing = null
+      }
+    })()
+
+    return printing
+  }
+
   window.heraldOS.office.onChanged((event) => void onChanged(event))
   loadedSessions.set(adapter.app, { active: () => $activeKey.get(), summaries })
 
-  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, active, find, notify, report, summaries, create, open, openPicked, activate, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf }
+  return { adapter, $documents, $activeKey, $notice, $conflict, $dialog, active, find, notify, report, summaries, create, open, openPicked, activate, attach, changed, refresh: touch, save, close, resolveConflict, exportPdf, print }
 }

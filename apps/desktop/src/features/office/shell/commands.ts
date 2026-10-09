@@ -53,7 +53,8 @@ export function officeMenus<Model>(source: MenuSource<Model>): OfficeMenu[] {
         { id: 'open', label: 'Open…', shortcut: 'mod+o', enabled: () => source.canOpen !== false, run: () => void session.openPicked() },
         { id: 'save', label: 'Save', shortcut: 'mod+s', enabled: () => hasDoc() && source.canSave, run: () => void session.save().catch(() => {}), dividerBefore: true },
         { id: 'save-as', label: 'Save As…', shortcut: 'mod+shift+s', enabled: () => hasDoc() && source.canSave, run: () => void session.save(doc(), { as: true }).catch(() => {}) },
-        { id: 'export-pdf', label: 'Export as PDF…', shortcut: 'mod+p', enabled: hasDoc, run: () => void session.exportPdf() },
+        { id: 'export-pdf', label: 'Export as PDF…', enabled: hasDoc, run: () => void session.exportPdf() },
+        { id: 'print', label: 'Print…', shortcut: 'mod+p', enabled: hasDoc, run: () => void session.print() },
         ...(source.file ?? []),
         {
           id: 'notes',

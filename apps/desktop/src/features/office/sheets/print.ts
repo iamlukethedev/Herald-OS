@@ -6,23 +6,118 @@ import { escapeHtml, printPage } from '../print.ts'
 /*
  * The print view of the sheet in front: its used range as a table, with the fonts, fills, borders,
  * alignment, merged cells, sizes and number formats it shows; hidden rows and columns left out.
- * It prints on the paper the sheet's page setup asks for, turned the way it says, and landscape
- * when the sheet is wider than the paper.
+ * It follows the page setup the sheet brought from its file: the paper, which way it is turned,
+ * the margins, the scale or fitting to so many pages, centring across the page, and the header
+ * and footer (page numbers and all). Without one it is landscape when wider than the paper.
  */
 
 /** The sheet the window has in front, kept on the snapshot it hands over for saving and printing. */
 export const activeSheetOf = (workbook: WorkbookSnapshot): string | undefined => (typeof workbook.activeSheetId === 'string' ? workbook.activeSheetId : undefined)
 
-/** Excel's paper sizes that CSS can name, with their width in inches; any other prints on A4. */
-const PAPERS: Record<number, { name: string; width: number }> = { 1: { name: 'letter', width: 8.5 }, 5: { name: 'legal', width: 8.5 }, 8: { name: 'A3', width: 11.69 }, 9: { name: 'A4', width: 8.27 }, 11: { name: 'A5', width: 5.83 } }
+/** Excel's paper sizes that CSS can name, in inches; any other prints on A4. */
+const PAPERS: Record<number, { name: string; width: number; height: number }> = {
+  1: { name: 'letter', width: 8.5, height: 11 },
+  5: { name: 'legal', width: 8.5, height: 14 },
+  8: { name: 'A3', width: 11.69, height: 16.54 },
+  9: { name: 'A4', width: 8.27, height: 11.69 },
+  11: { name: 'A5', width: 5.83, height: 8.27 }
+}
 
-const MARGIN_INCHES = 0.5
+interface Margins {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  header: number
+  footer: number
+}
 
-// The page's size and turn come from its CSS (main prints with the page's own size).
-const pageCss = (paper: string, landscape: boolean) => `@page { size: ${paper} ${landscape ? 'landscape' : 'portrait'}; margin: ${MARGIN_INCHES}in; }`
+/** Herald's margins for a sheet without a page setup, and Excel's for one whose file left them as they come. */
+const HERALD_MARGINS: Margins = { left: 0.5, right: 0.5, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 }
+const EXCEL_MARGINS: Margins = { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 }
 
-/** The page setup a sheet brought from its file. */
-const pageSetupOf = (sheet: SheetSnapshot): { orientation?: string; paperSize?: number } => (sheet.custom as { herald?: { page?: { pageSetup?: { orientation?: string; paperSize?: number } } } } | undefined)?.herald?.page?.pageSetup ?? {}
+// The page's size, turn and margins come from its CSS (main prints with the page's own size); `boxes` are its header and footer.
+const pageCss = (paper: string, landscape: boolean, margins: Margins, boxes = '') => `@page { size: ${paper} ${landscape ? 'landscape' : 'portrait'}; margin: ${margins.top}in ${margins.right}in ${margins.bottom}in ${margins.left}in;${boxes ? ` ${boxes}` : ''} }`
+
+interface PageSetup {
+  orientation?: string
+  paperSize?: number
+  scale?: number
+  fitToPage?: boolean
+  fitToWidth?: number
+  fitToHeight?: number
+  horizontalCentered?: boolean
+}
+
+/** What the sheet brought from its file: page setup, margins (inches) and header and footer, as read kept them. */
+const pageOf = (sheet: SheetSnapshot): { pageSetup?: PageSetup; margins?: Partial<Margins>; headerFooter?: { oddHeader?: string; oddFooter?: string } } | null => (sheet.custom as { herald?: { page?: object } } | undefined)?.herald?.page ?? null
+
+/** Excel's header and footer codes for the page number, the page count, the date and so on, as CSS content. */
+function headerContent(text: string, fields: { file: string; sheet: string; now: Date }): string {
+  const parts: string[] = []
+  let literal = ''
+  const flush = () => {
+    if (literal) {
+      // The CSS sits in a <style> element, so a < in the text is escaped too.
+      parts.push(`"${literal.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/</g, '\\3C ').replace(/\r?\n/g, '\\A ')}"`)
+      literal = ''
+    }
+  }
+
+  // Fonts (&"Arial,Bold"), sizes (&12), colours (&KFF0000) and toggles (&B, &I, &U, &S, &X, &Y) are dropped; pictures (&G) too.
+  const pattern = /&"[^"]*"|&K[0-9A-Fa-f]{6}|&K\d{2}[+-]\d{3}|&\d+|&([PNDTFAZGBIUSXY&])|([^&]+)|&/g
+
+  for (const [, code, plain] of text.matchAll(pattern)) {
+    if (plain) {
+      literal += plain
+    } else if (code === '&') {
+      literal += '&'
+    } else if (code === 'P' || code === 'N') {
+      flush()
+      parts.push(code === 'P' ? 'counter(page)' : 'counter(pages)')
+    } else if (code === 'D') {
+      literal += fields.now.toLocaleDateString()
+    } else if (code === 'T') {
+      literal += fields.now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    } else if (code === 'F') {
+      literal += fields.file
+    } else if (code === 'A') {
+      literal += fields.sheet
+    }
+  }
+
+  flush()
+
+  return parts.join(' ')
+}
+
+/** A header or footer's left, centre and right parts (&L, &C, &R), as page margin boxes. */
+function marginBoxes(text: string | undefined, edge: 'top' | 'bottom', offset: number, fields: { file: string; sheet: string; now: Date }): string {
+  if (!text) {
+    return ''
+  }
+
+  const sections: Record<string, string> = { L: '', C: '', R: '' }
+  let current = 'C'
+
+  for (const [, section, rest] of text.matchAll(/&([LCR])|((?:[^&]|&(?![LCR]))+)/g)) {
+    if (section) {
+      current = section
+    } else {
+      sections[current] += rest
+    }
+  }
+
+  const align = { L: 'left', C: 'center', R: 'right' } as Record<string, string>
+  const boxes = Object.entries(sections).filter(([, content]) => content).map(([section, content]) => {
+    const box = `${edge}-${align[section]}`
+    const place = edge === 'top' ? `vertical-align: top; padding-top: ${offset}in` : `vertical-align: bottom; padding-bottom: ${offset}in`
+
+    return `@${box} { content: ${headerContent(content, fields) || '""'}; text-align: ${align[section]}; ${place}; font: 9pt Arial, Helvetica, sans-serif; white-space: pre; }`
+  })
+
+  return boxes.join(' ')
+}
 
 const CSS = `
 body { font: 9pt Arial, Helvetica, sans-serif; color: #000; margin: 0; }
@@ -141,11 +236,11 @@ const textOf = (cell: CellSnapshot | undefined, pattern: string | null, format: 
   return stream && cell?.v === undefined ? stream.replace(/\r?\n$/, '').replace(/\r/g, '\n') : fieldFromCell(cell, pattern, format)
 }
 
-export function printHtml(workbook: WorkbookSnapshot, title: string, format?: NumberFormatter): { html: string; landscape: boolean } {
+export function printHtml(workbook: WorkbookSnapshot, title: string, format?: NumberFormatter, now = new Date()): { html: string; landscape: boolean } {
   const sheet = workbook.sheets[activeSheetOf(workbook) ?? ''] ?? workbook.sheets[workbook.sheetOrder[0]]
 
   if (!sheet) {
-    return { html: printPage(title, `${pageCss('A4', false)}${CSS}`, ''), landscape: false }
+    return { html: printPage(title, `${pageCss('A4', false, HERALD_MARGINS)}${CSS}`, ''), landscape: false }
   }
 
   const { rows, columns } = usedRange(sheet)
@@ -201,12 +296,28 @@ export function printHtml(workbook: WorkbookSnapshot, title: string, format?: Nu
   const base = styleOf(workbook, workbook.defaultStyle)
   const bodyCss = base?.ff || base?.fs ? `body { font-family: '${String(base.ff ?? 'Arial').replace(/'/g, '')}', Arial, sans-serif; font-size: ${base.fs ?? 9}pt; }` : ''
 
-  const setup = pageSetupOf(sheet)
+  const page = pageOf(sheet)
+  const setup = page?.pageSetup ?? {}
+  const margins: Margins = { ...(page ? EXCEL_MARGINS : HERALD_MARGINS), ...page?.margins }
   const paper = PAPERS[setup.paperSize ?? 9] ?? PAPERS[9]
-  const landscape = setup.orientation === 'landscape' || width > (paper.width - 2 * MARGIN_INCHES) * 96
+  const scale = setup.scale ?? 100
+  const landscape = setup.orientation === 'landscape' || (!setup.fitToPage && scale === 100 && width > (paper.width - margins.left - margins.right) * 96)
+  const fields = { file: title, sheet: sheet.name, now }
+  const { oddHeader, oddFooter } = page?.headerFooter ?? {}
+  const boxes = `${marginBoxes(oddHeader, 'top', margins.header, fields)}${marginBoxes(oddFooter, 'bottom', margins.footer, fields)}`
+  // The sheet's name heads the page unless its file gives the page a header or footer of its own.
+  const heading = boxes ? '' : `<h1>${escapeHtml(sheet.name)}</h1>`
+
+  // Fitting to so many pages across and down (0 for as many as it takes) scales down, never up, and not below 10%, as Excel does.
+  const across = ((landscape ? paper.height : paper.width) - margins.left - margins.right) * 96
+  const down = ((landscape ? paper.width : paper.height) - margins.top - margins.bottom) * 96
+  const height = rowLines.filter((line) => !line.hidden).reduce((sum, line) => sum + line.size, heading ? 24 : 0)
+  const [wide, tall] = [setup.fitToWidth ?? 1, setup.fitToHeight ?? 1]
+  const zoom = setup.fitToPage ? Math.max(0.1, Math.min(1, wide && width ? (across * wide) / width : 1, tall && height ? (down * tall) / height : 1)) : Math.min(4, Math.max(0.1, scale / 100))
+  const tableCss = [`width:${width}px`, zoom !== 1 ? `zoom:${Number(zoom.toFixed(4))}` : '', setup.horizontalCentered ? 'margin:0 auto' : ''].filter(Boolean).join(';')
 
   return {
-    html: printPage(title, `${pageCss(paper.name, landscape)}${CSS}${bodyCss}`, `<h1>${escapeHtml(sheet.name)}</h1><table style="width:${width}px">${colgroup}${body.join('')}</table>`),
+    html: printPage(title, `${pageCss(paper.name, landscape, margins, boxes)}${CSS}${bodyCss}`, `${heading}<table style="${tableCss}">${colgroup}${body.join('')}</table>`),
     landscape
   }
 }
