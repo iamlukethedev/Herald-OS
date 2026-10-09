@@ -19,8 +19,6 @@ export const SERIES_TYPES = ['column', 'line', 'area'] as const
 export const SETTINGS = ['kind', 'title', 'range', 'series', 'categories', 'legend', 'labels', 'axes', 'stacking', 'palette', 'hole'] as const
 const SERIES_KEYS = ['values', 'name', 'nameCell', 'categories', 'color', 'type', 'secondary', 'smooth', 'markers'] as const
 const AXIS_KEYS = ['title', 'min', 'max', 'gridlines', 'format', 'hidden', 'reverse'] as const
-/** Only the category axis runs its categories one way or the other. */
-const VALUE_AXIS_KEYS = AXIS_KEYS.filter((key) => key !== 'reverse')
 
 /** The most cells a chart is made from in one go. */
 const MAX_BLOCK = 50000
@@ -181,15 +179,14 @@ function axisFrom(value: unknown, base: ChartAxis | undefined, name: string): Ch
   }
 
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`axes.${name} is an object like {"title": "Sales", "min": 0, "max": 100, "gridlines": true, "format": "#,##0", "hidden": false${name === 'x' ? ', "reverse": false' : ''}}`)
+    throw new Error(`axes.${name} is an object like {"title": "Sales", "min": 0, "max": 100, "gridlines": true, "format": "#,##0", "hidden": false, "reverse": false}`)
   }
 
   const input = value as Record<string, unknown>
-  const keys = name === 'x' ? AXIS_KEYS : VALUE_AXIS_KEYS
-  checkKeys(input, keys, `axes.${name}`)
+  checkKeys(input, AXIS_KEYS, `axes.${name}`)
   const axis: ChartAxis = { ...base }
 
-  for (const key of keys) {
+  for (const key of AXIS_KEYS) {
     const entry = input[key]
 
     if (entry === undefined) {
@@ -222,7 +219,7 @@ function axisFrom(value: unknown, base: ChartAxis | undefined, name: string): Ch
 
 function axesFrom(value: unknown, base: ChartSpec['axes']): ChartSpec['axes'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('axes is {"x": {…}, "y": {…}, "y2": {…}} (the category axis, the value axis, a combo chart’s second value axis), each with title, min, max, gridlines, format or hidden, and x also reverse (categories the other way round)')
+    throw new Error('axes is {"x": {…}, "y": {…}, "y2": {…}} (the category axis, the value axis, a combo chart’s second value axis), each with title, min, max, gridlines, format, hidden or reverse (the axis the other way round)')
   }
 
   checkKeys(value, ['x', 'y', 'y2'], 'axes')

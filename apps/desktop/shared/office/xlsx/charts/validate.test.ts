@@ -22,24 +22,32 @@ describe('charts other readers open', () => {
       writeFileSync(join(samples, 'charts-all-kinds.xlsx'), bytes)
     }
 
-    const script = 'order = lambda chart: getattr(getattr(getattr(chart, "x_axis", None), "scaling", None), "orientation", None)\nprint(json.dumps({sheet.title: [[type(chart).__name__, getattr(chart, "type", None), getattr(chart, "grouping", None), order(chart)] for chart in sheet._charts] for sheet in book.worksheets}))'
+    const script =
+      'order = lambda chart, axis: getattr(getattr(getattr(chart, axis, None), "scaling", None), "orientation", None)\n' +
+      'print(json.dumps({sheet.title: [[type(chart).__name__, getattr(chart, "type", None), getattr(chart, "grouping", None), order(chart, "x_axis"), order(chart, "y_axis")] for chart in sheet._charts] for sheet in book.worksheets}))'
     const read = JSON.parse(openpyxl(bytes, script))
 
     // Herald's bars run from the top down where Excel's run from the bottom up (minMax).
     expect(read).toEqual({
       'Q1 sales': [
-        ['BarChart', 'col', 'stacked', 'minMax'],
-        ['BarChart', 'bar', 'clustered', 'maxMin'],
-        ['LineChart', null, 'standard', 'minMax'],
-        ['AreaChart', null, 'percentStacked', 'minMax'],
-        ['PieChart', null, null, null],
-        ['DoughnutChart', null, null, null],
-        ['AreaChart', null, 'stacked', 'minMax'],
-        ['BarChart', 'bar', 'clustered', 'minMax'],
-        ['BarChart', 'col', 'clustered', 'maxMin'],
-        ['BarChart', 'col', 'clustered', 'maxMin']
+        ['BarChart', 'col', 'stacked', 'minMax', 'minMax'],
+        ['BarChart', 'bar', 'clustered', 'maxMin', 'minMax'],
+        ['LineChart', null, 'standard', 'minMax', 'minMax'],
+        ['AreaChart', null, 'percentStacked', 'minMax', 'minMax'],
+        ['PieChart', null, null, null, null],
+        ['DoughnutChart', null, null, null, null],
+        ['AreaChart', null, 'stacked', 'minMax', 'minMax'],
+        ['BarChart', 'bar', 'clustered', 'minMax', 'minMax'],
+        ['BarChart', 'col', 'clustered', 'maxMin', 'minMax'],
+        ['BarChart', 'col', 'clustered', 'maxMin', 'minMax'],
+        ['BarChart', 'col', 'clustered', 'minMax', 'maxMin'],
+        ['BarChart', 'bar', 'clustered', 'maxMin', 'maxMin'],
+        ['BarChart', 'col', 'clustered', 'minMax', 'minMax']
       ],
-      Points: [['ScatterChart', null, null, 'minMax']]
+      Points: [
+        ['ScatterChart', null, null, 'minMax', 'minMax'],
+        ['ScatterChart', null, null, 'maxMin', 'maxMin']
+      ]
     })
   })
 

@@ -57,22 +57,27 @@ describe('charts written into a file and read back', () => {
     }
   })
 
-  it('gives back bars and columns with their categories either way round, writing each way as Excel reads it', async () => {
+  it('gives back bars, columns and values with their axes either way round, writing each way as Excel reads it', async () => {
     const { bytes } = await xlsxFromWorkbook(chartWorkbook(EITHER_WAY.map((spec, i) => chartDrawing(`c${i}`, 's1', spec, { at: i }))))
-    const { charts } = await readBack(await withoutHeraldPart(bytes))
+    const { charts, notes } = await readBack(await withoutHeraldPart(bytes))
 
     expect(charts.map((chart) => chart.data.spec)).toEqual(EITHER_WAY.map(asRead))
+    expect(notes).not.toContain(NOTES.axes)
     // Excel lists bars from the bottom up and columns from the left (minMax); a value axis crosses at the far end of reversed categories.
     expect(await axesOf(bytes, EITHER_WAY.length)).toEqual([
       ['catAx 101 maxMin autoZero', 'valAx 102 minMax max'],
       ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero'],
       ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero'],
       ['catAx 101 maxMin autoZero', 'valAx 102 minMax max'],
-      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max', 'valAx 104 minMax autoZero', 'catAx 103 maxMin autoZero']
+      ['catAx 101 maxMin autoZero', 'valAx 102 minMax max', 'valAx 104 minMax autoZero', 'catAx 103 maxMin autoZero'],
+      ['catAx 101 minMax autoZero', 'valAx 102 maxMin autoZero'],
+      ['catAx 101 maxMin autoZero', 'valAx 102 maxMin max'],
+      ['catAx 101 minMax autoZero', 'valAx 102 minMax autoZero', 'valAx 104 maxMin max', 'catAx 103 minMax autoZero'],
+      ['valAx 101 maxMin autoZero', 'valAx 102 maxMin autoZero']
     ])
   })
 
-  it('writes the axes of charts that do not reverse their categories as before', async () => {
+  it('writes the axes of charts that reverse none of them as before', async () => {
     const plain = EVERY_KIND.filter((spec) => ['bar', 'column', 'combo'].includes(spec.kind))
     const { bytes } = await xlsxFromWorkbook(chartWorkbook(plain.map((spec, i) => chartDrawing(`c${i}`, 's1', spec, { at: i }))))
 

@@ -192,19 +192,21 @@ describe('reading, changing, moving and removing charts', () => {
     expect(value.stacking).toBe('percent')
   })
 
-  it('runs a chart’s categories the other way round, and back', async () => {
+  it('runs a chart’s axes the other way round, and back, describing them as they run', async () => {
     const { value } = await changeAndUndo(
       async (target) => {
-        const reversed = await updateChart(target, { chart: 1, kind: 'bar', axes: { x: { reverse: true, title: 'Month' } } })
-        const back = await updateChart(target, { chart: 1, axes: { x: { reverse: null } } })
+        const reversed = await updateChart(target, { chart: 1, kind: 'bar', axes: { x: { reverse: true, title: 'Month' }, y: { reverse: true } } })
+        const described = describeChart(target, { chart: 1 })
+        const back = await updateChart(target, { chart: 1, axes: { x: { reverse: null }, y: { reverse: false } } })
 
-        return { reversed, back }
+        return { reversed, described, back }
       },
       (target) => insertChart(target, { range: 'A1:C7' })
     )
 
-    expect(value.reversed).toMatchObject({ kind: 'bar', axes: { x: { reverse: true, title: 'Month' } } })
-    expect(value.back.axes).toEqual({ x: { title: 'Month' } })
+    expect(value.reversed).toMatchObject({ kind: 'bar', axes: { x: { reverse: true, title: 'Month' }, y: { reverse: true } } })
+    expect(value.described.axes).toEqual(value.reversed.axes)
+    expect(value.back.axes).toEqual({ x: { title: 'Month' }, y: { reverse: false } })
   })
 
   it('lays the series out again from a new block, and changes nothing when nothing changes', async () => {
@@ -265,8 +267,9 @@ describe('reading, changing, moving and removing charts', () => {
       await expect(updateChart(target, { chart: 1, series: [] })).rejects.toThrow('series is a list of at least one series')
       await expect(updateChart(target, { chart: 1, series: [{ name: 'No values' }] })).rejects.toThrow('series 1 needs values')
       await expect(updateChart(target, { chart: 1, axes: { z: {} } })).rejects.toThrow('axes does not take z')
-      await expect(updateChart(target, { chart: 1, axes: { y: { reverse: true } } })).rejects.toThrow('axes.y does not take reverse; it takes title, min, max, gridlines, format, hidden')
       await expect(updateChart(target, { chart: 1, axes: { x: { reverse: 'yes' } } })).rejects.toThrow('axes.x.reverse is true or false, not “yes”')
+      await expect(updateChart(target, { chart: 1, axes: { y2: { reverse: 1 } } })).rejects.toThrow('axes.y2.reverse is true or false, not “1”')
+      await expect(updateChart(target, { chart: 1, axes: { y: { reversed: true } } })).rejects.toThrow('axes.y does not take reversed; it takes title, min, max, gridlines, format, hidden, reverse')
       await expect(updateChart(target, { chart: 1, hole: 95 })).rejects.toThrow('hole is the doughnut’s hole as a percentage of its size, from 0 to 90')
       await expect(updateChart(target, { chart: 1, palette: 'bright' })).rejects.toThrow('palette is a list of colours')
       await expect(moveChart(target, { chart: 1 })).rejects.toThrow('Say where to')

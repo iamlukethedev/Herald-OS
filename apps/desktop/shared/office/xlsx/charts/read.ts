@@ -38,7 +38,7 @@ export interface ChartReading {
 export const NOTES = {
   fills: 'Chart gradient, pattern and picture fills are shown as plain colours; the file keeps them while the chart is unchanged.',
   extras: 'Chart trendlines, error bars, drop lines, up/down bars and data tables are not drawn; the file keeps them while the chart is unchanged.',
-  axes: 'Chart axes with logarithmic scales, reversed order or display units are shown plainly; the file keeps them while the chart is unchanged.',
+  axes: 'Chart axes with logarithmic scales or display units are shown plainly; the file keeps them while the chart is unchanged.',
   labels: 'Chart data labels show one thing each (the value, the percentage or the category); the file keeps the rest while the chart is unchanged.',
   points: 'Single bars, points or slices coloured apart from their series are shown in the series colour; the file keeps them while the chart is unchanged.',
   stackedLines: 'Stacked line charts are shown with their lines unstacked; the file keeps them stacked while the chart is unchanged.',
@@ -159,7 +159,7 @@ class Reader {
     return paint?.none ? undefined : paint?.color
   }
 
-  /** An axis of values, or of categories (`bars` for a bar chart's, which Herald lists from the top down where a file lists them from the bottom up). */
+  /** An axis of values, or of categories (`bars` for a bar chart's, which Herald lists from the top down where a file lists them from the bottom up), and which way it runs. */
   axis(element: XmlElement | undefined, values: boolean, bars = false): ChartAxis {
     const axis: ChartAxis = { gridlines: Boolean(child(element, 'c:majorGridlines')) }
     const title = titleText(child(element, 'c:title'), 'Axis Title')
@@ -191,11 +191,12 @@ class Reader {
       axis.hidden = true
     }
 
-    if (!values && maxMin !== bars) {
+    // Values run up (or along) their axis from minMax; categories too, but Herald's bars list them from the top down.
+    if (values ? maxMin : maxMin !== bars) {
       axis.reverse = true
     }
 
-    if (child(scaling, 'c:logBase') || (values && maxMin) || child(element, 'c:dispUnits')) {
+    if (child(scaling, 'c:logBase') || child(element, 'c:dispUnits')) {
       this.notes.add(NOTES.axes)
     }
 

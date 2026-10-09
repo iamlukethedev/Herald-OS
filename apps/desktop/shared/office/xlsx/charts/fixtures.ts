@@ -146,7 +146,7 @@ export const EVERY_KIND: ChartSpec[] = [
   }
 ]
 
-/** Bars and columns with their categories each way round, as their chart parts say them exactly. */
+/** Bars, columns, a combo and a scatter chart with their axes each way round, as their chart parts say them exactly. */
 export const EITHER_WAY: ChartSpec[] = [
   { kind: 'bar', title: 'From the top down', series: [{ ...north, color: '#2e75b6' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false }, y: { gridlines: true } } },
   { kind: 'bar', title: 'From the bottom up', series: [{ ...north, color: '#2e75b6' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true } } },
@@ -162,15 +162,37 @@ export const EITHER_WAY: ChartSpec[] = [
     legend: 'bottom',
     labels: 'none',
     axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true }, y2: { gridlines: false, format: '0%' } }
+  },
+  { kind: 'column', title: 'Upside down', series: [{ ...north, color: '#1f4e79' }], legend: 'none', labels: 'none', axes: { x: { gridlines: false }, y: { gridlines: true, reverse: true } } },
+  { kind: 'bar', title: 'Values from the right', series: [{ ...north, color: '#2e75b6' }], legend: 'none', labels: 'value', axes: { x: { gridlines: false }, y: { gridlines: true, reverse: true } } },
+  {
+    kind: 'combo',
+    title: 'Margin upside down',
+    series: [
+      { ...north, color: '#1f4e79', type: 'column' },
+      { ...margin, color: '#548235', type: 'line', secondary: true, markers: true }
+    ],
+    legend: 'bottom',
+    labels: 'none',
+    axes: { x: { gridlines: false }, y: { gridlines: true }, y2: { gridlines: false, format: '0%', reverse: true } }
+  },
+  {
+    kind: 'scatter',
+    title: 'Both ways back',
+    series: [{ name: { cell: range('s2', 0, 1) }, values: range('s2', 1, 1, 5, 1), categories: range('s2', 1, 0, 5, 0), color: '#1f4e79' }],
+    legend: 'none',
+    labels: 'none',
+    axes: { x: { gridlines: true, reverse: true }, y: { gridlines: true, reverse: true } }
   }
 ]
 
 /**
- * A workbook made in Herald with a chart of every kind, one under another (the scatter chart on sheet
- * "Points"), then bars from the bottom up and columns from the right.
+ * A workbook made in Herald with a chart of every kind, one under another (the scatter charts on sheet
+ * "Points"), then the charts with an axis the other way round: bars from the bottom up, columns from
+ * the right, values decreasing along their axis.
  */
 export function everyKindWorkbook(): WorkbookSnapshot {
-  const reversed = EITHER_WAY.filter((spec) => spec.axes?.x?.reverse)
+  const reversed = EITHER_WAY.filter((spec) => Object.values(spec.axes ?? {}).some((axis) => axis?.reverse))
   const drawings = [...EVERY_KIND, ...reversed].map((spec, i) => chartDrawing(`chart-${i + 1}-${spec.kind}`, spec.kind === 'scatter' ? 's2' : 's1', spec, { at: i }))
 
   return chartWorkbook(drawings)
@@ -454,21 +476,27 @@ export const BACKWARDS_COLUMN_CHART = excelChart({
   plot: `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>${barSeries(0, 'North', 'B', NORTH, '<a:schemeClr val="accent1"/>')}${LABELS_OFF}<c:gapWidth val="219"/><c:axId val="911"/><c:axId val="912"/></c:barChart>${excelAxes(911, 912).replace('<c:catAx><c:axId val="911"/><c:scaling><c:orientation val="minMax"/>', '<c:catAx><c:axId val="911"/><c:scaling><c:orientation val="maxMin"/>')}`
 })
 
-/** A workbook as Excel writes it with sheet "Q1 sales" and two charts: Excel's bars, from the bottom up, and columns it reversed. */
+/** Columns with "Values in reverse order" set: the value axis from the top down (orientation maxMin), the categories along the top. */
+export const UPSIDE_DOWN_CHART = excelChart({
+  title: 'Upside down',
+  legend: 'none',
+  plot: `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>${barSeries(0, 'North', 'B', NORTH, '<a:schemeClr val="accent1"/>')}${LABELS_OFF}<c:gapWidth val="219"/><c:axId val="921"/><c:axId val="922"/></c:barChart>${excelAxes(921, 922).replace('<c:valAx><c:axId val="922"/><c:scaling><c:orientation val="minMax"/>', '<c:valAx><c:axId val="922"/><c:scaling><c:orientation val="maxMin"/>')}`
+})
+
+/** A workbook as Excel writes it with sheet "Q1 sales" and three charts: Excel's bars, from the bottom up, columns it reversed, and columns upside down. */
 export function excelBarWorkbook(): Promise<Uint8Array> {
+  const charts = [BAR_CHART, BACKWARDS_COLUMN_CHART, UPSIDE_DOWN_CHART]
+
   return chartPackage({
     sheets: [
       {
         name: 'Q1 sales',
         rows: [['Month', 'North'], ...MONTHS.map((month, i) => [month, NORTH[i]])],
-        anchors: [twoCellAnchor(2, [3, 0, 1, 0], [10, 0, 16, 0], chartFrame(0, 'Chart 1')), twoCellAnchor(3, [11, 0, 1, 0], [18, 0, 16, 0], chartFrame(1, 'Chart 2'))],
-        related: [
-          { type: CHART_REL, path: 'xl/charts/chart1.xml' },
-          { type: CHART_REL, path: 'xl/charts/chart2.xml' }
-        ]
+        anchors: charts.map((_chart, i) => twoCellAnchor(i + 2, [3 + i * 8, 0, 1, 0], [10 + i * 8, 0, 16, 0], chartFrame(i, `Chart ${i + 1}`))),
+        related: charts.map((_chart, i) => ({ type: CHART_REL, path: `xl/charts/chart${i + 1}.xml` }))
       }
     ],
-    parts: { 'xl/charts/chart1.xml': { content: BAR_CHART, type: CHART_TYPE }, 'xl/charts/chart2.xml': { content: BACKWARDS_COLUMN_CHART, type: CHART_TYPE } }
+    parts: Object.fromEntries(charts.map((content, i) => [`xl/charts/chart${i + 1}.xml`, { content, type: CHART_TYPE }]))
   })
 }
 

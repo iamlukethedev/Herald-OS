@@ -146,6 +146,7 @@ function valueAxis(theme: ChartTheme, preview: boolean, { axis, format, secondar
     ...(axis?.min !== undefined ? { min: axis.min } : percent ? { min: 0 } : {}),
     ...(axis?.max !== undefined ? { max: axis.max } : percent ? { max: 1 } : {}),
     ...(scale ? { scale: true } : {}),
+    ...(axis?.reverse === true ? { inverse: true } : {}),
     axisLine: { show: false },
     axisTick: { show: false },
     axisLabel: { show: !preview, color: theme.label, fontFamily: theme.font, fontSize: 11, formatter: (value: number) => formatNumber(value, axis?.format ?? (percent ? '0%' : format)) },

@@ -49,7 +49,10 @@ export interface ChartAxis {
   /** The number format of the axis labels ("0%"); the cells' own when unset. */
   format?: string
   hidden?: boolean
-  /** The categories run the other way from Herald's usual direction: bars from the bottom up, columns from right to left (the category axis only). */
+  /**
+   * The axis runs the other way from Herald's usual direction: on a category axis, bars from the bottom
+   * up and columns from right to left; on a value axis, values that decrease along it.
+   */
   reverse?: boolean
 }
 

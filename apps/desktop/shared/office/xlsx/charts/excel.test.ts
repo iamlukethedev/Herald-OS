@@ -100,12 +100,15 @@ describe('charts Excel made', () => {
     } satisfies ChartSpec)
   })
 
-  it('reads Excel’s bars, which run from the bottom up, and columns it reversed as categories the other way round', async () => {
+  it('reads Excel’s bars, which run from the bottom up, and columns it reversed or turned upside down, the way Excel shows them', async () => {
     const { charts, notes } = await readExcel(await excelBarWorkbook())
-    const [bars, columns] = charts(SALES)
+    const [bars, columns, upsideDown] = charts(SALES)
 
     expect(bars.data.spec).toMatchObject({ kind: 'bar', title: 'Bars', axes: { x: { gridlines: false, reverse: true }, y: { gridlines: true } } })
+    expect(bars.data.spec.axes?.y?.reverse).toBeUndefined()
     expect(columns.data.spec).toMatchObject({ kind: 'column', title: 'Backwards', axes: { x: { gridlines: false, reverse: true } } })
+    expect(upsideDown.data.spec).toMatchObject({ kind: 'column', title: 'Upside down', axes: { x: { gridlines: false }, y: { gridlines: true, reverse: true } } })
+    expect(upsideDown.data.spec.axes?.x?.reverse).toBeUndefined()
     expect(notes).not.toContain(NOTES.axes)
   })
 

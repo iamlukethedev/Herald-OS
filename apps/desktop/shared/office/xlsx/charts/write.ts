@@ -253,7 +253,7 @@ class ChartWriter {
     const bounds = `${axis?.max !== undefined ? val('max', axis.max) : ''}${axis?.min !== undefined ? val('min', axis.min) : ''}`
 
     return (
-      `<c:valAx>${val('axId', id)}<c:scaling>${val('orientation', 'minMax')}${bounds}</c:scaling>${val('delete', Number(axis?.hidden === true))}${val('axPos', options.position)}` +
+      `<c:valAx>${val('axId', id)}<c:scaling>${val('orientation', axis?.reverse === true ? 'maxMin' : 'minMax')}${bounds}</c:scaling>${val('delete', Number(axis?.hidden === true))}${val('axPos', options.position)}` +
       `${this.gridlines(axis?.gridlines ?? options.gridlines)}${this.title(axis?.title, 1000, options.position === 'l' || options.position === 'r')}${this.numberFormat(axis)}` +
       `${val('majorTickMark', 'none')}${val('minorTickMark', 'none')}${val('tickLblPos', 'nextTo')}<c:spPr><a:noFill/>${options.line ? `<a:ln w="9525">${solidFill(AXIS_COLOR)}</a:ln>` : '<a:ln><a:noFill/></a:ln>'}</c:spPr>` +
       `${val('crossAx', crossing)}${val('crosses', options.crosses)}${val('crossBetween', options.between)}</c:valAx>`
