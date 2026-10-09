@@ -133,7 +133,8 @@ function inventoryOf(doc: PMNode): Inventory {
     const scan = scanOf(node)
 
     for (const note of scan.notes) {
-      ;(note.kind === 'endnote' ? out.endnotes : out.footnotes).push({ pos: offset + note.offset, content: note.content })
+      const list = note.kind === 'endnote' ? out.endnotes : out.footnotes
+      list.push({ pos: offset + note.offset, content: note.content })
     }
 
     for (const heading of scan.headings) {
@@ -158,7 +159,8 @@ function sizeSpacer(element: HTMLElement, kind: Widget['kind'], size: number): v
   if (kind === 'block') {
     element.style.marginTop = px(size)
   } else if (kind === 'row') {
-    ;(element.firstElementChild as HTMLElement | null)?.style.setProperty('height', px(size))
+    const cell = element.firstElementChild as HTMLElement | null
+    cell?.style.setProperty('height', px(size))
   } else {
     element.style.height = px(size)
   }
@@ -500,9 +502,9 @@ export class Paginator {
       shape += key
     }
 
+    // A new state (a version loaded from disk) starts without them, and blocks added to a section lack theirs.
     const current = pagesKey.getState(this.view.state)
-    const mapped = current?.find(undefined, undefined, (spec) => spec.section === true) ?? []
-    const stale = mapped.length !== decorations.filter((decoration) => decoration.spec.section).length
+    const stale = (current?.find(undefined, undefined, (spec) => spec.spacer !== true).length ?? 0) !== decorations.length
 
     if (shape === this.shape && !stale) {
       return
