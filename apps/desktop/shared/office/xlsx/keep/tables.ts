@@ -94,7 +94,9 @@ function whyNot(keep: Keep, sheet: KeptSheet, table: SourceTable, range: CellRan
     return overlap
   }
 
-  if (keep.writtenNames().has(table.name.toLowerCase()) || keep.writtenNames().has(table.displayName.toLowerCase())) {
+  const names = keep.writtenNames('all')
+
+  if (names.has(table.name.toLowerCase()) || names.has(table.displayName.toLowerCase())) {
     return 'a defined name has its name'
   }
 

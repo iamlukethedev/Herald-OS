@@ -75,8 +75,7 @@ export class Keep {
     /** The written workbook part, and its XML as ExcelJS and the steps before this one left it. */
     readonly workbookPath: string,
     readonly workbookXml: string,
-    /** The source's workbook part and its relationships. */
-    readonly sourceWorkbookPath: string,
+    /** The relationships of the source's workbook part. */
     readonly sourceRelationships: Relationship[]
   ) {}
 
@@ -107,16 +106,16 @@ export class Keep {
       await styles.load(ctx.writer, stylesPath)
     }
 
-    keep = new Keep(ctx, pkg, copier, styles, sheets, names, workbookPath, (await ctx.writer.text(workbookPath)) ?? '', sourceWorkbookPath, await copier.relationships(sourceWorkbookPath))
+    keep = new Keep(ctx, pkg, copier, styles, sheets, names, workbookPath, (await ctx.writer.text(workbookPath)) ?? '', await copier.relationships(sourceWorkbookPath))
 
     return keep
   }
 
-  /** The workbook-scoped defined names of the written workbook, by name in lower case, with their formulas. */
-  writtenNames(): Map<string, string> {
+  /** The defined names of the written workbook (those of the whole workbook, or of every scope), by name in lower case, with their formulas. */
+  writtenNames(scopes: 'workbook' | 'all' = 'workbook'): Map<string, string> {
     return new Map(
       elementsOf(firstElement(this.workbookXml, 'definedNames')?.inner ?? '', 'definedName')
-        .filter(({ attributes }) => attributes.localSheetId === undefined)
+        .filter(({ attributes }) => scopes === 'all' || attributes.localSheetId === undefined)
         .map(({ attributes, inner }) => [(attributes.name ?? '').toLowerCase(), decodeXml(inner)])
     )
   }
