@@ -1,6 +1,6 @@
 import type { Deck, Slide, SlideElement } from './deck.ts'
 import { findSlide, newId, withSlide } from './deck.ts'
-import { boundsOfAll, center, lineEndsOnSlide, type Point, rotatePoint, withEndsOnSlide } from './elements.ts'
+import { boundsOfAll, center, copyElement, lineEndsOnSlide, type Point, rotatePoint, withBox, withEndsOnSlide } from './elements.ts'
 import type { DeckChange } from './model.ts'
 import { routeDeck } from './sites.ts'
 
@@ -117,6 +117,39 @@ export function ungroupElements(deck: Deck, slideId: string, ids: readonly strin
   })
 
   return { deck: withSlide(deck, slideId, (entry) => ({ ...entry, elements })), label: 'Ungroup', focus: { slideId, selected: [...members] } }
+}
+
+/**
+ * Kept objects that carry a drawing (SmartArt) made a group of its shapes, placed and stretched as
+ * the object is, so they can be edited; what the object kept for PowerPoint goes with it.
+ */
+export function convertToShapes(deck: Deck, slideId: string, ids: readonly string[]): DeckChange {
+  const slide = requireSlide(deck, slideId)
+  const wanted = new Set(ids)
+  const made: string[] = []
+  const elements = slide.elements.flatMap((element): SlideElement[] => {
+    if (!wanted.has(element.id) || element.kind !== 'object' || !element.shapes?.length) {
+      return [element]
+    }
+
+    const sx = element.width / Math.max(1, element.drawnIn?.width ?? element.width)
+    const sy = element.height / Math.max(1, element.drawnIn?.height ?? element.height)
+    const group = [...(element.group ?? []), newId('group')]
+    const shapes = regroupCopies(element.shapes).map((shape) => {
+      const placed = withBox(copyElement(shape), { x: element.x + shape.x * sx, y: element.y + shape.y * sy, width: shape.width * sx, height: shape.height * sy })
+
+      return { ...placed, group: [...group, ...(shape.group ?? [])] }
+    })
+    made.push(...shapes.map((shape) => shape.id))
+
+    return shapes
+  })
+
+  if (!made.length) {
+    return { deck, label: 'Convert to Shapes' }
+  }
+
+  return { deck: withSlide(deck, slideId, (entry) => ({ ...entry, elements })), label: 'Convert to Shapes', focus: { slideId, selected: made } }
 }
 
 const turned = (degrees: number): number => ((degrees % 360) + 360) % 360

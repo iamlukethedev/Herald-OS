@@ -134,4 +134,20 @@ describe('groups', () => {
     expect(elementsOf(spun, slideId).find((element) => element.id === table.elementId)!.rotation).toBe(0)
     expect(model.rotateElements(change.deck, slideId, [a], 300).deck.slides[1].elements.find((element) => element.id === a)!.rotation).toBe(30)
   })
+
+  it('turns a kept drawing into a group of its shapes, stretched to the object’s box', () => {
+    const { deck, slideId } = shapes()
+    const drawing = model.addShape(deck, slideId, { shape: 'ellipse', x: 10, y: 20, width: 40, height: 30 }).deck
+    const shape = elementsOf(drawing, slideId).at(-1)!
+    const object: SlideElement = { id: 'smartart', kind: 'object', object: 'diagram', x: 100, y: 100, width: 200, height: 120, rotation: 0, shapes: [shape, { ...shape, id: 'second', x: 60 }], drawnIn: { width: 100, height: 60 }, source: { xml: '<p:graphicFrame/>', parts: [] } }
+    const withObject = model.insertElements(deck, slideId, [object], 'Paste').deck
+    const change = model.convertToShapes(withObject, slideId, ['smartart'])
+    const made = elementsOf(change.deck, slideId).filter((element) => change.focus?.selected?.includes(element.id))
+
+    expect(elementsOf(change.deck, slideId).some((element) => element.id === 'smartart')).toBe(false)
+    expect(made).toHaveLength(2)
+    expect(made[0]).toMatchObject({ kind: 'shape', x: 120, y: 140, width: 80, height: 60 })
+    expect(new Set(made.map((element) => element.group?.[0])).size).toBe(1)
+    expect(model.convertToShapes(change.deck, slideId, [made[0].id]).deck).toBe(change.deck)
+  })
 })

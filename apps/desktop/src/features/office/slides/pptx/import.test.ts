@@ -575,10 +575,12 @@ describe('importPresentation: placeholders', () => {
     expect(deck.slides[0].elements.map((element) => element.name)).toEqual(['Page', 'Own'])
     expect(deck.slides[1].elements.map((element) => element.name)).toEqual(['Page'])
     expect(deck.slides[2].elements).toEqual([])
+    expect(deck.slides[2].showMaster).toBe(false)
+    expect(deck.slides[1].showMaster).toBeUndefined()
     expect(named<TextElement>(deck.slides[1], 'Page').body.paragraphs[0].runs[0].text).toBe('2')
     expect(deck.slides[0].elements[0].id).not.toBe(deck.slides[1].elements[0].id)
     expect(counts(report)).toEqual({ text: { imported: 2, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 0, skipped: 0 }, line: { imported: 1, approximated: 0, skipped: 0 } })
-    expect(report.reasons).toEqual({ 'background graphics shown on slides that did not show them': 1 })
+    expect(report.reasons).toEqual({})
   })
 })
 

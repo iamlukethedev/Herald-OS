@@ -229,7 +229,11 @@ export const backgroundOf = (deck: Pick<Deck, 'master' | 'size'>, slide: Pick<Sl
 }
 
 /** The master's and the layout's drawings a slide shows behind its own, in drawing order (placeholders are not drawn). */
-export function decorationsOf(deck: Pick<Deck, 'master' | 'size'>, layoutId: LayoutId): SlideElement[] {
+export function decorationsOf(deck: Pick<Deck, 'master' | 'size'>, layoutId: LayoutId, slide?: Pick<Slide, 'showMaster'>): SlideElement[] {
+  if (slide?.showMaster === false) {
+    return []
+  }
+
   const master = masterOf(deck)
   const layout = layoutOf(master, layoutId)
   const drawn = (element: SlideElement) => !element.placeholder

@@ -405,4 +405,13 @@ describe('writing slides with a theme of their own', () => {
     expect(attr(find(await raw('ppt/slideLayouts/slideLayout10.xml'), 'p:cSld'), 'name')).toBe('Title and Content')
     await expectWhole(zip)
   })
+
+  it('hides the master’s and layout’s drawings on a slide that hides them, and reads it back so', async () => {
+    let deck = model.addSlide(model.newDeck('Plain'), { layout: 'title-content' }).deck
+    deck = { ...deck, slides: deck.slides.map((slide, index) => (index === 1 ? { ...slide, showMaster: false as const } : slide)) }
+    const { read } = await unzip(await writePptx(deck, { now: NOW, embed: false }))
+
+    expect(attr(await read('ppt/slides/slide1.xml'), 'showMasterSp')).toBeUndefined()
+    expect(attr(await read('ppt/slides/slide2.xml'), 'showMasterSp')).toBe('0')
+  })
 })

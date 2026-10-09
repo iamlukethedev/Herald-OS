@@ -508,6 +508,8 @@ export interface Slide {
   transition?: SlideTransition
   /** A theme of its own in place of the deck's (PowerPoint keeps it as a master of its own). */
   theme?: Theme
+  /** False hides the master's and layout's drawings on this slide (PowerPoint's "Hide background graphics"). */
+  showMaster?: false
 }
 
 /**

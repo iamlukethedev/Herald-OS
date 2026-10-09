@@ -52,7 +52,7 @@ export {
   setShowMaster,
   slideLayoutId
 } from './masters.ts'
-export { expandToGroups, groupElements, regroupCopies, rotateElements, tidyGroups, ungroupElements, unitOf } from './groups.ts'
+export { convertToShapes, expandToGroups, groupElements, regroupCopies, rotateElements, tidyGroups, ungroupElements, unitOf } from './groups.ts'
 export { connectionSites, nearestSite, relinkCopies, routeConnectors, routeDeck, siteFacing } from './sites.ts'
 export { gradientFill } from './elements.ts'
 export { borderCells, type BorderSide } from './tables.ts'

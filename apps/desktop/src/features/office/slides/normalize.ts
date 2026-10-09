@@ -515,7 +515,8 @@ function slide(value: unknown): Slide | null {
     notes: str(value.notes, '', 200_000),
     hidden: flag(value.hidden),
     ...(own ? { transition: own } : {}),
-    ...(isObject(value.theme) ? { theme: theme(value.theme) } : {})
+    ...(isObject(value.theme) ? { theme: theme(value.theme) } : {}),
+    ...(value.showMaster === false ? { showMaster: false as const } : {})
   }
 }
 

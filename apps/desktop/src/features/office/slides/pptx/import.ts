@@ -2373,7 +2373,7 @@ async function graphics(scope: Scope, root: XmlElement, layout: Layout | undefin
     }
   }
 
-  if (drawn.some((path) => !shown.some((template) => template.path === path))) {
+  if (flagAttr(root, 'showMasterSp') !== false && drawn.some((path) => !shown.some((template) => template.path === path))) {
     note(scope.ctx.report, WHY.graphics)
   }
 
@@ -2462,7 +2462,8 @@ async function readSlide(ctx: Context, path: string | undefined, index: number):
       notes: await notesOf(ctx, relationships),
       hidden: flagAttr(root, 'show') === false,
       ...(transition.transition ? { transition: transition.transition } : {}),
-      ...(master.own ? { theme: master.own } : {})
+      ...(master.own ? { theme: master.own } : {}),
+      ...(flagAttr(root, 'showMasterSp') === false ? { showMaster: false as const } : {})
     },
     transition,
     animated: attempt(() => animated(root), false),

@@ -71,6 +71,10 @@ function finishSlide(root: XmlElement, slide: Slide, index: number, deck: Deck, 
     return
   }
 
+  if (slide.showMaster === false) {
+    root.attrs.showMasterSp = '0'
+  }
+
   finishTree(tree, slide.elements, {
     part: ctx.part,
     rels: ctx.rels,
