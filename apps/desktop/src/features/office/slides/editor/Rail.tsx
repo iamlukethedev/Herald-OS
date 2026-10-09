@@ -28,8 +28,9 @@ type ThumbDeck = Pick<Deck, 'size' | 'theme'> & Partial<Pick<Deck, 'master' | 'h
 
 const AS_IS: ViewOptions = {}
 
-const Thumbnail = memo(function Thumbnail({ deck, slide, index, width = THUMB, options = AS_IS }: { deck: ThumbDeck; slide: Slide; index?: number; width?: number; options?: ViewOptions }) {
-  return <SlideView deck={deck} slide={slide} scale={width / deck.size.width} mode="thumb" index={index} {...options} className="pointer-events-none" />
+/** The master view's thumbnails show placeholders with their prompts, as the master and its layouts are made of them. */
+const Thumbnail = memo(function Thumbnail({ deck, slide, index, width = THUMB, options = AS_IS, prompts = false }: { deck: ThumbDeck; slide: Slide; index?: number; width?: number; options?: ViewOptions; prompts?: boolean }) {
+  return <SlideView deck={deck} slide={slide} scale={width / deck.size.width} mode={prompts ? 'edit' : 'thumb'} index={index} {...options} className="pointer-events-none" />
 })
 
 /** The master view's list: the master's own slide, then each layout under it with its name. */
@@ -63,7 +64,7 @@ function MasterSlides({ doc, view }: { doc: SlidesDocument; view: ThumbDeck }) {
         className="flex w-full flex-col items-start gap-1 text-left"
       >
         <span className={cn('overflow-hidden rounded-[3px] ring-2 ring-offset-0', slide.id === front ? 'ring-accent' : 'ring-transparent hover:ring-line-strong')}>
-          <Thumbnail deck={view} slide={slide} width={layout ? LAYOUT_THUMB : THUMB} options={doc.viewOptions(slide)} />
+          <Thumbnail deck={view} slide={slide} width={layout ? LAYOUT_THUMB : THUMB} options={doc.viewOptions(slide)} prompts />
         </span>
         <span className={cn('max-w-full truncate text-[11px]', slide.id === front ? 'text-fg' : 'text-fg-3')}>{name}</span>
       </button>

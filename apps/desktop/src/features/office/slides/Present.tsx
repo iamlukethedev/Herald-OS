@@ -2,12 +2,13 @@ import { useStore } from '@nanostores/react'
 import { IconChevronLeft, IconChevronRight, IconPresentation, IconX } from '@tabler/icons-react'
 import { type ReactNode, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { matches } from '../../../lib/shortcuts.ts'
 import { $env } from '../../../store/backend.ts'
 import { isPanels } from '../../../store/shell.ts'
 import type { Deck } from './deck.ts'
 import { useDeck } from './editor/Stage.tsx'
 import { Audience } from './present/Audience.tsx'
-import { $audience, act, canUseTwoDisplays, closeAudienceWindow, enterFullScreen, openAudienceWindow, stopPresenting, useFullScreenEnd, usePresentationKeys } from './present/control.ts'
+import { $audience, act, canUseTwoDisplays, closeAudienceWindow, enterFullScreen, openAudienceWindow, setPresentingShortcut, stopPresenting, useFullScreenEnd, usePresentationKeys } from './present/control.ts'
 import { useIdle, useWindowSize } from './present/hooks.ts'
 import { PresenterView } from './present/PresenterView.tsx'
 import { Show } from './present/Show.tsx'
@@ -83,6 +84,16 @@ export function showPresenterView(shown: boolean, options: Pick<PresentOptions, 
 
   act((state) => withMode(state, mode))
 }
+
+setPresentingShortcut((event) => {
+  if (!matches(event, 'mod+alt+p')) {
+    return false
+  }
+
+  showPresenterView($presentation.get()?.mode === 'slides')
+
+  return true
+})
 
 /** Whether a deck is being presented. */
 export const isPresenting = (): boolean => $presentation.get() !== null

@@ -65,7 +65,7 @@ function ColourRow({ slot, value, onChange }: { slot: Slot; value: string; onCha
         spellCheck={false}
         aria-label={`${SLOT_NAMES[slot]} as #rrggbb`}
         aria-invalid={!hex}
-        className={cn('glass-input h-6 w-[76px] rounded-md px-1.5 font-mono text-[11.5px] text-fg outline-none', !hex && 'ring-1 ring-danger')}
+        className={cn('glass-input h-6 w-[64px] rounded-md px-1 font-mono text-[11.5px] text-fg outline-none', !hex && 'ring-1 ring-danger')}
       />
     </div>
   )

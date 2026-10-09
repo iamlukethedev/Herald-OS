@@ -102,6 +102,13 @@ export function act(move: (state: Presentation) => Presentation | null): void {
   }
 }
 
+/** What a key with modifiers does while presenting (true: taken), since the window's menus do not hear keys pressed in the presentation. */
+let shortcut: ((event: KeyboardEvent) => boolean) | null = null
+
+export const setPresentingShortcut = (handler: ((event: KeyboardEvent) => boolean) | null): void => {
+  shortcut = handler
+}
+
 /**
  * Keys pressed in a window move the presentation, the same whichever view they are pressed in;
  * `first` may take a key before they do (true: taken). Keys without modifiers go no further, so
@@ -119,7 +126,16 @@ export function usePresentationKeys(win: Window | null, first?: (event: Keyboard
     const onKey = (event: KeyboardEvent) => {
       const state = $presentation.get()
 
-      if (!state || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) {
+      if (!state || event.isComposing) {
+        return
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        if (shortcut?.(event)) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+
         return
       }
 
