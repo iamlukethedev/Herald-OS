@@ -13,6 +13,7 @@ import { DocsEditor, dragPoint } from './DocsEditor.tsx'
 import { mimeOfName } from './editor.ts'
 import { BLOCK_STYLES, styleAt } from './model.ts'
 import { $pickImage } from './slash.ts'
+import { $statistics, StatisticsDialog } from './StatisticsDialog.tsx'
 import { activeEditor, docsSession } from './store.ts'
 import { TABLE_ACTIONS } from './table-menu.ts'
 import { $templateGallery, openTemplateGallery, TemplateGallery } from './TemplateGallery.tsx'
@@ -129,6 +130,8 @@ function docsMenus(): OfficeMenu[] {
     { id: 'zoom-reset', label: 'Actual Size', shortcut: 'mod+0', enabled: has, run: () => key() && act.zoom(key()!, 'reset') }
   ]
 
+  const tools: OfficeCommand[] = [{ id: 'statistics', label: 'Word Count and Statistics…', shortcut: 'mod+shift+c', enabled: has, run: () => $statistics.set(true) }]
+
   return officeMenus({
     session: docsSession,
     canSave: true,
@@ -142,7 +145,8 @@ function docsMenus(): OfficeMenu[] {
       { id: 'insert', label: 'Insert', items: insert },
       { id: 'format', label: 'Format', items: format },
       { id: 'table', label: 'Table', items: table },
-      { id: 'view', label: 'View', items: view }
+      { id: 'view', label: 'View', items: view },
+      { id: 'tools', label: 'Tools', items: tools }
     ]
   })
 }
@@ -152,6 +156,7 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
   const [canOpen, setCanOpen] = useState(true)
   const gallery = useStore($templateGallery)
   const savingTemplate = useStore($saveTemplate)
+  const statistics = useStore($statistics)
   const picker = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -206,6 +211,7 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
       />
       {gallery && <TemplateGallery />}
       {savingTemplate && <SaveTemplateDialog />}
+      {statistics && <StatisticsDialog />}
     </>
   )
 }

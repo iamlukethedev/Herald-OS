@@ -801,3 +801,4 @@ export function setPage(change: PageChange): Op {
 }
 
 export { documentFromTemplate, TEMPLATES, type TemplateInfo, type TemplateOptions } from './templates/index.ts'
+export { type DocumentStatistics, documentStatistics, type Readability, type StatisticsOptions } from './statistics.ts'
