@@ -159,7 +159,8 @@
       "!**/node_modules/{jszip,lie,setimmediate}/**",
       "!**/node_modules/{echarts,zrender}/**",
       "!**/node_modules/{onnxruntime-web,onnxruntime-common}/**",
-      "!**/node_modules/@tabler/**"
+      "!**/node_modules/@tabler/**",
+      "!**/node_modules/ag-psd/**"
     ],
     "extraResources": [
       {
