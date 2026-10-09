@@ -116,6 +116,16 @@ describe('summaries', () => {
     expect(result.blank.read.values).toEqual([['Product', 'Sum of Amount'], ['Pears', 30], ['Grand total', 30]])
   })
 
+  it('shows date labels, and numbers, in the formats of their columns', async () => {
+    const book = salesBook(SALES.map((row, index) => [row[REGION], 46022 + (index % 3), row[QUARTER], row[AMOUNT]]))
+    book.styles.date = { n: { pattern: 'yyyy-mm-dd' } }
+    Object.values(book.sheets.sales.cellData).forEach((row, index) => index > 0 && Object.assign(row[1], { s: 'date' }))
+    const { result } = await withHeadlessSheets(book, (target) => summaryOf(target, { source: 'A1', rows: ['Product'], values: [{ field: 'Amount', fn: 'average' }, { field: 'Amount', fn: 'count' }] }))
+
+    expect(result.read.text.map((row) => row[0])).toEqual(['Product', '2025-12-31', '2026-01-01', '2026-01-02', 'Grand total'])
+    expect(result.read.text[1].slice(1)).toEqual(['111.25', '4'])
+  })
+
   it('previews its shape without changing anything', async () => {
     const result = await changeAndUndo(salesBook(), (target) => summarize(target, { source: 'A1', rows: ['Region', 'Product'], values: ['Amount'], preview: true }))
 
