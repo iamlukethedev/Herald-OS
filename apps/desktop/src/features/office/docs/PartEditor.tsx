@@ -110,11 +110,6 @@ export function PartEditors({ editor, docKey, frame, desk, active }: PartEditors
   )
 }
 
-/** Puts what is being typed in a header, footer or note into the document, before it is read. */
-export function flushPartEdits(docKey: string): void {
-  openPartOf(docKey)?.flush()
-}
-
 // The editors.
 
 const storyKeys = (onEscape: () => void) =>

@@ -1,4 +1,3 @@
-import './review.css'
 import { useStore } from '@nanostores/react'
 import { IconArrowBackUp, IconCheck, IconChevronDown, IconChevronRight, IconDots, IconMessagePlus, IconX } from '@tabler/icons-react'
 import type { Editor } from '@tiptap/core'
@@ -15,15 +14,13 @@ import { $commentsShown, $composeRequest, cancelComment, commentsState, leaveCom
 import { applyLive, comments, editComment, replyToComment } from './model.ts'
 import { keepInList } from './overlay.ts'
 import { docsSession } from './store.ts'
-import { TocBar } from './TocBar.tsx'
 import { ToolButton } from './Toolbar.tsx'
 
 /*
  * The comments beside the pages, as in Word and Google Docs: a card for each thread in the order of
  * its text, its replies under it and a box to answer it in, resolved threads folded away, and a
  * card for a new comment while it is written. A card picked selects its text; the caret in
- * commented text picks its card. The bar for a selected table of contents is drawn here too, over
- * the page, as the other bars are.
+ * commented text picks its card.
  */
 
 interface ThreadView {
@@ -441,7 +438,8 @@ function AuthorLine() {
   )
 }
 
-function CommentsColumn({ editor, docKey }: { editor: Editor; docKey: string }) {
+/** The comments beside the pages, when the document has some or the person asked for them. */
+export function CommentsColumn({ editor, docKey }: { editor: Editor; docKey: string }) {
   const view = useEditorState({ editor, selector: ({ editor: current }) => (current.isDestroyed ? null : panelView(current)) })
   const chosen = useStore($commentsShown)[docKey]
   const [showResolved, setShowResolved] = useState(false)
@@ -500,15 +498,5 @@ function CommentsColumn({ editor, docKey }: { editor: Editor; docKey: string }) 
       </div>
       <AuthorLine />
     </aside>
-  )
-}
-
-/** The comments beside the pages (when the document has some, or the person asked for them), and the bar of a selected table of contents. */
-export function CommentsPanel({ editor, docKey }: { editor: Editor; docKey: string }): ReactNode {
-  return (
-    <>
-      <TocBar editor={editor} docKey={docKey} />
-      <CommentsColumn editor={editor} docKey={docKey} />
-    </>
   )
 }

@@ -1,13 +1,9 @@
-import { atom } from 'nanostores'
 import { type ReactNode, useMemo } from 'react'
 import type { DocJSON } from '../../../../shared/office/document.ts'
 import { GlassButton } from '../../../components/ui/glass.tsx'
 import { Modal } from '../shell/dialogs.tsx'
 import { type DocumentStatistics, documentStatistics, durationLabel } from './statistics.ts'
-import { $pages, activeEditor, docsSession } from './store.ts'
-
-/** Whether Tools > Word Count and Statistics… is open. */
-export const $statistics = atom(false)
+import { $pages, $statistics, activeEditor, docsSession } from './store.ts'
 
 const whole = (value: number): string => value.toLocaleString()
 

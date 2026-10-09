@@ -44,3 +44,14 @@ export const $partEdit = atom<{ docKey: string; part: 'header' | 'footer'; kind:
 
 /** A request to edit a footnote or endnote, made by a double click on its reference or its text: the document, the note, where its reference is in the document, and where it was on screen. */
 export const $noteEdit = atom<{ docKey: string; kind: NoteKind; number: number; pos: number; rect: ScreenRect } | null>(null)
+
+/** Whether the template gallery is open over Herald Docs. */
+export const $templateGallery = atom(false)
+
+export const openTemplateGallery = (): void => $templateGallery.set(true)
+
+/** Whether File > Save as Template… is asking for the template's name. */
+export const $saveTemplate = atom(false)
+
+/** Whether Tools > Word Count and Statistics… is open. */
+export const $statistics = atom(false)

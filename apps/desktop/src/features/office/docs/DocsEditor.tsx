@@ -1,28 +1,35 @@
+import './review.css'
 import { useStore } from '@nanostores/react'
 import type { Editor } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
-import { EditorState } from '@tiptap/pm/state'
+import { EditorState, NodeSelection } from '@tiptap/pm/state'
 import { useEditorState } from '@tiptap/react'
-import { Fragment, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { countWords, type DocJSON, pageOf } from '../../../../shared/office/document.ts'
+import { Fragment, lazy, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { commentsOf, countWords, type DocJSON, pageOf } from '../../../../shared/office/document.ts'
 import type { EditorHandle, OfficeDocument } from '../types.ts'
 import * as act from './actions.ts'
 import { BubbleBar } from './BubbleBar.tsx'
-import { CommentsPanel } from './CommentsPanel.tsx'
+import { $commentsShown, commentsState } from './comments.ts'
 import { createDocsEditor } from './editor.ts'
-import { FindBar } from './FindBar.tsx'
 import { ImageBar } from './ImageBar.tsx'
 import { LinkPopover } from './LinkPopover.tsx'
 import { counts, outline } from './model.ts'
-import { NavigationPane } from './NavigationPane.tsx'
+import { $navigationPane } from './navigation-store.ts'
 import { useScrollTick } from './overlay.ts'
 import { pageCss } from './pages/css.ts'
 import { pageAt } from './pages/map.ts'
 import { paginatorOf } from './pages/paginator.ts'
-import { flushPartEdits, PartEditors } from './PartEditor.tsx'
+import { $pageSetup, openPartOf } from './parts.ts'
 import { SlashMenu } from './SlashMenu.tsx'
 import { $editors, $find, $noteEdit, $pages, $partEdit, $zoom, docsSession, type ScreenRect } from './store.ts'
 import { withTocPages } from './toc.ts'
+
+// What only some documents or moments need loads when it is first wanted, after the pages are up.
+const FindBar = lazy(() => import('./FindBar.tsx').then((module) => ({ default: module.FindBar })))
+const NavigationPane = lazy(() => import('./NavigationPane.tsx').then((module) => ({ default: module.NavigationPane })))
+const CommentsColumn = lazy(() => import('./CommentsPanel.tsx').then((module) => ({ default: module.CommentsColumn })))
+const TocBar = lazy(() => import('./TocBar.tsx').then((module) => ({ default: module.TocBar })))
+const PartEditors = lazy(() => import('./PartEditor.tsx').then((module) => ({ default: module.PartEditors })))
 
 /** Where a file was last dragged over a page, so a picture dropped from Files lands there. */
 export const dragPoint = { key: '', left: 0, top: 0 }
@@ -30,6 +37,17 @@ export const dragPoint = { key: '', left: 0, top: 0 }
 const plural = (count: number, one: string, many: string): string => `${count.toLocaleString()} ${count === 1 ? one : many}`
 
 const screenRect = ({ left, top, width, height }: DOMRect): ScreenRect => ({ left, top, width, height })
+
+/** True from the first time `wanted` is: a part that keeps its own state stays mounted once it has been needed. */
+function useWanted(wanted: boolean): boolean {
+  const [once, setOnce] = useState(wanted)
+
+  if (wanted && !once) {
+    setOnce(true)
+  }
+
+  return once || wanted
+}
 
 /** The page the selection ends on, and how many pages there are. */
 function caretPage(editor: Editor, key: string): { number: number; count: number } | null {
@@ -101,7 +119,8 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
     }
     const handle: EditorHandle<DocJSON> = {
       snapshot: () => {
-        flushPartEdits(doc.key)
+        // What is being typed in a header, footer or note goes into the document before it is read.
+        openPartOf(doc.key)?.flush()
 
         return withTocPages(instance.getJSON() as DocJSON, doc.key)
       },
@@ -196,6 +215,28 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
   const page = pageOf({ type: 'doc', attrs })
   const css = useMemo(() => pageCss(doc.key, attrs?.styles ?? null), [attrs?.styles, doc.key])
 
+  const navigation = useStore($navigationPane)
+  const commentsChosen = useStore($commentsShown)[doc.key]
+  const partRequest = useStore($partEdit)
+  const noteRequest = useStore($noteEdit)
+  const setup = useStore($pageSetup)
+  const wants = useEditorState({
+    editor,
+    selector: ({ editor: current }) => {
+      if (!current || current.isDestroyed) {
+        return { comments: false, toc: false }
+      }
+
+      const { state } = current
+      const comments = commentsOf({ type: 'doc', attrs: state.doc.attrs }).some((thread) => typeof thread?.id === 'string') || Boolean(commentsState(state)?.draft)
+
+      return { comments, toc: state.selection instanceof NodeSelection && state.selection.node.type.name === 'tableOfContents' }
+    }
+  })
+  const showComments = useWanted(Boolean(editor) && (commentsChosen ?? Boolean(wants?.comments)))
+  const showToc = useWanted(Boolean(wants?.toc))
+  const editingParts = useWanted(partRequest?.docKey === doc.key || noteRequest?.docKey === doc.key || (active && setup === doc.key))
+
   // A click on the paper or between pages puts the caret at the nearest place in that page's text.
   const onSheetDown = (event: MouseEvent<HTMLDivElement>) => {
     if (!editor || (event.target instanceof Node && mount.current?.contains(event.target))) {
@@ -224,9 +265,17 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
 
   return (
     <div ref={frame} className="docs-frame relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {editor && find?.key === doc.key && <FindBar key={`find-${editor.instanceId}`} editor={editor} replace={find.replace} at={find.at} onClose={() => $find.set(null)} />}
+      {editor && find?.key === doc.key && (
+        <Suspense fallback={null}>
+          <FindBar key={`find-${editor.instanceId}`} editor={editor} replace={find.replace} at={find.at} onClose={() => $find.set(null)} />
+        </Suspense>
+      )}
       <div className="flex min-h-0 min-w-0 flex-1">
-        {editor && <NavigationPane key={`navigation-${editor.instanceId}`} editor={editor} docKey={doc.key} />}
+        {editor && navigation && (
+          <Suspense fallback={<div className="w-60 shrink-0 border-r border-line" />}>
+            <NavigationPane key={`navigation-${editor.instanceId}`} editor={editor} docKey={doc.key} />
+          </Suspense>
+        )}
         <div
           ref={desk}
           className="docs-desk min-h-0 min-w-0 flex-1 overflow-auto"
@@ -244,9 +293,22 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
             <div ref={mount} className="docs-mount" />
           </div>
         </div>
-        {editor && <CommentsPanel key={`comments-${editor.instanceId}`} editor={editor} docKey={doc.key} />}
+        {editor && showToc && (
+          <Suspense fallback={null}>
+            <TocBar key={`toc-${editor.instanceId}`} editor={editor} docKey={doc.key} />
+          </Suspense>
+        )}
+        {editor && showComments && (
+          <Suspense fallback={<div className="w-72 shrink-0 border-l border-line" />}>
+            <CommentsColumn key={`comments-${editor.instanceId}`} editor={editor} docKey={doc.key} />
+          </Suspense>
+        )}
       </div>
-      {editor && <PartEditors key={`parts-${editor.instanceId}`} editor={editor} docKey={doc.key} frame={frame.current} desk={desk.current} active={active} />}
+      {editor && editingParts && (
+        <Suspense fallback={null}>
+          <PartEditors key={`parts-${editor.instanceId}`} editor={editor} docKey={doc.key} frame={frame.current} desk={desk.current} active={active} />
+        </Suspense>
+      )}
       {editor && active && (
         <Fragment key={editor.instanceId}>
           <BubbleBar editor={editor} frame={frame.current} tick={tick} />

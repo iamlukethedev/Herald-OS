@@ -1,12 +1,11 @@
 import { IconPencil, IconTrash } from '@tabler/icons-react'
 import type { Editor } from '@tiptap/core'
-import { atom } from 'nanostores'
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocJSON } from '../../../../shared/office/document.ts'
 import { GlassButton } from '../../../components/ui/glass.tsx'
 import { cn } from '../../../lib/cn.ts'
 import { messageOf } from '../../canvas/errors.ts'
-import { $editors, docsSession } from './store.ts'
+import { $editors, $templateGallery, docsSession } from './store.ts'
 import { type Direction, freshName, moveSelection, rowLength } from './templates/gallery.ts'
 import { documentFromTemplate, TEMPLATES } from './templates/index.ts'
 import { removeTemplate, renameTemplate, type SavedTemplate, savedTemplates } from './templates/saved.ts'
@@ -18,11 +17,6 @@ import { thumbnailOf } from './templates/thumbnail.ts'
  * page. The arrow keys move, Enter makes the document and Escape goes back. Only the person's own
  * New opens it: a document asked for by Hermes or another app is blank, with no dialog.
  */
-
-/** Whether the gallery is open over Herald Docs. */
-export const $templateGallery = atom(false)
-
-export const openTemplateGallery = (): void => $templateGallery.set(true)
 
 const THUMB = { width: 124, height: 175 }
 

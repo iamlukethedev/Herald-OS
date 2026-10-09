@@ -13,8 +13,7 @@ import { currentEntry, mapPositions, navigationEntries, navigationKey, navigatio
 import { NAVIGATION_PANE_SHORTCUT } from './navigation-menus.ts'
 import { $navigationPane, showNavigationPane } from './navigation-store.ts'
 import { pagesOf } from './pages/map.ts'
-import { $statistics } from './StatisticsDialog.tsx'
-import { $pages } from './store.ts'
+import { $pages, $statistics } from './store.ts'
 
 /** How long the pane lets the document change before it reads the headings again, in milliseconds. */
 const SETTLE = 150

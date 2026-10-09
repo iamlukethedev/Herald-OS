@@ -1,6 +1,6 @@
 import './docs.css'
 import { useStore } from '@nanostores/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import type { CalloutKind } from '../../../../shared/office/document.ts'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
@@ -18,12 +18,13 @@ import { navigationViewItems } from './navigation-menus.ts'
 import { pageMenuItems } from './page-menus.ts'
 import { reviewMenuItems } from './review-menus.ts'
 import { $pickImage } from './slash.ts'
-import { $statistics, StatisticsDialog } from './StatisticsDialog.tsx'
-import { activeEditor, docsSession } from './store.ts'
+import { $saveTemplate, $statistics, $templateGallery, activeEditor, docsSession, openTemplateGallery } from './store.ts'
 import { TABLE_ACTIONS } from './table-menu.ts'
-import { $templateGallery, openTemplateGallery, TemplateGallery } from './TemplateGallery.tsx'
-import { $saveTemplate, SaveTemplateDialog } from './templates/SaveTemplateDialog.tsx'
 import { DocsToolbar } from './Toolbar.tsx'
+
+const TemplateGallery = lazy(() => import('./TemplateGallery.tsx').then((module) => ({ default: module.TemplateGallery })))
+const SaveTemplateDialog = lazy(() => import('./templates/SaveTemplateDialog.tsx').then((module) => ({ default: module.SaveTemplateDialog })))
+const StatisticsDialog = lazy(() => import('./StatisticsDialog.tsx').then((module) => ({ default: module.StatisticsDialog })))
 
 const STYLE_SHORTCUTS: Record<string, string> = { normal: 'mod+alt+0', heading1: 'mod+alt+1', heading2: 'mod+alt+2', heading3: 'mod+alt+3' }
 
@@ -200,9 +201,21 @@ export function DocsWindow({ payload }: { payload?: Record<string, unknown> }) {
           event.target.value = ''
         }}
       />
-      {gallery && <TemplateGallery />}
-      {savingTemplate && <SaveTemplateDialog />}
-      {statistics && <StatisticsDialog />}
+      {gallery && (
+        <Suspense fallback={null}>
+          <TemplateGallery />
+        </Suspense>
+      )}
+      {savingTemplate && (
+        <Suspense fallback={null}>
+          <SaveTemplateDialog />
+        </Suspense>
+      )}
+      {statistics && (
+        <Suspense fallback={null}>
+          <StatisticsDialog />
+        </Suspense>
+      )}
     </>
   )
 }

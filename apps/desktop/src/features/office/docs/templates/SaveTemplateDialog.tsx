@@ -1,13 +1,9 @@
-import { atom } from 'nanostores'
 import { type FormEvent, useEffect, useState } from 'react'
 import { GlassButton } from '../../../../components/ui/glass.tsx'
 import { messageOf } from '../../../canvas/errors.ts'
 import { Modal } from '../../shell/dialogs.tsx'
-import { docsSession } from '../store.ts'
+import { $saveTemplate, docsSession } from '../store.ts'
 import { type SavedTemplate, savedTemplates, saveTemplate } from './saved.ts'
-
-/** Whether File > Save as Template… is asking for the template's name. */
-export const $saveTemplate = atom(false)
 
 const withoutExtension = (name: string): string => name.replace(/\.[a-z0-9]{1,5}$/i, '')
 

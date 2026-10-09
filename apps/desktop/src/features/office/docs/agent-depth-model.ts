@@ -15,10 +15,7 @@ import {
   type CommentSpec,
   deleteAllComments,
   deleteComment,
-  documentFromTemplate,
   documentSections,
-  type DocumentStatistics,
-  documentStatistics,
   editComment,
   type FieldChoice,
   fieldFormat,
@@ -55,11 +52,10 @@ import {
   setPage,
   setSectionPage,
   setTableOfContents,
-  TEMPLATES,
-  type TemplateInfo,
   updateTablesOfContents
 } from './model.ts'
-import { durationLabel } from './statistics.ts'
+import { type DocumentStatistics, documentStatistics, durationLabel } from './statistics.ts'
+import { documentFromTemplate, TEMPLATES, type TemplateInfo } from './templates/index.ts'
 import type { SavedTemplate } from './templates/saved.ts'
 
 /*

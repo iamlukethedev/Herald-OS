@@ -52,8 +52,9 @@ import {
   withBody
 } from './agent-depth-model.ts'
 import { chainBuilt, editsOf, pageArgsOf, readDocument, readOptions } from './agent-model.ts'
-import { applyLive, comments, documentSections, documentStatistics, headerFooterText, jsonOf, notes, replaceText, stateOf } from './model.ts'
+import { applyLive, comments, documentSections, headerFooterText, jsonOf, notes, replaceText, stateOf } from './model.ts'
 import { docsSchema } from './schema.ts'
+import { documentStatistics } from './statistics.ts'
 import type { SavedTemplate } from './templates/saved.ts'
 
 // The work of the docs.* page and review commands, made as a command makes it on a document that is not open.
