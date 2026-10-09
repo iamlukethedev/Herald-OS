@@ -80,8 +80,9 @@ export function chartComponent(univer: Univer, api: FUniver) {
       drawn.current = spec
     }, [ready, spec, values, theme])
 
+    // Univer takes the pointer for its handles as a press starts, so no click or double click reaches the chart: the second press of one does.
     return (
-      <div className="relative size-full overflow-hidden rounded-lg border border-line" style={{ background: theme.background }} onDoubleClick={() => floatDomId && openChartPanel(documentOf(unitId), floatDomId)}>
+      <div className="relative size-full overflow-hidden rounded-lg border border-line" style={{ background: theme.background }} onMouseDown={(event) => event.detail === 2 && floatDomId && openChartPanel(documentOf(unitId), floatDomId)}>
         <div ref={box} className="absolute inset-0" />
         {values && !hasNumbers(values) && <div className="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center text-[12px] text-fg-3">No numbers in this chart’s cells</div>}
       </div>

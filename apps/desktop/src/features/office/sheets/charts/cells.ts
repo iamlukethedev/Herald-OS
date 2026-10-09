@@ -121,7 +121,7 @@ export const hexOf = (color: string): string => toHex(parseHex(color)!)
 
 /** The colours a new chart takes: the accents of the theme of the file the workbook came from, or Excel's own. */
 export function workbookPalette(workbook: FWorkbook): string[] {
-  const accents = (workbook.getCustomMetadata() as { herald?: { theme?: { accents?: unknown } } } | undefined)?.herald?.theme?.accents
+  const accents = (workbook.getWorkbook().getCustomMetadata() as { herald?: { theme?: { accents?: unknown } } } | undefined)?.herald?.theme?.accents
 
   return Array.isArray(accents) && accents.length > 0 && accents.every(isHexColor) ? accents.map(hexOf) : [...OFFICE_ACCENTS]
 }
