@@ -3,7 +3,7 @@ import { Fragment, type Mark, type Node as PMNode, type NodeType, type Schema, S
 import { EditorState, Selection, type Transaction } from '@tiptap/pm/state'
 import { findWrapping, liftTarget } from '@tiptap/pm/transform'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { countCharacters, countWords, type DocJSON, type DocNode, defaultPage, pageOf, type PageSettings, PAGE_SIZES, type PageSizeName } from '../../../../shared/office/document.ts'
+import { countCharacters, countWords, type DocJSON, type DocNode, pageOf } from '../../../../shared/office/document.ts'
 import { docsSchema } from './schema.ts'
 
 /*
@@ -778,27 +778,7 @@ export function insertNodes(build: (schema: Schema) => PMNode[], place: Place): 
   }
 }
 
-// The page.
-
-export interface PageChange {
-  size?: PageSizeName
-  orientation?: 'portrait' | 'landscape'
-  /** Margins in points, all of them or each side. */
-  margins?: number | Partial<PageSettings['margins']>
-}
-
-export function setPage(change: PageChange): Op {
-  return (state) => {
-    const current = (state.doc.attrs.page as PageSettings | null) ?? defaultPage()
-    const named = change.size ? PAGE_SIZES[change.size] : null
-    const [short, long] = named ? [named.width, named.height] : [Math.min(current.width, current.height), Math.max(current.width, current.height)]
-    const landscape = change.orientation ? change.orientation === 'landscape' : current.width > current.height
-    const margins = typeof change.margins === 'number' ? { top: change.margins, right: change.margins, bottom: change.margins, left: change.margins } : { ...current.margins, ...change.margins }
-    const page: PageSettings = { width: landscape ? long : short, height: landscape ? short : long, margins }
-
-    return JSON.stringify(page) === JSON.stringify(current) && state.doc.attrs.page ? null : state.tr.setDocAttribute('page', page)
-  }
-}
+// The page: headers, footers, notes, sections and page setup (setPage and PageChange among them).
 
 export * from './page-ops.ts'
 export * from './review-ops.ts'
