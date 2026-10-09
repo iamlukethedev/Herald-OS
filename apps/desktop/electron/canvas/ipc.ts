@@ -19,6 +19,7 @@ import {
   IPC
 } from '../../shared/ipc.ts'
 import { assertWritable, normalizeUserPath } from '../ipc/fs.ts'
+import { whileOpen, WindowWatches } from '../ipc/watches.ts'
 import { log } from '../log.ts'
 import { convertToPng } from './convert.ts'
 import { type PackageContents, PackageWatcher, readAsset, readPackage, writePackage } from './package-io.ts'
@@ -94,6 +95,8 @@ interface Stream {
   partial: string
   png?: PngStream
   handle?: fs.FileHandle
+  /** Takes the export's close listener off its window. */
+  release: () => void
 }
 
 const streams = new Map<string, Stream>()
@@ -103,6 +106,7 @@ async function abortStream(id: string): Promise<void> {
   streams.delete(id)
 
   if (stream) {
+    stream.release()
     await (stream.png ? stream.png.abort() : stream.handle?.close().catch(() => {}))
     await fs.rm(stream.partial, { force: true })
   }
@@ -110,11 +114,10 @@ async function abortStream(id: string): Promise<void> {
 
 interface Watch {
   watcher: PackageWatcher
-  owner: WebContents
   dir: string
 }
 
-const watches = new Map<string, Watch>()
+const watches = new WindowWatches<Watch>()
 
 const SAVE_FILTERS: Record<CanvasSaveKind, Electron.FileFilter[]> = {
   project: [{ name: 'Herald Canvas project', extensions: ['comp'] }],
@@ -178,7 +181,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
     const dir = projectPath(target)
     const write = () => writePackage(dir, { manifest: parseManifest(request.manifest), assets: request.assets ?? {}, preview: request.preview })
     // This window's own save is not an outside change for it; other windows on the project still reload.
-    const own = [...watches.values()].find(watch => watch.dir === dir && watch.owner === event.sender)
+    const own = watches.find(event.sender, watch => watch.dir === dir)
 
     return own ? own.watcher.ownWrite(write) : write()
   })
@@ -243,6 +246,8 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
     const id = crypto.randomUUID()
     const partial = `${file}.${id.slice(0, 8)}.part`
 
+    const stream: Stream = { file, partial, release: () => {} }
+
     if (kind?.kind === 'png') {
       const { width, height } = kind
 
@@ -250,13 +255,14 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
         throw new Error(`An export is at most ${MAX_EXPORT_SIDE.toLocaleString('en')} pixels a side and ${(MAX_EXPORT_PIXELS / 1e9).toLocaleString('en')} billion in all`)
       }
 
-      streams.set(id, { file, partial, png: await PngStream.open(partial, width, height, 4, kind.ppi) })
+      stream.png = await PngStream.open(partial, width, height, 4, kind.ppi)
     } else {
-      streams.set(id, { file, partial, handle: await fs.open(partial, 'w') })
+      stream.handle = await fs.open(partial, 'w')
     }
 
+    streams.set(id, stream)
     // A window that closes mid-export leaves no half-written file behind.
-    event.sender.once('destroyed', () => void abortStream(id))
+    stream.release = whileOpen(event.sender, () => void abortStream(id))
 
     return id
   })
@@ -290,6 +296,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
     try {
       await (stream.png ? stream.png.finish() : stream.handle!.close())
       streams.delete(String(id))
+      stream.release()
       await fs.rename(stream.partial, stream.file)
     } catch (error) {
       await abortStream(String(id))
@@ -327,19 +334,14 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
     if (typeof loaded === 'string' && loaded && loaded !== contents.digest) {
       setTimeout(() => void watcher.check(), 0)
     }
-    watches.set(watchId, { watcher, owner, dir })
-    owner.once('destroyed', () => {
-      watcher.stop()
-      watches.delete(watchId)
-    })
+    watches.add(watchId, owner, { watcher, dir }, () => watcher.stop())
     log('canvas', `watching ${dir}`)
 
     return watchId
   })
 
-  ipcMain.handle(IPC.canvasUnwatch, (_event, watchId: string) => {
-    watches.get(watchId)?.watcher.stop()
-    watches.delete(watchId)
+  ipcMain.handle(IPC.canvasUnwatch, (event, watchId: string) => {
+    watches.remove(String(watchId), event.sender)
   })
 
   ipcMain.handle(IPC.canvasExists, async (_event, target: string) => {

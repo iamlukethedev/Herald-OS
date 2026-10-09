@@ -6,6 +6,7 @@ import path from 'node:path'
 import { type DirEntry, type FilePreview, IPC, type TreeEntry } from '../../shared/ipc.ts'
 import { run } from '../platform/exec.ts'
 import { type EditorTarget, hostPlatform } from '../platform/index.ts'
+import { WindowWatches } from './watches.ts'
 
 const TEXT_LIMIT = 2 * 1024 * 1024
 const IMAGE_LIMIT = 24 * 1024 * 1024
@@ -250,25 +251,18 @@ async function listTree(target: string, limit: number): Promise<{ entries: TreeE
 
 interface TreeWatch {
   watcher: FSWatcher
-  owner: WebContents
   pending: Set<string>
   timer: ReturnType<typeof setTimeout> | null
 }
 
-const treeWatches = new Map<string, TreeWatch>()
+const treeWatches = new WindowWatches<TreeWatch>()
 let treeWatchCounter = 0
 
-function unwatchTree(watchId: string): void {
-  const watch = treeWatches.get(watchId)
+function stopTree(watch: TreeWatch): void {
+  watch.watcher.close()
 
-  if (watch) {
-    watch.watcher.close()
-
-    if (watch.timer) {
-      clearTimeout(watch.timer)
-    }
-
-    treeWatches.delete(watchId)
+  if (watch.timer) {
+    clearTimeout(watch.timer)
   }
 }
 
@@ -276,7 +270,7 @@ function unwatchTree(watchId: string): void {
 async function watchTree(owner: WebContents, target: string): Promise<string> {
   const root = await projectRoot(target)
   const watchId = `tree-${++treeWatchCounter}`
-  const watch: TreeWatch = { watcher: watchFs(root, { recursive: true }), owner, pending: new Set(), timer: null }
+  const watch: TreeWatch = { watcher: watchFs(root, { recursive: true }), pending: new Set(), timer: null }
   const flush = () => {
     watch.timer = null
 
@@ -297,9 +291,8 @@ async function watchTree(owner: WebContents, target: string): Promise<string> {
     watch.pending.add(path.join(root, relative))
     watch.timer ??= setTimeout(flush, 250)
   })
-  watch.watcher.on('error', () => unwatchTree(watchId))
-  owner.once('destroyed', () => unwatchTree(watchId))
-  treeWatches.set(watchId, watch)
+  watch.watcher.on('error', () => treeWatches.remove(watchId, owner))
+  treeWatches.add(watchId, owner, watch, () => stopTree(watch))
 
   return watchId
 }
@@ -308,9 +301,7 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.fsListTree, (_event, target: string, limit: number) => listTree(target, Math.max(1, Math.min(10_000, Number(limit) || 3000))))
   ipcMain.handle(IPC.fsWatchTree, (event, target: string) => watchTree(event.sender, target))
   ipcMain.handle(IPC.fsUnwatchTree, (event, watchId: string) => {
-    if (treeWatches.get(watchId)?.owner === event.sender) {
-      unwatchTree(watchId)
-    }
+    treeWatches.remove(String(watchId), event.sender)
   })
   ipcMain.handle(IPC.fsHome, () => os.homedir())
   ipcMain.handle(IPC.fsRecent, (_event, limit: number) => hostPlatform().recentFiles(Math.max(1, Math.min(200, Number(limit) || 30))))
