@@ -23,7 +23,8 @@ const RULES: Args[] = [
   { range: 'E4', rule: { type: 'date', operator: 'greaterThan', value: '=TODAY()' } },
   { range: 'F2', rule: { type: 'textLength', operator: 'lessThanOrEqual', value: 12 }, input: { title: 'Short code' } },
   { range: 'F3', rule: { type: 'textLength', operator: 'notBetween', min: 3, max: 5 } },
-  { range: 'G2:G9', rule: { type: 'custom', formula: '=AND(G2>0,G2<=$H$1)' }, error: { style: 'stop', message: 'Positive, at most H1' } }
+  { range: 'G2:G9', rule: { type: 'custom', formula: '=AND(G2>0,G2<=$H$1)' }, error: { style: 'stop', message: 'Positive, at most H1' } },
+  { range: 'H2:H9', rule: { type: 'any' }, input: { title: 'Notes', message: 'Anything you like' } }
 ]
 
 /** The rules as set, read back from Herald. */
@@ -64,6 +65,7 @@ describe('data validation in .xlsx files', () => {
     expect(xml).toContain('<dataValidation type="date" operator="greaterThan" allowBlank="1" showErrorMessage="1" sqref="E4"><formula1>TODAY()</formula1></dataValidation>')
     expect(xml).toContain('<dataValidation type="textLength" operator="lessThanOrEqual" allowBlank="1" showInputMessage="1" showErrorMessage="1" promptTitle="Short code" sqref="F2"><formula1>12</formula1></dataValidation>')
     expect(xml).toContain('<dataValidation type="custom" allowBlank="1" showErrorMessage="1" error="Positive, at most H1" sqref="G2:G9"><formula1>AND(G2&gt;0,G2&lt;=$H$1)</formula1></dataValidation>')
+    expect(xml).toContain('<dataValidation allowBlank="1" showInputMessage="1" promptTitle="Notes" prompt="Anything you like" sqref="H2:H9"></dataValidation>')
 
     if (hasXmllint()) {
       expect(await malformedParts(bytes)).toEqual([])

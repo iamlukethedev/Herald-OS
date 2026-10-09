@@ -15,14 +15,16 @@ export type ValidationRule =
   | { type: 'list'; items?: string[]; source?: string }
   | { type: 'whole' | 'decimal' | 'date' | 'textLength'; operator: Operator; value?: Bound; min?: Bound; max?: Bound }
   | { type: 'custom'; formula: string }
+  /** Any value goes in: a rule for its input message alone. */
+  | { type: 'any' }
 
 export type ErrorStyle = 'stop' | 'warning' | 'information'
 
 export interface ValidationSettings {
   /** The cells the rule covers, as "B2:B9" (several areas with commas). */
   range: string
-  /** A rule Herald Sheets reads but does not make ("any" with messages only, "time", "checkbox") keeps its own type. */
-  rule: ValidationRule | { type: 'any' | 'time' | 'checkbox'; operator?: Operator; value?: Bound; min?: Bound; max?: Bound }
+  /** A rule Herald Sheets reads but does not make ("time", "checkbox") keeps its own type. */
+  rule: ValidationRule | { type: 'time' | 'checkbox'; operator?: Operator; value?: Bound; min?: Bound; max?: Bound }
   allowBlank: boolean
   /** Lists only: whether the cell shows the list's arrow. */
   dropdown?: boolean
@@ -31,7 +33,7 @@ export interface ValidationSettings {
   error: { style: ErrorStyle; title: string; message: string } | null
 }
 
-const TYPES = ['list', 'whole', 'decimal', 'date', 'textLength', 'custom'] as const
+const TYPES = ['list', 'whole', 'decimal', 'date', 'textLength', 'custom', 'any'] as const
 const STYLES: Record<ErrorStyle, DataValidationErrorStyle> = { stop: DataValidationErrorStyle.STOP, warning: DataValidationErrorStyle.WARNING, information: DataValidationErrorStyle.INFO }
 const NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$/
 /** The most characters Excel keeps of a rule's texts and of a list written into it. */
@@ -122,6 +124,10 @@ function criteriaOf(target: SheetsTarget, rule: unknown, sheet: FWorksheet): { t
     }
 
     return { type: DataValidationType.LIST, formula1: JSON.stringify([...new Set(items)]) }
+  }
+
+  if (type === 'any') {
+    return { type: DataValidationType.ANY }
   }
 
   if (type === 'custom') {
@@ -261,7 +267,8 @@ function settingsOf(rule: IDataValidationRule, unitId: string, date1904: boolean
 
 /**
  * Set what a range takes: a list (items, or cells as source), whole or decimal numbers, dates
- * ("yyyy-mm-dd") or text lengths compared with an operator, or a custom formula. Blanks are
+ * ("yyyy-mm-dd") or text lengths compared with an operator, a custom formula, or any value (for
+ * an input message alone). Blanks are
  * allowed and lists show their arrow unless told not to; the input message shows when the cell
  * is selected; the error alert (stop by default; false for none) follows a value the rule does not
  * allow. Replaces the rules the range had; one step to undo.
@@ -271,6 +278,15 @@ export async function setValidation(target: SheetsTarget, args: { range: unknown
   const criteria = criteriaOf(target, args.rule, sheet)
   const allowBlank = args.allowBlank !== false && args.allowBlank !== 'false'
   const options: IDataValidationRuleOptions = { ...messagesOf(args), ...(criteria.type === DataValidationType.LIST ? { showDropDown: args.dropdown !== false && args.dropdown !== 'false' } : {}) }
+
+  if (criteria.type === DataValidationType.ANY) {
+    if (!options.showInputMessage) {
+      throw new Error('A rule that takes any value is there for its input message: give input {"title": …, "message": …}, or clearValidation to take the rules off')
+    }
+
+    options.showErrorMessage = false
+  }
+
   const rule = FUniver.newAPI(target.univer).newDataValidation().build()
   rule.setCriteria(criteria.type, [criteria.operator as DataValidationOperator, criteria.formula1 ?? '', criteria.formula2 ?? ''], allowBlank)
   rule.setOptions(options)

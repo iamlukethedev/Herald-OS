@@ -131,6 +131,16 @@ describe('data validation', () => {
     expect(result.checks).toEqual(['valid', 'invalid', 'valid', 'invalid'])
   })
 
+  it('takes any value with an input message alone', async () => {
+    const { result } = await run(async (target) => ({
+      set: (await setValidation(target, { range: 'H1:H3', rule: { type: 'any' }, input: { title: 'Tip', message: 'Anything goes here' }, error: { style: 'stop' } })).rules,
+      bare: await setValidation(target, { range: 'H4', rule: { type: 'any' } }).catch((error: Error) => error.message)
+    }))
+
+    expect(result.set).toEqual([{ range: 'H1:H3', rule: { type: 'any' }, allowBlank: true, input: { title: 'Tip', message: 'Anything goes here' }, error: null }])
+    expect(result.bare).toBe('A rule that takes any value is there for its input message: give input {"title": …, "message": …}, or clearValidation to take the rules off')
+  })
+
   it('replaces the rules of the cells it sets, in one step to undo', async () => {
     const { result } = await run(async (target) => {
       await setValidation(target, { range: 'A1:A9', rule: { type: 'whole', operator: 'greaterThan', value: 0 } })
@@ -191,7 +201,7 @@ describe('data validation', () => {
     )
 
     expect(result).toEqual([
-      'A rule\'s type is list, whole, decimal, date, textLength, custom: {"type": "list", "items": ["Yes", "No"]} or {"type": "whole", "operator": "between", "min": 1, "max": 10}',
+      'A rule\'s type is list, whole, decimal, date, textLength, custom, any: {"type": "list", "items": ["Yes", "No"]} or {"type": "whole", "operator": "between", "min": 1, "max": 10}',
       'Give the list its items (["Yes", "No"]) or the cells they are in (source: "A2:A9")',
       'List items cannot have commas in them (Excel separates items with commas): put such items in cells and give their range as source',
       'The items are 261 characters together; Excel keeps at most 255 written into a rule: put them in cells and give their range as source',
