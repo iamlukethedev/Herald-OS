@@ -27,6 +27,19 @@ call the tools directly.
                 canvas filter <kind> [--amount --radius --threshold --angle --distance --strength] [--layer <l>]
                 canvas mask <layer> reveal|hide|invert|apply|enable|disable|remove|link|unlink|reveal-selection|hide-selection
                 canvas remove-background [layer] [--cutout] | canvas fill <x> <y> <w> <h> [--layer <l>] [--new-layer]
+  Docs          docs open [file] | docs new [name] [--template <t>] [--path <file>] [--content <markdown>|-] | docs list
+                docs read [document] [--part markdown|text|outline|selection] [--heading <h>] | docs find <text>
+                docs write <markdown>|- [--at end|start|selection|marked|after|heading] [--heading <h>] [--mode <m>]
+                docs replace <find> <replacement> [--first] | docs format [--at <what>] [--style <s>] [--bold] [--color <c>]
+                docs table <json-rows> | docs image <file> [--width <px>] | docs insert-range [range] [--workbook <w>]
+                docs save [document] [--to <file>] [--overwrite] | docs pdf [document] [--to <file>] | docs undo|redo [--steps <n>]
+  Sheets        sheets open [file] | sheets new [name] [--template <t>] [--path <file>] | sheets list | sheets read [range]
+                sheets find <text> | sheets write <range> <value...> | sheets write <range> <json-rows>
+                sheets fill <range> [formula] | sheets format <range> <json> | sheets sort <range> --by <column> [--descending]
+                sheets filter <range> --by <column> --values <json> | sheets filter --clear | sheets freeze <rows> [columns]
+                sheets add-sheet [name] | sheets rename-sheet <sheet> <name> | sheets remove-sheet <sheet>
+                sheets replace <find> <replacement> [--first] | sheets clean <range> dedupe|trim|numbers|dates|split|case
+                sheets save [workbook] [--to <file>] [--overwrite] | sheets pdf [workbook] | sheets undo|redo [--steps <n>]
   Crashes       crash list | crash diagnose [pid|name] | crash mute <name> [off]
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
@@ -105,6 +118,8 @@ COMMANDS: dict[str, str] = {
     "hook": "hook list | hook install <event> <script> | hook dir: scripts that run when something happens",
     "os": "Run a Herald OS command: os <command.id> [json args], e.g. os page.open '{\"name\": \"missions\"}'",
     "canvas": "canvas open [file] | new [name] [WxH] | status | layers [project] | history | text <words> [--x …] | resize <WxH> [--anchor …] | crop <x> <y> <w> <h> [--ratio …] [--angle …] | preview [project] | export <file> [--project …] [--overwrite] | undo | redo [--steps <n>] | auto [tone|contrast|color] | align <edges> [--layers …] | distribute <mode> --layers … | guides … | filter <kind> [--amount …] | mask <layer> <action> | remove-background [layer] [--cutout] | fill <x> <y> <w> <h> [--layer …] [--new-layer]: Herald Canvas, the image editor",
+    "docs": "docs open [file] | new [name] [--template …] [--path …] [--content <markdown>|-] | list | read [document] [--part …] [--heading …] | find <text> | write <markdown>|- [--at …] [--heading …] [--mode …] | replace <find> <replacement> [--first] | format [--at …] [--bold] [--style …] [--color …] [--size …] [--align …] | table <json-rows> | image <file> [--width …] | insert-range [range] [--workbook …] | save [document] [--to …] [--overwrite] | pdf [document] [--to …] | undo | redo [--steps <n>]; --document picks the document: Herald Docs, the word processor",
+    "sheets": "sheets open [file] | new [name] [--template …] [--path …] | list | read [range] [--sheet …] | find <text> | write <range> <value…|json-rows> | fill <range> [formula] | format <range> <json> | sort <range> --by <column> [--descending] [--header] | filter <range> --by <column> --values <json> | filter --clear | freeze <rows> [columns] | add-sheet [name] | rename-sheet <sheet> <name> | remove-sheet <sheet> | replace <find> <replacement> [--first] | clean <range> dedupe|trim|numbers|dates|split|case | save [workbook] [--to …] [--overwrite] | pdf [workbook] | undo | redo [--steps <n>]; --workbook picks the workbook: Herald Sheets, the spreadsheet",
     "voice": "Talk to Hermes: voice [toggle|start|stop|mute] (default toggle)",
     "dictate": "Start or finish dictation: what you say is typed into the focused app",
     "emoji": "Emoji picker; the pick is typed into the focused app",
@@ -1246,6 +1261,373 @@ def canvas_cmd(args: list[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# Herald Docs and Herald Sheets: documents and workbooks, through the same docs.* and sheets.*
+# commands Hermes uses.
+DOCS_USAGE = (
+    "docs open [<file>] | new [<name>] [--template <template>] [--path <file>] [--content <markdown>|-] | list "
+    "| read [<document>] [--part markdown|text|outline|selection] [--heading <heading>] | find <text> [--document <document>] "
+    "| write <markdown>|- [--document <document>] [--at end|start|selection|marked|after|heading] [--heading <heading>] [--mode append|prepend|replace] "
+    "| replace <find> <replacement> [--document <document>] [--first] "
+    "| format [--document <document>] [--at selection|marked|all|heading|section|text] [--heading <heading>] [--text <text>] [--style <style>] "
+    "[--bold|--no-bold] [--italic|--no-italic] [--underline|--no-underline] [--strike|--no-strike] [--color <css>] [--highlight <css>] [--font <family>] "
+    "[--size <points>] [--align left|center|right|justify] [--line-spacing <n>] [--link <url>] [--clear] "
+    "| table <json-rows>|- [--document <document>] [--at <where>] [--heading <heading>] [--no-header] "
+    "| image <file> [--document <document>] [--width <px>] [--alt <text>] [--at <where>] "
+    "| insert-range [<range>] [--workbook <workbook>] [--sheet <sheet>] [--document <document>] [--at <where>] [--heading <heading>] [--no-header] "
+    "| save [<document>] [--to <file>] [--overwrite] | pdf [<document>] [--to <file>] [--overwrite] | undo|redo [<document>] [--steps <n>]"
+)
+SHEETS_USAGE = (
+    "sheets open [<file>] | new [<name>] [--template budget|expenses|todo|schedule|invoice] [--path <file>] | list "
+    "| read [<range>] [--workbook <workbook>] [--sheet <sheet>] | find <text> [--workbook <workbook>] [--sheet <sheet>] "
+    "| write <range> <value>... | write <range> <json-rows> | fill <range> [<formula>] | format <range> <json> "
+    "| sort <range> --by <column> [--descending] [--header] | filter <range> --by <column> --values <json-list> "
+    "| filter <range> --by <column> --condition <json> | filter --clear | freeze <rows> [<columns>] "
+    "| add-sheet [<name>] [--index <n>] | rename-sheet <sheet> <name> | remove-sheet <sheet> | replace <find> <replacement> [--range <range>] [--first] "
+    "| clean <range> dedupe|trim|numbers|dates|split|case [--header] [--by <columns>] [--delimiter <d>] [--order dmy|mdy] [--date-format <format>] "
+    "[--case upper|lower|title] [--overwrite] | save [<workbook>] [--to <file>] [--overwrite] | pdf [<workbook>] [--to <file>] [--overwrite] "
+    "| undo|redo [<workbook>] [--steps <n>]; every command but open, new and list takes --workbook <workbook>, and the ones on cells --sheet <sheet>"
+)
+
+# What `sheets clean` does, as sheets.clean names it.
+SHEETS_CLEAN_ACTIONS = ("dedupe", "trim", "numbers", "dates", "split", "case")
+# The flags that take no value; every other flag takes the word after it.
+OFFICE_SWITCHES = ("--json", "--overwrite", "--first", "--header", "--no-header", "--descending", "--clear", "--bold", "--no-bold", "--italic", "--no-italic", "--underline", "--no-underline", "--strike", "--no-strike")
+
+
+def _office_words(rest: list[str], usage: str) -> tuple[list[str], dict[str, str | bool]]:
+    words: list[str] = []
+    flags: dict[str, str | bool] = {}
+    i = 0
+    while i < len(rest):
+        token = rest[i]
+        if token in OFFICE_SWITCHES:
+            flags[token[2:]] = True
+        elif token.startswith("--"):
+            if i + 1 == len(rest):
+                die(f"herald-os {usage}", 2)
+            flags[token[2:]] = rest[i + 1]
+            i += 1
+        else:
+            words.append(token)
+        i += 1
+    return words, flags
+
+
+def _office_ref(value: str) -> str:
+    """A document or workbook as the commands take it: a file by its absolute path, or the name of an
+    open one as its tab shows it."""
+    return _absolute(value) if "/" in value or value.startswith("~") or Path(value).exists() else value
+
+
+def _stdin_or(value: str) -> str:
+    return sys.stdin.read() if value == "-" else value
+
+
+def _json_text(value: str, kind: type, example: str) -> str:
+    """`value` checked to be a JSON list or object, passed on as JSON text."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, kind):
+        die(f"expected JSON like {example}, not {value[:60]!r}", 2)
+    return json.dumps(parsed)
+
+
+def _number(value: str | bool, usage: str) -> float:
+    try:
+        return float(str(value))
+    except ValueError:
+        die(f"herald-os {usage}", 2)
+    return 0.0
+
+
+def _count(value: str | bool, usage: str) -> int:
+    if not re.fullmatch(r"\d+", str(value)):
+        die(f"herald-os {usage}", 2)
+    return int(str(value))
+
+
+def docs_request(args: list[str]) -> tuple[str, dict]:
+    """(command id, arguments) for `herald-os docs ...` (pure; tested)."""
+    sub, rest = (args[0], args[1:]) if args else ("open", [])
+    words, flags = _office_words(rest, DOCS_USAGE)
+    text = " ".join(words)
+    if sub == "open":
+        return "docs.open", ({"path": _absolute(text)} if words else {})
+    if sub == "new":
+        payload: dict = {"name": text} if words else {}
+        if "template" in flags:
+            payload["template"] = str(flags["template"])
+        if "path" in flags:
+            payload["path"] = _absolute(str(flags["path"]))
+        if "content" in flags:
+            payload["content"] = _stdin_or(str(flags["content"]))
+        return "docs.new", payload
+    if sub == "list":
+        return "docs.list", {}
+    payload = {"document": _office_ref(str(flags["document"]))} if "document" in flags else {}
+    if sub in ("read", "save", "pdf", "undo", "redo") and words:
+        payload["document"] = _office_ref(text)
+    placed = {key: str(flags[key]) for key in ("at", "heading", "mode") if key in flags}
+    if sub == "read":
+        return "docs.read", {**payload, **{key: str(flags[key]) for key in ("part", "heading") if key in flags}}
+    if sub == "find":
+        if not words:
+            die(f"herald-os {DOCS_USAGE}", 2)
+        return "docs.find", {**payload, "text": text}
+    if sub == "write":
+        content = _stdin_or(text)
+        if not content.strip():
+            die("docs write: nothing to write (give the Markdown, or - to read it from stdin)", 2)
+        return "docs.write", {**payload, "content": content, **placed}
+    if sub == "replace":
+        if len(words) != 2:
+            die(f"herald-os {DOCS_USAGE}", 2)
+        payload.update({"find": words[0], "replacement": words[1]})
+        if flags.get("first"):
+            payload["all"] = False
+        return "docs.replace", payload
+    if sub == "format":
+        changes: dict = {key: str(flags[key]) for key in ("style", "color", "highlight", "font", "link", "align") if key in flags}
+        for key in ("bold", "italic", "underline", "strike"):
+            if flags.get(key) or flags.get(f"no-{key}"):
+                changes[key] = bool(flags.get(key))
+        if "size" in flags:
+            changes["size"] = _number(flags["size"], DOCS_USAGE)
+        if "line-spacing" in flags:
+            changes["lineSpacing"] = _number(flags["line-spacing"], DOCS_USAGE)
+        if flags.get("clear"):
+            changes["clear"] = True
+        if words or not changes:
+            die(f"herald-os {DOCS_USAGE}", 2)
+        return "docs.format", {**payload, **{key: str(flags[key]) for key in ("at", "heading", "text") if key in flags}, **changes}
+    if sub == "table":
+        if len(words) != 1:
+            die(f"herald-os {DOCS_USAGE}", 2)
+        payload["cells"] = _json_text(_stdin_or(words[0]), list, '[["Item", "Cost"], ["Rent", "1200"]]')
+        if flags.get("no-header"):
+            payload["header"] = False
+        return "docs.insertTable", {**payload, **placed}
+    if sub == "image":
+        if not words:
+            die(f"herald-os {DOCS_USAGE}", 2)
+        payload["source"] = _absolute(text)
+        if "width" in flags:
+            payload["width"] = _number(flags["width"], DOCS_USAGE)
+        if "alt" in flags:
+            payload["alt"] = str(flags["alt"])
+        return "docs.insertImage", {**payload, **placed}
+    if sub == "insert-range":
+        if words:
+            payload["range"] = text
+        if "workbook" in flags:
+            payload["workbook"] = _office_ref(str(flags["workbook"]))
+        if "sheet" in flags:
+            payload["sheet"] = str(flags["sheet"])
+        if flags.get("no-header"):
+            payload["header"] = False
+        return "docs.insertRange", {**payload, **placed}
+    if sub in ("save", "pdf"):
+        if "to" in flags:
+            payload["to"] = _absolute(str(flags["to"]))
+        if flags.get("overwrite"):
+            payload["overwrite"] = True
+        return ("docs.save" if sub == "save" else "docs.exportPdf"), payload
+    if sub in ("undo", "redo"):
+        if "steps" in flags:
+            payload["steps"] = _count(flags["steps"], DOCS_USAGE)
+        return f"docs.{sub}", payload
+    die(f"herald-os {DOCS_USAGE}", 2)
+    return "", {}
+
+
+def sheets_request(args: list[str]) -> tuple[str, dict]:
+    """(command id, arguments) for `herald-os sheets ...` (pure; tested)."""
+    sub, rest = (args[0], args[1:]) if args else ("open", [])
+    words, flags = _office_words(rest, SHEETS_USAGE)
+    text = " ".join(words)
+    if sub == "open":
+        return "sheets.open", ({"path": _absolute(text)} if words else {})
+    if sub == "new":
+        payload: dict = {"name": text} if words else {}
+        if "template" in flags:
+            payload["template"] = str(flags["template"])
+        if "path" in flags:
+            payload["path"] = _absolute(str(flags["path"]))
+        return "sheets.new", payload
+    if sub == "list":
+        return "sheets.list", {}
+    payload = {"workbook": _office_ref(str(flags["workbook"]))} if "workbook" in flags else {}
+    if sub in ("save", "pdf", "undo", "redo") and words:
+        payload["workbook"] = _office_ref(text)
+    on_sheet = {"sheet": str(flags["sheet"])} if "sheet" in flags else {}
+    if sub == "read":
+        return "sheets.read", {**payload, **({"range": text} if words else {}), **on_sheet}
+    if sub == "find":
+        if not words:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        return "sheets.find", {**payload, "text": text, **on_sheet}
+    if sub == "write":
+        if len(words) < 2:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        rows = len(words) == 2 and words[1].lstrip().startswith("[")
+        values = _json_text(words[1], list, '[["Item", "Cost"], ["Rent", 1200]]') if rows else " ".join(words[1:])
+        return "sheets.write", {**payload, "range": words[0], "values": values, **on_sheet}
+    if sub == "fill":
+        if not words:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload["range"] = words[0]
+        if len(words) > 1:
+            payload["formula"] = " ".join(words[1:])
+        return "sheets.fill", {**payload, **on_sheet}
+    if sub == "format":
+        if len(words) != 2:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        return "sheets.format", {**payload, "range": words[0], "format": _json_text(words[1], dict, '{"bold": true, "numberFormat": "#,##0.00"}'), **on_sheet}
+    if sub == "sort":
+        if len(words) != 1 or "by" not in flags:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload.update({"range": words[0], "by": str(flags["by"])})
+        if flags.get("descending"):
+            payload["ascending"] = False
+        if flags.get("header"):
+            payload["header"] = True
+        return "sheets.sort", {**payload, **on_sheet}
+    if sub == "filter":
+        if flags.get("clear"):
+            return "sheets.filter", {**payload, "clear": True, **on_sheet}
+        if len(words) != 1 or "by" not in flags or ("values" not in flags and "condition" not in flags):
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload.update({"range": words[0], "by": str(flags["by"])})
+        if "values" in flags:
+            payload["values"] = _json_text(str(flags["values"]), list, '["Paid", "Due"]')
+        if "condition" in flags:
+            payload["condition"] = _json_text(str(flags["condition"]), dict, '{"operator": "greaterThan", "value": 100}')
+        return "sheets.filter", {**payload, **on_sheet}
+    if sub == "freeze":
+        if not 1 <= len(words) <= 2:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload["rows"] = _count(words[0], SHEETS_USAGE)
+        if len(words) == 2:
+            payload["columns"] = _count(words[1], SHEETS_USAGE)
+        return "sheets.freeze", {**payload, **on_sheet}
+    if sub == "add-sheet":
+        if words:
+            payload["name"] = text
+        if "index" in flags:
+            payload["index"] = _count(flags["index"], SHEETS_USAGE)
+        return "sheets.addSheet", payload
+    if sub == "rename-sheet":
+        if len(words) != 2:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        return "sheets.renameSheet", {**payload, "sheet": words[0], "name": words[1]}
+    if sub == "remove-sheet":
+        if not words:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        return "sheets.removeSheet", {**payload, "sheet": text}
+    if sub == "replace":
+        if len(words) != 2:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload.update({"find": words[0], "replacement": words[1]})
+        if "range" in flags:
+            payload["range"] = str(flags["range"])
+        if flags.get("first"):
+            payload["all"] = False
+        return "sheets.replace", {**payload, **on_sheet}
+    if sub == "clean":
+        if len(words) != 2 or words[1] not in SHEETS_CLEAN_ACTIONS:
+            die(f"herald-os {SHEETS_USAGE}", 2)
+        payload.update({"range": words[0], "action": words[1]})
+        for flag, key in (("by", "by"), ("delimiter", "delimiter"), ("order", "order"), ("date-format", "dateFormat"), ("case", "case")):
+            if flag in flags:
+                payload[key] = str(flags[flag])
+        for key in ("header", "overwrite"):
+            if flags.get(key):
+                payload[key] = True
+        return "sheets.clean", {**payload, **on_sheet}
+    if sub in ("save", "pdf"):
+        if "to" in flags:
+            payload["to"] = _absolute(str(flags["to"]))
+        if flags.get("overwrite"):
+            payload["overwrite"] = True
+        return ("sheets.save" if sub == "save" else "sheets.exportPdf"), payload
+    if sub in ("undo", "redo"):
+        if "steps" in flags:
+            payload["steps"] = _count(flags["steps"], SHEETS_USAGE)
+        return f"sheets.{sub}", payload
+    die(f"herald-os {SHEETS_USAGE}", 2)
+    return "", {}
+
+
+def _shown(value: object) -> str:
+    """A cell as one field of a tab-separated line."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    return re.sub(r"[\t\r\n]+", " ", str(value))
+
+
+def _office_listing(documents: list, summary: str | None, quote: bool) -> None:
+    """One line per open document: * for the one in front, its file, unsaved edits and what is selected."""
+    for doc in documents:
+        selection = " ".join(str(doc.get("selection") or "").split())
+        if selection and quote:
+            selection = f"“{selection[:60]}…”" if len(selection) > 60 else f"“{selection}”"
+        print(f"{'*' if doc.get('active') else ' '} {doc.get('name')}  {doc.get('path') or 'not saved'}{'  (edited)' if doc.get('modified') else ''}{'  ' + selection if selection else ''}")
+    if not documents:
+        print(summary or "Nothing is open.")
+
+
+def docs_cmd(args: list[str]) -> int:
+    command, payload = docs_request(args)
+    reply = run_os_wait(command, payload, timeout=120)
+    data = reply.get("data") or {}
+    if "--json" in args:
+        print(json.dumps(data, indent=2))
+        return 0
+    if command == "docs.list":
+        _office_listing(data.get("documents") or [], reply.get("summary"), quote=True)
+        return 0
+    if command == "docs.read":
+        outline = data.get("outline") or []
+        for heading in outline:
+            print(f"{'  ' * (int(heading.get('level') or 1) - 1)}{heading.get('text')}")
+        body = data.get("content") if "content" in data else data.get("marked") or data.get("selection")
+        if body:
+            print(f"\n{body}" if outline else body)
+        elif not outline:
+            print(reply.get("summary") or "")
+        return 0
+    print(reply.get("summary") or "done")
+    return 0
+
+
+def sheets_cmd(args: list[str]) -> int:
+    command, payload = sheets_request(args)
+    reply = run_os_wait(command, payload, timeout=120)
+    data = reply.get("data") or {}
+    if "--json" in args:
+        print(json.dumps(data, indent=2))
+        return 0
+    if command == "sheets.list":
+        _office_listing(data.get("workbooks") or [], reply.get("summary"), quote=False)
+        return 0
+    if command == "sheets.read":
+        rows = data.get("text") or data.get("values") or []
+        for row in rows:
+            print("\t".join(_shown(cell) for cell in row))
+        if not rows:
+            print(reply.get("summary") or "")
+        elif data.get("truncated"):
+            print(reply.get("summary") or "", file=sys.stderr)
+        return 0
+    print(reply.get("summary") or "done")
+    return 0
+
+
 def signal_name(number: object) -> str:
     try:
         return signal.Signals(int(number)).name  # type: ignore[arg-type]
@@ -2346,6 +2728,10 @@ def main(argv: list[str]) -> int:
         return hook_cmd(args)
     if cmd == "canvas":
         return canvas_cmd(args)
+    if cmd == "docs":
+        return docs_cmd(args)
+    if cmd == "sheets":
+        return sheets_cmd(args)
     if cmd == "os":
         if not args:
             die("os <command.id> [json args]", 2)
