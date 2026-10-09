@@ -82,7 +82,8 @@ docs action=new name="Cover letter - Product designer" content="Dear Hiring Mana
 
 When the person asks Hermes about text they selected in Herald Docs, Herald marks that text (it
 stays tinted while you work) and the request says text is marked for it. `docs action=read
-part=selection` gives it as `marked`, and what is selected now as `selection`.
+part=selection` gives it as `marked`, and what is selected now as `selection`. When nothing was
+selected, the caret's place is marked instead, and `at=marked` writes there.
 
 - **Rewrite, shorten, expand, change the tone, translate, fix the spelling and grammar:** write
   the new text with `at=marked`. It replaces exactly the marked text as one step, even when the
