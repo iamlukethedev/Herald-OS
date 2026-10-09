@@ -20,14 +20,14 @@ const mode: CommandArg = { name: 'mode', type: 'string', description: 'With head
 /** Where something in a line of text goes, for a field or a note's number; `between` says where it goes at a place between paragraphs. */
 const inText = (between: string): readonly CommandArg[] => [
   quote,
-  { name: 'at', type: 'string', description: `Without quote: end (the default), start, selection (at the caret of an open document), marked (in place of the text Herald marked for this request), after (the selection’s paragraph) or heading; at a place between paragraphs it goes ${between}` },
+  { name: 'at', type: 'string', description: `Without quote: end (the default), start, selection (at the caret of an open document), marked (in place of the text Herald marked for this request), after (the marked text’s paragraph, or the selection’s when nothing is marked) or heading; at a place between paragraphs it goes ${between}` },
   heading,
   mode
 ]
 
 /** Where a block goes, for a section break or a table of contents. */
 const between = (fallback: 'end' | 'start'): readonly CommandArg[] => [
-  { name: 'at', type: 'string', description: `Where: ${fallback} (the default), ${fallback === 'end' ? 'start' : 'end'}, selection (at the caret of an open document), marked (in place of the text Herald marked), after (under the selection’s paragraph) or heading` },
+  { name: 'at', type: 'string', description: `Where: ${fallback} (the default), ${fallback === 'end' ? 'start' : 'end'}, selection (at the caret of an open document), marked (in place of the text Herald marked), after (under the marked text’s paragraph, or the selection’s when nothing is marked) or heading` },
   heading,
   mode,
   { name: 'quote', type: 'string', description: 'Exact text in the document: it goes after the paragraph with its first match' }

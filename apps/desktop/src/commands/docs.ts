@@ -71,7 +71,7 @@ export const docsCommands: readonly OsCommand[] = [
     id: 'docs.write',
     title: 'Write in a document',
     description:
-      'Put content in a document as one step to undo: Markdown by default (headings, bold and italic, lists, task lists, tables, links, quotes, code, pictures from files as ![alt](~/path.png)), at the end, the start, the selection, the marked text, under the selection’s paragraph, or in a heading’s section (append, prepend or replace). One paragraph at the selection joins its line of text.',
+      'Put content in a document as one step to undo: Markdown by default (headings, bold and italic, lists, task lists, tables, links, quotes, code, pictures from files as ![alt](~/path.png)), at the end, the start, the selection, the marked text, under the marked text’s paragraph (or the selection’s when nothing is marked), or in a heading’s section (append, prepend or replace). One paragraph at the selection joins its line of text.',
     tier: 'act',
     args: [document, { name: 'content', type: 'string', description: 'What to write, in Markdown (or plain text with format=text)', required: true }, { name: 'format', type: 'string', description: 'markdown (the default) or text' }, ...placement],
     run: run('docs.write', async (args) => (await agent()).write(args))

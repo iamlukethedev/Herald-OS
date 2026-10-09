@@ -35,7 +35,8 @@ a PDF". Code, configuration and other plain files are for your file tools; readi
    task lists, tables, links, `>` quotes, code, and pictures from files
    (`![Sales by month](~/Pictures/sales.png)`). `at` says where it goes: `end` (the default),
    `start`, `selection` (in place of what is selected, or at the caret), `marked` (in place of
-   the text marked for the request), `after` (under the paragraph the selection is in), or
+   the text marked for the request), `after` (under the paragraph the marked text is in, or the
+   selection when nothing is marked), or
    `heading` with `heading=` and `mode=append` (the end of its section, the default), `prepend`
    (right under the heading) or `replace` (the section's text, keeping the heading). One paragraph
    written at the selection joins its line of text. `selection`, `marked` and `after` need the
@@ -102,10 +103,8 @@ selected, the caret's place is marked instead, and `at=marked` writes there.
   formatting (bold, links, lists, headings), and the facts, names and numbers in it; change only
   what was asked.
 - **Summarise, explain, list the action items, suggest a title:** leave the text as it is. A
-  summary or note goes under it with `at=after`, which is under the paragraph the selection is
-  in: the marked text, as long as `selection` still matches `marked`. If the person has moved on,
-  give the answer in your reply, or ask where it should go. A question gets its answer in your
-  reply.
+  summary or note goes under it with `at=after`, which is under the marked text's paragraph even
+  when the person has clicked elsewhere since. A question gets its answer in your reply.
 - Without marked text, "this paragraph" and "what I selected" are the selection: read
   `part=selection` and write `at=selection`. With nothing selected, find the part by its words
   (`find`) or ask which part they mean.

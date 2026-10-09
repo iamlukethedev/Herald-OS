@@ -444,6 +444,28 @@ describe('tables of contents', () => {
   })
 })
 
+describe('under the marked text', () => {
+  const marked = quoteMatches(stateOf(report()).doc, 'Sales grew')[0]
+
+  /** A change made at=after in the open report, with "Sales grew" marked for Hermes (or nothing) and "two people" clicked since. */
+  function after(made: Change, mark: typeof marked | null = marked) {
+    const view = live(report(), 'two people')
+    applyLive(view, made.build(view.state, mark, true))
+
+    return jsonOf(view.state.doc)
+  }
+
+  it('puts a field, a note, a section break and a table of contents under the marked text’s paragraph, wherever the person has clicked since', () => {
+    const types = (json: DocJSON) => json.content.map((block) => block.type)
+
+    expect(inline(after(insertFieldChange({ field: 'page', at: 'after' })).content[4])).toEqual(['[field:page]'])
+    expect(notesList(stateOf(after(insertNoteChange({ at: 'after' }, { text: 'Source.' }))).doc)[0]).toMatchObject({ note: 'footnote 1', after: 'Sales grew in March.' })
+    expect(types(after(insertSectionBreakChange({ at: 'after' })))).toEqual(['heading', 'paragraph', 'heading', 'paragraph', 'sectionBreak', 'paragraph', 'heading', 'paragraph'])
+    expect(types(after(insertTocChange({ at: 'after' }))).indexOf('tableOfContents')).toBe(4)
+    expect(types(after(insertTocChange({ at: 'after' }), null)).indexOf('tableOfContents')).toBe(7)
+  })
+})
+
 describe('templates', () => {
   const saved: SavedTemplate[] = [{ id: 'mine-1', name: 'Board pack', savedAt: '2026-10-01T09:00:00.000Z', doc: newDocumentModel(templateChoice('memo', []), 'a4') }]
 

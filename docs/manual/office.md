@@ -75,9 +75,9 @@ footers included.
 - **The writing assistant.** Select text and click Ask Hermes in the bar over it, or open the Hermes
   menu: Rewrite, Shorten, Expand, Change Tone (Professional, Friendly, Confident or Casual),
   Translate (Spanish, French, German, Portuguese, Italian, Japanese, Chinese, or Other Language…),
-  Fix Spelling and Grammar, and Summarise. Summarise puts a short summary under the paragraph; the
-  others replace the selection with the new text, as one step to undo, even if you click elsewhere
-  while Hermes works.
+  Fix Spelling and Grammar, and Summarise. Summarise puts a short summary under the paragraph and
+  the others replace the selection with the new text, each as one step to undo, even if you click
+  elsewhere while Hermes works.
 - **Review with Hermes.** Review > Review with Hermes reads the whole document and leaves comments
   on exact passages, each starting Clarity, Grammar or Tone and suggesting a fix. It never changes
   the text, and the whole review is one step to undo.
