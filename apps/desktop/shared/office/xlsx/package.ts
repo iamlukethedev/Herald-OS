@@ -38,6 +38,8 @@ export interface XlsxPackage {
   themeXml?: string
   stylesXml?: string
   read: (path: string) => Promise<string | undefined>
+  /** A part as it is stored, for pictures and other binary parts. */
+  binary: (path: string) => Promise<Uint8Array | undefined>
 }
 
 const relationshipType = (type: string): string => type.split('/').pop() ?? type
@@ -145,6 +147,7 @@ export async function openPackage(bytes: Uint8Array | ArrayBuffer): Promise<Xlsx
     workbookXml,
     themeXml: themePath ? await read(themePath) : undefined,
     stylesXml: stylesPath ? await read(stylesPath) : undefined,
-    read
+    read,
+    binary: async (path) => zip.file(path)?.async('uint8array')
   }
 }

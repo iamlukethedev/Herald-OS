@@ -7,9 +7,16 @@ import { type CellRange, columnIndex, columnName, MAX_COLUMNS, MAX_ROWS, parseRa
 /*
  * What Hermes's commands do in a workbook, on the live one in a window or on one loaded from a file
  * with nothing drawn: read a range, write values and formulas, format, add and rename sheets, sort,
- * filter and freeze. Each change is one step to undo, whatever number of Univer commands it takes.
- * Arguments are checked here, with messages that say what to give instead.
+ * filter and freeze; and, from the feature folders, charts, data tools and summaries, named ranges,
+ * validation, comments and notes. Each change is one step to undo, whatever number of Univer
+ * commands it takes. Arguments are checked here, with messages that say what to give instead.
  */
+
+export * from './charts/model.ts'
+export * from './comments/model.ts'
+export * from './names/model.ts'
+export * from './tools/model.ts'
+export * from './validation/model.ts'
 
 export interface SheetsTarget {
   univer: Univer
