@@ -1,4 +1,4 @@
-import { type Color, type FontRef, type Slot, SLOTS, type Theme } from './deck.ts'
+import { type Color, type Deck, type FontRef, type Slide, type Slot, SLOTS, type Theme } from './deck.ts'
 
 /*
  * Herald Slides' themes: ten colour slots (backgrounds, text and six accents, as PowerPoint's theme
@@ -28,6 +28,9 @@ export const THEMES: readonly Theme[] = [
 export const DEFAULT_THEME = THEMES[0]
 
 export const themeById = (id: string): Theme | undefined => THEMES.find((entry) => entry.id === id)
+
+/** The theme a slide is drawn in: its own, or the deck's. */
+export const themeOf = (deck: Pick<Deck, 'theme'>, slide: Pick<Slide, 'theme'> | undefined): Theme => slide?.theme ?? deck.theme
 
 export const SLOT_NAMES: Record<Slot, string> = {
   bg1: 'Background',

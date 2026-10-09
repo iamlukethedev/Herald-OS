@@ -1,4 +1,4 @@
-import type { Anchor, BodyStyle, Box, Deck, FooterRole, LayoutId, Master, Paragraph, PlaceholderRole, Slide, SlideElement, SlideLayout, SlideSize, TextAlign } from './deck.ts'
+import type { Anchor, Background, BodyStyle, Box, Deck, FooterRole, LayoutId, Master, Paragraph, PlaceholderRole, Slide, SlideElement, SlideLayout, SlideSize, TextAlign } from './deck.ts'
 import { FOOTER_ROLES, LAYOUTS, newId, SLIDE_SIZES } from './deck.ts'
 import { imageElement, textElement } from './elements.ts'
 import { isBlank, textBody } from './text.ts'
@@ -219,6 +219,22 @@ export function changeLayout(slide: Slide, layout: LayoutId, size: SlideSize = B
   })
 
   return { ...slide, layout, elements: [...placed, ...rest] }
+}
+
+/** The background a slide shows: its own, else its layout's, else the master's; null is the theme's background colour. */
+export const backgroundOf = (deck: Pick<Deck, 'master' | 'size'>, slide: Pick<Slide, 'background' | 'layout'>): Background | null => {
+  const master = masterOf(deck)
+
+  return slide.background ?? layoutOf(master, slide.layout).background ?? master.background
+}
+
+/** The master's and the layout's drawings a slide shows behind its own, in drawing order (placeholders are not drawn). */
+export function decorationsOf(deck: Pick<Deck, 'master' | 'size'>, layoutId: LayoutId): SlideElement[] {
+  const master = masterOf(deck)
+  const layout = layoutOf(master, layoutId)
+  const drawn = (element: SlideElement) => !element.placeholder
+
+  return [...(layout.showMaster ? master.elements.filter(drawn) : []), ...layout.elements.filter(drawn)]
 }
 
 /** The element a role's text goes into on a slide (the first such placeholder). */
