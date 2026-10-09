@@ -74,12 +74,32 @@ export function outline(doc: PMNode): OutlineEntry[] {
   return out
 }
 
-export const documentText = (doc: PMNode): string => doc.textBetween(0, doc.content.size, '\n', (leaf) => (leaf.type.name === 'hardBreak' ? '\n' : ''))
+const leafText = (leaf: PMNode): string => (leaf.type.name === 'hardBreak' ? '\n' : '')
 
+export const documentText = (doc: PMNode): string => doc.textBetween(0, doc.content.size, '\n', leafText)
+
+/** Each top-level block's counts, for as long as the block is unchanged. */
+const blockCounts = new WeakMap<PMNode, { words: number; characters: number }>()
+
+/** The document's words and characters, block by block: a keystroke counts only the block it changed again. */
 export function counts(doc: PMNode): { words: number; characters: number } {
-  const text = documentText(doc)
+  let words = 0
+  let characters = 0
 
-  return { words: countWords(text), characters: countCharacters(text) }
+  doc.forEach((block) => {
+    let known = blockCounts.get(block)
+
+    if (!known) {
+      const text = block.textBetween(0, block.content.size, '\n', leafText)
+      known = { words: countWords(text), characters: countCharacters(text) }
+      blockCounts.set(block, known)
+    }
+
+    words += known.words
+    characters += known.characters
+  })
+
+  return { words, characters }
 }
 
 export interface SearchOptions {
@@ -789,5 +809,3 @@ export function insertNodes(build: (schema: Schema) => PMNode[], place: Place): 
 
 export * from './page-ops.ts'
 export * from './review-ops.ts'
-export { documentFromTemplate, TEMPLATES, type TemplateInfo, type TemplateOptions } from './templates/index.ts'
-export { type DocumentStatistics, documentStatistics, type Readability, type StatisticsOptions } from './statistics.ts'

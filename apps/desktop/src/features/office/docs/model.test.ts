@@ -2,7 +2,7 @@ import { history, undo, undoDepth } from '@tiptap/pm/history'
 import { EditorState, NodeSelection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
-import { blankDocument, type DocJSON } from '../../../../shared/office/document.ts'
+import { blankDocument, countCharacters, countWords, type DocJSON } from '../../../../shared/office/document.ts'
 import {
   applyLive,
   applyToJSON,
@@ -74,6 +74,24 @@ describe('reading', () => {
     expect(findHeading(state.doc, 3)?.text).toBe('Timeline')
     expect(documentText(state.doc)).toBe('Plan\nIntro text.\nCosts\nRent is due.\nDetail\nSmall print.\nTimeline\nSoon.')
     expect(counts(state.doc)).toEqual({ words: 12, characters: 63 })
+  })
+
+  it('counts block by block what the whole text counts, after an edit too', () => {
+    const state = markdownState('# Title\n\nFirst line  \nsecond line, with words.\n\n- one item\n- two items\n\n| A | B |\n| - | - |\n| cell one | cell two |\n\n> quoted words here\n\n```\ncode block text\n```\n')
+    const whole = (doc: EditorState['doc']) => {
+      const text = documentText(doc)
+
+      return { words: countWords(text), characters: countCharacters(text) }
+    }
+
+    expect(counts(state.doc)).toEqual(whole(state.doc))
+    expect(counts(state.doc).words).toBe(23)
+    const [match] = findText(state.doc, 'two items')
+    const edited = state.apply(state.tr.insertText(' and three more', match.to))
+
+    expect(counts(edited.doc)).toEqual(whole(edited.doc))
+    expect(counts(edited.doc).words).toBe(26)
+    expect(counts(state.doc).words).toBe(23)
   })
 
   it('finds text across formatting, by case, whole words and patterns', () => {

@@ -5,6 +5,7 @@ import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import { noteHtml, partHtml } from '../../../../../shared/office/doc-html.ts'
 import { type DocNode, HEADER_KINDS, type HeaderKind, headerKindFor, type NoteKind, type PageHeaders, pagePart, round } from '../../../../../shared/office/document.ts'
 import { type ChromePage, type NoteTarget, PageChrome, type PartTarget } from './chrome.ts'
+import { changedBlock, shiftedPages } from './edits.ts'
 import { fieldViewsOf, showField } from './fields.ts'
 import { bodyOf, type Frame, type Section, sectionAt, sectionsOfDoc, textWidthOf } from './geometry.ts'
 import { type Page, paginate } from './layout.ts'
@@ -18,7 +19,8 @@ import { lineStart, measureFlow, type Ref } from './measure.ts'
  * spacers hidden, works out the pages, then sets the spacers (in place when only their heights
  * change), the paper behind with each page's header, footer and footnotes, and a clip that shows
  * the text only where pages have text. It runs once in the frame after a change, and again when
- * fonts or pictures load or the zoom changes.
+ * fonts or pictures load or the zoom changes. A change that leaves every page where it was (typing
+ * that keeps a block's height, in a block no page starts inside) only moves the page map along.
  */
 
 export interface PagesHost {
@@ -196,6 +198,10 @@ function clipOf(bands: readonly { left: number; right: number; top: number; bott
 export class Paginator {
   layout: PageLayout | null = null
   private frameId = 0
+  /** Whether the next run lays everything out, rather than first trying an edit that moved nothing. */
+  private full = true
+  /** The document the pages were last laid out for, and its top-level blocks' heights then. */
+  private laid: { doc: PMNode; heights: number[] } | null = null
   private skipped = false
   private destroyed = false
   private width = 0
@@ -232,13 +238,21 @@ export class Paginator {
 
   /** Lay the pages out in the next frame (once, however many changes come before it). */
   readonly schedule = (): void => {
+    this.full = true
+    this.request()
+  }
+
+  private request(): void {
     if (this.destroyed || this.frameId) {
       return
     }
 
     this.frameId = requestAnimationFrame(() => {
       this.frameId = 0
-      this.run()
+
+      if (this.full || !this.quietEdit()) {
+        this.run()
+      }
     })
   }
 
@@ -264,8 +278,42 @@ export class Paginator {
 
   update(prev: EditorState): void {
     if (this.view.state.doc !== prev.doc) {
-      this.schedule()
+      this.request()
     }
+  }
+
+  /** The pages stand when only one block's text changed and its height did not: the page map moves with the change. */
+  private quietEdit(): boolean {
+    const { view, layout, laid } = this
+    const zoom = this.options.zoom() || 1
+
+    if (!layout || !laid || this.skipped || this.settling || view.composing || layout.zoom !== zoom) {
+      return false
+    }
+
+    const { doc } = view.state
+    const change = changedBlock(laid.doc, doc, (block) => scanOf(block).notes.length > 0)
+
+    if (!change) {
+      return false
+    }
+
+    const end = change.start + change.after.nodeSize
+    // A page that starts inside the block has to follow its lines.
+    const inside = pagesKey.getState(view.state)?.find(change.start + 1, end - 1, (spec) => spec.spacer === true) ?? []
+    const dom = view.nodeDOM(change.start)
+
+    if (inside.length || !(dom instanceof HTMLElement) || Math.abs(dom.getBoundingClientRect().height / zoom - laid.heights[change.index]) > 0.5) {
+      return false
+    }
+
+    const pages = shiftedPages(layout.pages, change.start + change.before.nodeSize, change.after.nodeSize - change.before.nodeSize)
+    this.inventory = inventoryOf(doc)
+    this.laid = { doc, heights: laid.heights }
+    this.layout = { ...layout, pages, map: { ...layout.map, pages: pages.map(({ number, from, to, kind, section, blank }) => ({ number, from, to, kind, section, blank })) } }
+    this.options.onLayout?.(this.layout)
+
+    return true
   }
 
   /** One page of the document's size before the first run, so the first frame shows paper. */
@@ -332,6 +380,7 @@ export class Paginator {
         return { y: box ? ((box.top + box.bottom) / 2 - origin) / zoom : Number.NEGATIVE_INFINITY, note: index + 1 }
       })
       const boxes = measureFlow({ view, origin, zoom, notes: marks }, sections)
+      this.laid = { doc, heights: boxes.slice(0, doc.childCount).map((box) => box.bottom - box.top) }
       pages = paginate(boxes, {
         room: (number, section) => {
           const { frame } = sections[section]
@@ -364,6 +413,7 @@ export class Paginator {
     }
 
     this.skipped = false
+    this.full = false
     const count = pages.length
     const base = sections[0].frame
     const columnLeft = (sheetWidth - base.width) / 2 + base.left
