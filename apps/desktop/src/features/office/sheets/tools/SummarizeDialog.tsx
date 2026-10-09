@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { quoteSheet } from '../../../../../shared/office/xlsx/address.ts'
 import type { CellInput } from '../model.ts'
 import { openDialog } from '../ui/overlay.tsx'
-import { labelKey, SUMMARY_FUNCTIONS, type SummaryFunction, summarize, summarySource, valueName } from './summary.ts'
+import { labelKey, previewRows, SUMMARY_FUNCTIONS, type SummaryFunction, summarize, summarySource, valueName } from './summary.ts'
 import { Check, Choices, counted, Heading, Note, PreviewGrid, RemoveButton, Select, TextField, ToolDialog, useLive } from './ui.tsx'
 
 /* Data → Summarize…: a pivot-style summary of the table, its fields from the header row put in rows, columns, values and filters. */
@@ -266,7 +266,7 @@ function SummarizeDialog({ docKey, range }: { docKey: string; range: string }) {
           <Heading>
             {preview.value.range} on {preview.value.newSheet ? 'a new sheet' : preview.value.sheet}
           </Heading>
-          <PreviewGrid rows={[...preview.value.headers, ...preview.value.labels.map((labels) => [...labels, ...preview.value!.headers[0].slice(labels.length).map(() => '…')]), ...(preview.value.rows > preview.value.labels.length ? [[`${preview.value.rows - preview.value.labels.length} more`]] : []), ['Grand total']]} />
+          <PreviewGrid rows={previewRows(preview.value)} />
         </section>
       )}
       {preview.error && <Note tone="warn">{preview.error}</Note>}

@@ -5,7 +5,7 @@ import { xlsxFromWorkbook } from '../../../../../shared/office/xlsx/write.ts'
 import { withHeadlessSheets } from '../headless.ts'
 import { type CellInput, readRange, type SheetsTarget, settled, writeRange } from '../model.ts'
 import { changeAndUndo, SALES, salesBook, stable, type Value } from './fixtures.ts'
-import { labelKey, listSummaries, refreshSummary, type SummaryFunction, summarize, summarySource } from './summary.ts'
+import { labelKey, listSummaries, previewRows, refreshSummary, type SummaryFunction, summarize, summarySource } from './summary.ts'
 
 const REGION = 0
 const PRODUCT = 1
@@ -131,6 +131,33 @@ describe('summaries', () => {
 
     expect(result.value).toMatchObject({ preview: true, sheet: 'Summary', newSheet: true, range: 'A1:C10', rows: 8, headers: [['Region', 'Product', 'Sum of Amount']], labels: [['East', 'Apples'], ['East', 'Mixed*'], ['East', 'Pears'], ['North', 'Apples'], ['North', 'Pears']] })
     expect(result.unchanged).toBe(true)
+  })
+
+  it('previews where its values and grand totals go, under every value column', async () => {
+    const { result } = await withHeadlessSheets(salesBook(), async (target) => ({
+      down: await summarize(target, { source: 'A1', rows: ['Region', 'Product'], values: ['Amount'], preview: true }),
+      across: await summarize(target, { source: 'A1', rows: ['Region'], columns: ['Quarter'], values: ['Amount'], preview: true })
+    }))
+
+    expect(previewRows(result.down)).toEqual([
+      ['Region', 'Product', 'Sum of Amount'],
+      ['East', 'Apples', '…'],
+      ['East', 'Mixed*', '…'],
+      ['East', 'Pears', '…'],
+      ['North', 'Apples', '…'],
+      ['North', 'Pears', '…'],
+      ['3 more'],
+      ['Grand total', '', '…']
+    ])
+    expect(previewRows(result.across)).toEqual([
+      ['Quarter', 'Q1', 'Q2', 'Grand total'],
+      ['Region', 'Sum of Amount', 'Sum of Amount', 'Sum of Amount'],
+      ['East', '…', '…', '…'],
+      ['North', '…', '…', '…'],
+      ['West', '…', '…', '…'],
+      ['(blank)', '…', '…', '…'],
+      ['Grand total', '…', '…', '…']
+    ])
   })
 
   it('goes beside its table, an empty column between, and says what to give instead', async () => {

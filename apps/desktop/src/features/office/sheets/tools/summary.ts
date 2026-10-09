@@ -598,6 +598,17 @@ export interface SummaryResult {
   labels: string[][]
 }
 
+/** What a summary's preview shows: its header rows, its first rows of labels and its grand total row with … where values go, and how many rows are not shown. */
+export function previewRows(result: Pick<SummaryResult, 'headers' | 'labels' | 'rows' | 'columns' | 'values'>): string[][] {
+  const width = result.headers[0]?.length ?? 0
+  const valueColumns = Math.min(width, (result.headers.length > 1 ? result.columns + 1 : 1) * result.values.length)
+  const fields = Math.max(1, width - valueColumns)
+  const values = Array.from({ length: valueColumns }, () => '…')
+  const more = result.rows > result.labels.length ? [[`${result.rows - result.labels.length} more`]] : []
+
+  return [...result.headers, ...result.labels.map((labels) => [...labels, ...values]), ...more, ['Grand total', ...Array.from({ length: fields - 1 }, () => ''), ...values]]
+}
+
 const sourceName = (source: Source): string => `${quoteSheet(source.sheet.getSheetName())}!${rangeName(source.cells)}`
 
 function resultOf(source: Source, spec: Spec, plan: Plan, layout: Layout, place: { sheet: string; newSheet: boolean; row: number; column: number; id: string; preview: boolean }): SummaryResult {
