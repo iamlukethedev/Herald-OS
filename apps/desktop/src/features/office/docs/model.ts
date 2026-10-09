@@ -799,3 +799,5 @@ export function setPage(change: PageChange): Op {
     return JSON.stringify(page) === JSON.stringify(current) && state.doc.attrs.page ? null : state.tr.setDocAttribute('page', page)
   }
 }
+
+export { documentFromTemplate, TEMPLATES, type TemplateInfo, type TemplateOptions } from './templates/index.ts'
