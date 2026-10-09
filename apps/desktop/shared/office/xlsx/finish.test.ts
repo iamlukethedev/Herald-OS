@@ -29,6 +29,14 @@ describe('package helpers', () => {
     expect(placeInWorkbook('<workbook><sheets/><definedNames/><calcPr/><extLst/></workbook>', 'pivotCaches', '<pivotCaches/>')).toBe('<workbook><sheets/><definedNames/><calcPr/><pivotCaches/><extLst/></workbook>')
   })
 
+  it('takes an extension list inside a data bar rule for the rule’s, not the sheet’s', () => {
+    const dataBar = '<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="dataBar"><extLst><ext uri="{B025F937}"/></extLst></cfRule></conditionalFormatting><pageMargins left="0.7"/></worksheet>'
+    const placed = placeInWorksheet(dataBar, 'drawing', '<drawing r:id="rId1"/>')
+
+    expect(placed).toContain('<pageMargins left="0.7"/><drawing r:id="rId1"/></worksheet>')
+    expect(placeInWorksheet(dataBar, 'dataValidations', '<dataValidations/>')).toContain('</conditionalFormatting><dataValidations/><pageMargins')
+  })
+
   it('gives new relationships ids of their own and writes content types once', async () => {
     const zip = new JSZip()
     zip.file('[Content_Types].xml', '<Types><Default Extension="xml" ContentType="application/xml"/></Types>')

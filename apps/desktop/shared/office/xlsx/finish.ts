@@ -86,7 +86,7 @@ export class DrawingBuilder {
 
       const path = ctx.writer.freshName((n) => `xl/drawings/drawing${n}.xml`)
       // Shape ids an anchor brings stay as they are (connectors name shapes by them); new ones come after the highest.
-      let next = Math.max(0, ...anchors.flatMap((anchor) => [...anchor.xml.matchAll(/<(?:\w+:)?cNvPr\b[^>]*?\sid="(\d+)"/g)].map((match) => Number(match[1])))) + 1
+      let next = Math.max(1, ...anchors.flatMap((anchor) => [...anchor.xml.matchAll(/<(?:\w+:)?cNvPr\b[^>]*?\sid="(\d+)"/g)].map((match) => Number(match[1])))) + 1
       const body: string[] = []
       const namespaces: Record<string, string> = { 'xmlns:xdr': XDR, 'xmlns:a': A, 'xmlns:r': R }
       const ignorable = new Set<string>()

@@ -220,34 +220,144 @@ export class PackageWriter {
 }
 
 /** The order of a worksheet's elements (CT_Worksheet). */
-const WORKSHEET_ORDER = ['sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios', 'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr', 'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'legacyDrawing', 'legacyDrawingHF', 'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst']
+export const WORKSHEET_ORDER = ['sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios', 'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr', 'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'legacyDrawing', 'legacyDrawingHF', 'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst']
 
 /** The order of the workbook's elements (CT_Workbook). */
-const WORKBOOK_ORDER = ['fileVersion', 'fileSharing', 'workbookPr', 'workbookProtection', 'bookViews', 'sheets', 'functionGroups', 'externalReferences', 'definedNames', 'calcPr', 'oleSize', 'customWorkbookViews', 'pivotCaches', 'smartTagPr', 'smartTagTypes', 'webPublishing', 'fileRecoveryPr', 'webPublishObjects', 'extLst']
+export const WORKBOOK_ORDER = ['fileVersion', 'fileSharing', 'workbookPr', 'workbookProtection', 'bookViews', 'sheets', 'functionGroups', 'externalReferences', 'definedNames', 'calcPr', 'oleSize', 'customWorkbookViews', 'pivotCaches', 'smartTagPr', 'smartTagTypes', 'webPublishing', 'fileRecoveryPr', 'webPublishObjects', 'extLst']
 
-/** Where a top-level element of this name starts, or -1; the search stops at the extension list, whose children reuse names. */
-function startOf(xml: string, name: string): number {
-  const ext = name === 'extLst' ? -1 : xml.search(/<extLst[\s>]/)
-
-  return (ext >= 0 ? xml.slice(0, ext) : xml).search(new RegExp(`<${name}[\\s/>]`))
+export interface Child {
+  /** The element's name with its prefix, as "extLst" or "x14:slicerList". */
+  name: string
+  /** Where its start tag opens and where its end tag closes (one past it). */
+  start: number
+  end: number
 }
 
-function place(xml: string, order: string[], root: string, element: string, content: string): string {
-  const after = order.slice(order.indexOf(element) + 1)
-  const positions = after.map((name) => startOf(xml, name)).filter((index) => index >= 0)
-  const position = positions.length ? Math.min(...positions) : xml.lastIndexOf(`</${root}>`)
+export const localName = (name: string): string => name.slice(name.indexOf(':') + 1)
 
-  return `${xml.slice(0, position)}${content}${xml.slice(position)}`
+/** Where the tag opening at `open` ends (its ">"), passing over quoted attribute values; -1 when it does not. */
+export function tagEnd(xml: string, open: number): number {
+  let quote = ''
+
+  for (let at = open + 1; at < xml.length; at++) {
+    const char = xml[at]
+
+    if (quote) {
+      quote = char === quote ? '' : quote
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (char === '>') {
+      return at
+    }
+  }
+
+  return -1
+}
+
+/**
+ * The elements from `from` to the end tag of the element holding them, whole and in order. Nested
+ * elements of any name are passed over (an extension list inside a conditional format is not the
+ * sheet's own), and a sheetData without reading its cells.
+ */
+export function childrenFrom(xml: string, from: number): Child[] {
+  const children: Child[] = []
+  let depth = 0
+  let current = { name: '', start: 0 }
+  let at = from
+
+  while (at < xml.length) {
+    const open = xml.indexOf('<', at)
+
+    if (open < 0) {
+      break
+    }
+
+    const skip = xml.startsWith('<!--', open) ? '-->' : xml.startsWith('<?', open) ? '?>' : xml.startsWith('<![CDATA[', open) ? ']]>' : ''
+
+    if (skip) {
+      const end = xml.indexOf(skip, open)
+      at = end < 0 ? xml.length : end + skip.length
+      continue
+    }
+
+    const end = tagEnd(xml, open)
+
+    if (end < 0) {
+      break
+    }
+
+    const closing = xml[open + 1] === '/'
+    const empty = !closing && xml[end - 1] === '/'
+
+    if (closing) {
+      if (depth === 0) {
+        break
+      }
+
+      depth--
+
+      if (depth === 0) {
+        children.push({ ...current, end: end + 1 })
+      }
+    } else if (depth === 0) {
+      const name = /^<([\w:.-]+)/.exec(xml.slice(open, open + 256))?.[1] ?? ''
+      current = { name, start: open }
+
+      if (empty) {
+        children.push({ ...current, end: end + 1 })
+      } else if (localName(name) === 'sheetData') {
+        const close = xml.indexOf(`</${name}>`, end)
+        const finish = close < 0 ? xml.length : close + name.length + 3
+        children.push({ ...current, end: finish })
+        at = finish
+        continue
+      } else {
+        depth = 1
+      }
+    } else if (!empty) {
+      depth++
+    }
+
+    at = end + 1
+  }
+
+  return children
+}
+
+/** Where the content of a part's root element starts: just after its start tag. */
+export function rootContent(xml: string): number {
+  const root = /<(?![?!])[\w:.-]+/.exec(xml)
+
+  return root ? tagEnd(xml, root.index) + 1 : -1
+}
+
+/** The children of a part's root element, in order. */
+export const childrenOf = (xml: string): Child[] => {
+  const start = rootContent(xml)
+
+  return start > 0 ? childrenFrom(xml, start) : []
+}
+
+/** The child of a part's root with this local name. */
+export const childNamed = (xml: string, name: string): Child | undefined => childrenOf(xml).find((child) => localName(child.name) === name)
+
+/** Put a child into a part's root where `order` has it: before the first child that comes after it, else at the end. */
+export function placeChild(xml: string, order: string[], element: string, content: string): string {
+  const rank = order.indexOf(element)
+  const later = childrenOf(xml).find((child) => order.indexOf(localName(child.name)) > rank)
+  const at = later ? later.start : xml.lastIndexOf('</')
+
+  return `${xml.slice(0, at)}${content}${xml.slice(at)}`
 }
 
 /** Put a top-level element into a worksheet where CT_Worksheet has it (the caller makes sure there is none already). */
-export const placeInWorksheet = (sheetXml: string, element: string, content: string): string => place(sheetXml, WORKSHEET_ORDER, 'worksheet', element, content)
+export const placeInWorksheet = (sheetXml: string, element: string, content: string): string => placeChild(sheetXml, WORKSHEET_ORDER, element, content)
 
 /** Put a top-level element into the workbook where CT_Workbook has it (the caller makes sure there is none already). */
-export const placeInWorkbook = (workbookXml: string, element: string, content: string): string => place(workbookXml, WORKBOOK_ORDER, 'workbook', element, content)
+export const placeInWorkbook = (workbookXml: string, element: string, content: string): string => placeChild(workbookXml, WORKBOOK_ORDER, element, content)
 
 /** Whether a worksheet or workbook has a top-level element of this name. */
-export const hasElement = (xml: string, element: string): boolean => startOf(xml, element) >= 0
+export const hasElement = (xml: string, element: string): boolean => Boolean(childNamed(xml, element))
 
 /** A start tag's namespace declarations and Ignorable list, to carry into a part that takes its children. */
 export function rootNamespaces(xml: string, root: string): Record<string, string> {
