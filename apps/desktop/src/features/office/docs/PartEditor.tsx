@@ -339,6 +339,23 @@ function HeaderFooterEditor({ main, docKey, part, page, kind, headers, frame, de
     }
   }, [map, page])
 
+  // The bar follows the page when the frame or the desk change size, as when a pane opens beside the pages.
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const observer = new ResizeObserver(() => setVersion((value) => value + 1))
+
+    for (const element of [frame, desk]) {
+      if (element) {
+        observer.observe(element)
+      }
+    }
+
+    return () => observer.disconnect()
+  }, [frame, desk])
+
   usePressAway(desk, box, (event) => {
     const area = event.target instanceof Element ? event.target.closest<HTMLElement>('.docs-page-area') : null
 
