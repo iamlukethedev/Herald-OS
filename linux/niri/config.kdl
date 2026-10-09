@@ -195,6 +195,18 @@ window-rule {
     shadow { off; }
 }
 
+// Herald Slides' audience window: the slides full screen while the presenter view keeps the focus
+// and the keys. Herald opens it for the display the presenter view is not on and asks for that
+// output when it goes full screen; a rule cannot name "the other output", so the request decides.
+window-rule {
+    match app-id=r#"^(herald-os|Herald OS)$"# title="^Herald Slides Audience$"
+    open-fullscreen true
+    open-focused false
+    border { off; }
+    focus-ring { off; }
+    shadow { off; }
+}
+
 // Wallpaper renderer: an offscreen helper that must never be shown.
 window-rule {
     match app-id=r#"^(herald-os|Herald OS)$"# title="^Herald OS · Wallpaper$"
