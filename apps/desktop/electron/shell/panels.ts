@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { IPC, type ShellCommand, type ShellSurface, type WmAction, type WmWindow } from '../../shared/ipc.ts'
 import { GUEST_PREFERENCES, lockDownPartition, WEB_PARTITION } from '../ipc/web.ts'
 import { log } from '../log.ts'
+import { audienceWindow } from '../office/presenter.ts'
 import { devServerUrl, isShellPage, rendererIndex } from '../paths.ts'
 import type { Compositor } from '../wm/compositor.ts'
 import { NiriClient } from '../wm/niri.ts'
@@ -277,7 +278,7 @@ export class PanelShell implements ShellHost {
 
     // The renderer must not rename the window: niri rules key on the title.
     win.on('page-title-updated', event => event.preventDefault())
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    win.webContents.setWindowOpenHandler(details => audienceWindow(win, details) ?? { action: 'deny' })
 
     win.webContents.on('will-navigate', (event, url) => {
       if (!isShellPage(url)) {

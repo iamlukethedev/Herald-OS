@@ -1,252 +1,191 @@
 import { useStore } from '@nanostores/react'
-import { IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react'
-import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { IconChevronLeft, IconChevronRight, IconPresentation, IconX } from '@tabler/icons-react'
+import { type ReactNode, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { $env } from '../../../store/backend.ts'
 import { isPanels } from '../../../store/shell.ts'
-import type { Deck, Slide } from './deck.ts'
-import type { SlidesDocument } from './document.ts'
+import type { Deck } from './deck.ts'
 import { useDeck } from './editor/Stage.tsx'
-import { $presenting, decks } from './store.ts'
-import { SlideView } from './view/SlideView.tsx'
+import { Audience } from './present/Audience.tsx'
+import { $audience, act, canUseTwoDisplays, closeAudienceWindow, enterFullScreen, openAudienceWindow, stopPresenting, useFullScreenEnd, usePresentationKeys } from './present/control.ts'
+import { useIdle, useWindowSize } from './present/hooks.ts'
+import { PresenterView } from './present/PresenterView.tsx'
+import { Show } from './present/Show.tsx'
+import { begin, follow, frameOf, next, type Presentation, type PresentMode, previous, withMode } from './present/state.ts'
+import { $presentation, decks } from './store.ts'
 
 /*
- * Presenting: the deck's shown slides one at a time over everything, fitted to the window, with the
- * deck's transition between them and an end screen after the last. Arrows, Space, Enter, Page keys
- * and clicks move on; typing a number and Enter jumps; B and W blank the screen; Escape ends.
+ * Presenting: the deck's shown slides one at a time over everything, fitted to the window, each
+ * coming in by its transition, with an end screen after the last; or the presenter view, the
+ * slides beside it in Herald's window or on another display. Arrows, Space, Enter, Page keys and
+ * clicks move on; typing a number and Enter jumps; B and W blank the screen; Escape ends.
  */
 
-const TRANSITION_MS = 450
+/** Whether the slides can go on a display of their own while the presenter view stays on this one. */
+export { canUseTwoDisplays }
 
-/** Start presenting: called from the click or key that asks, since the system grants full screen only then. */
-export function startPresenting(key: string, index: number): void {
-  $presenting.set({ key, index })
+/** End the presentation in every view. */
+export { stopPresenting }
+
+/** How to present. */
+export interface PresentOptions {
+  /** Show the presenter view: the slides go on another display when there is one, else beside it in Herald's window. */
+  presenter?: boolean
+  /** With the presenter view, keep the slides beside it in Herald's window even when another display is there. */
+  oneDisplay?: boolean
+}
+
+/** Where the presenter view puts the slides: on another display when a window opens there, else beside it. */
+function presenterMode(oneDisplay = false): PresentMode {
+  return !oneDisplay && canUseTwoDisplays() && openAudienceWindow() ? 'displays' : 'split'
+}
+
+/**
+ * Start presenting a deck from its slide at `index` (the next one shown when that one is hidden):
+ * called from the click or key that asks, since the system grants full screen and a window on
+ * another display only then.
+ */
+export function startPresenting(key: string, index: number, options: PresentOptions = {}): void {
+  const doc = decks.get(key)
+
+  if (!doc) {
+    return
+  }
+
   // Herald's own window fills the screen already, and the developer's window is presented in;
   // a window of its own (panels) goes full screen.
   const own = isPanels || (!$env.get()?.isDev && (window.outerWidth < screen.width || window.outerHeight < screen.height))
 
   if (own) {
-    document.documentElement.requestFullscreen?.().catch(() => {})
+    enterFullScreen()
   }
+
+  const mode = options.presenter ? presenterMode(options.oneDisplay) : 'slides'
+
+  if (mode !== 'displays') {
+    closeAudienceWindow()
+  }
+
+  $presentation.set(begin(doc.history.present, key, index, Date.now(), mode))
 }
 
-function stop(): void {
-  $presenting.set(null)
-
-  if (document.fullscreenElement) {
-    void document.exitFullscreen().catch(() => {})
+/** Show or hide the presenter view while presenting; shown, it puts the slides on another display when there is one. */
+export function showPresenterView(shown: boolean, options: Pick<PresentOptions, 'oneDisplay'> = {}): void {
+  if (!$presentation.get()) {
+    return
   }
+
+  const mode = shown ? presenterMode(options.oneDisplay) : 'slides'
+
+  if (mode !== 'displays') {
+    closeAudienceWindow()
+  }
+
+  act((state) => withMode(state, mode))
 }
 
-function layerStyle(deck: Deck, kind: 'in' | 'out', direction: 1 | -1): CSSProperties {
-  if (deck.transition === 'fade') {
-    return kind === 'in' ? { animation: `hs-fade-in ${TRANSITION_MS}ms ease both` } : {}
-  }
+/** Whether a deck is being presented. */
+export const isPresenting = (): boolean => $presentation.get() !== null
 
-  if (deck.transition === 'push') {
-    const name = kind === 'in' ? (direction > 0 ? 'hs-push-in' : 'hs-push-in-back') : direction > 0 ? 'hs-push-out' : 'hs-push-out-back'
-
-    return { animation: `${name} ${TRANSITION_MS}ms cubic-bezier(.3,.7,.2,1) both` }
-  }
-
-  return {}
+function PillButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" aria-label={label} title={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick} className="grid size-7 place-items-center rounded-full hover:bg-white/15">
+      {children}
+    </button>
+  )
 }
 
-function Show({ doc, start }: { doc: SlidesDocument; start: number }) {
-  useDeck(doc)
-  const deck = doc.history.present
-  const shown = useMemo(() => {
-    const visible = deck.slides.filter((slide) => !slide.hidden)
-
-    return visible.length ? visible : deck.slides
-  }, [deck.slides])
-  const [at, setAt] = useState(() => {
-    const wanted = deck.slides.slice(start).find((slide) => shown.includes(slide))
-
-    return Math.max(0, wanted ? shown.indexOf(wanted) : shown.length - 1)
-  })
-  const [leaving, setLeaving] = useState<{ slide: Slide | null; direction: 1 | -1 } | null>(null)
-  const [blank, setBlank] = useState<'black' | 'white' | null>(null)
-  const [idle, setIdle] = useState(false)
-  const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight })
-  const typed = useRef('')
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const atRef = useRef(at)
-  atRef.current = Math.min(at, shown.length)
-
-  const go = (next: number) => {
-    const now = atRef.current
-
-    // Moving on from the end screen ends the presentation.
-    if (now >= shown.length && next > now) {
-      stop()
-
-      return
-    }
-
-    const target = Math.max(0, Math.min(shown.length, next))
-
-    if (target === now) {
-      return
-    }
-
-    setBlank(null)
-    setLeaving(deck.transition === 'none' ? null : { slide: shown[now] ?? null, direction: target > now ? 1 : -1 })
-    setAt(target)
-  }
-
-  useEffect(() => {
-    if (!leaving) {
-      return
-    }
-
-    const done = setTimeout(() => setLeaving(null), TRANSITION_MS + 30)
-
-    return () => clearTimeout(done)
-  }, [leaving])
-
-  useLayoutEffect(() => {
-    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight })
-    window.addEventListener('resize', onResize)
-
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const key = event.key
-      const now = atRef.current
-
-      if (/^\d$/.test(key)) {
-        typed.current = (typed.current + key).slice(-4)
-      } else if (key === 'Escape') {
-        stop()
-      } else if (key === 'Enter' && typed.current) {
-        go(Number(typed.current) - 1)
-        typed.current = ''
-      } else if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter', 'n', 'N'].includes(key)) {
-        go(now + 1)
-      } else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace', 'p', 'P'].includes(key)) {
-        go(now - 1)
-      } else if (key === 'Home') {
-        go(0)
-      } else if (key === 'End') {
-        go(shown.length - 1)
-      } else if (key === 'b' || key === 'B' || key === '.') {
-        setBlank((value) => (value === 'black' ? null : 'black'))
-      } else if (key === 'w' || key === 'W' || key === ',') {
-        setBlank((value) => (value === 'white' ? null : 'white'))
-      } else {
-        return
-      }
-
-      if (!/^\d$/.test(key) && key !== 'Enter') {
-        typed.current = ''
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-    }
-    window.addEventListener('keydown', onKey, true)
-
-    return () => window.removeEventListener('keydown', onKey, true)
-  })
-
-  const wake = () => {
-    setIdle(false)
-
-    if (timer.current) {
-      clearTimeout(timer.current)
-    }
-
-    timer.current = setTimeout(() => setIdle(true), 2500)
-  }
-
-  useEffect(() => {
-    wake()
-
-    return () => {
-      if (timer.current) {
-        clearTimeout(timer.current)
-      }
-    }
-  }, [])
-
-  const scale = Math.min(size.width / deck.size.width, size.height / deck.size.height)
-  const width = deck.size.width * scale
-  const height = deck.size.height * scale
-  const view = { size: deck.size, theme: deck.theme }
-  const current = Math.min(at, shown.length)
-  const ended = current >= shown.length
-  const frame: CSSProperties = { position: 'absolute', inset: 0 }
+/** The slides alone over everything, with a few controls that hide while the mouse rests. */
+function SlidesAlone({ deck, state }: { deck: Deck; state: Presentation }) {
+  const size = useWindowSize(window)
+  const { idle, wake } = useIdle()
+  const frame = frameOf(state)
+  usePresentationKeys(window)
 
   return (
     <div
       role="dialog"
-      aria-label={ended ? 'End of the presentation' : `Presenting slide ${current + 1} of ${shown.length}`}
+      aria-label={frame.ended ? 'End of the presentation' : `Presenting slide ${frame.number} of ${frame.count}`}
       className="fixed inset-0 z-[2147483000] overflow-hidden bg-black select-none"
       style={{ cursor: idle ? 'none' : 'default' }}
       onMouseMove={wake}
-      onClick={() => go(current + 1)}
+      onClick={() => act(next)}
       onContextMenu={(event) => {
         event.preventDefault()
-        go(current - 1)
+        act(previous)
       }}
     >
-      <div className="absolute overflow-hidden" style={{ left: (size.width - width) / 2, top: (size.height - height) / 2, width, height }}>
-        {leaving?.slide && (
-          <div key={`out-${leaving.slide.id}`} style={{ ...frame, ...layerStyle(deck, 'out', leaving.direction) }}>
-            <SlideView deck={view} slide={leaving.slide} scale={scale} mode="present" />
-          </div>
-        )}
-        {ended ? (
-          <div key="end" className="grid place-items-center bg-black text-center" style={{ ...frame, ...layerStyle(deck, 'in', 1) }}>
-            <div className="text-[15px] text-white/70">
-              End of the presentation
-              <div className="mt-1 text-[12px] text-white/40">Click or press Escape to go back</div>
-            </div>
-          </div>
-        ) : (
-          <div key={`in-${shown[current].id}`} style={{ ...frame, ...(leaving ? layerStyle(deck, 'in', leaving.direction) : {}) }}>
-            <SlideView deck={view} slide={shown[current]} scale={scale} mode="present" />
-          </div>
-        )}
-      </div>
-      {blank && <div className="absolute inset-0" style={{ background: blank }} />}
+      <Show deck={deck} state={state} width={size.width} height={size.height} />
       <div
-        className="absolute bottom-5 left-5 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-1 text-[12px] text-white/80 backdrop-blur transition-opacity duration-300"
+        className="absolute bottom-5 left-5 z-10 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-1 text-[12px] text-white/80 backdrop-blur transition-opacity duration-300"
         style={{ opacity: idle ? 0 : 1, pointerEvents: idle ? 'none' : 'auto' }}
         onClick={(event) => event.stopPropagation()}
       >
-        <button type="button" aria-label="Previous slide" onClick={() => go(current - 1)} className="grid size-7 place-items-center rounded-full hover:bg-white/15">
+        <PillButton label="Previous slide" onClick={() => act(previous)}>
           <IconChevronLeft size={16} />
-        </button>
-        <span className="min-w-14 text-center tabular-nums">{ended ? 'End' : `${current + 1} / ${shown.length}`}</span>
-        <button type="button" aria-label="Next slide" onClick={() => go(current + 1)} className="grid size-7 place-items-center rounded-full hover:bg-white/15">
+        </PillButton>
+        <span className="min-w-14 text-center tabular-nums">{frame.ended ? 'End' : `${frame.number} / ${frame.count}`}</span>
+        <PillButton label="Next slide" onClick={() => act(next)}>
           <IconChevronRight size={16} />
-        </button>
-        <button type="button" aria-label="End the presentation" onClick={stop} className="ml-1 grid size-7 place-items-center rounded-full hover:bg-white/15">
+        </PillButton>
+        <PillButton label="Presenter view" onClick={() => showPresenterView(true)}>
+          <IconPresentation size={15} />
+        </PillButton>
+        <PillButton label="End the presentation" onClick={stopPresenting}>
           <IconX size={15} />
-        </button>
+        </PillButton>
       </div>
     </div>
   )
 }
 
-/** The deck being presented, drawn on the page itself rather than in the window, whose frame would hold it to its own size. */
+/**
+ * The presentation under way, drawn on the page itself rather than in the window, whose frame would
+ * hold it to its own size; and in the audience window, when the slides are on another display.
+ */
 export function Present() {
-  const presenting = useStore($presenting)
-  const doc = presenting ? decks.get(presenting.key) : undefined
+  const state = useStore($presentation)
+  const audience = useStore($audience)
+  const doc = state ? decks.get(state.key) : undefined
+  useDeck(doc)
+  const deck = doc?.history.present
+  useFullScreenEnd()
+
+  useEffect(
+    () => () => {
+      if ($presentation.get()) {
+        stopPresenting()
+      }
+    },
+    []
+  )
 
   useEffect(() => {
-    if (presenting && !doc) {
-      $presenting.set(null)
+    if (state && !doc) {
+      stopPresenting()
     }
-  }, [presenting, doc])
+  }, [state, doc])
 
-  if (!presenting || !doc) {
+  useEffect(() => {
+    if (deck) {
+      act((current) => follow(current, deck))
+    }
+  }, [deck])
+
+  if (!state || !deck) {
     return null
   }
 
-  return createPortal(<Show key={`${presenting.key}:${presenting.index}`} doc={doc} start={presenting.index} />, document.body)
+  const run = `${state.key}:${state.started}`
+
+  if (state.mode === 'slides') {
+    return createPortal(<SlidesAlone key={run} deck={deck} state={state} />, document.body)
+  }
+
+  return (
+    <>
+      {createPortal(<PresenterView key={run} deck={deck} state={state} />, document.body)}
+      {state.mode === 'displays' && audience && <Audience key={run} win={audience} deck={deck} state={state} />}
+    </>
+  )
 }
