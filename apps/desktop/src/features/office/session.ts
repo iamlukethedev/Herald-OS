@@ -258,9 +258,10 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     }
 
     const entry = tracked.get(doc.key)
-    const edits = entry?.edits ?? 0
     await doc.editor?.settle?.()
     const model = doc.editor?.snapshot() ?? doc.initial
+    // Counted after the snapshot, which puts in what was still being typed (a text box, speaker notes).
+    const edits = entry?.edits ?? 0
     const sameFile = target.path === doc.path
     const { bytes, losses } = await adapter.write(model, target.extension, target.extension === doc.format ? doc.layout : undefined)
 
