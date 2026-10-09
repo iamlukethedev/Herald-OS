@@ -20,7 +20,7 @@ const run = <T>(work: (target: SheetsTarget) => Promise<T> | T) => withHeadlessS
 
 describe('name rules', () => {
   it('takes the names Excel takes', () => {
-    for (const name of ['Total', '_rate', '\\path', 'Tax.Rate', 'Größe', 'Q1_2026', 'a?b', 'ABCD1', 'XFE1', 'x'.repeat(255)]) {
+    for (const name of ['Total', '_rate', '\\path', 'Tax.Rate', 'Größe', 'कीमत', 'Q1_2026', 'a?b', 'ABCD1', 'XFE1', 'x'.repeat(255)]) {
       expect(nameProblem(name), name).toBeNull()
     }
   })
@@ -178,5 +178,20 @@ describe('named ranges', () => {
     expect(result.selected).toBe('A1:A3')
     expect(result.formula).toBe('“Rate” stands for a formula (=0.07), not cells to go to')
     expect(snapshot.activeSheetId).toBe('s2')
+  })
+
+  it('says when a name’s cells are on a hidden sheet', async () => {
+    const { result } = await run(async (target) => {
+      await createName(target, { name: 'Sales', refersTo: "'Q1 sales'!A1:A3" })
+      target.workbook.getSheetByName('Q1 sales')!.hideSheet()
+
+      try {
+        return goToName(target, { name: 'Sales' })
+      } catch (error) {
+        return (error as Error).message
+      }
+    })
+
+    expect(result).toBe('“Sales” is on Q1 sales, which is hidden: show that sheet to go to it')
   })
 })

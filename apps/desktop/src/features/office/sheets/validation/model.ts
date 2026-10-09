@@ -268,10 +268,9 @@ function settingsOf(rule: IDataValidationRule, unitId: string, date1904: boolean
 /**
  * Set what a range takes: a list (items, or cells as source), whole or decimal numbers, dates
  * ("yyyy-mm-dd") or text lengths compared with an operator, a custom formula, or any value (for
- * an input message alone). Blanks are
- * allowed and lists show their arrow unless told not to; the input message shows when the cell
- * is selected; the error alert (stop by default; false for none) follows a value the rule does not
- * allow. Replaces the rules the range had; one step to undo.
+ * an input message alone). Blanks are allowed and lists show their arrow unless told not to; the
+ * input message shows when the cell is selected; the error alert (stop by default; false for
+ * none) follows a value the rule does not allow. Replaces the rules the range had; one step to undo.
  */
 export async function setValidation(target: SheetsTarget, args: { range: unknown; rule: unknown; sheet?: unknown; allowBlank?: unknown; dropdown?: unknown; input?: unknown; error?: unknown }): Promise<{ sheet: string; rules: ValidationSettings[] }> {
   const { sheet, range, cells } = rangeOf(target.workbook, args.range, args.sheet)

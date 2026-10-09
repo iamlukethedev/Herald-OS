@@ -285,6 +285,11 @@ export function goToName(target: SheetsTarget, args: { name: unknown; scope?: un
   }
 
   const sheet = areas[0].sheet
+
+  if (sheet.isSheetHidden()) {
+    throw new Error(`“${entry.name}” is on ${sheet.getSheetName()}, which is hidden: show that sheet to go to it`)
+  }
+
   const onSheet = areas.filter((area) => area.sheet.getSheetId() === sheet.getSheetId())
   target.workbook.setActiveSheet(sheet)
   const worksheet = sheet.getSheet()

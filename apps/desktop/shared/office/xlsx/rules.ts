@@ -718,7 +718,7 @@ export interface UDefinedName {
 export const WORKBOOK_SCOPE = 'AllDefaultWorkbook'
 
 const NAME_START = /^[\p{L}\p{Nl}_\\]/u
-const NAME_OTHER = /[^\p{L}\p{Nl}\p{Nd}_\\.?]/gu
+const NAME_OTHER = /[^\p{L}\p{M}\p{Nl}\p{Nd}\p{Pc}\\.?]/gu
 
 /** Why Excel does not take `name` as a defined name (as ECMA-376 has names), or null when it does. */
 export function nameProblem(name: string): string | null {
