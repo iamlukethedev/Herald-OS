@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { matches } from '../../../lib/shortcuts.ts'
 import { Menu, type MenuItemDef } from '../../files/Menu.tsx'
 import type { EditorHandle, OfficeDocument } from '../types.ts'
@@ -7,9 +7,11 @@ import { SlidesDocument } from './document.ts'
 import { describeElement } from './elements.ts'
 import { flushTyping, textSessionOf } from './editor/active.ts'
 import * as commands from './editor/commands.ts'
+import { MasterBar } from './editor/MasterBar.tsx'
+import { layoutInFront, readCustomThemes } from './editor/master-commands.ts'
 import { Rail } from './editor/Rail.tsx'
 import { isTyping, Stage, stageScales, useDeck } from './editor/Stage.tsx'
-import { isEmptyPlaceholder } from './layouts.ts'
+import { isEmptyPlaceholder, layoutOf, masterOf } from './layouts.ts'
 import { ALIGN_LABELS, type AlignEdge, ARRANGE_LABELS, setNotes, slideTitle } from './model.ts'
 import { decks, slidesSession } from './store.ts'
 import { tableText } from './tables.ts'
@@ -17,8 +19,16 @@ import { plainText } from './text.ts'
 
 /*
  * One deck in its window: the slides down the side, the slide in front with its speaker notes
- * under it, and the handle the Office shell saves, reloads and undoes through.
+ * under it, and the handle the Office shell saves, reloads and undoes through. In the master view
+ * the master and its layouts take the slides' place, with the master's bar over them.
  */
+
+/** In the master view, what is in front: the master itself, or one of its layouts. */
+function masterPlace(doc: SlidesDocument): string {
+  const layout = layoutInFront(doc)
+
+  return layout ? `the ${layoutOf(masterOf(doc.presentation), layout).name} layout` : 'the slide master'
+}
 
 const clip = (words: string, limit: number): string => {
   const line = words.replace(/\s+/g, ' ').trim()
@@ -39,8 +49,9 @@ function selectionOf(doc: SlidesDocument): string {
   const editing = typing ? findElement(doc.slide, typing.elementId) : undefined
   const picked = doc.selection.map((element) => `${describeElement(element).toLowerCase()}${wordsOf(element).trim() ? ` “${clip(wordsOf(element), 60)}”` : ''}`)
   const what = typed && editing ? `text “${clip(typed, 120)}” selected in the ${describeElement(editing).toLowerCase()}` : picked.length ? `${picked.slice(0, 3).join(', ')}${picked.length > 3 ? `, and ${picked.length - 3} more` : ''} selected` : ''
+  const place = doc.mode === 'master' ? `Editing ${masterPlace(doc)} in the master view` : `Slide ${doc.index + 1}${title ? `: “${clip(title, 60)}”` : ''}`
 
-  return `Slide ${doc.index + 1}${title ? `: “${clip(title, 60)}”` : ''}${what ? `, ${what}` : ''}`
+  return `${place}${what ? `, ${what}` : ''}`
 }
 
 function Notes({ doc }: { doc: SlidesDocument }) {
@@ -92,7 +103,8 @@ function StageMenu({ doc, at, onClose }: { doc: SlidesDocument; at: { x: number;
           label: selection.length > 1 ? 'Align' : 'Align to Slide',
           onSelect: () => {},
           submenu: (['left', 'center', 'right', 'top', 'middle', 'bottom'] as AlignEdge[]).map((edge) => ({ id: edge, label: ALIGN_LABELS[edge], onSelect: () => commands.alignSelection(edge) }))
-        }
+        },
+        ...commands.selectionMenuItems(doc)
       ]
     : [
         { id: 'text', label: 'New Text Box', onSelect: commands.insertText },
@@ -110,13 +122,20 @@ function StageMenu({ doc, at, onClose }: { doc: SlidesDocument; at: { x: number;
 export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
   const [doc] = useState(() => new SlidesDocument(officeDoc.initial, () => slidesSession.changed(officeDoc)))
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const mode = useSyncExternalStore(
+    (listener) => doc.subscribe(listener),
+    () => doc.mode
+  )
+
+  // The theme menus list the custom themes; the theme panel tells when they cannot be read.
+  useEffect(() => readCustomThemes(false), [])
 
   useEffect(() => {
     const handle: EditorHandle<Deck> = {
       snapshot: () => {
         flushTyping(doc)
 
-        return doc.history.present
+        return doc.presentation
       },
       load: (deck) => doc.reset(deck),
       undo: () => {
@@ -137,12 +156,26 @@ export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
           doc.redo()
         }
       },
-      status: () => `Slide ${doc.index + 1} of ${doc.deck.slides.length}`,
-      detail: () => {
-        const title = slideTitle(doc.slide)
-        const selected = doc.selection.map(describeElement)
+      status: () => {
+        if (doc.mode === 'master') {
+          const layout = layoutInFront(doc)
 
-        return `slide ${doc.index + 1} of ${doc.deck.slides.length}${title ? ` (“${title}”)` : ''}${selected.length ? `, ${selected.join(', ').toLowerCase()} selected` : ''}`
+          return layout ? `${layoutOf(masterOf(doc.presentation), layout).name} Layout` : 'Slide Master'
+        }
+
+        return `Slide ${doc.index + 1} of ${doc.deck.slides.length}`
+      },
+      detail: () => {
+        const selected = doc.selection.map(describeElement)
+        const picked = selected.length ? `, ${selected.join(', ').toLowerCase()} selected` : ''
+
+        if (doc.mode === 'master') {
+          return `the master view, ${masterPlace(doc)} in front${picked}`
+        }
+
+        const title = slideTitle(doc.slide)
+
+        return `slide ${doc.index + 1} of ${doc.deck.slides.length}${title ? ` (“${title}”)` : ''}${picked}`
       },
       selection: () => selectionOf(doc),
       zoom: (step) => {
@@ -164,7 +197,7 @@ export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
     return () => {
       off()
       // The deck outlives its view (a closed window keeps it until Herald quits).
-      officeDoc.initial = doc.history.present
+      officeDoc.initial = doc.presentation
 
       if (officeDoc.editor === handle) {
         slidesSession.attach(officeDoc, null)
@@ -195,9 +228,12 @@ export function SlideEditor({ doc: officeDoc }: { doc: OfficeDocument<Deck> }) {
     >
       <Rail doc={doc} />
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <Stage doc={doc} onContextMenu={setMenu} />
-        {menu && <StageMenu doc={doc} at={menu} onClose={() => setMenu(null)} />}
-        <Notes doc={doc} />
+        {mode === 'master' && <MasterBar doc={doc} />}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <Stage doc={doc} onContextMenu={setMenu} />
+          {menu && <StageMenu doc={doc} at={menu} onClose={() => setMenu(null)} />}
+        </div>
+        {mode === 'slides' && <Notes doc={doc} />}
       </div>
     </div>
   )

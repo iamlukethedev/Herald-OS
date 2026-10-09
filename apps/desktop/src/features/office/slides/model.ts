@@ -1,10 +1,65 @@
-import type { ArrowHead, Background, Box, Color, Deck, Fill, LayoutId, ListKind, ShapeKind, Slide, SlideElement, SlideSize, Stroke, TableElement, TextAlign, Theme, Transition } from './deck.ts'
+import type {
+  ArrowHead,
+  Background,
+  Box,
+  Color,
+  ConnectorEnd,
+  ConnectorPreset,
+  Deck,
+  Fill,
+  LayoutId,
+  ListKind,
+  Master,
+  ShapeKind,
+  Slide,
+  SlideElement,
+  SlideSize,
+  SlideTransition,
+  Stroke,
+  TableElement,
+  TextAlign,
+  Theme,
+  Transition
+} from './deck.ts'
 import { findElement, findSlide, newId, SLIDE_SIZES, withElements, withSlide } from './deck.ts'
-import { boundsOf, boundsOfAll, copyElement, coverCrop, DEFAULT_LINE, imageElement, keepOnSlide, lineElement, moveElement, type Point, shapeElement, textElement, withBox } from './elements.ts'
-import { changeLayout, isEmptyPlaceholder, LAYOUT_NAMES, newSlide, placeholderFor } from './layouts.ts'
-import { type CellRef, cellUnder, fillCells, insertColumn, insertRow, MAX_COLUMNS, MAX_ROWS, removeColumns, removeRows, ROW_HEIGHT, tableElement, withCell } from './tables.ts'
-import { DEFAULT_THEME, themeById } from './themes.ts'
+import { boundsOf, boundsOfAll, copyElement, coverCrop, DEFAULT_LINE, describeElement, imageElement, keepOnSlide, lineElement, moveElement, type Point, shapeElement, textElement, withBox, withEndsOnSlide } from './elements.ts'
+import { regroupCopies, tidyGroups } from './groups.ts'
+import { changeLayout, defaultMaster, isEmptyPlaceholder, LAYOUT_NAMES, masterOf, newSlide, placeholderFor } from './layouts.ts'
+import { connectionSites, relinkCopies, routeDeck, siteFacing } from './sites.ts'
+import { borderCells, type BorderSide, type CellRef, cellUnder, fillCells, insertColumn, insertRow, MAX_COLUMNS, MAX_ROWS, removeColumns, removeRows, ROW_HEIGHT, tableElement, withCell } from './tables.ts'
+import { DEFAULT_THEME, findTheme, sameBackground, sameTheme } from './themes.ts'
 import { MAX_LEVEL, plainText, textBody } from './text.ts'
+import { sameTransition } from './transitions.ts'
+
+export {
+  addLogo,
+  addMasterElements,
+  applyMasterDeck,
+  layoutSlideId,
+  type LogoCorner,
+  type LogoOptions,
+  MASTER_SLIDE_ID,
+  masterDeck,
+  type PlaceholderStyle,
+  removeMasterElements,
+  renameLayout,
+  resetMaster,
+  setHeaderFooter,
+  setLayoutBackground,
+  setMasterBackground,
+  setPlaceholderBox,
+  setPlaceholderStyle,
+  setShowMaster,
+  slideLayoutId
+} from './masters.ts'
+export { convertToShapes, expandToGroups, groupElements, regroupCopies, rotateElements, tidyGroups, ungroupElements, unitOf } from './groups.ts'
+export { connectionSites, nearestSite, relinkCopies, routeConnectors, routeDeck, siteFacing } from './sites.ts'
+export { gradientFill } from './elements.ts'
+export { borderCells, type BorderSide } from './tables.ts'
+export { editTheme, findTheme, type ThemePatch } from './themes.ts'
+export { transitionFor } from './transitions.ts'
+export { deckFromDocument, slidesFromDocument } from './from-document.ts'
+export { addSlideFromSheet, addTableFromSheet, formatNumber, sheetRange } from './from-sheet.ts'
 
 /*
  * What can be done to a deck, as pure functions: each takes a deck and gives the next one with the
@@ -26,8 +81,11 @@ const unchanged = (deck: Deck, label: string): DeckChange => ({ deck, label })
 
 export function newDeck(title: string, options: { size?: SlideSize; theme?: Theme } = {}): Deck {
   const size = options.size ?? SLIDE_SIZES.wide
+  const theme = options.theme ?? DEFAULT_THEME
+  // A theme's background is the master's, as applying the theme makes it.
+  const master = theme.background ? { master: { ...defaultMaster(size), background: theme.background } } : {}
 
-  return { id: newId('deck'), title, size: { ...size }, theme: options.theme ?? DEFAULT_THEME, transition: 'fade', slides: [newSlide('title', size)] }
+  return { id: newId('deck'), title, size: { ...size }, theme, transition: 'fade', ...master, slides: [newSlide('title', size)] }
 }
 
 function requireSlide(deck: Deck, slideId: string): Slide {
@@ -55,7 +113,7 @@ function linesToParagraphs(lines: readonly string[], list: ListKind | null | und
  * A slide's text element of a role, made from its layout's placeholder when the slide has none. A
  * slide's text is its body, or else its subtitle (a title or section slide) or caption.
  */
-function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth = 0): { slide: Slide; element: SlideElement } {
+function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth = 0, master?: Master): { slide: Slide; element: SlideElement } {
   const found = placeholderFor(slide, role, nth) ?? (role === 'body' && nth === 0 ? (placeholderFor(slide, 'subtitle') ?? placeholderFor(slide, 'caption')) : undefined)
 
   if (found) {
@@ -63,7 +121,7 @@ function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth =
   }
 
   const layout: LayoutId = role === 'title' ? (slide.layout === 'blank' ? 'title-only' : slide.layout) : slide.layout === 'title' || slide.layout === 'blank' || slide.layout === 'title-only' || slide.layout === 'section' ? 'title-content' : slide.layout
-  const moved = changeLayout(slide, layout, size)
+  const moved = changeLayout(slide, layout, size, master)
   const element = placeholderFor(moved, role, nth)
 
   if (!element) {
@@ -75,7 +133,7 @@ function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth =
 
 /** A new slide after `after` (at the end without one), with its title and text when given. */
 export function addSlide(deck: Deck, options: { layout?: LayoutId; after?: string | null; title?: string; body?: string | string[] } = {}): DeckChange & { slideId: string } {
-  const slide = newSlide(options.layout ?? 'title-content', deck.size)
+  const slide = newSlide(options.layout ?? 'title-content', deck.size, deck.master)
   const index = options.after ? deck.slides.findIndex((entry) => entry.id === options.after) + 1 : deck.slides.length
   const slides = [...deck.slides]
   slides.splice(index > 0 ? index : slides.length, 0, slide)
@@ -100,7 +158,14 @@ export function duplicateSlides(deck: Deck, ids: readonly string[]): DeckChange 
       return [slide]
     }
 
-    const copy: Slide = { ...slide, id: newId('slide'), elements: slide.elements.map(copyElement) }
+    const ids = new Map<string, string>()
+    const elements = slide.elements.map((element) => {
+      const copy = copyElement(element)
+      ids.set(element.id, copy.id)
+
+      return copy
+    })
+    const copy: Slide = { ...slide, id: newId('slide'), elements: relinkCopies(elements, ids) }
     copies.push(copy.id)
 
     return [slide, copy]
@@ -120,7 +185,7 @@ export function removeSlides(deck: Deck, ids: readonly string[]): DeckChange {
   }
 
   if (!slides.length) {
-    slides = [newSlide('blank', deck.size)]
+    slides = [newSlide('blank', deck.size, deck.master)]
   }
 
   const focus = slides[Math.min(first, slides.length - 1)].id
@@ -143,6 +208,26 @@ export function moveSlides(deck: Deck, ids: readonly string[], toIndex: number):
   return { deck: { ...deck, slides }, label: moving.length > 1 ? 'Move Slides' : 'Move Slide', focus: { slideId: moving[0].id } }
 }
 
+/** Whether some slides show their master's and layout's drawings (PowerPoint's "Hide background graphics" unticked). */
+export function setShowMasterOnSlides(deck: Deck, ids: readonly string[], show: boolean): DeckChange {
+  const wanted = new Set(ids)
+  const slides = deck.slides.map((slide) => {
+    if (!wanted.has(slide.id) || (slide.showMaster !== false) === show) {
+      return slide
+    }
+
+    const next: Slide = { ...slide, showMaster: false }
+
+    if (show) {
+      delete next.showMaster
+    }
+
+    return next
+  })
+
+  return { deck: { ...deck, slides }, label: show ? 'Show Background Graphics' : 'Hide Background Graphics' }
+}
+
 export function setHidden(deck: Deck, ids: readonly string[], hidden: boolean): DeckChange {
   const wanted = new Set(ids)
 
@@ -152,7 +237,7 @@ export function setHidden(deck: Deck, ids: readonly string[], hidden: boolean): 
 export function setLayout(deck: Deck, slideId: string, layout: LayoutId): DeckChange {
   requireSlide(deck, slideId)
 
-  return { deck: withSlide(deck, slideId, (slide) => changeLayout(slide, layout, deck.size)), label: 'Layout', focus: { selected: [] } }
+  return { deck: routeDeck(withSlide(deck, slideId, (slide) => changeLayout(slide, layout, deck.size, deck.master)), deck), label: 'Layout', focus: { selected: [] } }
 }
 
 /** A background for some slides, or all of them; null goes back to the theme's. */
@@ -170,7 +255,7 @@ export function setNotes(deck: Deck, slideId: string, notes: string): DeckChange
 
 /** The slide's title, in its title placeholder (the slide gets one from its layout if it has none). */
 export function setTitle(deck: Deck, slideId: string, text: string): DeckChange {
-  const { slide, element } = ensureText(requireSlide(deck, slideId), 'title', deck.size)
+  const { slide, element } = ensureText(requireSlide(deck, slideId), 'title', deck.size, 0, deck.master)
 
   if (element.kind !== 'text' && element.kind !== 'shape') {
     throw new Error('The title is not text')
@@ -189,7 +274,7 @@ export function setTitle(deck: Deck, slideId: string, text: string): DeckChange 
  * bullets unless `list` says otherwise (null for none).
  */
 export function setBody(deck: Deck, slideId: string, text: string | readonly string[], options: { list?: ListKind | null; nth?: number } = {}): DeckChange {
-  const { slide, element } = ensureText(requireSlide(deck, slideId), 'body', deck.size, options.nth ?? 0)
+  const { slide, element } = ensureText(requireSlide(deck, slideId), 'body', deck.size, options.nth ?? 0, deck.master)
 
   if (element.kind !== 'text' && element.kind !== 'shape') {
     throw new Error('That is not text')
@@ -205,15 +290,65 @@ export function setBody(deck: Deck, slideId: string, text: string | readonly str
   return { deck: withSlide(deck, slideId, () => next), label: 'Text', focus: { slideId, selected: [element.id] } }
 }
 
-/** A built-in theme by id, or a theme: everything naming a slot or a theme font takes the new one. */
-export function applyTheme(deck: Deck, theme: Theme | string): DeckChange {
-  const next = typeof theme === 'string' ? themeById(theme) : theme
+/** A slide with a theme of its own, or without one (null); a background that came with its old theme goes with it, and its new theme's comes in its place. */
+function withSlideTheme(slide: Slide, theme: Theme | null): Slide {
+  const old = slide.theme
+  const stays = old && theme ? sameTheme(old, theme) : old === undefined && theme === null
+
+  if (stays) {
+    return slide
+  }
+
+  let background = slide.background && old?.background && sameBackground(slide.background, old.background) ? null : slide.background
+
+  if (theme?.background && !background) {
+    background = theme.background
+  }
+
+  const next: Slide = { ...slide, background }
+
+  if (theme) {
+    next.theme = theme
+  } else {
+    delete next.theme
+  }
+
+  return next
+}
+
+/**
+ * A theme (a built-in or custom one by id, or a theme): everything naming a slot or a theme font
+ * takes the new one. For the whole deck (`all`, as when not said) slides' own themes go, and the
+ * master's background goes with the theme: a theme's background becomes the master's where the
+ * master had none or had the old theme's. For some slides, they get it as a theme of their own
+ * (none when it is the deck's).
+ */
+export function applyTheme(deck: Deck, theme: Theme | string, slides: readonly string[] | 'all' = 'all'): DeckChange {
+  const next = typeof theme === 'string' ? findTheme(theme) : theme
 
   if (!next) {
     throw new Error(`There is no theme called ${String(theme)}`)
   }
 
-  return next === deck.theme ? unchanged(deck, 'Theme') : { deck: { ...deck, theme: next }, label: 'Theme' }
+  if (slides !== 'all') {
+    const wanted = new Set(slides)
+    const own = sameTheme(next, deck.theme) ? null : next
+    const changed = deck.slides.map((slide) => (wanted.has(slide.id) ? withSlideTheme(slide, own) : slide))
+
+    return changed.every((slide, index) => slide === deck.slides[index]) ? unchanged(deck, 'Theme') : { deck: { ...deck, slides: changed }, label: 'Theme' }
+  }
+
+  const master = masterOf(deck)
+  const had = master.background
+  const background = next.background ? (!had || sameBackground(had, deck.theme.background) ? next.background : had) : had && sameBackground(had, deck.theme.background) ? null : had
+  const own = deck.slides.map((slide) => (slide.theme ? withSlideTheme(slide, null) : slide))
+  const slidesChanged = own.some((slide, index) => slide !== deck.slides[index])
+
+  if (next === deck.theme && background === had && !slidesChanged) {
+    return unchanged(deck, 'Theme')
+  }
+
+  return { deck: { ...deck, theme: next, ...(background !== had ? { master: { ...master, background } } : {}), slides: slidesChanged ? own : deck.slides }, label: 'Theme' }
 }
 
 /** A new slide size: everything is moved and widened in proportion across, and kept as tall. */
@@ -225,18 +360,57 @@ export function setSize(deck: Deck, size: SlideSize): DeckChange {
   const sx = size.width / deck.size.width
   const sy = size.height / deck.size.height
   const scale = (element: SlideElement): SlideElement => withBox(element, { x: element.x * sx, y: element.y * sy, width: element.width * sx, height: element.height * sy })
+  const master = deck.master && { ...deck.master, elements: deck.master.elements.map(scale), layouts: deck.master.layouts.map((layout) => ({ ...layout, elements: layout.elements.map(scale) })) }
 
-  return { deck: { ...deck, size: { ...size }, slides: deck.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scale) })) }, label: 'Slide Size' }
+  const next = { ...deck, size: { ...size }, ...(master ? { master } : {}), slides: deck.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scale) })) }
+
+  return { deck: routeDeck(next, deck), label: 'Slide Size' }
 }
 
-export const setTransition = (deck: Deck, transition: Transition): DeckChange => ({ deck: { ...deck, transition }, label: 'Transition' })
+/** The deck's transition kind, for every slide: slides' own transitions go. */
+export const setTransition = (deck: Deck, transition: Transition): DeckChange => ({
+  deck: { ...deck, transition, slides: deck.slides.some((slide) => slide.transition) ? deck.slides.map((slide) => withTransition(slide, null)) : deck.slides },
+  label: 'Transition'
+})
+
+function withTransition(slide: Slide, transition: SlideTransition | null): Slide {
+  if (sameTransition(slide.transition, transition ?? undefined)) {
+    return slide
+  }
+
+  const next = { ...slide }
+
+  if (transition) {
+    next.transition = transition
+  } else {
+    delete next.transition
+  }
+
+  return next
+}
+
+/** A transition of their own for some slides, or all of them; null gives them the deck's again. */
+export function setSlideTransition(deck: Deck, ids: readonly string[] | 'all', transition: SlideTransition | null): DeckChange {
+  const wanted = ids === 'all' ? null : new Set(ids)
+  const slides = deck.slides.map((slide) => (!wanted || wanted.has(slide.id) ? withTransition(slide, transition) : slide))
+
+  return slides.every((slide, index) => slide === deck.slides[index]) ? unchanged(deck, 'Transition') : { deck: { ...deck, slides }, label: 'Transition' }
+}
+
+/** A transition for every slide, its kind the deck's too (PowerPoint's Apply To All). */
+export function applyTransitionToAll(deck: Deck, transition: SlideTransition): DeckChange {
+  const slides = deck.slides.map((slide) => withTransition(slide, transition))
+
+  return deck.transition === transition.kind && slides.every((slide, index) => slide === deck.slides[index]) ? unchanged(deck, 'Transition') : { deck: { ...deck, transition: transition.kind, slides }, label: 'Transition' }
+}
 
 /** Elements added on top of a slide, kept at least partly on it. */
 export function insertElements(deck: Deck, slideId: string, elements: readonly SlideElement[], label: string): DeckChange {
   requireSlide(deck, slideId)
   const placed = elements.map((element) => keepOnSlide(element, deck.size))
+  const next = withSlide(deck, slideId, (slide) => ({ ...slide, elements: [...slide.elements, ...placed] }))
 
-  return { deck: withSlide(deck, slideId, (slide) => ({ ...slide, elements: [...slide.elements, ...placed] })), label, focus: { slideId, selected: placed.map((element) => element.id) } }
+  return { deck: routeDeck(next, deck), label, focus: { slideId, selected: placed.map((element) => element.id) } }
 }
 
 const middle = (deck: Deck, width: number, height: number): Box => ({ x: (deck.size.width - width) / 2, y: (deck.size.height - height) / 2, width, height })
@@ -337,6 +511,61 @@ export function addLine(deck: Deck, slideId: string, options: { from: Point; to:
   return { ...change, elementId: element.id }
 }
 
+export interface ConnectorOptions {
+  /** An end glued to an element's connection site (`connectionSites` numbers them), or a point on the slide. */
+  from: ConnectorEnd | Point
+  to: ConnectorEnd | Point
+  preset?: ConnectorPreset
+  stroke?: Stroke
+  start?: ArrowHead
+  end?: ArrowHead
+}
+
+/**
+ * A connector between two elements' connection sites (or points), straight unless a preset says
+ * otherwise; glued ends follow their elements as they move. A bent or curved one leaves its first
+ * glued end the way that site faces.
+ */
+export function addConnector(deck: Deck, slideId: string, options: ConnectorOptions): DeckChange & { elementId: string } {
+  const slide = requireSlide(deck, slideId)
+  const place = (end: ConnectorEnd | Point): { point: Point; glued?: ConnectorEnd; facing?: number } => {
+    if (Array.isArray(end)) {
+      return { point: [end[0], end[1]] }
+    }
+
+    const element = findElement(slide, end.element)
+
+    if (!element) {
+      throw new Error(`There is no element ${end.element} on that slide`)
+    }
+
+    const sites = connectionSites(element)
+    const point = sites[end.site]
+
+    if (!point) {
+      throw new Error(sites.length ? `${describeElement(element)} has connection sites 0 to ${sites.length - 1}` : `${describeElement(element)} has no connection sites`)
+    }
+
+    return { point, glued: { element: element.id, site: end.site }, facing: siteFacing(element, end.site) }
+  }
+  const from = place(options.from)
+  const to = place(options.to)
+  const preset = options.preset ?? 'straightConnector1'
+  const facing = from.facing ?? to.facing
+  const line = lineElement(from.point, to.point, {
+    stroke: options.stroke ?? DEFAULT_LINE,
+    start: options.start ?? 'none',
+    end: options.end ?? 'none',
+    connector: { preset, ...(from.glued ? { start: from.glued } : {}), ...(to.glued ? { end: to.glued } : {}) }
+  })
+  // DrawingML's bent and curved connectors leave their start across their box, so one that leaves upwards or downwards is turned a quarter.
+  const upright = preset !== 'straightConnector1' && facing !== undefined && Math.abs(Math.sin((facing * Math.PI) / 180)) > Math.SQRT1_2
+  const element = upright ? withEndsOnSlide({ ...line, rotation: 90 }, from.point, to.point) : line
+  const change = insertElements(deck, slideId, [element], 'New Connector')
+
+  return { ...change, elementId: element.id }
+}
+
 export interface TableOptions {
   rows: number
   columns: number
@@ -383,7 +612,7 @@ function changeTable(deck: Deck, slideId: string, tableId: string, label: string
     return { ...removeElements(deck, slideId, [tableId]), label: 'Delete Table' }
   }
 
-  return { deck: withElements(deck, slideId, new Set([tableId]), () => next), label, focus: { slideId, selected: [tableId] } }
+  return { deck: routeDeck(withElements(deck, slideId, new Set([tableId]), () => next), deck), label, focus: { slideId, selected: [tableId] } }
 }
 
 /** A cell's text (rows and columns count from 0), a paragraph a line with the cell's first paragraph's settings; a covered cell's goes to the merged cell over it. */
@@ -414,30 +643,43 @@ export const removeTableColumns = (deck: Deck, slideId: string, tableId: string,
 /** A fill for some cells of a table, or all of them; null for none. */
 export const setCellFill = (deck: Deck, slideId: string, tableId: string, cells: readonly CellRef[] | 'all', fill: Fill | null): DeckChange => changeTable(deck, slideId, tableId, 'Cell Fill', (table) => fillCells(table, cells, fill))
 
-/** Some elements changed alike, as one step called `label`. */
+/** A line (null for none) on some sides of some cells of a table, or all of them: a side of the cells together, their outside, the lines between them, or all. */
+export const setCellBorders = (deck: Deck, slideId: string, tableId: string, cells: readonly CellRef[] | 'all', sides: readonly BorderSide[], stroke: Stroke | null): DeckChange =>
+  changeTable(deck, slideId, tableId, 'Cell Borders', (table) => borderCells(table, cells, sides, stroke))
+
+/** Some elements changed alike, as one step called `label`; connectors glued to them follow. */
 export function updateElements(deck: Deck, slideId: string, ids: readonly string[], change: (element: SlideElement) => SlideElement, label: string): DeckChange {
   requireSlide(deck, slideId)
 
-  return { deck: withElements(deck, slideId, new Set(ids), change), label, focus: { slideId, selected: [...ids] } }
+  return { deck: routeDeck(withElements(deck, slideId, new Set(ids), change), deck), label, focus: { slideId, selected: [...ids] } }
 }
 
+/** Elements taken off a slide: their groups go when one member is left, and connectors glued to them come loose where they are. */
 export function removeElements(deck: Deck, slideId: string, ids: readonly string[]): DeckChange {
   const wanted = new Set(ids)
+  const next = withSlide(deck, slideId, (slide) => {
+    const left = slide.elements.filter((element) => !wanted.has(element.id))
+    const broken = new Set(slide.elements.flatMap((element) => (wanted.has(element.id) ? (element.group ?? []) : [])))
 
-  return { deck: withSlide(deck, slideId, (slide) => ({ ...slide, elements: slide.elements.filter((element) => !wanted.has(element.id)) })), label: 'Delete', focus: { slideId, selected: [] } }
+    return { ...slide, elements: broken.size ? tidyGroups(left, broken) : left }
+  })
+
+  return { deck: routeDeck(next, deck), label: 'Delete', focus: { slideId, selected: [] } }
 }
 
-/** Copies of elements (as they were), shifted by `offset` points, on top of the slide. */
+/** Copies of elements (as they were), shifted by `offset` points, on top of the slide: groups among them under new ids, connectors glued to the copies of what they were glued to. */
 export function pasteElements(deck: Deck, slideId: string, elements: readonly SlideElement[], offset = 0, label = 'Paste'): DeckChange {
+  const ids = new Map<string, string>()
   const copies = elements.map((element) => {
     const copy = copyElement(offset ? moveElement(element, offset, offset) : element)
     // A pasted placeholder is an ordinary element: the slide's own placeholder stays the one.
     delete copy.placeholder
+    ids.set(element.id, copy.id)
 
     return copy
   })
 
-  return insertElements(deck, slideId, copies, label)
+  return insertElements(deck, slideId, relinkCopies(regroupCopies(copies), ids), label)
 }
 
 export function duplicateElements(deck: Deck, slideId: string, ids: readonly string[], offset = 12): DeckChange {
@@ -501,7 +743,7 @@ export function align(deck: Deck, slideId: string, ids: readonly string[], edge:
     return moveElement(element, horizontal ? target - at : 0, horizontal ? 0 : target - at)
   }
 
-  return { deck: withElements(deck, slideId, new Set(ids), change), label: ALIGN_LABELS[edge], focus: { slideId, selected: [...ids] } }
+  return { deck: routeDeck(withElements(deck, slideId, new Set(ids), change), deck), label: ALIGN_LABELS[edge], focus: { slideId, selected: [...ids] } }
 }
 
 /** Three or more elements spread so the gaps between them are equal, across or down. */
@@ -531,7 +773,10 @@ export function distribute(deck: Deck, slideId: string, ids: readonly string[], 
   }
 
   return {
-    deck: withElements(deck, slideId, new Set(ids), (element) => moveElement(element, across ? (moves.get(element.id) ?? 0) : 0, across ? 0 : (moves.get(element.id) ?? 0))),
+    deck: routeDeck(
+      withElements(deck, slideId, new Set(ids), (element) => moveElement(element, across ? (moves.get(element.id) ?? 0) : 0, across ? 0 : (moves.get(element.id) ?? 0))),
+      deck
+    ),
     label,
     focus: { slideId, selected: [...ids] }
   }

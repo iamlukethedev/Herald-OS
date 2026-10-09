@@ -1,4 +1,4 @@
-import type { ArrowHead, Box, ImageElement, LineElement, ShapeElement, ShapeKind, SlideElement, SlideSize, Stroke, TextBody, TextElement } from './deck.ts'
+import type { ArrowHead, Box, Color, Fill, ImageElement, LineElement, ShapeElement, ShapeKind, SlideElement, SlideSize, Stroke, TextBody, TextElement } from './deck.ts'
 import { MIN_SIDE, newId } from './deck.ts'
 import { scaleTable } from './tables.ts'
 import { textBody } from './text.ts'
@@ -34,6 +34,18 @@ export function imageElement(src: string, natural: { width: number; height: numb
 }
 
 export const DEFAULT_LINE: Stroke = { color: 'tx1', width: 2, dash: 'solid' }
+
+/** A fill running from one colour to another: 90 degrees runs top to bottom, 0 left to right. */
+export const gradientFill = (from: Color, to: Color, angle = 90): Fill => ({
+  color: from,
+  gradient: {
+    stops: [
+      { at: 0, color: from },
+      { at: 1, color: to }
+    ],
+    angle
+  }
+})
 
 /** A line from one point to another: its box spans both, flipped where it runs right to left or upwards. */
 export function lineElement(from: Point, to: Point, patch: Partial<Omit<LineElement, 'x' | 'y' | 'width' | 'height'>> = {}): LineElement {
@@ -84,6 +96,29 @@ export function corners(box: Box, rotation = 0): Point[] {
   ]
 
   return points.map((point) => rotatePoint(point, middle, rotation))
+}
+
+/** Where a line starts and ends on the slide, its rotation included. */
+export function lineEndsOnSlide(line: LineElement): { from: Point; to: Point } {
+  const { from, to } = lineEnds(line)
+  const middle = center(line)
+
+  return { from: rotatePoint(from, middle, line.rotation), to: rotatePoint(to, middle, line.rotation) }
+}
+
+const tidy = (value: number): number => (Math.abs(value) < 1e-9 ? 0 : value)
+
+/** A line moved to run between two points on the slide, keeping its rotation: its box is the one that, turned by it, has those ends. */
+export function withEndsOnSlide(line: LineElement, from: Point, to: Point): LineElement {
+  if (!line.rotation) {
+    return withEnds(line, from, to)
+  }
+
+  const [dx, dy] = rotatePoint([to[0] - from[0], to[1] - from[1]], [0, 0], -line.rotation).map(tidy)
+  const width = Math.abs(dx)
+  const height = Math.abs(dy)
+
+  return { ...line, x: (from[0] + to[0]) / 2 - width / 2, y: (from[1] + to[1]) / 2 - height / 2, width, height, flipH: dx < 0, flipV: dy < 0 }
 }
 
 /** The upright box around points. */
@@ -153,8 +188,12 @@ export const ARROW_NAMES: Record<ArrowHead, string> = { none: 'None', triangle: 
 /** What an element is called in menus and in what Hermes is told. */
 export function describeElement(element: SlideElement): string {
   if (element.placeholder) {
-    return { title: 'Title', subtitle: 'Subtitle', body: 'Text', heading: 'Heading', caption: 'Caption', picture: 'Picture' }[element.placeholder.role]
+    return { title: 'Title', subtitle: 'Subtitle', body: 'Text', heading: 'Heading', caption: 'Caption', picture: 'Picture', date: 'Date', footer: 'Footer', number: 'Slide number' }[element.placeholder.role]
   }
 
-  return element.kind === 'text' ? 'Text box' : element.kind === 'image' ? 'Picture' : element.kind === 'line' ? 'Line' : element.kind === 'table' ? 'Table' : 'Shape'
+  if (element.kind === 'object') {
+    return { chart: 'Chart', diagram: 'SmartArt', ole: 'Embedded object', media: 'Media', other: 'Object' }[element.object]
+  }
+
+  return element.kind === 'text' ? 'Text box' : element.kind === 'image' ? 'Picture' : element.kind === 'line' ? (element.connector ? 'Connector' : 'Line') : element.kind === 'table' ? 'Table' : 'Shape'
 }

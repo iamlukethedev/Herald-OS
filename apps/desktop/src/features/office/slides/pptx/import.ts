@@ -5,20 +5,30 @@ import type {
   Background,
   BodyStyle,
   Box,
+  CellBorders,
   Color,
+  ConnectorEnd,
+  ConnectorPreset,
   Crop,
   Dash,
   Deck,
   Fill,
   FontRef,
+  FooterRole,
+  Gradient,
+  GradientStop,
   LayoutId,
+  LineElement,
+  Master as DeckMaster,
   NumberStyle,
+  ObjectKind,
   Paragraph,
   Placeholder,
   PlaceholderRole,
   ShapeKind,
   Slide,
   SlideElement,
+  SlideLayout,
   SlideSize,
   Slot,
   Stroke,
@@ -29,25 +39,32 @@ import type {
   Theme,
   Transition
 } from '../deck.ts'
-import { ARROW_HEADS, EMU_PER_POINT, LAYOUTS, newId, NUMBER_STYLES, SHAPE_KINDS, SLIDE_SIZES, SLOTS } from '../deck.ts'
+import { ARROW_HEADS, CONNECTOR_PRESETS, EMU_PER_POINT, LAYOUTS, newId, NUMBER_STYLES, SHAPE_KINDS, SLIDE_SIZES, SLOTS } from '../deck.ts'
 import { imageElement, lineElement, type Point, rotatePoint, shapeElement, textElement } from '../elements.ts'
-import { LAYOUT_NAMES, newSlide, PROMPTS } from '../layouts.ts'
+import { defaultMaster, LAYOUT_NAMES, newSlide, PROMPTS } from '../layouts.ts'
 import { MAX_COLUMNS, MAX_ROWS, settleSpans } from '../tables.ts'
 import { bulletFor, isBlank, MAX_LEVEL, numberingFor, ownStyle, paragraphIndent, tidyRuns } from '../text.ts'
+import { transitionFor } from '../transitions.ts'
 import { colorIn, isColorElement, OFFICE_SCHEME, type Paint, type Palette, readColorMap, readScheme, SCHEME_NAMES, themeColor } from './color.ts'
 import { imageSize } from './image-size.ts'
 import { placeholderNames } from './placeholders.ts'
-import { count, drop, emptyReport, type ImportReport, type ReportKind } from './report.ts'
+import { compareFooters, type FooterFound, footerFound, headerFooterFrom } from './read-footers.ts'
+import { readGeometry } from './read-geometry.ts'
+import { drawingId, drawingShapes, isLink, keptParts, relationshipIds, writtenXml } from './read-objects.ts'
+import { base64, byId, Package, partOf, type Relationship, remember, resolveTarget, targetOf } from './read-package.ts'
+import { readTransition, type TransitionRead } from './read-transitions.ts'
+import { count, drop, emptyReport, type ImportReport, note, type ReportKind } from './report.ts'
 import { attr, child, childrenNamed, descendants, elements, find, flagAttr, numberAttr, parseXml, textOf, xml, type XmlElement } from './xml.ts'
 
 /*
  * Reading a PowerPoint file (.pptx, and .pptm the same way) into a Herald deck. Parts are found
- * through their relationships, as PowerPoint finds them. Each slide's shapes are read back to front
- * with what their placeholders, layout, master and theme lend them, and become Herald's text boxes,
- * shapes, lines, pictures and tables (their styles worked out into each cell). What Herald has no
- * element for is shown as the nearest thing it has (a gradient as one colour, a group as its
- * members) or left out, and the report counts every element once, as kept, approximated or left
- * out, with the reasons.
+ * through their relationships, as PowerPoint finds them. The master most slides use becomes the
+ * deck's, with a layout for each of Herald's; each slide's shapes are read back to front with what
+ * their placeholders, layout, master and theme lend them, and become Herald's text boxes, shapes,
+ * lines and connectors, pictures, tables (their styles worked out into each cell) and the objects
+ * it keeps as they were (charts, SmartArt, embedded objects). What Herald has no element for is
+ * shown as the nearest thing it has (a pattern as one colour) or left out, and the report counts
+ * every element once, as kept, approximated or left out, with the reasons.
  */
 
 /** How deep groups may nest before what is deeper is left out. */
@@ -57,18 +74,17 @@ const MAX_DEPTH = 32
 const WHY = {
   hidden: 'hidden objects left out',
   unreadable: 'objects that could not be read left out',
-  grouped: 'grouped elements kept as separate elements',
   nested: 'groups nested too deeply left out',
   nearestShape: 'shapes Herald does not draw shown as the nearest shape it does',
   customShape: 'custom shapes drawn as rectangles',
-  gradient: 'gradient fills shown as a solid colour',
+  gradient: 'gradient lines and text shown in one colour',
   pattern: 'pattern fills shown as a solid colour',
   pictureShape: 'shapes filled with a picture shown as the picture',
   pictureFill: 'picture fills shown as a colour',
   effects: 'shadows and other effects left out',
   objectLinks: 'links on objects left out',
   lineText: 'text on lines left out',
-  connectors: 'connectors drawn straight',
+  straight: 'connectors Herald does not draw shown straight',
   customDash: 'custom dashes shown as plain dashes',
   links: 'links kept as plain text',
   scripts: 'superscript and subscript shown as ordinary text',
@@ -88,19 +104,22 @@ const WHY = {
   video: 'videos shown as their poster frame',
   sound: 'sounds left out',
   ole: 'embedded objects shown as their picture',
+  oleBox: 'embedded objects without a picture shown as a box (kept in the file as they were)',
+  chartBox: 'charts shown as a box (kept in the file as they were)',
+  diagramBox: 'SmartArt without a drawing shown as a box (kept in the file as it was)',
   format: 'pictures in formats Herald cannot show',
   missing: 'pictures missing from the file left out',
   linked: 'pictures linked from outside the file left out',
   emptyTables: 'tables without cells left out',
   bigTables: 'table rows and columns past 75 left out',
   tableStyles: 'table styles not in the file shown as the default table style',
-  tableBorders: 'table borders shown as one kind of line for the whole table',
   diagonals: 'diagonal lines in table cells left out',
   turnedTables: 'turned tables shown upright',
   backgroundStretch: 'background pictures fill the slide without stretching',
   backgroundTiles: 'tiled backgrounds shown as one picture',
-  radial: 'radial gradient backgrounds shown as linear ones',
-  transitions: 'transitions (Herald uses one transition for the whole deck)'
+  transitions: 'transitions shown as the nearest one Herald plays',
+  footers: 'dates, footers and slide numbers shown as most slides have them',
+  graphics: 'background graphics shown on slides that did not show them'
 } as const
 
 const FILLS: ReadonlySet<string> = new Set(['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill'])
@@ -125,25 +144,33 @@ const GROUPS: Record<string, string> = {
 
 /** Presets Herald does not draw, by the shape of its own they look most like (anything else is a rectangle). */
 const NEAREST: Record<string, ShapeKind> = {
-  ...each('rect', 'flowChartProcess flowChartPredefinedProcess flowChartInternalStorage'),
-  ...each('roundRect', 'flowChartAlternateProcess flowChartTerminator round1Rect round2SameRect round2DiagRect snipRoundRect snip1Rect snip2SameRect snip2DiagRect plaque'),
-  ...each('diamond', 'flowChartDecision flowChartSort'),
-  ...each('ellipse', 'flowChartConnector flowChartOr flowChartSummingJunction donut heptagon decagon dodecagon cloud pie chord teardrop smileyFace noSmoking blockArc'),
-  ...each('star5', 'star4 star6 star7 star8 star10 star12 star16 star24 star32 irregularSeal1 irregularSeal2'),
+  round2DiagRect: 'round2SameRect',
+  snip2DiagRect: 'snip2SameRect',
+  snipRoundRect: 'snip1Rect',
+  pieWedge: 'pie',
+  flowChartOfflineStorage: 'flowChartMerge',
+  ...each('trapezoid', 'nonIsoscelesTrapezoid funnel'),
+  ...each('can', 'flowChartMagneticDrum flowChartDirectAccessStorage'),
+  ...each('star8', 'star7 irregularSeal1 irregularSeal2'),
+  ...each('star12', 'star16 star24 star32'),
+  ...each('blockArc', 'circularArrow leftCircularArrow leftRightCircularArrow'),
   ...each(
-    'wedgeRoundRectCallout',
-    'wedgeEllipseCallout cloudCallout callout1 callout2 callout3 accentCallout1 accentCallout2 accentCallout3 borderCallout1 borderCallout2 borderCallout3 accentBorderCallout1 accentBorderCallout2 accentBorderCallout3'
+    'wedgeRectCallout',
+    'callout1 callout2 callout3 accentCallout1 accentCallout2 accentCallout3 borderCallout1 borderCallout2 borderCallout3 accentBorderCallout1 accentBorderCallout2 accentBorderCallout3'
   ),
-  ...each('rightArrow', 'notchedRightArrow stripedRightArrow rightArrowCallout curvedRightArrow bentArrow'),
+  ...each('rightArrow', 'rightArrowCallout curvedRightArrow swooshArrow'),
   ...each('leftArrow', 'leftArrowCallout curvedLeftArrow'),
-  ...each('upArrow', 'upArrowCallout curvedUpArrow bentUpArrow'),
+  ...each('upArrow', 'upArrowCallout curvedUpArrow bentUpArrow leftUpArrow'),
   ...each('downArrow', 'downArrowCallout curvedDownArrow'),
   ...each('leftRightArrow', 'leftRightArrowCallout'),
-  ...each('parallelogram', 'flowChartInputOutput'),
-  ...each('trapezoid', 'flowChartManualOperation nonIsoscelesTrapezoid'),
-  ...each('hexagon', 'flowChartPreparation'),
-  ...each('triangle', 'flowChartExtract'),
-  ...each('plus', 'quadArrow mathPlus')
+  ...each('upDownArrow', 'upDownArrowCallout'),
+  ...each('quadArrow', 'quadArrowCallout leftRightUpArrow'),
+  ...each('hexagon', 'gear6'),
+  ...each('decagon', 'gear9'),
+  ...each(
+    'bevel',
+    'actionButtonBlank actionButtonHome actionButtonHelp actionButtonInformation actionButtonForwardNext actionButtonBackPrevious actionButtonEnd actionButtonBeginning actionButtonReturn actionButtonDocument actionButtonSound actionButtonMovie'
+  )
 }
 
 /** Presets drawn as a line from corner to corner of their box. */
@@ -180,6 +207,9 @@ const CONTENT: ReadonlySet<string> = new Set(['body', 'obj', 'chart', 'tbl', 'cl
 
 /** Date, footer, slide number and header placeholders. */
 const FOOTERS: ReadonlySet<string> = new Set(['dt', 'ftr', 'sldNum', 'hdr'])
+
+/** The date, footer and slide number placeholders, by the role Herald gives each. */
+const FOOTER_TYPES: Record<string, FooterRole> = { dt: 'date', ftr: 'footer', sldNum: 'number' }
 
 /** What Herald's layouts call the body placeholders that PowerPoint's leave as plain text. */
 const BODY_ROLES: Partial<Record<LayoutId, PlaceholderRole>> = { section: 'subtitle', comparison: 'heading', 'picture-caption': 'caption' }
@@ -220,9 +250,6 @@ const WINGDINGS: Record<string, string> = { '§': '▪', 'q': '❑', 'v': '❖',
 
 const SYMBOL_FONTS = /wingdings|webdings|symbol|marlett/i
 
-/** Transitions that move the slide, which Herald's push stands for. */
-const PUSHES: ReadonlySet<string> = new Set(['push', 'wipe', 'cover', 'pull', 'split', 'reveal', 'randomBar', 'strips', 'blinds', 'checker', 'comb', 'pan', 'conveyor', 'ferris', 'gallery', 'switch', 'flip', 'doors', 'window'])
-
 /** Timing behaviours that animate something. */
 const ANIMATIONS = ['p:anim', 'p:animClr', 'p:animEffect', 'p:animMotion', 'p:animRot', 'p:animScale', 'p:set', 'p:cmd']
 
@@ -245,6 +272,12 @@ const EMPTY_PARAGRAPH = xml('a:p')
 /** A line with nothing to draw it with, kept so it can be given a colour. */
 const UNSEEN: Stroke = { color: 'tx1', width: 0.75, dash: 'solid', alpha: 0 }
 
+/** The theme's background colour as a background of its own, for a slide or layout showing it over one that differs. */
+const THEME_BACKGROUND: Background = { kind: 'solid', color: 'bg1' }
+
+/** The graphic frames Herald keeps as they were, as the object each becomes. */
+const KEPT: Partial<Record<ReportKind, ObjectKind>> = { chart: 'chart', smartart: 'diagram', ole: 'ole' }
+
 const round2 = (value: number): number => Math.round(value * 100) / 100 || 0
 
 const pt = (emu: number): number => round2(emu / EMU_PER_POINT)
@@ -257,136 +290,12 @@ function degrees(value: number): number {
   return turned === 360 ? 0 : turned
 }
 
-function remember<T>(cache: Map<string, Promise<T>>, key: string, make: () => Promise<T>): Promise<T> {
-  let entry = cache.get(key)
-
-  if (!entry) {
-    entry = make()
-    cache.set(key, entry)
-  }
-
-  return entry
-}
-
 function attempt<T>(read: () => T, fallback: T): T {
   try {
     return read()
   } catch {
     // A structure too deep to walk counts as having nothing.
     return fallback
-  }
-}
-
-interface Relationship {
-  id: string
-  /** The type URI's last segment, such as `slide`, `image` or `notesSlide`. */
-  type: string
-  /** The target's path in the zip, or its URL when it is outside the file. */
-  target: string
-  external: boolean
-}
-
-/** Where a relationship's target is in the zip: from its source part's folder, or from the root when it starts with `/`. */
-function resolveTarget(source: string, target: string): string {
-  const path = target.replace(/\\/g, '/')
-  const parts = path.startsWith('/') ? [] : source.split('/').slice(0, -1)
-
-  for (const piece of path.split('/')) {
-    if (piece === '..') {
-      parts.pop()
-    } else if (piece && piece !== '.') {
-      parts.push(piece)
-    }
-  }
-
-  return parts.join('/')
-}
-
-function relationshipsPart(part: string): string {
-  const slash = part.lastIndexOf('/')
-
-  return `${part.slice(0, slash + 1)}_rels/${part.slice(slash + 1)}.rels`
-}
-
-function readRelationships(root: XmlElement | undefined, part: string): Relationship[] {
-  return childrenNamed(root, 'Relationship').flatMap((entry) => {
-    const id = attr(entry, 'Id')
-    const type = attr(entry, 'Type') ?? ''
-    const target = attr(entry, 'Target')
-    const external = attr(entry, 'TargetMode') === 'External'
-
-    return id && target ? [{ id, type: type.slice(type.lastIndexOf('/') + 1), target: external ? target : resolveTarget(part, target), external }] : []
-  })
-}
-
-const targetOf = (relationships: readonly Relationship[], type: string): string | undefined => relationships.find((entry) => entry.type === type && !entry.external)?.target
-
-const byId = (relationships: readonly Relationship[], id: string | undefined): Relationship | undefined => (id ? relationships.find((entry) => entry.id === id) : undefined)
-
-const partOf = (relationships: readonly Relationship[], id: string | undefined): string | undefined => {
-  const relationship = byId(relationships, id)
-
-  return relationship && !relationship.external ? relationship.target : undefined
-}
-
-function decodePath(path: string): string {
-  try {
-    return decodeURIComponent(path)
-  } catch {
-    // A `%` that starts no escape is part of the name.
-    return path
-  }
-}
-
-/** The zip's parts, each read and parsed once. */
-class Package {
-  private readonly parsed = new Map<string, Promise<XmlElement | undefined>>()
-  private readonly related = new Map<string, Promise<Relationship[]>>()
-  private lowerCase: Map<string, string> | null = null
-
-  constructor(private readonly zip: JSZip) {}
-
-  /** A file by its path, or by the same path URL-decoded or in other letter case (as some tools write names). */
-  file(path: string): JSZip.JSZipObject | null {
-    if (!path) {
-      return null
-    }
-
-    const plain = decodePath(path)
-    const exact = this.zip.file(path) ?? this.zip.file(plain)
-
-    if (exact) {
-      return exact
-    }
-
-    this.lowerCase ??= new Map(Object.keys(this.zip.files).map((name) => [name.toLowerCase(), name]))
-    const name = this.lowerCase.get(path.toLowerCase()) ?? this.lowerCase.get(plain.toLowerCase())
-
-    return name ? this.zip.file(name) : null
-  }
-
-  /** A part's XML, or nothing when it is missing or is not XML. */
-  xml(path: string | undefined): Promise<XmlElement | undefined> {
-    return path ? remember(this.parsed, path, () => this.parse(path)) : Promise.resolve(undefined)
-  }
-
-  /** A part's relationships with their targets resolved; none when it has no relationships part. */
-  relationships(part: string): Promise<Relationship[]> {
-    return remember(this.related, part, async () => readRelationships(await this.xml(relationshipsPart(part)), part))
-  }
-
-  private async parse(path: string): Promise<XmlElement | undefined> {
-    const file = this.file(path)
-
-    if (!file) {
-      return undefined
-    }
-
-    try {
-      return parseXml(await file.async('string'))
-    } catch {
-      return undefined
-    }
   }
 }
 
@@ -416,16 +325,43 @@ function readTheme(root: XmlElement | undefined): ThemeInfo {
   }
 }
 
-const themeOf = (theme: ThemeInfo, slots: Record<Slot, string>): Theme => ({
-  id: 'imported',
+const themeOf = (theme: ThemeInfo, slots: Record<Slot, string>, id = 'imported'): Theme => ({
+  id,
   name: theme.name,
   colors: Object.fromEntries(SLOTS.map((slot) => [slot, theme.scheme[slots[slot]] ?? OFFICE_SCHEME[slots[slot]] ?? '#000000'])) as Record<Slot, string>,
   fonts: { ...theme.fonts }
 })
 
-/** A shape tree's children, with markup-compatibility choices made: the fallback where there is one, else the first choice. */
+/** The scheme colour each slot holds under a colour map: the backgrounds and text as it maps them, the accents as themselves. */
+const slotsOf = (map: Record<string, string>): Record<Slot, string> => Object.fromEntries(SLOTS.map((slot) => [slot, slot.startsWith('accent') ? slot : map[slot]])) as Record<Slot, string>
+
+/** Graphic frames a markup choice offers that Herald keeps, by the `mc:AlternateContent` they were chosen from. */
+const CHOSEN = new WeakMap<XmlElement, XmlElement>()
+
+/** A markup choice's chart or SmartArt frame, which Herald keeps over the fallback's stand-in for it. */
+function keptChoice(alternate: XmlElement): XmlElement | undefined {
+  return childrenNamed(alternate, 'mc:Choice')
+    .map((choice) => child(choice, 'p:graphicFrame'))
+    .find((frame) => frame !== undefined && /\/(chart|chartex|diagram)$/.test(attr(find(frame, 'a:graphic/a:graphicData'), 'uri') ?? ''))
+}
+
+/** A shape tree's children, with markup-compatibility choices made: a chart or SmartArt Herald keeps, else the fallback where there is one, else the first choice. */
 function treeChildren(tree: XmlElement | undefined, depth = 0): XmlElement[] {
-  return elements(tree).flatMap((node) => (node.name !== 'mc:AlternateContent' ? [node] : depth < MAX_DEPTH ? treeChildren(child(node, 'mc:Fallback') ?? child(node, 'mc:Choice'), depth + 1) : []))
+  return elements(tree).flatMap((node) => {
+    if (node.name !== 'mc:AlternateContent') {
+      return [node]
+    }
+
+    const kept = keptChoice(node)
+
+    if (kept) {
+      CHOSEN.set(kept, node)
+
+      return [kept]
+    }
+
+    return depth < MAX_DEPTH ? treeChildren(child(node, 'mc:Fallback') ?? child(node, 'mc:Choice'), depth + 1) : []
+  })
 }
 
 /** The element holding a shape's non-visual properties (`p:nvSpPr`, `p:nvPicPr`…). */
@@ -446,35 +382,40 @@ function placeholdersOf(root: XmlElement | undefined): PlaceholderShape[] {
   })
 }
 
+/** A master's or layout's drawings: its shape tree's children that are not placeholders. */
+const drawingsOf = (root: XmlElement | undefined): XmlElement[] => treeChildren(find(root, 'p:cSld/p:spTree')).filter((node) => !STRUCTURE.has(node.name) && !find(nonVisual(node), 'p:nvPr/p:ph'))
+
+/** Whether a drawing shows the number of the slide it is on. */
+const showsNumber = (node: XmlElement): boolean => descendants(node, 'a:fld').some((field) => attr(field, 'type') === 'slidenum')
+
 type TextKind = 'title' | 'body' | 'other'
-
-interface Fonts {
-  heading: FontRef
-  body: FontRef
-}
-
-const THEME_FONTS: Fonts = { heading: '+heading', body: '+body' }
 
 /** The scheme colours the deck theme's slots can hold: all but the two link colours. */
 const SLOT_COLORS = SCHEME_NAMES.filter((name) => name !== 'hlink' && name !== 'folHlink')
 
-interface Master {
+/** A master's or layout's part and its drawings, which slides show behind their own. */
+interface Template {
   path: string
   root: XmlElement | undefined
   relationships: Relationship[]
+  drawings: XmlElement[]
+  /** Those of its drawings that show the slide number, which each slide shows as its own (Herald's text has no fields). */
+  numbered: XmlElement[]
+}
+
+interface Master extends Template {
   theme: ThemeInfo
   map: Record<string, string>
-  /** Whether its colours are the deck theme's, so theme colours stay slots. */
-  slots: boolean
-  fonts: Fonts
+  /** The scheme colour each slot holds on its slides: the deck theme's, or its own theme's when its slides have a theme of their own. */
+  slots: Record<Slot, string>
+  /** The theme its slides have, when its theme is not the deck's. */
+  own?: Theme
   placeholders: PlaceholderShape[]
   styles: Record<TextKind, XmlElement | undefined>
 }
 
-interface Layout {
-  path: string
+interface Layout extends Template {
   root: XmlElement
-  relationships: Relationship[]
   master: Master
   map: Record<string, string>
   placeholders: PlaceholderShape[]
@@ -493,12 +434,12 @@ interface Context {
   size: SlideSize
   /** The presentation's default text style, under every other. */
   defaults: XmlElement | undefined
-  /** The deck theme, from the first slide master's theme part. */
+  /** The deck theme, from the theme of the master most slides use. */
   theme: ThemeInfo
   /** The scheme colour each slot of the deck theme holds. */
   slots: Record<Slot, string>
-  /** The first slide master, or a stand-in for a file without one. */
-  first: Master
+  /** The master most slides use, which becomes the deck's; or a stand-in for a file without one. */
+  main: Master
   masters: Map<string, Promise<Master | undefined>>
   layouts: Map<string, Promise<Layout | undefined>>
   pictures: Map<string, Promise<Loaded>>
@@ -506,22 +447,31 @@ interface Context {
   tableStyles: Map<string, XmlElement>
   /** Masters and layouts whose shapes are counted already, and backgrounds whose approximations are. */
   counted: Set<string>
+  /** The masters and layouts (by part) whose drawings the deck's master draws on slides of each layout. */
+  drawn: Map<LayoutId, string[]>
+  /** The background the deck's master gives slides of each layout; null is the theme's background colour. */
+  backgrounds: Map<LayoutId, Background | null>
 }
 
-function masterOf(deck: ThemeInfo, path: string, root: XmlElement | undefined, relationships: Relationship[], theme: ThemeInfo): Master {
+function masterOf(deck: Pick<Context, 'theme' | 'slots'>, path: string, root: XmlElement | undefined, relationships: Relationship[], theme: ThemeInfo): Master {
   const styles = child(root, 'p:txStyles')
-  const sameFonts = theme.fonts.heading === deck.fonts.heading && theme.fonts.body === deck.fonts.body
+  const map = readColorMap(child(root, 'p:clrMap'))
+  const same = SLOT_COLORS.every((name) => theme.scheme[name] === deck.theme.scheme[name]) && theme.fonts.heading === deck.theme.fonts.heading && theme.fonts.body === deck.theme.fonts.body
+  const slots = same ? deck.slots : slotsOf(map)
+  const drawings = drawingsOf(root)
 
   return {
     path,
     root,
     relationships,
     theme,
-    map: readColorMap(child(root, 'p:clrMap')),
-    slots: SLOT_COLORS.every((name) => theme.scheme[name] === deck.scheme[name]),
-    fonts: sameFonts ? THEME_FONTS : theme.fonts,
+    map,
+    slots,
+    ...(same ? {} : { own: themeOf(theme, slots, `imported-${path.slice(path.lastIndexOf('/') + 1).replace(/\.xml$/i, '')}`) }),
     placeholders: placeholdersOf(root),
-    styles: { title: child(styles, 'p:titleStyle'), body: child(styles, 'p:bodyStyle'), other: child(styles, 'p:otherStyle') }
+    styles: { title: child(styles, 'p:titleStyle'), body: child(styles, 'p:bodyStyle'), other: child(styles, 'p:otherStyle') },
+    drawings,
+    numbered: drawings.filter(showsNumber)
   }
 }
 
@@ -536,7 +486,7 @@ function masterAt(ctx: Context, path: string): Promise<Master | undefined> {
     const relationships = await ctx.pkg.relationships(path)
     const theme = await ctx.pkg.xml(targetOf(relationships, 'theme'))
 
-    return masterOf(ctx.theme, path, root, relationships, theme ? readTheme(theme) : ctx.theme)
+    return masterOf(ctx, path, root, relationships, theme ? readTheme(theme) : ctx.theme)
   })
 }
 
@@ -568,11 +518,12 @@ function layoutAt(ctx: Context, path: string): Promise<Layout | undefined> {
 
     const relationships = await ctx.pkg.relationships(path)
     const masterPath = targetOf(relationships, 'slideMaster')
-    const master = (masterPath ? await masterAt(ctx, masterPath) : undefined) ?? ctx.first
+    const master = (masterPath ? await masterAt(ctx, masterPath) : undefined) ?? ctx.main
     const placeholders = placeholdersOf(root)
     const type = attr(root, 'type')
     const byType = type ? LAYOUT_TYPES[type] : undefined
     const byName = LAYOUT_BY_NAME[(attr(child(root, 'p:cSld'), 'name') ?? '').trim().toLowerCase()]
+    const drawings = drawingsOf(root)
 
     return {
       path,
@@ -583,9 +534,24 @@ function layoutAt(ctx: Context, path: string): Promise<Layout | undefined> {
       placeholders,
       showsMaster: flagAttr(root, 'showMasterSp') !== false,
       id: byType ?? byName ?? layoutFrom(placeholders),
-      named: !byType && byName !== undefined
+      named: !byType && byName !== undefined,
+      drawings,
+      numbered: drawings.filter(showsNumber)
     }
   })
+}
+
+interface LinkEnd {
+  /** The shape's id in the file (`p:cNvPr`). */
+  id: string
+  site: number
+}
+
+/** A connector whose ends are glued to shapes, found once every shape it may name is read. */
+interface Link {
+  line: string
+  start?: LinkEnd
+  end?: LinkEnd
 }
 
 interface Scope {
@@ -594,15 +560,26 @@ interface Scope {
   /** The relationships of the part whose shapes these are, for its pictures. */
   relationships: Relationship[]
   palette: Palette
-  fonts: Fonts
   /** Text's colour where nothing says: `tx1` under this colour map. */
   text: Color
   master: Master
+  /** A slide's layout, or the layout whose own shapes these are. */
   layout: Layout | undefined
-  /** A slide's own shapes: placeholders are drawn, with what the layout and master lend them. */
-  slide: boolean
+  /**
+   * What the shapes are read as: a slide's own (its placeholders drawn with what they inherit, its
+   * date, footer and slide number noted), a master's or layout's own (placeholders as the empty
+   * places they are), or a master's or layout's drawings copied onto a slide (placeholders left out).
+   */
+  mode: 'slide' | 'template' | 'copy'
   /** The slide's number, for slide number fields. */
   number: number
+  /** The part the shapes are in, as read, for keeping an object's XML as it was written. */
+  part?: { path: string; root: XmlElement }
+  /** Herald's id for each shape read, by its id in the file, for gluing connectors. */
+  ids: Map<string, string>
+  links: Link[]
+  /** The date, footer and slide number placeholders a slide carries. */
+  footers: FooterFound[]
 }
 
 /**
@@ -730,7 +707,7 @@ function tally(report: ImportReport, kind: ReportKind, issues: ReadonlySet<strin
   count(report, kind, first ? 'approximated' : 'imported', first)
 
   for (const reason of rest) {
-    report.reasons[reason] = (report.reasons[reason] ?? 0) + 1
+    note(report, reason)
   }
 }
 
@@ -743,7 +720,7 @@ function noteOnce(ctx: Context, key: string, reasons: ReadonlySet<string>): void
   ctx.counted.add(key)
 
   for (const reason of reasons) {
-    ctx.report.reasons[reason] = (ctx.report.reasons[reason] ?? 0) + 1
+    note(ctx.report, reason)
   }
 }
 
@@ -829,6 +806,26 @@ function inheritance(ph: XmlElement, scope: Scope): Inherited {
   }
 }
 
+/**
+ * What a master's or layout's own placeholder takes: a layout's from its master's (matched by
+ * kind), a master's from nothing but itself; its date, footer and slide number keep their roles.
+ */
+function templateInheritance(ph: XmlElement, scope: Scope): Inherited {
+  const type = attr(ph, 'type') ?? 'obj'
+  const own = scope.layout?.placeholders.find((shape) => shape.ph === ph)
+  const master = scope.layout ? matching(scope.master.placeholders, type, undefined) : undefined
+  const role = FOOTER_TYPES[type] ?? writtenRole(scope.layout, own) ?? roleOf(type, scope.layout?.id)
+
+  return {
+    layout: undefined,
+    master: master?.element,
+    type,
+    text: titleLike(type) ? 'title' : FOOTERS.has(type) ? 'other' : 'body',
+    role,
+    prompt: role ? (FOOTER_TYPES[type] ? PROMPTS[role] : (customPrompt(own) ?? PROMPTS[role])) : ''
+  }
+}
+
 const alphaOf = (paint: Paint): { alpha?: number } => (paint.alpha < 1 ? { alpha: Math.round(paint.alpha * 1000) / 1000 } : {})
 
 const fillOf = (paint: Paint | null): Fill | null => (paint ? { color: paint.color, ...alphaOf(paint) } : null)
@@ -851,6 +848,24 @@ function gradientStop(gradient: XmlElement, palette: Palette, placeholder: Paint
   return colorIn(stops.length > 2 ? stops[Math.floor(stops.length / 2)] : stops[0], palette, placeholder)
 }
 
+/** A gradient's stops in order along it, each with its colour and opacity. */
+function gradientStops(gradient: XmlElement, palette: Palette, placeholder: Paint | null): GradientStop[] {
+  return childrenNamed(child(gradient, 'a:gsLst'), 'a:gs')
+    .flatMap((stop) => {
+      const paint = colorIn(stop, palette, placeholder)
+
+      return paint ? [{ at: clamp01(numberAttr(stop, 'pos', 0) / 100000), color: paint.color, ...alphaOf(paint) }] : []
+    })
+    .sort((a, b) => a.at - b.at)
+}
+
+/** A gradient fill (`a:gradFill`) as Herald's: along its line's angle, or spreading from the middle for a path gradient; null with fewer than two stops. */
+function gradientOf(fill: XmlElement, palette: Palette, placeholder: Paint | null): Gradient | null {
+  const stops = gradientStops(fill, palette, placeholder)
+
+  return stops.length > 1 ? { stops, angle: degrees(numberAttr(child(fill, 'a:lin'), 'ang', 5400000) / 60000), ...(child(fill, 'a:path') ? { radial: true } : {}) } : null
+}
+
 interface FillRead {
   fill: Fill | null
   /** A picture fill (`a:blipFill`), which only a picture can show. */
@@ -864,9 +879,9 @@ function readFill(element: XmlElement | undefined, palette: Palette, placeholder
   }
 
   if (element?.name === 'a:gradFill') {
-    issues.add(WHY.gradient)
+    const gradient = gradientOf(element, palette, placeholder)
 
-    return { fill: fillOf(gradientStop(element, palette, placeholder)) }
+    return { fill: gradient ? { color: gradient.stops[0].color, gradient } : fillOf(gradientStop(element, palette, placeholder)) }
   }
 
   if (element?.name === 'a:pattFill') {
@@ -882,10 +897,16 @@ function readFill(element: XmlElement | undefined, palette: Palette, placeholder
   return element?.name === 'a:grpFill' && group ? readFill(group, palette, placeholder, issues) : { fill: null }
 }
 
+/** A line style reference's theme line: `idx` 1 and up picks a line style, and 0 none. */
+function themeLine(ref: XmlElement | undefined, theme: ThemeInfo): XmlElement | undefined {
+  const idx = Math.round(numberAttr(ref, 'idx', 0))
+
+  return idx > 0 ? (theme.lines[idx - 1] ?? theme.lines.at(-1) ?? THEME_LINE) : undefined
+}
+
 /** A shape's outline: its own over the theme line style its style refers to. */
 function lineProps(props: XmlElement | undefined, style: XmlElement | undefined, theme: ThemeInfo): XmlElement | undefined {
-  const idx = Math.round(numberAttr(child(style, 'a:lnRef'), 'idx', 0))
-  const themed = idx > 0 ? (theme.lines[idx - 1] ?? theme.lines.at(-1) ?? THEME_LINE) : undefined
+  const themed = themeLine(child(style, 'a:lnRef'), theme)
   const own = child(props, 'a:ln')
 
   return themed || own ? overlay('a:ln', [themed, own]) : undefined
@@ -1017,16 +1038,17 @@ interface Draft {
   look: RunLook
 }
 
-function fontOf(typeface: string | undefined, fonts: Fonts): FontRef | undefined {
+/** A typeface as Herald's font: the theme's heading or body font (`+mj-lt`, `+mn-ea`…), or the family. */
+function fontOf(typeface: string | undefined): FontRef | undefined {
   if (!typeface) {
     return undefined
   }
 
   if (typeface.startsWith('+mj')) {
-    return fonts.heading
+    return '+heading'
   }
 
-  return typeface.startsWith('+mn') ? fonts.body : typeface
+  return typeface.startsWith('+mn') ? '+body' : typeface
 }
 
 function readRun(text: string, props: XmlElement, sources: TextSources, scope: Scope, issues: Set<string>): Draft {
@@ -1036,7 +1058,7 @@ function readRun(text: string, props: XmlElement, sources: TextSources, scope: S
   const highlight = colorIn(child(props, 'a:highlight'), scope.palette)
   const cap = attr(props, 'cap')
   const look: RunLook = {
-    font: fontOf(attr(child(props, 'a:latin'), 'typeface'), scope.fonts) ?? (sources.title ? scope.fonts.heading : scope.fonts.body),
+    font: fontOf(attr(child(props, 'a:latin'), 'typeface')) ?? (sources.title ? '+heading' : '+body'),
     size: size > 0 ? round2(size / 100) : 18,
     color: paint?.color ?? scope.text,
     bold: flagAttr(props, 'b') ?? false,
@@ -1271,21 +1293,8 @@ function readBody(txBody: XmlElement | undefined, sources: TextSources, scope: S
   }
 }
 
-function base64(bytes: Uint8Array): string {
-  let binary = ''
-
-  for (let at = 0; at < bytes.length; at += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000))
-  }
-
-  return btoa(binary)
-}
-
 async function readImage(pkg: Package, path: string): Promise<Loaded> {
-  const bytes = await pkg
-    .file(path)
-    ?.async('uint8array')
-    .catch(() => undefined)
+  const bytes = await pkg.bytes(path)
 
   if (!bytes) {
     return { reason: WHY.missing }
@@ -1337,15 +1346,27 @@ function lineFrom(placement: Placement, inverted: boolean): { from: Point; to: P
   return { from, to }
 }
 
-function readLine(props: XmlElement, style: XmlElement | undefined, info: XmlElement | undefined, placement: Placement, preset: string, scope: Scope, issues: Set<string>): SlideElement {
+const isConnector = (preset: string | undefined): preset is ConnectorPreset => CONNECTOR_PRESETS.includes(preset as ConnectorPreset)
+
+/**
+ * A line, or a connector when `connector` says how it runs: a straight one from corner to corner
+ * of its box with its turn folded into its ends, a bent or curved one in its box as it is turned
+ * and flipped, which its preset runs through.
+ */
+function readLine(props: XmlElement, style: XmlElement | undefined, info: XmlElement | undefined, placement: Placement, preset: string, scope: Scope, issues: Set<string>, connector?: ConnectorPreset): LineElement {
   const theme = scope.master.theme
   const outline = lineProps(props, style, theme)
   const stroke = readStroke(outline, scope.palette, colorIn(child(style, 'a:lnRef'), scope.palette), issues) ?? { ...UNSEEN }
-  const { from, to } = lineFrom(placement, preset === 'lineInv')
-  const line = lineElement(from, to, { stroke, start: arrowOf(child(outline, 'a:headEnd')), end: arrowOf(child(outline, 'a:tailEnd')), ...nameOf(info) })
+  const look = { stroke, start: arrowOf(child(outline, 'a:headEnd')), end: arrowOf(child(outline, 'a:tailEnd')), ...nameOf(info) }
+  const adjust = connector ? adjustOf(child(props, 'a:prstGeom')) : undefined
+  let line: LineElement
 
-  if (preset !== 'line' && preset !== 'lineInv' && preset !== 'straightConnector1') {
-    issues.add(WHY.connectors)
+  if (connector && connector !== 'straightConnector1') {
+    line = { ...lineElement([0, 0], [0, 0], look), ...boxOf(placement), rotation: degrees(placement.rotation), flipH: placement.flipH, flipV: placement.flipV }
+  } else {
+    const { from, to } = lineFrom(placement, preset === 'lineInv')
+    const straight = lineElement(from, to, look)
+    line = { ...straight, x: round2(straight.x), y: round2(straight.y), width: round2(straight.width), height: round2(straight.height) }
   }
 
   if (hasEffects(props, style, theme)) {
@@ -1354,16 +1375,19 @@ function readLine(props: XmlElement, style: XmlElement | undefined, info: XmlEle
 
   tally(scope.report, 'line', issues)
 
-  return { ...line, x: round2(line.x), y: round2(line.y), width: round2(line.width), height: round2(line.height) }
+  return connector ? { ...line, connector: { preset: connector, ...(adjust ? { adjust } : {}) } } : line
 }
 
-async function readShape(sp: XmlElement, scope: Scope, at: readonly Transform[], group: XmlElement | undefined): Promise<SlideElement[]> {
+async function readShape(sp: XmlElement, given: Scope, at: readonly Transform[], group: XmlElement | undefined): Promise<SlideElement[]> {
   const nv = child(sp, 'p:nvSpPr')
   const info = child(nv, 'p:cNvPr')
   const ph = find(nv, 'p:nvPr/p:ph')
   const textBox = flagAttr(child(nv, 'p:cNvSpPr'), 'txBox') === true
+  const template = ph !== undefined && given.mode === 'template'
+  // A master's or layout's placeholders are places for slides' text, not elements a slide shows.
+  const scope = template ? { ...given, report: emptyReport() } : given
 
-  if (ph && !scope.slide) {
+  if (ph && scope.mode === 'copy') {
     return []
   }
 
@@ -1373,7 +1397,27 @@ async function readShape(sp: XmlElement, scope: Scope, at: readonly Transform[],
     return []
   }
 
-  const from = ph ? inheritance(ph, scope) : undefined
+  const from = ph ? (template ? templateInheritance(ph, scope) : inheritance(ph, scope)) : undefined
+  const footer = from && scope.mode === 'slide' ? FOOTER_TYPES[from.type] : undefined
+
+  if (template && !from?.role) {
+    return []
+  }
+
+  if (footer) {
+    const text = child(sp, 'p:txBody')
+    const found = footerFound(footer, childrenNamed(text, 'a:p').map(paragraphText).join('\n'), descendants(text, 'a:fld').map((field) => attr(field, 'type') ?? ''))
+    const own = find(sp, 'p:spPr/a:xfrm')
+    const placed = [from?.layout, from?.master].map((layer) => find(layer, 'p:spPr/a:xfrm')).find((entry) => entry !== undefined)
+    const moved = own !== undefined && JSON.stringify(boxOf(placementOf(own))) !== JSON.stringify(boxOf(placementOf(placed)))
+
+    if (found) {
+      scope.footers.push(moved ? { ...found, moved } : found)
+    }
+
+    return []
+  }
+
   const layers = [from?.master, from?.layout, sp]
   const props = shapeProps(layers.map((layer) => child(layer, 'p:spPr')))
   const style = layers.map((layer) => child(layer, 'p:style')).findLast((entry) => entry !== undefined)
@@ -1388,13 +1432,13 @@ async function readShape(sp: XmlElement, scope: Scope, at: readonly Transform[],
       issues.add(WHY.lineText)
     }
 
-    return [readLine(props, style, info, placement, preset, scope, issues)]
+    return [readLine(props, style, info, placement, preset, scope, issues, preset !== 'straightConnector1' && isConnector(preset) ? preset : undefined)]
   }
 
   const fillRef = child(style, 'a:fillRef')
   const read = readFill(elements(props).find((node) => FILLS.has(node.name)) ?? themeFill(fillRef, theme), scope.palette, colorIn(fillRef, scope.palette), issues, group)
   const stroke = readStroke(lineProps(props, style, theme), scope.palette, colorIn(child(style, 'a:lnRef'), scope.palette), issues)
-  const body = readBody(child(sp, 'p:txBody'), textSources(scope, from, sp, style), scope, issues)
+  const body = readBody(template ? undefined : child(sp, 'p:txBody'), textSources(scope, from, sp, style), scope, issues)
   const box = boxOf(placement)
   const frame = frameOf(placement, info)
   const placeholder: Placeholder | undefined = from?.role ? { role: from.role, prompt: from.prompt } : undefined
@@ -1449,16 +1493,18 @@ async function readShape(sp: XmlElement, scope: Scope, at: readonly Transform[],
   }
 
   const known = preset !== undefined && SHAPE_KINDS.includes(preset as ShapeKind)
-  const kind: ShapeKind = known ? (preset as ShapeKind) : (NEAREST[preset ?? 'rect'] ?? 'rect')
+  const extent = find(props, 'a:xfrm/a:ext')
+  const outline = custom ? readGeometry(custom, Math.max(0, numberAttr(extent, 'cx', 0)), Math.max(0, numberAttr(extent, 'cy', 0))) : null
+  const kind: ShapeKind = known ? (preset as ShapeKind) : outline ? 'rect' : (NEAREST[preset ?? 'rect'] ?? 'rect')
   const adjust = known ? adjustOf(child(props, 'a:prstGeom')) : undefined
 
-  if (!known) {
+  if (!known && !outline) {
     issues.add(custom ? WHY.customShape : WHY.nearestShape)
   }
 
   tally(scope.report, 'shape', issues)
 
-  return [shapeElement(kind, box, { ...frame, fill, stroke, body, ...(adjust ? { adjust } : {}), ...(placeholder ? { placeholder } : {}) })]
+  return [shapeElement(kind, box, { ...frame, fill, stroke, body, ...(adjust ? { adjust } : {}), ...(outline ? { paths: outline } : {}), ...(placeholder ? { placeholder } : {}) })]
 }
 
 /** A preset's adjust values (`a:gd fmla="val 16667"`) by guide name. */
@@ -1497,7 +1543,7 @@ async function readPicture(pic: XmlElement, scope: Scope, at: readonly Transform
   const info = frame ? find(frame, 'p:nvGraphicFramePr/p:cNvPr') : child(nv, 'p:cNvPr')
   const ph = find(nv, 'p:nvPr/p:ph')
 
-  if (ph && !scope.slide) {
+  if (ph && scope.mode !== 'slide') {
     return []
   }
 
@@ -1550,8 +1596,10 @@ async function readPicture(pic: XmlElement, scope: Scope, at: readonly Transform
   return [imageElement(loaded.src, loaded.natural, boxOf(placement), { ...frameOf(placement, info), stroke, ...(crop ? { crop } : {}), ...(alt ? { alt } : {}), ...(placeholder ? { placeholder } : {}) })]
 }
 
+/** A connector (`p:cxnSp`): how it runs, and the shapes its ends are glued to, found once the slide's shapes are read. */
 async function readConnector(connector: XmlElement, scope: Scope, at: readonly Transform[]): Promise<SlideElement[]> {
-  const info = find(connector, 'p:nvCxnSpPr/p:cNvPr')
+  const nv = child(connector, 'p:nvCxnSpPr')
+  const info = child(nv, 'p:cNvPr')
   const props = child(connector, 'p:spPr') ?? xml('p:spPr')
 
   if (flagAttr(info, 'hidden')) {
@@ -1561,10 +1609,32 @@ async function readConnector(connector: XmlElement, scope: Scope, at: readonly T
   }
 
   const placement = place(placementOf(child(props, 'a:xfrm')), at)
+  const preset = child(props, 'a:custGeom') ? 'custom' : (attr(child(props, 'a:prstGeom'), 'prst') ?? 'line')
+  const issues = new Set<string>()
 
-  return [readLine(props, child(connector, 'p:style'), info, placement, attr(child(props, 'a:prstGeom'), 'prst') ?? 'line', scope, new Set())]
+  if (!isConnector(preset) && preset !== 'line' && preset !== 'lineInv') {
+    issues.add(WHY.straight)
+  }
+
+  const line = readLine(props, child(connector, 'p:style'), info, placement, preset, scope, issues, isConnector(preset) ? preset : 'straightConnector1')
+  const glued = child(nv, 'p:cNvCxnSpPr')
+  const end = (name: string): LinkEnd | undefined => {
+    const site = child(glued, name)
+    const id = attr(site, 'id')
+
+    return id ? { id, site: Math.max(0, Math.round(numberAttr(site, 'idx', 0))) } : undefined
+  }
+  const start = end('a:stCxn')
+  const finish = end('a:endCxn')
+
+  if (start || finish) {
+    scope.links.push({ line: line.id, ...(start ? { start } : {}), ...(finish ? { end: finish } : {}) })
+  }
+
+  return [line]
 }
 
+/** A group's members, placed through its transform, each told it is in the group (and the groups around it). */
 async function readGroup(group: XmlElement, scope: Scope, at: readonly Transform[], depth: number, fill: XmlElement | undefined): Promise<SlideElement[]> {
   const props = child(group, 'p:grpSpPr')
   const own = elements(props).find((node) => FILLS.has(node.name))
@@ -1581,9 +1651,35 @@ async function readGroup(group: XmlElement, scope: Scope, at: readonly Transform
     return []
   }
 
-  count(scope.report, 'group', 'approximated', WHY.grouped)
+  count(scope.report, 'group', 'imported')
 
-  return walk(treeChildren(group), scope, [...at, groupTransform(child(props, 'a:xfrm'))], depth + 1, own && own.name !== 'a:grpFill' ? own : fill)
+  const id = newId('group')
+  const members = await walk(treeChildren(group), scope, [...at, groupTransform(child(props, 'a:xfrm'))], depth + 1, own && own.name !== 'a:grpFill' ? own : fill)
+
+  return members.map((member) => ({ ...member, group: [id, ...(member.group ?? [])] }))
+}
+
+/** Connectors glued to the shapes their ends name, among those read with them. */
+function glue(elements: readonly SlideElement[], scope: Scope): SlideElement[] {
+  const links = new Map(scope.links.map((link) => [link.line, link]))
+  const end = (at: LinkEnd | undefined): ConnectorEnd | undefined => {
+    const element = at ? scope.ids.get(at.id) : undefined
+
+    return element && at ? { element, site: at.site } : undefined
+  }
+
+  return elements.map((element) => {
+    const link = element.kind === 'line' && element.connector ? links.get(element.id) : undefined
+
+    if (!link || element.kind !== 'line' || !element.connector) {
+      return element
+    }
+
+    const start = end(link.start)
+    const finish = end(link.end)
+
+    return start || finish ? { ...element, connector: { ...element.connector, ...(start ? { start } : {}), ...(finish ? { end: finish } : {}) } } : element
+  })
 }
 
 const frameKind = (uri: string): ReportKind =>
@@ -1615,29 +1711,62 @@ const DEFAULT_STYLE = parseXml(
   `<a:tblStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" styleId="${DEFAULT_TABLE_STYLE}"><a:wholeTbl><a:tcTxStyle><a:fontRef idx="minor"/><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle><a:tcBdr>${STYLE_SIDES.map((side) => `<${side}>${styleLine(12700)}</${side}>`).join('')}</a:tcBdr>${styleFill(20000)}</a:tcStyle></a:wholeTbl><a:band1H><a:tcStyle>${styleFill(40000)}</a:tcStyle></a:band1H><a:band1V><a:tcStyle>${styleFill(40000)}</a:tcStyle></a:band1V>${styleEdge('lastCol')}${styleEdge('firstCol')}${styleEdge('lastRow', 'top')}${styleEdge('firstRow', 'bottom')}</a:tblStyle>`
 )
 
+/** A cell's sides, in the order of its own lines (`a:lnL`, `a:lnR`, `a:lnT`, `a:lnB`). */
+const SIDES = ['left', 'right', 'top', 'bottom'] as const
+
+type Side = (typeof SIDES)[number]
+
+/** A run of rows or columns, from the first to the last. */
+type Span = [number, number]
+
+/** A part of a table style and the block of cells it styles, whose outer sides take its outer lines and whose sides within take its inside lines. */
+interface StylePart {
+  part: XmlElement
+  rows: Span
+  columns: Span
+}
+
 /** The parts of a table style that reach a cell, the most general first, as PowerPoint lays them over each other. */
-function styleParts(style: XmlElement | undefined, flags: TableFlags, row: number, column: number, rows: number, columns: number): XmlElement[] {
+function styleParts(style: XmlElement | undefined, flags: TableFlags, row: number, column: number, rows: number, columns: number): StylePart[] {
   const firstRow = flags.firstRow && row === 0
   const lastRow = flags.lastRow && row === rows - 1
   const firstCol = flags.firstCol && column === 0
   const lastCol = flags.lastCol && column === columns - 1
   const across = row - (flags.firstRow ? 1 : 0)
   const down = column - (flags.firstCol ? 1 : 0)
-  const names = [
-    'a:wholeTbl',
-    flags.bandCol && !firstCol && !lastCol ? (down % 2 ? 'a:band2V' : 'a:band1V') : '',
-    flags.bandRow && !firstRow && !lastRow ? (across % 2 ? 'a:band2H' : 'a:band1H') : '',
-    firstCol ? 'a:firstCol' : '',
-    lastCol ? 'a:lastCol' : '',
-    firstRow ? 'a:firstRow' : '',
-    lastRow ? 'a:lastRow' : ''
+  const allRows: Span = [0, rows - 1]
+  const allColumns: Span = [0, columns - 1]
+  const names: [string, Span, Span][] = [
+    ['a:wholeTbl', allRows, allColumns],
+    [flags.bandCol && !firstCol && !lastCol ? (down % 2 ? 'a:band2V' : 'a:band1V') : '', allRows, [column, column]],
+    [flags.bandRow && !firstRow && !lastRow ? (across % 2 ? 'a:band2H' : 'a:band1H') : '', [row, row], allColumns],
+    [firstCol ? 'a:firstCol' : '', allRows, [0, 0]],
+    [lastCol ? 'a:lastCol' : '', allRows, [columns - 1, columns - 1]],
+    [firstRow ? 'a:firstRow' : '', [0, 0], allColumns],
+    [lastRow ? 'a:lastRow' : '', [rows - 1, rows - 1], allColumns]
   ]
 
-  return names.flatMap((name) => {
+  return names.flatMap(([name, spanRows, spanColumns]) => {
     const part = name ? child(style, name) : undefined
 
-    return part ? [part] : []
+    return part ? [{ part, rows: spanRows, columns: spanColumns }] : []
   })
+}
+
+/** The line a table style gives a side of a cell reaching across `rows` and `columns`: the last part's that says, undefined when none does. */
+function styleSide(parts: readonly StylePart[], side: Side, rows: Span, columns: Span, scope: Scope, issues: Set<string>): Stroke | null | undefined {
+  for (const entry of [...parts].reverse()) {
+    const edge = side === 'left' ? columns[0] === entry.columns[0] : side === 'right' ? columns[1] === entry.columns[1] : side === 'top' ? rows[0] === entry.rows[0] : rows[1] === entry.rows[1]
+    const border = find(entry.part, `a:tcStyle/a:tcBdr/${edge ? `a:${side}` : side === 'left' || side === 'right' ? 'a:insideV' : 'a:insideH'}`)
+    const ref = child(border, 'a:lnRef')
+    const line = child(border, 'a:ln') ?? themeLine(ref, scope.master.theme)
+
+    if (line) {
+      return readStroke(line, scope.palette, colorIn(ref, scope.palette), issues)
+    }
+  }
+
+  return undefined
 }
 
 /** A table style part's text look (`a:tcTxStyle`) as a list style, to lay under a cell's own. */
@@ -1724,9 +1853,9 @@ const strokeKey = (stroke: Stroke | null): string => (stroke ? `${stroke.color} 
 
 /**
  * A table (`a:tbl`) as Herald's: its grid, rows at least as tall as their text, and cells with
- * merged ones whole, the table's style worked out into each cell's fill and text. Its borders
- * become the one line Herald draws them all with: the kind most used, the cells' own or else the
- * style's.
+ * merged ones whole, the table's style worked out into each cell's fill, text and lines. The line
+ * most sides have (a cell's own, else its style's) becomes the table's, and each cell keeps the
+ * sides that differ from it.
  */
 function readTable(frame: XmlElement, tbl: XmlElement, scope: Scope, at: readonly Transform[]): SlideElement[] {
   const info = find(frame, 'p:nvGraphicFramePr/p:cNvPr')
@@ -1751,8 +1880,6 @@ function readTable(frame: XmlElement, tbl: XmlElement, scope: Scope, at: readonl
   const back = elements(tblPr).find((node) => FILLS.has(node.name))
   const sx = own.width ? placement.width / own.width : 1
   const sy = own.height ? placement.height / own.height : 1
-  const sides: (Stroke | null | undefined)[] = []
-  const styleLines: (Stroke | null)[] = []
 
   if (grid.length > MAX_COLUMNS || trs.length > MAX_ROWS) {
     issues.add(WHY.bigTables)
@@ -1766,44 +1893,61 @@ function readTable(frame: XmlElement, tbl: XmlElement, scope: Scope, at: readonl
     issues.add(WHY.tableStyles)
   }
 
-  const cells = Array.from({ length: down }, (_, r) => {
+  const reads = Array.from({ length: down }, (_, r) => {
     const tcs = childrenNamed(trs[r], 'a:tc')
 
     return Array.from({ length: across }, (_, c) => {
       const parts = styleParts(style, flags, r, c, down, across)
-      const read = readCell(tcs[c], parts, back, scope, issues)
-      sides.push(...read.sides)
 
-      for (const side of parts.flatMap((part) => STYLE_SIDES.map((name) => find(part, `a:tcStyle/a:tcBdr/${name}/a:ln`)))) {
-        if (side) {
-          styleLines.push(readStroke(side, scope.palette, null, issues))
-        }
-      }
-
-      return read.cell
+      return { ...readCell(tcs[c], parts.map((entry) => entry.part), back, scope, issues), parts }
     })
   })
-  const settled = settleSpans(cells, across)
-  const written = sides.filter((side): side is Stroke | null => side !== undefined)
-  const kinds = new Map<string, { stroke: Stroke | null; uses: number }>()
+  const settled = settleSpans(reads.map((row) => row.map((read) => read.cell)), across)
+  const lines = settled.map((row, r) =>
+    row.map((cell, c) => {
+      const read = reads[r][c]
+      const spanRows: Span = [r, r + (cell.rowSpan ?? 1) - 1]
+      const spanColumns: Span = [c, c + (cell.colSpan ?? 1) - 1]
 
-  for (const line of written.length ? written : styleLines) {
-    const kind = kinds.get(strokeKey(line)) ?? { stroke: line, uses: 0 }
-    kind.uses++
-    kinds.set(strokeKey(line), kind)
+      return SIDES.map((side, index) => (read.sides[index] !== undefined ? read.sides[index] : (styleSide(read.parts, side, spanRows, spanColumns, scope, issues) ?? null)))
+    })
+  )
+  const kinds = new Map<string, { stroke: Stroke; uses: number }>()
+
+  for (const [r, row] of settled.entries()) {
+    for (const [c, cell] of row.entries()) {
+      for (const line of cell.merged ? [] : lines[r][c]) {
+        if (line) {
+          const kind = kinds.get(strokeKey(line)) ?? { stroke: line, uses: 0 }
+          kind.uses++
+          kinds.set(strokeKey(line), kind)
+        }
+      }
+    }
   }
 
-  if (kinds.size > 1) {
-    issues.add(WHY.tableBorders)
-  }
+  const stroke = [...kinds.values()].sort((a, b) => b.uses - a.uses)[0]?.stroke ?? null
+  const cells = settled.map((row, r) =>
+    row.map((cell, c): TableCell => {
+      const borders: CellBorders = {}
 
+      SIDES.forEach((side, index) => {
+        const line = lines[r][c][index]
+
+        if (!cell.merged && strokeKey(line) !== strokeKey(stroke)) {
+          borders[side] = line
+        }
+      })
+
+      return Object.keys(borders).length ? { ...cell, borders } : cell
+    })
+  )
   const columns = Array.from({ length: across }, (_, c) => round2(Math.max(1, (grid[c] ? pt(numberAttr(grid[c], 'w', 0)) : own.width / across) * sx)))
   const rows = Array.from({ length: down }, (_, r) => {
     const needed = Math.max(0, ...settled[r].map((cell) => (cell.merged || (cell.rowSpan ?? 1) > 1 ? 0 : textHeight(cell.body))))
 
     return round2(Math.max(1, pt(numberAttr(trs[r], 'h', 0)) * sy, needed))
   })
-  const stroke = [...kinds.values()].filter((kind) => kind.stroke).sort((a, b) => b.uses - a.uses)[0]?.stroke ?? null
   const table: TableElement = {
     id: newId('table'),
     kind: 'table',
@@ -1815,7 +1959,7 @@ function readTable(frame: XmlElement, tbl: XmlElement, scope: Scope, at: readonl
     ...nameOf(info),
     columns,
     rows,
-    cells: settled,
+    cells,
     stroke
   }
 
@@ -1824,7 +1968,88 @@ function readTable(frame: XmlElement, tbl: XmlElement, scope: Scope, at: readonl
   return [table]
 }
 
-async function readFrame(frame: XmlElement, scope: Scope, at: readonly Transform[]): Promise<SlideElement[]> {
+/** A diagram's drawing (the shapes PowerPoint last laid it out as), read as a slide's shapes are but counted with the diagram. */
+async function diagramShapes(scope: Scope, drawing: Relationship): Promise<SlideElement[]> {
+  const root = await scope.ctx.pkg.xml(drawing.target)
+
+  if (!root) {
+    return []
+  }
+
+  const relationships = await scope.ctx.pkg.relationships(drawing.target)
+  const shapes = await readTree(drawingShapes(root), { ...scope, relationships, report: emptyReport(), mode: 'copy', part: undefined, ids: new Map(), links: [] })
+
+  return shapes.filter((shape) => shape.kind !== 'object')
+}
+
+/**
+ * A chart, SmartArt or embedded object kept as it was: its frame's XML (with the markup choice
+ * around it, if it came from one) and the parts it names, shown as its picture or drawing; null
+ * when it cannot be kept, as it is then shown as before.
+ */
+async function readObject(frame: XmlElement, data: XmlElement | undefined, kind: ReportKind, scope: Scope, at: readonly Transform[]): Promise<SlideElement[] | null> {
+  const object = KEPT[kind]
+  const part = scope.part
+
+  if (!object || !part) {
+    return null
+  }
+
+  const pkg = scope.ctx.pkg
+  const wrapper = CHOSEN.get(frame)
+  const node = wrapper ?? frame
+  const written = await pkg.source(part.path)
+  const source = written ? writtenXml(part.root, written, node) : null
+
+  if (!source) {
+    return null
+  }
+
+  const diagram = object === 'diagram' ? await pkg.xml(partOf(scope.relationships, attr(child(data, 'dgm:relIds'), 'r:dm'))) : undefined
+  const named = byId(scope.relationships, drawingId(diagram))
+  const drawing = named && !named.external ? named : undefined
+  const ids = relationshipIds(node)
+  const links = ids.filter((id) => isLink(byId(scope.relationships, id)))
+  const parts = await keptParts(pkg, scope.relationships, [...ids.filter((id) => !links.includes(id)), ...(drawing ? [drawing.id] : [])])
+
+  if (!parts) {
+    return null
+  }
+
+  const own = placementOf(child(frame, 'p:xfrm'))
+  const placement = place(own, at)
+  const info = find(frame, 'p:nvGraphicFramePr/p:cNvPr')
+  const picture = object === 'ole' ? olePicture(data) : child(child(wrapper, 'mc:Fallback'), 'p:pic')
+  const loaded = picture ? await loadPicture(scope, find(picture, 'p:blipFill/a:blip')) : undefined
+  const preview = loaded && 'src' in loaded ? loaded : undefined
+  const shapes = drawing ? await diagramShapes(scope, drawing) : []
+  const issues = new Set<string>()
+
+  if (object === 'diagram' ? !shapes.length : !preview) {
+    issues.add(object === 'diagram' ? WHY.diagramBox : object === 'chart' ? WHY.chartBox : WHY.oleBox)
+  }
+
+  if (links.length) {
+    issues.add(WHY.objectLinks)
+  }
+
+  tally(scope.report, kind, issues)
+
+  return [
+    {
+      id: newId('object'),
+      kind: 'object',
+      ...boxOf(placement),
+      ...frameOf(placement, info),
+      object,
+      ...(preview ? { preview } : {}),
+      ...(shapes.length ? { shapes, drawnIn: { width: round2(own.width), height: round2(own.height) } } : {}),
+      source: { xml: source, parts }
+    }
+  ]
+}
+
+async function readFrame(frame: XmlElement, scope: Scope, at: readonly Transform[], depth: number): Promise<SlideElement[]> {
   const data = find(frame, 'a:graphic/a:graphicData')
   const kind = frameKind(attr(data, 'uri') ?? '')
   const table = kind === 'table' ? child(data, 'a:tbl') : undefined
@@ -1837,6 +2062,18 @@ async function readFrame(frame: XmlElement, scope: Scope, at: readonly Transform
 
   if (table) {
     return readTable(frame, table, scope, at)
+  }
+
+  const kept = await readObject(frame, data, kind, scope, at)
+  const fallback = child(CHOSEN.get(frame), 'mc:Fallback')
+
+  if (kept) {
+    return kept
+  }
+
+  // A markup choice Herald cannot keep is shown as its fallback, as other choices are.
+  if (fallback) {
+    return walk(treeChildren(fallback), scope, at, depth)
   }
 
   const picture = kind === 'ole' ? olePicture(data) : undefined
@@ -1876,7 +2113,7 @@ async function readNode(node: XmlElement, scope: Scope, at: readonly Transform[]
   }
 
   if (node.name === 'p:graphicFrame') {
-    return readFrame(node, scope, at)
+    return readFrame(node, scope, at, depth)
   }
 
   // Elements in other namespaces are extensions PowerPoint itself may ignore.
@@ -1893,7 +2130,14 @@ async function walk(nodes: readonly XmlElement[], scope: Scope, at: readonly Tra
 
   for (const node of nodes) {
     try {
-      out.push(...(await readNode(node, scope, at, depth, group)))
+      const read = await readNode(node, scope, at, depth, group)
+      const id = node.name === 'p:grpSp' ? undefined : attr(child(nonVisual(node), 'p:cNvPr'), 'id')
+
+      if (id && read[0]) {
+        scope.ids.set(id, read[0].id)
+      }
+
+      out.push(...read)
     } catch {
       count(scope.report, kindGuess(node), 'skipped', WHY.unreadable)
     }
@@ -1902,12 +2146,25 @@ async function walk(nodes: readonly XmlElement[], scope: Scope, at: readonly Tra
   return out
 }
 
-/** A master's or layout's own shapes (not its placeholders), drawn on a slide behind the slide's own; counted for the first slide only. */
-async function decorations(scope: Scope, path: string, root: XmlElement, relationships: Relationship[]): Promise<SlideElement[]> {
-  const counted = scope.ctx.counted.has(path)
-  scope.ctx.counted.add(path)
+/** Shapes read whole: back to front, with connectors glued to the shapes among them their ends name. */
+async function readTree(nodes: readonly XmlElement[], scope: Scope): Promise<SlideElement[]> {
+  return glue(await walk(nodes, scope, [], 0), scope)
+}
 
-  return walk(treeChildren(find(root, 'p:cSld/p:spTree')), { ...scope, relationships, slide: false, report: counted ? emptyReport() : scope.report }, [], 0)
+/** Drawings of a master or layout copied onto a slide as its own, read in the slide's colours with its number; counted for the first slide only. */
+async function copies(scope: Scope, template: Template, nodes: readonly XmlElement[], key: string): Promise<SlideElement[]> {
+  const counted = scope.ctx.counted.has(key)
+  scope.ctx.counted.add(key)
+
+  return readTree(nodes, {
+    ...scope,
+    relationships: template.relationships,
+    mode: 'copy',
+    report: counted ? emptyReport() : scope.report,
+    part: template.root ? { path: template.path, root: template.root } : undefined,
+    ids: new Map(),
+    links: []
+  })
 }
 
 async function readBackground(bg: XmlElement, scope: Scope, notes: Set<string>): Promise<Background | null> {
@@ -1927,23 +2184,10 @@ async function readBackground(bg: XmlElement, scope: Scope, notes: Set<string>):
   }
 
   if (fill?.name === 'a:gradFill') {
-    const stops = childrenNamed(child(fill, 'a:gsLst'), 'a:gs')
-      .flatMap((stop) => {
-        const paint = colorIn(stop, scope.palette, placeholder)
+    const gradient = gradientOf(fill, scope.palette, placeholder)
+    const only = gradientStops(fill, scope.palette, placeholder)[0]
 
-        return paint ? [{ at: clamp01(numberAttr(stop, 'pos', 0) / 100000), color: paint.color }] : []
-      })
-      .sort((a, b) => a.at - b.at)
-
-    if (child(fill, 'a:path')) {
-      notes.add(WHY.radial)
-    }
-
-    if (stops.length < 2) {
-      return stops[0] ? { kind: 'solid', color: stops[0].color } : null
-    }
-
-    return { kind: 'gradient', stops, angle: degrees(numberAttr(child(fill, 'a:lin'), 'ang', 5400000) / 60000) }
+    return gradient ? { kind: 'gradient', ...gradient } : only ? { kind: 'solid', color: only.color } : null
   }
 
   if (fill?.name !== 'a:blipFill') {
@@ -1999,36 +2243,6 @@ async function notesOf(ctx: Context, relationships: readonly Relationship[]): Pr
   return childrenNamed(child(body, 'p:txBody'), 'a:p').map(paragraphText).join('\n').replace(/\v/g, '\n').trimEnd()
 }
 
-interface TransitionRead {
-  kind: Transition
-  /** Whether Herald's transition is the very one the slide had. */
-  exact: boolean
-}
-
-/** A slide's transition: a choice's, which holds the effect itself, over its fallback's stand-in for older readers. */
-function transitionElement(root: XmlElement): XmlElement | undefined {
-  const alternatives = childrenNamed(root, 'mc:AlternateContent').flatMap((node) => [...childrenNamed(node, 'mc:Choice'), ...childrenNamed(node, 'mc:Fallback')])
-
-  return child(root, 'p:transition') ?? alternatives.map((node) => child(node, 'p:transition')).find((entry) => entry !== undefined)
-}
-
-/** A transition's effect as Herald's nearest; null for a transition with no effect (one that only times the slide). */
-function transitionOf(transition: XmlElement | undefined): TransitionRead | null {
-  const effect = elements(transition).find((node) => node.name !== 'p:sndAc' && node.name !== 'p:extLst')
-
-  if (!effect) {
-    return null
-  }
-
-  const name = effect.name.slice(effect.name.indexOf(':') + 1)
-
-  if (name === 'fade' || name === 'cut') {
-    return { kind: name === 'fade' ? 'fade' : 'none', exact: !flagAttr(effect, 'thruBlk') }
-  }
-
-  return { kind: PUSHES.has(name) ? 'push' : 'fade', exact: name === 'push' }
-}
-
 function animated(root: XmlElement): boolean {
   const timings = [child(root, 'p:timing'), ...childrenNamed(root, 'mc:AlternateContent').map((node) => child(child(node, 'mc:Fallback') ?? child(node, 'mc:Choice'), 'p:timing'))]
 
@@ -2048,13 +2262,153 @@ async function commentsOf(ctx: Context, relationships: readonly Relationship[]):
   return total
 }
 
+/** A master's or layout's own background and elements, its placeholders as the empty places they are; its drawings are counted here, once. */
+async function readTemplate(ctx: Context, master: Master, layout?: Layout): Promise<{ background: Background | null; own: boolean; elements: SlideElement[] }> {
+  const template: Template = layout ?? master
+  const root = template.root
+  const palette: Palette = { scheme: master.theme.scheme, map: layout?.map ?? master.map, slots: master.slots }
+  const scope: Scope = {
+    ctx,
+    report: ctx.report,
+    relationships: template.relationships,
+    palette,
+    text: themeColor('tx1', palette)?.color ?? 'tx1',
+    master,
+    layout,
+    mode: 'template',
+    number: 0,
+    ...(root ? { part: { path: template.path, root } } : {}),
+    ids: new Map(),
+    links: [],
+    footers: []
+  }
+  const bg = find(root, 'p:cSld/p:bg')
+  const notes = new Set<string>()
+
+  ctx.counted.add(template.path)
+
+  const elements = await readTree(treeChildren(find(root, 'p:cSld/p:spTree')).filter((node) => !template.numbered.includes(node)), scope)
+  const background = bg ? await readBackground(bg, scope, notes) : null
+  noteOnce(ctx, `background ${template.path}`, notes)
+
+  return { background, own: bg !== undefined, elements }
+}
+
+/** A master's layouts Herald keeps: for each of its own layouts, the first that maps to it; and how many others there are. */
+async function layoutsOf(ctx: Context, master: Master): Promise<{ kept: Map<LayoutId, Layout>; others: number }> {
+  const listed = childrenNamed(child(master.root, 'p:sldLayoutIdLst'), 'p:sldLayoutId').map((entry) => partOf(master.relationships, attr(entry, 'r:id')))
+  const paths = listed.some((entry) => entry !== undefined) ? listed : master.relationships.filter((entry) => entry.type === 'slideLayout' && !entry.external).map((entry) => entry.target)
+  const kept = new Map<LayoutId, Layout>()
+  let others = 0
+
+  for (const path of new Set(paths)) {
+    const layout = path ? await layoutAt(ctx, path) : undefined
+
+    if (layout?.master === master && kept.has(layout.id)) {
+      others++
+    } else if (layout?.master === master) {
+      kept.set(layout.id, layout)
+    }
+  }
+
+  return { kept, others }
+}
+
+/**
+ * The deck's master: the background, elements and placeholders of the master most slides use, and
+ * for each of Herald's layouts the first of its layouts that maps to it (Herald's own where none
+ * does). Notes the drawings and background it gives slides of each layout, for each slide to add
+ * what its own differ in.
+ */
+async function readMaster(ctx: Context): Promise<{ master: DeckMaster; others: number } | undefined> {
+  const master = ctx.main
+
+  if (!master.root) {
+    return undefined
+  }
+
+  const own = await readTemplate(ctx, master)
+  const drawn = own.elements.some((element) => !element.placeholder)
+  const herald = defaultMaster(ctx.size)
+  const { kept, others } = await layoutsOf(ctx, master)
+  const layouts: SlideLayout[] = []
+
+  for (const id of LAYOUTS) {
+    const layout = kept.get(id)
+
+    if (!layout) {
+      layouts.push(herald.layouts.find((entry) => entry.id === id)!)
+      ctx.drawn.set(id, drawn ? [master.path] : [])
+      ctx.backgrounds.set(id, own.background)
+      continue
+    }
+
+    const read = await readTemplate(ctx, master, layout)
+    const background = read.own && !read.background && own.background ? THEME_BACKGROUND : read.background
+
+    layouts.push({ id, name: (attr(child(layout.root, 'p:cSld'), 'name') ?? '').trim() || LAYOUT_NAMES[id], background, elements: read.elements, showMaster: layout.showsMaster })
+    ctx.drawn.set(id, [...(layout.showsMaster && drawn ? [master.path] : []), ...(read.elements.some((element) => !element.placeholder) ? [layout.path] : [])])
+    ctx.backgrounds.set(id, background ?? own.background)
+  }
+
+  return { master: { background: own.background, elements: own.elements, layouts }, others }
+}
+
+/**
+ * The master's and layout's drawings a slide shows that the deck's master does not draw for its
+ * layout, as the slide's own (and those showing the slide number always, numbered); noted when
+ * the deck's master draws some the slide did not show.
+ */
+async function graphics(scope: Scope, root: XmlElement, layout: Layout | undefined, id: LayoutId): Promise<SlideElement[]> {
+  const drawn = scope.ctx.drawn.get(id) ?? []
+  const shown: Template[] = layout && flagAttr(root, 'showMasterSp') !== false ? [...(layout.showsMaster ? [layout.master] : []), layout] : []
+  const out: SlideElement[] = []
+
+  for (const template of shown) {
+    const already = drawn.includes(template.path)
+    const nodes = already ? template.numbered : template.drawings
+
+    if (nodes.length) {
+      out.push(...(await copies(scope, template, nodes, already ? `numbered ${template.path}` : template.path)))
+    }
+  }
+
+  if (flagAttr(root, 'showMasterSp') !== false && drawn.some((path) => !shown.some((template) => template.path === path))) {
+    note(scope.ctx.report, WHY.graphics)
+  }
+
+  return out
+}
+
+function sameBackground(a: Background | null, b: Background | null): boolean {
+  if (!a || !b) {
+    return a === b
+  }
+
+  if (a.kind === 'image' || b.kind === 'image') {
+    return a.kind === 'image' && b.kind === 'image' && a.src === b.src
+  }
+
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** A slide's background: its own, or what it shows from its layout or master where the deck's master gives its layout another. */
+async function slideBackground(scope: Scope, sources: readonly Source[], root: XmlElement, id: LayoutId): Promise<Background | null> {
+  const shown = await backgroundOf(scope, sources)
+
+  if (shown && find(root, 'p:cSld/p:bg')) {
+    return shown
+  }
+
+  return sameBackground(shown, scope.ctx.backgrounds.get(id) ?? null) ? null : (shown ?? THEME_BACKGROUND)
+}
+
 interface SlideRead {
   slide: Slide
-  transition: TransitionRead | null
-  /** Whether the slide moves on by itself after a time. */
-  timed: boolean
+  transition: TransitionRead
   animated: boolean
   comments: number
+  footers: FooterFound[]
 }
 
 async function readSlide(ctx: Context, path: string | undefined, index: number): Promise<SlideRead> {
@@ -2067,10 +2421,24 @@ async function readSlide(ctx: Context, path: string | undefined, index: number):
   const relationships = await ctx.pkg.relationships(path)
   const layoutPath = targetOf(relationships, 'slideLayout')
   const layout = layoutPath ? await layoutAt(ctx, layoutPath) : undefined
-  const master = layout?.master ?? ctx.first
-  const palette: Palette = { scheme: master.theme.scheme, map: mapOver(root, layout?.map ?? master.map), slots: master.slots ? ctx.slots : null }
-  const scope: Scope = { ctx, report: ctx.report, relationships, palette, fonts: master.fonts, text: themeColor('tx1', palette)?.color ?? 'tx1', master, layout, slide: true, number: index + 1 }
-  const drawn: SlideElement[] = []
+  const master = layout?.master ?? ctx.main
+  const palette: Palette = { scheme: master.theme.scheme, map: mapOver(root, layout?.map ?? master.map), slots: master.slots }
+  const scope: Scope = {
+    ctx,
+    report: ctx.report,
+    relationships,
+    palette,
+    text: themeColor('tx1', palette)?.color ?? 'tx1',
+    master,
+    layout,
+    mode: 'slide',
+    number: index + 1,
+    part: { path, root },
+    ids: new Map(),
+    links: [],
+    footers: []
+  }
+  const id = layout?.id ?? layoutFrom(placeholdersOf(root))
   const sources: Source[] = [{ path, root, relationships }]
 
   if (layout) {
@@ -2081,51 +2449,57 @@ async function readSlide(ctx: Context, path: string | undefined, index: number):
     sources.push({ path: master.path, root: master.root, relationships: master.relationships })
   }
 
-  if (layout && flagAttr(root, 'showMasterSp') !== false) {
-    if (layout.showsMaster && master.root) {
-      drawn.push(...(await decorations(scope, master.path, master.root, master.relationships)))
-    }
-
-    drawn.push(...(await decorations(scope, layout.path, layout.root, layout.relationships)))
-  }
-
-  drawn.push(...(await walk(treeChildren(find(root, 'p:cSld/p:spTree')), scope, [], 0)))
-
-  const transition = transitionElement(root)
+  const shown = await graphics(scope, root, layout, id)
+  const own = await readTree(treeChildren(find(root, 'p:cSld/p:spTree')), scope)
+  const transition = readTransition(root)
 
   return {
     slide: {
       id: newId('slide'),
-      layout: layout?.id ?? layoutFrom(placeholdersOf(root)),
-      background: await backgroundOf(scope, sources),
-      elements: drawn,
+      layout: id,
+      background: await slideBackground(scope, sources, root, id),
+      elements: [...shown, ...own],
       notes: await notesOf(ctx, relationships),
-      hidden: flagAttr(root, 'show') === false
+      hidden: flagAttr(root, 'show') === false,
+      ...(transition.transition ? { transition: transition.transition } : {}),
+      ...(master.own ? { theme: master.own } : {}),
+      ...(flagAttr(root, 'showMasterSp') === false ? { showMaster: false as const } : {})
     },
-    transition: transitionOf(transition),
-    timed: attr(transition, 'advTm') !== undefined,
+    transition,
     animated: attempt(() => animated(root), false),
-    comments: await commentsOf(ctx, relationships)
+    comments: await commentsOf(ctx, relationships),
+    footers: scope.footers
   }
 }
 
 const emptySlide = (): Slide => ({ id: newId('slide'), layout: 'blank', background: null, elements: [], notes: '', hidden: false })
 
-/** The deck's one transition, the slides' most common; and how many slides had one, when that is not what every slide had. */
-function deckTransition(reads: readonly (SlideRead | null)[]): { transition: Transition; inexact: number } {
-  const effects = reads.map((read) => read?.transition ?? null)
+/** The kind of transition most slides have (a slide without one counting as none), which slides without one of their own take. */
+function deckTransition(reads: readonly (SlideRead | null)[]): Transition {
   const counts = new Map<Transition, number>()
 
-  for (const effect of effects) {
-    if (effect) {
-      counts.set(effect.kind, (counts.get(effect.kind) ?? 0) + 1)
+  for (const read of reads) {
+    const kind = read?.transition.transition?.kind ?? 'none'
+    counts.set(kind, (counts.get(kind) ?? 0) + 1)
+  }
+
+  return [...counts].reduce<[Transition, number]>((best, entry) => (entry[1] > best[1] ? entry : best), ['none', 0])[0]
+}
+
+/** The master most slides use through their layouts, the first listed of those tied, else the first listed. */
+async function mainMaster(pkg: Package, slides: readonly (string | undefined)[], listed: readonly string[]): Promise<string | undefined> {
+  const uses = new Map<string, number>(listed.map((path) => [path, 0]))
+
+  for (const slide of slides) {
+    const layout = slide ? targetOf(await pkg.relationships(slide), 'slideLayout') : undefined
+    const master = layout ? targetOf(await pkg.relationships(layout), 'slideMaster') : undefined
+
+    if (master) {
+      uses.set(master, (uses.get(master) ?? 0) + 1)
     }
   }
 
-  const transition = [...counts].reduce<[Transition, number]>((best, entry) => (entry[1] > best[1] ? entry : best), ['none', 0])[0]
-  const exact = effects.every((effect) => (effect?.kind ?? 'none') === transition && (effect?.exact ?? true))
-
-  return { transition, inexact: exact ? 0 : effects.filter((effect) => effect !== null).length }
+  return [...uses].reduce<[string, number] | undefined>((best, entry) => (!best || entry[1] > best[1] ? entry : best), undefined)?.[0]
 }
 
 async function hasMacros(pkg: Package, relationships: readonly Relationship[]): Promise<boolean> {
@@ -2168,12 +2542,12 @@ export async function importPresentation(zip: JSZip, title: string): Promise<{ d
   }
 
   const relationships = await pkg.relationships(path)
-  const firstPath = childrenNamed(child(presentation, 'p:sldMasterIdLst'), 'p:sldMasterId').map((entry) => partOf(relationships, attr(entry, 'r:id'))).find((entry) => entry !== undefined) ?? targetOf(relationships, 'slideMaster')
-  const firstRoot = await pkg.xml(firstPath)
-  const themePath = (firstPath && targetOf(await pkg.relationships(firstPath), 'theme')) || targetOf(relationships, 'theme')
+  const slidePaths = childrenNamed(child(presentation, 'p:sldIdLst'), 'p:sldId').map((entry) => partOf(relationships, attr(entry, 'r:id')))
+  const masterPaths = childrenNamed(child(presentation, 'p:sldMasterIdLst'), 'p:sldMasterId').flatMap((entry) => partOf(relationships, attr(entry, 'r:id')) ?? [])
+  const mainPath = (await mainMaster(pkg, slidePaths, masterPaths)) ?? targetOf(relationships, 'slideMaster')
+  const themePath = (mainPath && targetOf(await pkg.relationships(mainPath), 'theme')) || targetOf(relationships, 'theme')
   const theme = readTheme(await pkg.xml(themePath))
-  const map = readColorMap(child(firstRoot, 'p:clrMap'))
-  const slots = Object.fromEntries(SLOTS.map((slot) => [slot, slot.startsWith('accent') ? slot : map[slot]])) as Record<Slot, string>
+  const slots = slotsOf(readColorMap(child(await pkg.xml(mainPath), 'p:clrMap')))
   const report = emptyReport()
   const ctx: Context = {
     pkg,
@@ -2182,36 +2556,61 @@ export async function importPresentation(zip: JSZip, title: string): Promise<{ d
     defaults: child(presentation, 'p:defaultTextStyle'),
     theme,
     slots,
-    first: masterOf(theme, '', undefined, [], theme),
+    main: masterOf({ theme, slots }, '', undefined, [], theme),
     masters: new Map(),
     layouts: new Map(),
     pictures: new Map(),
     tableStyles: new Map(childrenNamed(await pkg.xml(targetOf(relationships, 'tableStyles')), 'a:tblStyle').map((style) => [attr(style, 'styleId') ?? '', style])),
-    counted: new Set()
+    counted: new Set(),
+    drawn: new Map(),
+    backgrounds: new Map()
   }
-  ctx.first = (firstPath ? await masterAt(ctx, firstPath) : undefined) ?? ctx.first
+  ctx.main = (mainPath ? await masterAt(ctx, mainPath) : undefined) ?? ctx.main
+  const master = await readMaster(ctx)
   const reads: (SlideRead | null)[] = []
 
-  for (const [index, entry] of childrenNamed(child(presentation, 'p:sldIdLst'), 'p:sldId').entries()) {
+  for (const [index, slidePath] of slidePaths.entries()) {
     try {
-      reads.push(await readSlide(ctx, partOf(relationships, attr(entry, 'r:id')), index))
+      reads.push(await readSlide(ctx, slidePath, index))
     } catch {
       reads.push(null)
     }
   }
 
-  const { transition, inexact } = deckTransition(reads)
+  const carried = reads.flatMap((read) => (read ? [{ layout: read.slide.layout, found: read.footers }] : []))
+  const headerFooter = headerFooterFrom(carried)
+  const transition = deckTransition(reads)
+
+  for (const slide of carried) {
+    const { same, added } = compareFooters(headerFooter, slide, master?.master ?? defaultMaster(ctx.size))
+
+    for (const kept of same) {
+      count(report, 'text', kept ? 'imported' : 'approximated', kept ? undefined : WHY.footers)
+    }
+
+    if (added) {
+      note(report, WHY.footers, added)
+    }
+  }
+
+  const nearest = reads.filter((read) => read?.transition.transition && !read.transition.exact).length
   const dropped: [string, number][] = [
     ['slides that could not be read', reads.filter((read) => !read).length],
     ['animations', reads.filter((read) => read?.animated).length],
-    [WHY.transitions, inexact],
-    ['automatic slide timings', reads.filter((read) => read?.timed).length],
+    ['automatic slide timings', reads.filter((read) => read?.transition.timed).length],
+    ['transition sounds', reads.filter((read) => read?.transition.sound).length],
     ['embedded fonts', childrenNamed(child(presentation, 'p:embeddedFontLst'), 'p:embeddedFont').length],
     ['macros', (await hasMacros(pkg, relationships)) ? 1 : 0],
     ['comments', reads.reduce((sum, read) => sum + (read?.comments ?? 0), 0)],
     ['sections', attempt(() => descendants(child(presentation, 'p:extLst'), 'p14:section').length, 0)],
-    ['custom shows', childrenNamed(child(presentation, 'p:custShowLst'), 'p:custShow').length]
+    ['custom shows', childrenNamed(child(presentation, 'p:custShowLst'), 'p:custShow').length],
+    ['slide masters besides the one most slides use', master ? masterPaths.filter((entry) => entry !== ctx.main.path).length : 0],
+    ['slide layouts Herald has no place for', master?.others ?? 0]
   ]
+
+  if (nearest) {
+    note(report, WHY.transitions, nearest)
+  }
 
   for (const [what, times] of dropped) {
     if (times) {
@@ -2219,7 +2618,20 @@ export async function importPresentation(zip: JSZip, title: string): Promise<{ d
     }
   }
 
-  const slides = reads.map((read) => read?.slide ?? emptySlide())
+  // A slide without a transition just appears, which slides take from the deck only when that is its transition too.
+  const slides = reads.map((read) => read?.slide ?? emptySlide()).map((slide) => (slide.transition || transition === 'none' ? slide : { ...slide, transition: transitionFor('none') }))
 
-  return { deck: { id: newId('deck'), title, size: ctx.size, theme: themeOf(theme, slots), transition, slides: slides.length ? slides : [newSlide('blank', ctx.size)] }, report }
+  return {
+    deck: {
+      id: newId('deck'),
+      title,
+      size: ctx.size,
+      theme: themeOf(theme, slots),
+      transition,
+      ...(master ? { master: master.master } : {}),
+      ...(headerFooter ? { headerFooter } : {}),
+      slides: slides.length ? slides : [newSlide('blank', ctx.size, master?.master)]
+    },
+    report
+  }
 }

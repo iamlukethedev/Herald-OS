@@ -1,21 +1,19 @@
 import JSZip from 'jszip'
 import PptxGenJS from 'pptxgenjs'
 import type { Color, Deck, Fill, Paragraph, Slide, SlideElement, Stroke, TextBody, Theme } from '../deck.ts'
-import { LAYOUT_NAMES, layoutPlaceholders, PROMPTS } from '../layouts.ts'
-import { isSlot, resolveFont } from '../themes.ts'
+import { isSlot, resolveFont, themeOf } from '../themes.ts'
 import { bulletFor, effectiveStyle, LIST_INDENT, numberingFor, paragraphIndent } from '../text.ts'
 import { finishPresentation, type ShrinkOf } from './finish.ts'
 import { embedDeck } from './herald-part.ts'
-import { placeholderNames, placeholderSlots } from './placeholders.ts'
+import { type DrawingSet, drawingSets, planMasters } from './write-masters.ts'
 
 /*
- * A deck as a PowerPoint file. PptxGenJS writes the package: a slide layout for each of Herald's
- * layouts with real placeholders (so PowerPoint knows each slide's title), every slide with its
- * placeholders' text, text boxes with their runs and lists, shapes as preset geometry, lines,
- * pictures, tables, backgrounds and notes. A finishing pass then writes what PptxGenJS gets wrong
- * or cannot say (paragraph settings, text box settings, positions of placeholders, crops,
- * gradients, merged cells and cell settings, the theme's colours, the transition), and Herald's own
- * copy of the deck goes in for itself.
+ * A deck as a PowerPoint file. PptxGenJS writes the package: every slide with its text boxes and
+ * placeholders' text (runs and lists), shapes as preset geometry, lines, pictures, tables,
+ * backgrounds and notes. The masters' and layouts' drawings are written the same way on slides of
+ * their own in a second package, with plain shapes standing for placeholders, and so are kept
+ * objects on slides. A finishing pass then writes the masters, layouts and themes, and what
+ * PptxGenJS gets wrong or cannot say, and Herald's own copy of the deck goes in for itself.
  */
 
 const inches = (points: number): number => points / 72
@@ -32,39 +30,6 @@ function lineOptions(stroke: Stroke | null): PptxGenJS.ShapeLineProps | undefine
 }
 
 const fillOptions = (fill: Fill | null): PptxGenJS.ShapeFillProps | undefined => (fill ? { color: pptxColor(fill.color), transparency: transparency(fill.alpha) } : undefined)
-
-function defineLayouts(pptx: PptxGenJS, deck: Deck): void {
-  const used = new Set(deck.slides.map((slide) => slide.layout))
-
-  for (const layout of used) {
-    const specs = layoutPlaceholders(layout, deck.size).filter((spec) => spec.role !== 'picture')
-    const names = placeholderNames(layout)
-
-    pptx.defineSlideMaster({
-      title: LAYOUT_NAMES[layout],
-      objects: specs.map((spec, index) => ({
-        placeholder: {
-          options: {
-            name: names[index].name,
-            type: spec.role === 'title' ? 'title' : 'body',
-            x: inches(spec.box.x),
-            y: inches(spec.box.y),
-            w: inches(spec.box.width),
-            h: inches(spec.box.height),
-            fontFace: resolveFont(spec.style.font, deck.theme),
-            fontSize: spec.style.size,
-            color: pptxColor(spec.style.color),
-            bold: spec.style.bold,
-            align: spec.align,
-            valign: spec.anchor,
-            bullet: spec.paragraph?.list === 'bullet'
-          },
-          text: PROMPTS[spec.role]
-        }
-      }))
-    })
-  }
-}
 
 /** A paragraph's text as PptxGenJS text objects: one a run (or a line of one), the last one ending the paragraph. */
 function paragraphObjects(paragraph: Paragraph, body: TextBody, theme: Theme, last: boolean): PptxGenJS.TextProps[] {
@@ -128,10 +93,17 @@ function frameOptions(element: SlideElement) {
   }
 }
 
-function addElement(target: PptxGenJS.Slide, element: SlideElement, deck: Deck, slots: Map<string, string>): void {
+/** A plain shape standing for an element the finishing pass writes itself (a kept object, a master's placeholder, an empty picture placeholder). */
+function addStandIn(target: PptxGenJS.Slide, element: SlideElement): void {
+  target.addShape('rect' as PptxGenJS.ShapeType, frameOptions(element))
+}
+
+function addElement(target: PptxGenJS.Slide, element: SlideElement, theme: Theme): void {
   if (element.kind === 'image') {
     if (element.src) {
       target.addImage({ data: element.src, ...frameOptions(element), altText: element.alt ?? '' })
+    } else {
+      addStandIn(target, element)
     }
 
     return
@@ -150,17 +122,22 @@ function addElement(target: PptxGenJS.Slide, element: SlideElement, deck: Deck, 
 
   if (element.kind === 'table') {
     // Every cell goes in as a cell of its own, covered ones too, so each row has one for every column; the finishing pass merges them.
-    const rows = element.cells.map((row) => row.map((cell) => ({ text: textObjects(cell.body, deck.theme), options: { fontFace: resolveFont(cell.body.style.font, deck.theme), fontSize: cell.body.style.size } })))
+    const rows = element.cells.map((row) => row.map((cell) => ({ text: textObjects(cell.body, theme), options: { fontFace: resolveFont(cell.body.style.font, theme), fontSize: cell.body.style.size } })))
     target.addTable(rows, { x: inches(element.x), y: inches(element.y), w: inches(element.width), h: inches(element.height), colW: element.columns.map(inches), rowH: element.rows.map(inches), objectName: element.id })
 
     return
   }
 
+  if (element.kind === 'object') {
+    addStandIn(target, element)
+
+    return
+  }
+
   const body = element.body
-  const placeholder = slots.get(element.id)
   const anchor = body.anchor === 'middle' ? 'middle' : body.anchor === 'bottom' ? 'bottom' : 'top'
 
-  target.addText(textObjects(body, deck.theme), {
+  target.addText(textObjects(body, theme), {
     ...frameOptions(element),
     shape: (element.kind === 'shape' ? element.shape : 'rect') as PptxGenJS.ShapeType,
     fill: fillOptions(element.fill),
@@ -168,23 +145,23 @@ function addElement(target: PptxGenJS.Slide, element: SlideElement, deck: Deck, 
     margin: [body.inset[0], body.inset[2], body.inset[3], body.inset[1]],
     valign: anchor,
     wrap: body.wrap,
-    fontFace: resolveFont(body.style.font, deck.theme),
+    fontFace: resolveFont(body.style.font, theme),
     fontSize: body.style.size,
     color: pptxColor(body.style.color),
-    isTextBox: element.kind === 'text' && !placeholder,
-    ...(placeholder ? { placeholder } : {})
+    isTextBox: element.kind === 'text'
   })
 }
 
 function addSlide(pptx: PptxGenJS, slide: Slide, deck: Deck): void {
-  const target = pptx.addSlide({ masterName: LAYOUT_NAMES[slide.layout] })
+  const target = pptx.addSlide()
   const background = slide.background
+  const theme = themeOf(deck, slide)
 
-  if (!background || background.kind === 'solid') {
-    target.background = { color: pptxColor(background?.color ?? 'bg1') }
-  } else if (background.kind === 'image') {
+  if (background?.kind === 'solid') {
+    target.background = { color: pptxColor(background.color) }
+  } else if (background?.kind === 'image') {
     target.background = { data: background.src }
-  } else {
+  } else if (background) {
     // A placeholder colour; the finishing pass puts the gradient in.
     target.background = { color: pptxColor(background.stops[0]?.color ?? 'bg1') }
   }
@@ -193,10 +170,8 @@ function addSlide(pptx: PptxGenJS, slide: Slide, deck: Deck): void {
     target.hidden = true
   }
 
-  const slots = placeholderSlots(slide)
-
   for (const element of slide.elements) {
-    addElement(target, element, deck, slots)
+    addElement(target, element, theme)
   }
 
   if (slide.notes) {
@@ -204,15 +179,7 @@ function addSlide(pptx: PptxGenJS, slide: Slide, deck: Deck): void {
   }
 }
 
-export interface PptxOptions {
-  /** Put Herald's own copy of the deck in (the default), so Herald reads the file back exactly. */
-  embed?: boolean
-  /** How much each shrinking text box's text was shrunk when last drawn. */
-  shrink?: ShrinkOf
-}
-
-/** A deck as the bytes of a .pptx file. */
-export async function writePptx(deck: Deck, options: PptxOptions = {}): Promise<Uint8Array> {
+function presentation(deck: Deck): PptxGenJS {
   const pptx = new PptxGenJS()
   pptx.defineLayout({ name: 'HERALD', width: inches(deck.size.width), height: inches(deck.size.height) })
   pptx.layout = 'HERALD'
@@ -220,15 +187,54 @@ export async function writePptx(deck: Deck, options: PptxOptions = {}): Promise<
   pptx.title = deck.title
   pptx.author = ''
   pptx.company = ''
-  defineLayouts(pptx, deck)
+
+  return pptx
+}
+
+/** The masters' and layouts' drawings, a slide each, with their picture backgrounds; placeholders are plain shapes in their place. */
+async function writeDrawings(deck: Deck, sets: readonly DrawingSet[]): Promise<JSZip> {
+  const pptx = presentation(deck)
+
+  for (const set of sets) {
+    const target = pptx.addSlide()
+
+    if (set.background?.kind === 'image') {
+      target.background = { data: set.background.src }
+    }
+
+    for (const element of set.elements) {
+      if (element.placeholder) {
+        addStandIn(target, element)
+      } else {
+        addElement(target, element, set.theme)
+      }
+    }
+  }
+
+  return JSZip.loadAsync((await pptx.write({ outputType: 'uint8array' })) as Uint8Array)
+}
+
+export interface PptxOptions {
+  /** Put Herald's own copy of the deck in (the default), so Herald reads the file back exactly. */
+  embed?: boolean
+  /** How much each shrinking text box's text was shrunk when last drawn. */
+  shrink?: ShrinkOf
+  /** The day the date fields show (today). */
+  now?: Date
+}
+
+/** A deck as the bytes of a .pptx file. */
+export async function writePptx(deck: Deck, options: PptxOptions = {}): Promise<Uint8Array> {
+  const pptx = presentation(deck)
 
   for (const slide of deck.slides) {
     addSlide(pptx, slide, deck)
   }
 
-  const raw = (await pptx.write({ outputType: 'uint8array' })) as Uint8Array
-  const zip = await JSZip.loadAsync(raw)
-  await finishPresentation(zip, deck, options.shrink)
+  const plans = planMasters(deck)
+  const zip = await JSZip.loadAsync((await pptx.write({ outputType: 'uint8array' })) as Uint8Array)
+  const drawings = await writeDrawings(deck, drawingSets(plans))
+  await finishPresentation(zip, deck, { plans, drawings, shrink: options.shrink, now: options.now })
 
   if (options.embed !== false) {
     await embedDeck(zip, deck)

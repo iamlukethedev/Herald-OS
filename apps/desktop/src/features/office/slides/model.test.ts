@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { type Deck, findSlide, type ShapeElement, type SlideElement, SLIDE_SIZES, type TextElement } from './deck.ts'
+import { type CellBorders, type Deck, findSlide, type ShapeElement, type SlideElement, SLIDE_SIZES, type Stroke, type TableElement, type TextElement } from './deck.ts'
 import { boundsOf } from './elements.ts'
 import { placeholderFor } from './layouts.ts'
 import * as model from './model.ts'
+import { borderCells, settleSpans, tableElement, withCell } from './tables.ts'
 import { resolveColor, THEMES } from './themes.ts'
 import { plainText } from './text.ts'
 
@@ -207,5 +208,96 @@ describe('elements', () => {
     expect(model.slideRef(deck, 2)).toBe(deck.slides[1].id)
     expect(() => model.slideRef(deck, 3)).toThrow(/no slide 3/)
     expect(model.outline(deck)).toBe('1. Welcome: Title, 2 elements\n2. Agenda: Title and Content, 2 elements')
+  })
+
+  it('fills with a gradient from one colour to another', () => {
+    expect(model.gradientFill('accent1', '#ffffff')).toEqual({
+      color: 'accent1',
+      gradient: {
+        stops: [
+          { at: 0, color: 'accent1' },
+          { at: 1, color: '#ffffff' }
+        ],
+        angle: 90
+      }
+    })
+    expect(model.gradientFill('bg1', 'bg2', 0).gradient?.angle).toBe(0)
+  })
+})
+
+describe('cell borders', () => {
+  const line: Stroke = { color: 'accent2', width: 2, dash: 'solid' }
+
+  /** A slide with a 3 by 3 table on it. */
+  function table() {
+    const deck = model.addSlide(model.newDeck('Pitch'), { layout: 'blank' }).deck
+    const slideId = deck.slides[1].id
+    const change = model.addTable(deck, slideId, { rows: 3, columns: 3 })
+
+    return { deck: change.deck, slideId, tableId: change.elementId }
+  }
+
+  const bordersOf = (deck: Deck, slideId: string, tableId: string): (CellBorders | undefined)[][] => (findSlide(deck, slideId)!.elements.find((element) => element.id === tableId) as TableElement).cells.map((row) => row.map((cell) => cell.borders))
+
+  it('lines a cell’s outside, the cells about it saying the same', () => {
+    const { deck, slideId, tableId } = table()
+    const change = model.setCellBorders(deck, slideId, tableId, [{ row: 1, column: 1 }], ['outer'], line)
+    const borders = bordersOf(change.deck, slideId, tableId)
+
+    expect(change.label).toBe('Cell Borders')
+    expect(borders[1][1]).toEqual({ left: line, top: line, right: line, bottom: line })
+    expect([borders[1][0], borders[0][1], borders[1][2], borders[2][1]]).toEqual([{ right: line }, { bottom: line }, { left: line }, { top: line }])
+    expect([borders[0][0], borders[2][2]]).toEqual([undefined, undefined])
+    expect(model.setCellBorders(change.deck, slideId, tableId, [{ row: 1, column: 1 }], ['outer'], line).deck).toBe(change.deck)
+  })
+
+  it('lines between picked cells, one side of them, or the whole table’s outside', () => {
+    const { deck, slideId, tableId } = table()
+    const block = [
+      { row: 0, column: 0 },
+      { row: 0, column: 1 },
+      { row: 1, column: 0 },
+      { row: 1, column: 1 }
+    ]
+    const inner = bordersOf(model.setCellBorders(deck, slideId, tableId, block, ['inner'], line).deck, slideId, tableId)
+
+    expect(inner[0][0]).toEqual({ right: line, bottom: line })
+    expect(inner[1][1]).toEqual({ left: line, top: line })
+    expect(inner[0][2]).toBeUndefined()
+
+    const left = bordersOf(model.setCellBorders(deck, slideId, tableId, [{ row: 0, column: 1 }, { row: 1, column: 1 }], ['left'], line).deck, slideId, tableId)
+    expect(left.map((row) => row.slice(0, 2))).toEqual([
+      [{ right: line }, { left: line }],
+      [{ right: line }, { left: line }],
+      [undefined, undefined]
+    ])
+
+    const outline = bordersOf(model.setCellBorders(deck, slideId, tableId, 'all', ['outer'], line).deck, slideId, tableId)
+    expect(outline[0][0]).toEqual({ left: line, top: line })
+    expect(outline[2][2]).toEqual({ right: line, bottom: line })
+    expect(outline[1][1]).toBeUndefined()
+
+    const none = bordersOf(model.setCellBorders(deck, slideId, tableId, 'all', ['all'], null).deck, slideId, tableId)
+    expect(none[1][1]).toEqual({ left: null, top: null, right: null, bottom: null })
+  })
+
+  it('lines a merged cell as one, and keeps cells’ lines as rows and columns come and go', () => {
+    const base = tableElement({ x: 0, y: 0, width: 300, height: 90 }, 3, 3)
+    const wide = withCell(base, { row: 0, column: 0 }, (cell) => ({ ...cell, colSpan: 2 }))
+    const merged: TableElement = { ...wide, cells: settleSpans(wide.cells, 3) }
+    const lined = borderCells(merged, [{ row: 0, column: 1 }], ['outer'], line)
+
+    expect(lined.cells[0][0].borders).toEqual({ left: line, top: line, right: line, bottom: line })
+    expect(lined.cells[0][2].borders).toEqual({ left: line })
+    expect([lined.cells[1][0].borders, lined.cells[1][1].borders]).toEqual([{ top: line }, { top: line }])
+
+    const { deck, slideId, tableId } = table()
+    const boxed = model.setCellBorders(deck, slideId, tableId, [{ row: 1, column: 1 }], ['left', 'top'], line).deck
+    const widened = bordersOf(model.insertTableColumn(boxed, slideId, tableId, 0, 'left').deck, slideId, tableId)
+    const lengthened = bordersOf(model.insertTableRow(boxed, slideId, tableId, 0, 'above').deck, slideId, tableId)
+
+    expect(widened[1][2]).toEqual({ left: line, top: line })
+    expect(widened[1][1]).toEqual({ right: line })
+    expect(lengthened[2][1]).toEqual({ left: line, top: line })
   })
 })

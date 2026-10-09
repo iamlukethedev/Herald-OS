@@ -1,9 +1,14 @@
+import { atom } from 'nanostores'
+import { keysLabel } from '../../../../lib/shortcuts.ts'
+import { messageOf } from '../../../canvas/errors.ts'
+import type { MenuItemDef } from '../../../files/Menu.tsx'
 import type {
   Anchor,
   ArrowHead,
   AutoFit,
   Background,
   Color,
+  ConnectorPreset,
   Deck,
   Fill,
   FontRef,
@@ -31,6 +36,8 @@ import { decks, slidesSession } from '../store.ts'
 import { type CellRef, cellUnder, fillCells, nextCell, tableText } from '../tables.ts'
 import { allRuns, effectiveStyle, paragraphsAll, styleAll, textBody, withParagraph } from '../text.ts'
 import { $textSession, flushTyping, requestEditStart, textSessionOf } from './active.ts'
+import { $borderPen, type BorderChoice, bordersFor } from './borders.ts'
+import { decksFromDocuments, type FileAccess, officeFiles, pickDocuments, withDocumentSlides } from './from-files.ts'
 import { changeParagraphs, selectedParagraphs, shiftLevel, toggleList } from './tiptap.ts'
 
 /*
@@ -53,9 +60,9 @@ export function change<T extends DeckChange>(make: (deck: Deck, doc: SlidesDocum
   }
 
   flushTyping(doc)
-  const next = make(doc.history.present, doc)
+  const next = make(doc.base, doc)
 
-  if (next && next.deck !== doc.history.present) {
+  if (next && next.deck !== doc.base) {
     doc.commit(next)
   }
 
@@ -190,6 +197,22 @@ export function insertLine(end: ArrowHead = 'none'): void {
   change((deck) => model.insertElements(deck, doc.slideId, [element], end === 'none' ? 'New Line' : 'New Arrow'), doc)
 }
 
+export const CONNECTOR_NAMES = { straightConnector1: 'Straight', bentConnector3: 'Elbow', curvedConnector3: 'Curved' } as const satisfies Partial<Record<ConnectorPreset, string>>
+
+/** The connector the next drag on the slide draws, from where it starts to where it ends, each end glued to the site it is near. */
+export const $drawing = atom<keyof typeof CONNECTOR_NAMES | null>(null)
+
+export function drawConnector(preset: keyof typeof CONNECTOR_NAMES, doc = live()): void {
+  if (!doc) {
+    return
+  }
+
+  textSessionOf(doc)?.finish()
+  doc.edit(null)
+  $drawing.set(preset)
+  slidesSession.notify('Drag from one shape to another to join them; Escape stops drawing')
+}
+
 /** A table of `rows` by `columns` in the middle of the slide, typing in its first cell, as PowerPoint inserts one; its id. */
 export function insertTable(rows: number, columns: number, doc = live()): string | null {
   const added = doc ? change((deck) => model.addTable(deck, doc.slideId, { rows, columns }), doc) : null
@@ -258,7 +281,7 @@ function changeAtCell(doc: SlidesDocument | undefined, make: (deck: Deck, slideI
   const cell = doc.cell
   const typing = doc.editing === table.id && Boolean(textSessionOf(doc))
   textSessionOf(doc)?.finish()
-  const deck = doc.history.present
+  const deck = doc.base
   const made = make(deck, doc.slideId, model.requireTable(deck, doc.slideId, table.id), cell)
 
   if (!made) {
@@ -318,6 +341,17 @@ export function setCellFill(fill: Fill | null, cells?: readonly CellRef[] | 'all
 
   if (doc && table) {
     change((deck) => model.setCellFill(deck, doc.slideId, table.id, cells ?? (typing ? [typing] : 'all'), fill), doc)
+  }
+}
+
+/** Borders on the selected table's cell being typed into, or else on all its cells, in the border pen (or none). */
+export function setBorders(choice: BorderChoice, doc = live()): void {
+  const table = selectedTable(doc)
+  const typing = doc?.editing === table?.id ? (doc?.cell ?? null) : null
+
+  if (doc && table) {
+    const { cells, sides, stroke } = bordersFor(choice, $borderPen.get(), typing)
+    change((deck) => model.setCellBorders(deck, doc.slideId, table.id, cells, sides, stroke), doc)
   }
 }
 
@@ -399,6 +433,34 @@ export function pickPictures(doc = live()): void {
   picker.click()
 }
 
+/** New presentations made from documents picked, in the theme of the deck in front. */
+export async function newFromDocument(access: FileAccess = officeFiles()): Promise<void> {
+  for (const { name, deck } of await decksFromDocuments(access, notify, live()?.presentation.theme)) {
+    slidesSession.create({ name, model: deck })
+  }
+}
+
+/** The slides of documents picked, after the slide in front, as one step. */
+export async function insertSlidesFromDocument(access: FileAccess = officeFiles(), doc = live()): Promise<void> {
+  const picked = doc ? await pickDocuments(access, notify) : []
+
+  if (!doc || !picked.length) {
+    return
+  }
+
+  const files = picked.map((entry) => entry.file).join(', ')
+
+  try {
+    const made = change((deck, d) => withDocumentSlides(deck, picked.map((entry) => entry.doc), d.slideId), doc)
+
+    if (made && !made.slideIds.length) {
+      notify(`${files} ${picked.length > 1 ? 'have' : 'has'} nothing to make slides of`)
+    }
+  } catch (error) {
+    notify(`Could not make slides from ${files}: ${messageOf(error)}`)
+  }
+}
+
 export const deleteSelection = () => change((deck, doc) => (doc.selected.length ? model.removeElements(deck, doc.slideId, doc.selected) : null))
 
 export const duplicateSelection = () => change((deck, doc) => (doc.selected.length ? model.duplicateElements(deck, doc.slideId, doc.selected) : null))
@@ -416,6 +478,39 @@ export const distributeSelection = (axis: 'horizontal' | 'vertical') => change((
 
 export const nudgeSelection = (dx: number, dy: number) => change((deck, doc) => (doc.selected.length ? model.nudge(deck, doc.slideId, doc.selected, dx, dy) : null))
 
+/** Whether grouping the selection makes a group: it has two elements or groups (placeholders aside). */
+export function canGroup(doc = live()): boolean {
+  if (!doc?.selected.length) {
+    return false
+  }
+
+  const ids = new Set(model.expandToGroups(doc.slide, doc.selected))
+
+  return new Set(doc.slide.elements.filter((element) => ids.has(element.id) && !element.placeholder).map((element) => element.group?.[0] ?? element.id)).size > 1
+}
+
+export const canUngroup = (doc = live()): boolean => Boolean(doc?.selection.some((element) => element.group?.length))
+
+/** Whether the selection has a kept object with a drawing of its own (SmartArt) to turn into shapes. */
+export const canConvert = (doc = live()): boolean => Boolean(doc?.selection.some((element) => element.kind === 'object' && element.shapes?.length))
+
+export const groupSelection = (doc = live()) => change((deck, d) => (d.selected.length ? model.groupElements(deck, d.slideId, d.selected) : null), doc)
+
+export const ungroupSelection = (doc = live()) => change((deck, d) => (d.selected.length ? model.ungroupElements(deck, d.slideId, d.selected) : null), doc)
+
+export const convertSelection = (doc = live()) => change((deck, d) => (d.selected.length ? model.convertToShapes(deck, d.slideId, d.selected) : null), doc)
+
+/** The slide's context menu items for grouping and for kept objects: those that do something to the selection. */
+export function selectionMenuItems(doc = live()): MenuItemDef[] {
+  const items: MenuItemDef[] = [
+    ...(canGroup(doc) ? [{ id: 'group', label: 'Group', hint: keysLabel('mod+alt+g'), onSelect: () => groupSelection(doc) }] : []),
+    ...(canUngroup(doc) ? [{ id: 'ungroup', label: 'Ungroup', hint: keysLabel('mod+alt+shift+g'), onSelect: () => ungroupSelection(doc) }] : []),
+    ...(canConvert(doc) ? [{ id: 'convert', label: 'Convert to Shapes', onSelect: () => convertSelection(doc) }] : [])
+  ]
+
+  return items.map((item, index) => ({ ...item, dividerBefore: index === 0 }))
+}
+
 /** Start typing into the selected text box or shape, or the selected table's current cell. */
 export function editSelection(select: 'end' | 'all' = 'end'): void {
   const doc = live()
@@ -429,14 +524,14 @@ export function editSelection(select: 'end' | 'all' = 'end'): void {
 
 export const changeSelected = (label: string, edit: (element: SlideElement) => SlideElement) => change((deck, doc) => (doc.selected.length ? model.updateElements(deck, doc.slideId, doc.selected, edit, label) : null))
 
-/** A fill for shapes and text boxes, and for a table the cell being typed into or else every cell. */
-export function setFill(fill: Fill | null, doc = live()): void {
+/** A fill for shapes and text boxes, and for a table the cell being typed into or else every cell; fills with the same `join` in quick succession are one step (a gradient being tuned). */
+export function setFill(fill: Fill | null, doc = live(), join?: string): void {
   change((deck, d) => {
     const typing = d.editing ? d.cell : null
     const fillOf = (element: SlideElement): SlideElement =>
       element.kind === 'shape' || element.kind === 'text' ? { ...element, fill } : element.kind === 'table' ? fillCells(element, typing && d.editing === element.id ? [typing] : 'all', fill) : element
 
-    return d.selected.length ? model.updateElements(deck, d.slideId, d.selected, fillOf, 'Fill') : null
+    return d.selected.length ? { ...model.updateElements(deck, d.slideId, d.selected, fillOf, 'Fill'), ...(join ? { join: `${join}:${d.selected.join(',')}` } : {}) } : null
   }, doc)
 }
 
@@ -445,6 +540,10 @@ export function setStroke(patch: Partial<Stroke> | null): void {
   changeSelected('Outline', (element) => {
     if (element.kind === 'line') {
       return patch ? { ...element, stroke: { ...element.stroke, ...patch } } : element
+    }
+
+    if (element.kind === 'object') {
+      return element
     }
 
     const base: Stroke = element.stroke ?? { color: 'tx1', width: 1, dash: 'solid' }
