@@ -30,6 +30,8 @@ SKILLS: dict[str, str] = {
     "file-documents": "Find documents such as invoices and receipts among badly named files, read them (OCR for scans), name them clearly and file them where the person keeps them, with a plan they approve and an undo.",
     "herald-os-tailor": "Change Herald OS itself: Herald OS widgets (menu bar, Overview, their own window), themes, fonts, the wallpaper, the menu bar, control-menu entries, branding, keybindings, settings and routines.",
     "herald-canvas": "Make and edit pictures in Herald Canvas: posters, banners, collages, photo fixes; the canvas tool, design habits, the .comp format and every adjustment setting.",
+    "herald-docs": "Write and edit documents in Herald Docs: drafts from a brief, templates, rewriting marked text, formatting, tables, pictures, a sheet's figures in a report, saving and PDFs.",
+    "herald-sheets": "Work in Herald Sheets: formulas from a description, explaining formulas, filling a column from examples, cleaning data, what stands out, building a workbook, sorting, filtering, saving.",
 }
 
 

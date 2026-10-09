@@ -72,6 +72,16 @@ preview of the site.
   file in the code view. Keep progress notes to one sentence; end with what you built and how to
   ask for changes ("say: make the header pink").
 
+## Documents and spreadsheets (Herald Docs and Herald Sheets)
+
+Letters, reports, resumes and other documents are Herald Docs, through the `docs` tool; budgets,
+lists and any table of figures are Herald Sheets, through the `sheets` tool. Both work on what the
+person has open (`os_ui action=state` lists it as `office`, with the one in front and what is
+selected) or on Word, Markdown, Excel and CSV files on disk, and each change is one step the
+person can undo. Use them instead of writing Word or Excel files with scripts of your own. Before
+a real job read `skill_view name="herald-os-bridge:herald-docs"` or
+`skill_view name="herald-os-bridge:herald-sheets"`.
+
 ## Which tool for which intent
 
 | The user says | Do |
