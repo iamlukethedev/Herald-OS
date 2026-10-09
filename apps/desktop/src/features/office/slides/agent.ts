@@ -1,11 +1,12 @@
-import { IMAGE_TYPES } from '../../../../shared/office/document.ts'
+import { type DocJSON, IMAGE_TYPES } from '../../../../shared/office/document.ts'
 import { baseName, extensionOf, officeAppFor } from '../../../../shared/office/files.ts'
 import type { CommandContext, CommandResult } from '../../../store/os-commands.ts'
 import { isMainSurface, isPanels } from '../../../store/shell.ts'
 import { openApp } from '../../../store/windows.ts'
 import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve, showDocument, withEditor } from '../agent.ts'
-import { documentFileName, fileName, freePath, stepCount, tildePath } from '../agent-model.ts'
+import { documentFileName, fileName, findEntry, freePath, isPathLike, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
+import { loadedSessions } from '../session.ts'
 import type { OfficeDocument } from '../types.ts'
 import { slidesAdapter } from './adapter.ts'
 import {
@@ -403,6 +404,37 @@ export async function edit(args: Args): Promise<Outcome> {
   }
 }
 
+/**
+ * A document's content: through Herald Docs in this window, or (panels mode, where it is open in
+ * Herald Docs' own window) as the Markdown that window reads it as, where Title and Subtitle are headings.
+ */
+async function documentFor(ref: unknown, context: CommandContext): Promise<{ name: string; path: string | null; json: DocJSON }> {
+  const { documentJSON } = await import('../docs/agent.ts')
+
+  try {
+    return await documentJSON(ref)
+  } catch (error) {
+    const asked = text(ref)
+    const entries = await openEntries()
+    const entry = asked ? findEntry(entries, 'docs', asked, isPathLike(asked) ? resolve(asked) : null) : (entries.find((candidate) => candidate.app === 'docs' && candidate.active) ?? null)
+
+    if (!entry || loadedSessions.get('docs')?.summaries().some((doc) => doc.key === entry.key) || typeof window.heraldOS.office.run !== 'function') {
+      throw error
+    }
+
+    const result = (await window.heraldOS.office.run({ app: 'docs', key: entry.key }, 'docs.read', { document: entry.path ?? entry.name, part: 'markdown', maxChars: 200000 }, context.source)) as CommandResult | undefined
+    const markdown = result?.ok && typeof result.data?.content === 'string' ? result.data.content : null
+
+    if (markdown === null) {
+      throw error
+    }
+
+    const { documentFromMarkdown } = await import('../../../../shared/office/doc-text.ts')
+
+    return { name: entry.name, path: entry.path, json: documentFromMarkdown(markdown).document }
+  }
+}
+
 /** A Herald Docs document (open, or a file) as slides: in a new presentation named after it, or added to the end of one. */
 export async function fromDocument(args: Args, context: CommandContext): Promise<Outcome> {
   const level = given(args.level) ? headingLevelOf(args.level) : undefined
@@ -412,8 +444,7 @@ export async function fromDocument(args: Args, context: CommandContext): Promise
     return inSlidesWindow('slides.fromDocument', args, context)
   }
 
-  const { documentJSON } = await import('../docs/agent.ts')
-  const source = await documentJSON(args.document)
+  const source = await documentFor(args.document, context)
   const made = slidesFromDocument(source.json, { name: stem(source.name), level, notes: args.notes === true })
 
   if (fresh) {
