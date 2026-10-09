@@ -14,8 +14,9 @@ import { type LocalSttConfig, sttTuningPatch } from '../lib/voice/stt-tuning.ts'
 import { assistantTextSince, runningToolsSince, textDelta, toolsSince } from '../lib/voice/turn-text.ts'
 import { decideVoiceApproval, voiceApprovalFor } from '../lib/voice/approval-answer.ts'
 import { withScreenContext } from '../lib/screen-context.ts'
+import type { ChatState, SystemMessage } from '../lib/chat-model.ts'
 import { $prefs, updatePrefs } from './backend.ts'
-import { $chats, interruptChat, sendPrompt } from './chat.ts'
+import { $activeChatId, $chats, createChat, interruptChat, sendPrompt } from './chat.ts'
 import { $gatewayReady, onGatewayEvent } from './gateway.ts'
 import { notify } from './notifications.ts'
 import { officeContextLine, screenContextLine } from './on-screen.ts'
@@ -101,37 +102,122 @@ function recordLiveSeconds(seconds: number): void {
 /** The last Hermes turn of this conversation used its tools; cleared when a fast-path command runs. */
 let hermesActed = false
 
-/** Follow a turn's assistant text through the chat store; unsubscribes on completion. */
+/** How long a spoken request waits for the turn it interrupted (an Office call cannot stop halfway) to end. */
+const SETTLE_MS = 15_000
+/** How long a request queued behind an interrupted turn may take to start once that turn has ended. */
+const QUEUED_START_MS = 3000
+
+type TurnStatus = 'complete' | 'error' | 'interrupted'
+
+interface TurnEnd {
+  status: TurnStatus
+  error?: string
+}
+
+/** A spoken request sent to Hermes: where its reply starts, and the ends its session reported before anyone followed it. */
+interface SentTurn {
+  /** Index of the request in the chat; the reply is everything after it. */
+  from: number
+  /** The session was still running an earlier turn, whose interrupted end comes first. */
+  queued: boolean
+  ends: TurnEnd[]
+  onEnd: ((end: TurnEnd) => void) | null
+  release: () => void
+}
+
+const sentTurns = new Map<string, SentTurn>()
+let requests = 0
+
+/** Collect a session's turn ends from before a request goes out: a refusal or a fast failure can beat the answer to the submit. */
+function watchEnds(sessionId: string, queued: boolean): SentTurn {
+  const turn: SentTurn = { from: -1, queued, ends: [], onEnd: null, release: () => undefined }
+  // After the reducer has applied the event, so the reply includes the final text.
+  const report = (end: TurnEnd) => queueMicrotask(() => (turn.onEnd ? turn.onEnd(end) : void turn.ends.push(end)))
+  const offComplete = onGatewayEvent('message.complete', event => {
+    if (event.session_id === sessionId) {
+      const status = event.payload?.status
+      const error = event.payload?.error ?? (status === 'error' ? event.payload?.text : undefined)
+      report({ status: status === 'error' ? 'error' : status === 'interrupted' ? 'interrupted' : 'complete', error: typeof error === 'string' ? error : undefined })
+    }
+  })
+  const offError = onGatewayEvent('error', event => {
+    if (event.session_id === sessionId) {
+      // The failure text arrives here before any assistant bubble exists; carry it to the engine.
+      report({ status: 'error', error: (event.payload as { message?: string } | undefined)?.message })
+    }
+  })
+
+  turn.release = () => {
+    offComplete()
+    offError()
+  }
+
+  return turn
+}
+
+/** The chat a spoken request goes to: the one the Hermes window shows, or a new one. */
+async function voiceSession(): Promise<string> {
+  const active = $activeChatId.get()
+
+  return active && $chats.get()[active] ? active : (await createChat()).sessionId
+}
+
+/** Wait for the turn still running in a session to end, for a while; true when it is still running. */
+async function settle(sessionId: string): Promise<boolean> {
+  const until = Date.now() + SETTLE_MS
+
+  while ($chats.get()[sessionId]?.streaming && Date.now() < until) {
+    await new Promise(done => setTimeout(done, 100))
+  }
+
+  return Boolean($chats.get()[sessionId]?.streaming)
+}
+
+/** Follow a turn's assistant text through the chat store until it ends; unsubscribes then. */
 function observeTurn(sessionId: string, handlers: TurnHandlers): () => void {
+  const sent = sentTurns.get(sessionId)
+  sentTurns.delete(sessionId)
+  const turn = sent ?? watchEnds(sessionId, false)
   const chat = $chats.get()[sessionId]
-  // The user message sendPrompt appended is the last one right now; everything after it is the reply.
-  const fromIndex = chat ? chat.messages.length - 1 : -1
+  // A turn sent some other way: its request is the chat's last message.
+  const fromIndex = sent ? sent.from : chat ? chat.messages.length - 1 : -1
   let seen = ''
   let seenTools = new Set<string>()
   let done = false
+  let skipped = false
+  let starting: ReturnType<typeof setTimeout> | null = null
   hermesActed = false
 
-  const finish = (status: 'complete' | 'error' | 'interrupted', error?: string) => {
+  /** Stop following; the tools the turn ran, or null when it was over already. */
+  const stop = (): string[] | null => {
     if (done) {
-      return
+      return null
     }
 
     done = true
-    offChats()
-    offComplete()
-    offError()
-    const current = $chats.get()[sessionId]
-    hermesActed = Boolean(current && toolsSince(current.messages, fromIndex).length > 0)
-    handlers.onComplete(seen, status, error)
-  }
 
-  const offChats = $chats.subscribe(chats => {
-    const current = chats[sessionId]
-
-    if (!current || done) {
-      return
+    if (starting) {
+      clearTimeout(starting)
     }
 
+    offChats()
+    turn.release()
+    const current = $chats.get()[sessionId]
+    const tools = current ? toolsSince(current.messages, fromIndex) : []
+    hermesActed = tools.length > 0
+
+    return tools
+  }
+
+  const finish = (status: TurnStatus, error?: string) => {
+    const tools = stop()
+
+    if (tools) {
+      handlers.onComplete(seen, status, error, tools)
+    }
+  }
+
+  const follow = (current: ChatState) => {
     for (const name of runningToolsSince(current.messages, fromIndex)) {
       if (!seenTools.has(name)) {
         seenTools = new Set([...seenTools, name])
@@ -149,40 +235,68 @@ function observeTurn(sessionId: string, handlers: TurnHandlers): () => void {
       // Authoritative final text replaced the stream (partial payload): re-sync without re-speaking.
       seen = full
     }
-  })
-  const offComplete = onGatewayEvent('message.complete', event => {
-    if (event.session_id !== sessionId) {
+  }
+
+  const offChats = $chats.subscribe(chats => {
+    const current = chats[sessionId]
+
+    if (!current || done) {
       return
     }
 
-    // Let the reducer apply the payload first so `seen` includes the final text.
-    queueMicrotask(() => {
-      const current = $chats.get()[sessionId]
-
-      if (current) {
-        const full = assistantTextSince(current.messages, fromIndex)
-        const delta = textDelta(seen, full)
-
-        if (delta) {
-          seen = full
-          handlers.onDelta(delta, full)
-        }
-      }
-
-      const status = event.payload?.status
-      const error = event.payload?.error ?? (status === 'error' ? event.payload?.text : undefined)
-      finish(status === 'error' ? 'error' : status === 'interrupted' ? 'interrupted' : 'complete', typeof error === 'string' ? error : undefined)
-    })
-  })
-  const offError = onGatewayEvent('error', event => {
-    if (event.session_id === sessionId) {
-      // The failure text arrives here before any assistant bubble exists; carry it to the engine.
-      const payload = event.payload as { message?: string } | undefined
-      finish('error', payload?.message)
+    if (starting && current.streaming) {
+      clearTimeout(starting)
+      starting = null
     }
+
+    follow(current)
   })
 
-  return () => finish('interrupted')
+  const onEnd = (end: TurnEnd) => {
+    if (done) {
+      return
+    }
+
+    const current = $chats.get()[sessionId]
+
+    if (current) {
+      follow(current)
+    }
+
+    if (end.status === 'interrupted' && turn.queued && !skipped) {
+      // The turn this request waited behind has ended; the request's own turn starts next, unless the
+      // session folded the request into that turn and dropped it with it.
+      skipped = true
+      starting = setTimeout(() => {
+        starting = null
+
+        if (!$chats.get()[sessionId]?.streaming) {
+          finish('interrupted')
+        }
+      }, QUEUED_START_MS)
+
+      return
+    }
+
+    finish(end.status, end.error)
+  }
+
+  turn.onEnd = onEnd
+
+  for (const end of turn.ends.splice(0)) {
+    onEnd(end)
+  }
+
+  // A request the gateway refused never starts a turn; sendPrompt leaves the refusal right after it.
+  const current = $chats.get()[sessionId]
+  const refusal = current && !current.streaming && fromIndex >= 0 ? current.messages.slice(fromIndex + 1).find((message): message is SystemMessage => message.role === 'system' && message.level === 'error') : undefined
+
+  if (refusal) {
+    finish('error', refusal.text)
+  }
+
+  // The engine has moved on (barge-in, a newer request, the end of the conversation): no end to report.
+  return () => void stop()
 }
 
 /** Voice fast path: a matching registry command runs immediately; a failed run falls back to Hermes. */
@@ -213,17 +327,41 @@ const host: VoiceHost = {
   // The Office and screen lines ride with the spoken context (model input only), so "this folder",
   // "this file" and "this sheet" mean what is open and shown while the person's words stay exactly as said.
   submit: async (text, options) => {
+    const request = ++requests
+    const target = await voiceSession()
+    // Sent while the turn it interrupted still runs, the request would wait behind that turn or be dropped with it.
+    const queued = options.interrupted ? await settle(target) : Boolean($chats.get()[target]?.streaming)
+
+    if (request !== requests) {
+      return null
+    }
+
     const office = await officeContextLine()
-    const sessionId = await sendPrompt(text, { surface: 'voice-live', voiceContext: withScreenContext(options.voiceContext, screenContextLine(), office), interrupted: options.interrupted })
+    const turn = watchEnds(target, queued)
+    let sessionId: string | null = null
+
+    try {
+      sessionId = await sendPrompt(text, { sessionId: target, surface: 'voice-live', voiceContext: withScreenContext(options.voiceContext, screenContextLine(), office), interrupted: options.interrupted })
+    } finally {
+      // A reconnect can drop the chat meanwhile; sendPrompt then starts another.
+      if (sessionId !== target) {
+        turn.release()
+      }
+    }
 
     if (sessionId) {
+      const sent = sessionId === target ? turn : watchEnds(sessionId, false)
+      const words = text.trim()
+      sent.from = $chats.get()[sessionId]?.messages.findLastIndex(message => message.role === 'user' && message.text === words) ?? -1
+      sentTurns.get(sessionId)?.release()
+      sentTurns.set(sessionId, sent)
       $voiceSessionId.set(sessionId)
     }
 
     return sessionId
   },
   runIntent: runVoiceIntent,
-  interrupt: () => interruptChat().catch(() => undefined),
+  interrupt: () => interruptChat($voiceSessionId.get() ?? undefined).catch(() => undefined),
   approvalPending: () => voiceApprovalFor($pendingRequests.get(), $voiceSessionId.get()) !== null,
   answerApproval: text => {
     const decision = decideVoiceApproval($pendingRequests.get(), $voiceSessionId.get(), text)
@@ -337,6 +475,12 @@ export async function endConversation(reason: ConversationEndReason = 'user', de
   hermesActed = false
   $voiceSessionId.set(null)
   stopFallbackAudio()
+
+  for (const turn of sentTurns.values()) {
+    turn.release()
+  }
+
+  sentTurns.clear()
 
   if (current) {
     try {

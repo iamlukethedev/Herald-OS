@@ -20,8 +20,27 @@ export interface TurnHandlers {
   onDelta(delta: string, full: string): void
   /** A tool started running; `name` is the tool id/name for progress notes. */
   onTool?(name: string): void
-  /** The turn finished (message.complete or error); `error` carries the backend's message when it failed. */
-  onComplete(full: string, status: 'complete' | 'error' | 'interrupted', error?: string): void
+  /**
+   * The turn finished (message.complete or error); `error` carries the backend's message when it failed,
+   * `tools` names the tools the turn ran.
+   */
+  onComplete(full: string, status: 'complete' | 'error' | 'interrupted', error?: string, tools?: readonly string[]): void
+}
+
+/**
+ * What to say when a turn ended with nothing to say: Hermes did the work without a word, stopped
+ * before it finished, or answered nothing at all. Null when the reply has words to speak.
+ */
+export function silentTurnLine(spoken: string, status: 'complete' | 'interrupted', tools: readonly string[] = []): { spoken: string; problem: boolean } | null {
+  if (spoken.trim()) {
+    return null
+  }
+
+  if (status === 'interrupted') {
+    return { spoken: 'Hermes stopped before it finished. Please ask again.', problem: true }
+  }
+
+  return tools.length > 0 ? { spoken: 'Done.', problem: false } : { spoken: 'Hermes did not answer that. Please ask again.', problem: true }
 }
 
 export interface TurnErrorDescription {
@@ -74,7 +93,7 @@ export interface VoiceHost {
    * once, or deny) and returns the answer; null when no card waits or the words are no answer.
    */
   answerApproval(text: string): 'approve' | 'deny' | null
-  /** Follow the assistant text of a turn on `sessionId`; the returned function stops following. */
+  /** Follow the assistant text of a turn on `sessionId`; the returned function stops following without reporting an end. */
   observeTurn(sessionId: string, handlers: TurnHandlers): () => void
   /** The engine ended the conversation on its own (idle, stop phrase, error). */
   ended(reason: ConversationEndReason, detail?: string): void

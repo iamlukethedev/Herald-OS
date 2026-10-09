@@ -9,7 +9,7 @@
 import { rest } from '../rest.ts'
 import { microphoneStream, MicrophoneUnavailableError, setMicrophoneMuted } from './audio-capture.ts'
 import { earcons } from './earcons.ts'
-import { type ConversationEngine, describeTurnError, type VoiceHost } from './engine.ts'
+import { type ConversationEngine, describeTurnError, silentTurnLine, type VoiceHost } from './engine.ts'
 import { $speakLevel } from './speak-stream.ts'
 import { chunkForCommentary, isStopPhrase, sanitizeForSpeech, SentenceChunker } from './speech-text.ts'
 
@@ -477,7 +477,7 @@ export class LiveEngine implements ConversationEngine {
               this.think(delegationId, `Hermes is using ${name.replace(/_/g, ' ')}.`)
             }
           },
-          onComplete: (full, status, error) => {
+          onComplete: (full, status, error, tools = []) => {
             if (this.activeDelegationId !== delegationId) {
               return
             }
@@ -502,8 +502,15 @@ export class LiveEngine implements ConversationEngine {
               this.speak(delegationId, sentence)
             }
 
-            if (!full) {
-              this.speak(delegationId, 'Done.')
+            const silent = silentTurnLine(sanitizeForSpeech(full), status, tools)
+
+            if (silent) {
+              if (silent.problem) {
+                this.host.notify('Hermes', silent.spoken, 'warn')
+              }
+
+              this.host.setCaptions({ assistant: silent.spoken })
+              this.speak(delegationId, silent.spoken)
             }
 
             this.host.setState('listening')

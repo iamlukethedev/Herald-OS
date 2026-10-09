@@ -4,7 +4,7 @@
 import { rest } from '../rest.ts'
 import { type CaptureFrame, MicrophoneUnavailableError, subscribeMicrophone } from './audio-capture.ts'
 import { earcons } from './earcons.ts'
-import { type ConversationEngine, describeTurnError, type VoiceHost } from './engine.ts'
+import { type ConversationEngine, describeTurnError, silentTurnLine, type VoiceHost } from './engine.ts'
 import { bytesToBase64, concatInt16, encodeWav } from './pcm.ts'
 import { withProviderFallback } from './provider-fallback.ts'
 import { SpeakStream, speakOnce, stopFallbackAudio } from './speak-stream.ts'
@@ -45,6 +45,7 @@ export class ChainedEngine implements ConversationEngine {
   private replyText = ''
   private fallbackText: string | null = null
   private speechEnded = false
+  private speechStarted = false
   private thinkingTimer: ReturnType<typeof setTimeout> | null = null
   private readonly exchanges: Array<{ user: string; hermes: string }> = []
 
@@ -285,7 +286,10 @@ export class ChainedEngine implements ConversationEngine {
       transcript = await this.transcribe(pcm)
     } catch (error) {
       this.host.notify('Transcription failed', error instanceof Error ? error.message : String(error), 'warn')
-      this.beginListening(true)
+
+      if (!this.stopped) {
+        this.sayInstead('Sorry, I could not make that out. Please say it again.')
+      }
 
       return
     }
@@ -406,6 +410,7 @@ export class ChainedEngine implements ConversationEngine {
     this.replyText = ''
     this.fallbackText = null
     this.speechEnded = false
+    this.speechStarted = false
     const interrupted = this.exchanges.length > 0 && !this.exchanges[this.exchanges.length - 1].hermes
     this.exchanges.push({ user: text, hermes: '' })
 
@@ -415,6 +420,7 @@ export class ChainedEngine implements ConversationEngine {
         this.clearThinkingTimer()
 
         if (!this.stopped && this.speak === speak) {
+          this.speechStarted = true
           this.host.setState('speaking')
         }
       },
@@ -425,16 +431,14 @@ export class ChainedEngine implements ConversationEngine {
 
         this.speechEnded = true
 
-        if (reason === 'fallback') {
-          // Provider has no chunked API: speak the whole reply once the turn completes.
-          this.fallbackText = ''
-          this.maybeFinishTurn()
-
-          return
-        }
-
         if (reason === 'error' && error) {
           this.host.notify('Speech unavailable', error, 'warn')
+        }
+
+        // Provider has no chunked API, or the stream ended while Hermes was still working (its socket
+        // closed): speak the whole reply once the turn completes.
+        if (reason === 'fallback' || (reason !== 'stopped' && !this.turnDone)) {
+          this.fallbackText = ''
         }
 
         this.maybeFinishTurn()
@@ -445,15 +449,22 @@ export class ChainedEngine implements ConversationEngine {
     this.endpointer = new Endpointer(BARGE_IN_ENDPOINTER)
     this.armThinkingTimer()
 
-    const sessionId = await this.host.submit(text, { voiceContext: this.voiceContext(), interrupted })
+    let sessionId: string | null = null
+    let failure = ''
+
+    try {
+      sessionId = await this.host.submit(text, { voiceContext: this.voiceContext(), interrupted })
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
 
     if (this.stopped || this.speak !== speak) {
       return
     }
 
     if (!sessionId) {
-      speak.stop()
-      this.beginListening(true)
+      this.host.notify('Hermes could not take that', failure || 'The request did not reach Hermes.', 'warn')
+      this.sayInstead('Sorry, I could not reach Hermes for that request.')
 
       return
     }
@@ -471,7 +482,7 @@ export class ChainedEngine implements ConversationEngine {
       onTool: () => {
         this.armThinkingTimer()
       },
-      onComplete: (full, status, error) => {
+      onComplete: (full, status, error, tools = []) => {
         this.clearThinkingTimer()
         this.replyText = full || this.replyText
         this.turnDone = true
@@ -485,29 +496,30 @@ export class ChainedEngine implements ConversationEngine {
         // went wrong in plain words and show the real message, instead of a generic failure.
         if (status === 'error' || (!full.trim() && error) || /^Error:/i.test(this.replyText.trim())) {
           const described = describeTurnError(error || this.replyText)
-          speak.stop()
 
           // Sign-in problems surface as the OS sign-in card (opened by the auth store); no second toast.
           if (described.kind !== 'auth') {
             this.host.notify(described.title, described.body, described.fixable ? 'error' : 'warn')
           }
 
-          this.host.setCaptions({ assistant: described.spoken })
-          this.host.setState('speaking')
-          const signal = { stopped: false }
-          this.speakWithFallback(described.spoken, signal)
-            .catch(() => undefined)
-            .finally(() => {
-              if (!this.stopped) {
-                // A fixable setup problem will fail every turn; do not sit there listening for one.
-                if (described.fixable) {
-                  // Already reported above; 'unavailable' ends quietly without a second toast.
-                  this.host.ended('unavailable', described.body)
-                } else {
-                  this.beginListening(true)
-                }
-              }
-            })
+          // A fixable setup problem will fail every turn; do not sit there listening for one.
+          // Already reported above; 'unavailable' ends quietly without a second toast.
+          this.sayInstead(described.spoken, described.fixable ? () => this.host.ended('unavailable', described.body) : undefined)
+
+          return
+        }
+
+        // Nothing came back to say (the work done without a word, a turn that stopped short): say so.
+        const silent = silentTurnLine(sanitizeForSpeech(this.replyText), status, tools)
+
+        if (silent) {
+          if (silent.problem) {
+            this.host.notify('Hermes', silent.spoken, 'warn')
+          } else if (last) {
+            last.hermes = silent.spoken
+          }
+
+          this.sayInstead(silent.spoken)
 
           return
         }
@@ -516,6 +528,38 @@ export class ChainedEngine implements ConversationEngine {
         this.maybeFinishTurn()
       }
     })
+  }
+
+  /**
+   * Say a line instead of the reply (a failure, or a turn that ended with nothing to say), then
+   * listen; `ended` closes the conversation instead, once the line is said.
+   */
+  private sayInstead(line: string, ended?: () => void): void {
+    const stream = this.speak
+    this.speak = null
+    stream?.stop()
+    this.stopObserving?.()
+    this.stopObserving = null
+    this.clearThinkingTimer()
+    this.turnDone = true
+    this.mode = 'monitor'
+    this.endpointer = new Endpointer(BARGE_IN_ENDPOINTER)
+    this.host.setCaptions({ assistant: line })
+    this.host.setState('speaking')
+    const signal = { stopped: false }
+    this.speakWithFallback(line, signal)
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.stopped) {
+          return
+        }
+
+        if (ended) {
+          ended()
+        } else if (this.mode === 'monitor') {
+          this.beginListening(true)
+        }
+      })
   }
 
   /** Once the turn is complete and speech has drained (or fell back), listen for a follow-up. */
@@ -528,7 +572,8 @@ export class ChainedEngine implements ConversationEngine {
     this.stopObserving?.()
     this.stopObserving = null
 
-    if (this.fallbackText !== null) {
+    // Speech fell back, or the stream never said a word: speak the reply in one go.
+    if (this.fallbackText !== null || !this.speechStarted) {
       const text = sanitizeForSpeech(this.replyText)
       this.fallbackText = null
 
