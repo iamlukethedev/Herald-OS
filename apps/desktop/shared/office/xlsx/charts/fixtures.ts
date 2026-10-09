@@ -1,11 +1,153 @@
 import JSZip from 'jszip'
+import { CHART_COMPONENT, CHART_DRAWING_TYPE, type CellOffset, type ChartDrawing, type ChartRange, type ChartSpec, DRAWING_RESOURCE } from '../../charts.ts'
+import { CELL_TYPE, type CellMatrix, newSheet, newWorkbook, type WorkbookSnapshot } from '../../workbook.ts'
 import { encodeXml } from '../xml.ts'
 
 /*
- * Workbooks with charts as Excel writes them, made here part by part for the chart tests: Excel's
- * chart parts with their style and colour parts and extensions, anchors of each kind, a picture, a
- * chartEx waterfall and kinds Herald does not draw beside the ones it reads.
+ * Workbooks with charts for the chart tests, made here: workbooks made in Herald with a chart of
+ * each kind, and workbooks as Excel writes them, part by part (Excel's chart parts with their style
+ * and colour parts and extensions, anchors of each kind, a picture, a chartEx waterfall and kinds
+ * Herald does not draw beside the ones it reads).
  */
+
+export const range = (sheet: string, startRow: number, startColumn: number, endRow = startRow, endColumn = startColumn): ChartRange => ({ sheet, startRow, startColumn, endRow, endColumn })
+
+/** Cells from rows of text and numbers, with a style id where `style` gives one. */
+export function cellMatrix(rows: (string | number)[][], style?: (row: number, column: number) => string | undefined): CellMatrix {
+  return Object.fromEntries(
+    rows.map((row, r) => [
+      r,
+      Object.fromEntries(row.map((value, c) => [c, { v: value, t: typeof value === 'number' ? CELL_TYPE.number : CELL_TYPE.string, ...(style?.(r, c) ? { s: style(r, c) } : {}) }]))
+    ])
+  )
+}
+
+/** Sheet "Q1 sales" (id s1): months, two regions and a margin as percentages. */
+export const SALES_CELLS = cellMatrix(
+  [
+    ['Month', 'North', 'South', 'Margin'],
+    ['Jan', 120, 80, 0.25],
+    ['Feb', 135, 95, 0.31],
+    ['Mar', 150, 70, 0.28],
+    ['Apr', 110, 105, 0.35]
+  ],
+  (row, column) => (row > 0 && column === 3 ? 'percent' : undefined)
+)
+
+/** Sheet "Points" (id s2): x and y values. */
+export const POINTS_CELLS = cellMatrix([['X', 'Y'], [1, 2.5], [2, 3.1], [3, 4.8], [4, 4.2], [5, 6]])
+
+const months = range('s1', 1, 0, 4, 0)
+
+/** The series of sheet "Q1 sales", each named after its column's header. */
+export const SALES_SERIES = {
+  months,
+  north: { name: { cell: range('s1', 0, 1) }, values: range('s1', 1, 1, 4, 1), categories: months },
+  south: { name: { cell: range('s1', 0, 2) }, values: range('s1', 1, 2, 4, 2), categories: months },
+  margin: { name: { cell: range('s1', 0, 3) }, values: range('s1', 1, 3, 4, 3), categories: months }
+}
+
+/** A chart's floating object, by default over columns G to N of the `at`th 16 rows. */
+export function chartDrawing(id: string, sheet: string, spec: ChartSpec, options: { at?: number; from?: CellOffset; to?: CellOffset; anchorType?: '0' | '1' | '2' } = {}): ChartDrawing {
+  const at = options.at ?? 0
+  const from = options.from ?? { column: 6, columnOffset: 0, row: at * 16, rowOffset: 0 }
+  const to = options.to ?? { column: 13, columnOffset: 0, row: at * 16 + 15, rowOffset: 0 }
+
+  return {
+    unitId: 'book',
+    subUnitId: sheet,
+    drawingId: id,
+    drawingType: CHART_DRAWING_TYPE,
+    componentKey: CHART_COMPONENT,
+    sheetTransform: { from, to },
+    axisAlignSheetTransform: { from, to },
+    transform: { left: 0, top: 0, width: 0, height: 0 },
+    ...(options.anchorType ? { anchorType: options.anchorType } : {}),
+    allowTransform: true,
+    data: { herald: 'chart', version: 1, spec }
+  }
+}
+
+/** A workbook made in Herald with sheets "Q1 sales" and "Points" (or other names), and these charts over them. */
+export function chartWorkbook(drawings: ChartDrawing[], names: [string, string] = ['Q1 sales', 'Points']): WorkbookSnapshot {
+  const book = newWorkbook('book', 'Book', [newSheet('s1', names[0], structuredClone(SALES_CELLS)), newSheet('s2', names[1], structuredClone(POINTS_CELLS))])
+  const resource: Record<string, { data: Record<string, ChartDrawing>; order: string[] }> = {}
+
+  for (const drawing of drawings) {
+    resource[drawing.subUnitId] ??= { data: {}, order: [] }
+    resource[drawing.subUnitId].data[drawing.drawingId] = drawing
+    resource[drawing.subUnitId].order.push(drawing.drawingId)
+  }
+
+  return { ...book, styles: { percent: { n: { pattern: '0%' } } }, resources: [{ name: DRAWING_RESOURCE, data: JSON.stringify(resource) }] }
+}
+
+const { north, south, margin } = SALES_SERIES
+
+/** One chart of each kind, as its chart part says it exactly: colours, gridlines, series types and markers written out. */
+export const EVERY_KIND: ChartSpec[] = [
+  {
+    kind: 'column',
+    title: 'Quarterly sales',
+    series: [
+      { ...north, color: '#1f4e79' },
+      { ...south, color: '#c55a11' }
+    ],
+    stacking: 'stacked',
+    legend: 'bottom',
+    labels: 'value',
+    axes: { x: { gridlines: false, title: 'Month' }, y: { gridlines: true, title: 'Units', min: 0, max: 300, format: '#,##0' } }
+  },
+  { kind: 'bar', title: 'By region', series: [{ name: { text: 'North' }, values: north.values, categories: months, color: '#2e75b6' }], legend: 'none', labels: 'category', axes: { x: { gridlines: true }, y: { gridlines: false, hidden: true } } },
+  {
+    kind: 'line',
+    series: [
+      { ...north, color: '#1f4e79', markers: true, smooth: true },
+      { ...south, color: '#548235', markers: false }
+    ],
+    legend: 'top',
+    labels: 'none',
+    axes: { x: { gridlines: false }, y: { gridlines: true } }
+  },
+  {
+    kind: 'area',
+    title: 'Two lines\nof title',
+    series: [
+      { ...north, color: '#1f4e79' },
+      { ...south, color: '#c55a11' }
+    ],
+    stacking: 'percent',
+    legend: 'right',
+    labels: 'none',
+    axes: { x: { gridlines: false }, y: { gridlines: true, format: '0%' } }
+  },
+  { kind: 'pie', title: 'North', series: [north], legend: 'right', labels: 'percent', palette: ['#1f4e79', '#c55a11', '#7f7f7f', '#bf8f00'] },
+  { kind: 'doughnut', series: [north, south], legend: 'bottom', labels: 'category', palette: ['#2e75b6', '#548235', '#bf8f00', '#7030a0'], hole: 60 },
+  {
+    kind: 'scatter',
+    title: 'Growth',
+    series: [{ name: { cell: range('s2', 0, 1) }, values: range('s2', 1, 1, 5, 1), categories: range('s2', 1, 0, 5, 0), color: '#1f4e79' }],
+    legend: 'none',
+    labels: 'value',
+    axes: { x: { gridlines: true, min: 0, max: 6, title: 'X' }, y: { gridlines: false, title: 'Y' } }
+  },
+  {
+    kind: 'combo',
+    title: 'Sales and margin',
+    series: [
+      { ...north, color: '#1f4e79', type: 'column' },
+      { ...south, color: '#c55a11', type: 'area' },
+      { ...margin, color: '#548235', type: 'line', secondary: true, markers: true }
+    ],
+    stacking: 'stacked',
+    legend: 'bottom',
+    labels: 'none',
+    axes: { x: { gridlines: false }, y: { gridlines: true, title: 'Units' }, y2: { gridlines: false, min: 0, max: 0.5, format: '0%', title: 'Margin' } }
+  }
+]
+
+/** A workbook made in Herald with a chart of every kind, one under another (the scatter chart on sheet "Points"). */
+export const everyKindWorkbook = (): WorkbookSnapshot => chartWorkbook(EVERY_KIND.map((spec, i) => chartDrawing(`chart-${spec.kind}`, spec.kind === 'scatter' ? 's2' : 's1', spec, { at: i })))
 
 const MAIN = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
