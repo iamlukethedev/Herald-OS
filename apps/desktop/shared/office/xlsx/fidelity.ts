@@ -1,10 +1,15 @@
+import { keepsPivotCache, pivotCacheIdOf } from './keep/pivots.ts'
+import { readTable } from './keep/tables.ts'
+import { parseRelationships, relsPathOf } from './opc.ts'
 import type { XlsxPackage } from './package.ts'
 
 /*
  * What an .xlsx file holds that Herald Sheets drops, found by looking at the package's parts
- * rather than at what ExcelJS happened to read: charts, pivot tables, macros, pictures and shapes,
- * notes, links to other workbooks, slicers, sparklines, protection, print settings and the rest.
- * Each note says what happens to the thing, for the fidelity report before the first save.
+ * rather than at what ExcelJS happened to read: macros, protection, print settings, form controls,
+ * data connections and the rest. What Herald shows or carries into the file it saves (charts,
+ * pictures, shapes, pivot tables, slicers, tables, sparklines, chart sheets, links to other
+ * workbooks) has no note, but for the kinds fed by a data connection, which go with it. Each note
+ * says what happens to the thing, for the fidelity report before the first save.
  */
 
 /** "one chart", "3 charts". */
@@ -14,35 +19,64 @@ export function counted(n: number, singular: string, plural = `${singular}s`): s
 
 const capital = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1)
 
-/** How many times `pattern` occurs in `text`. */
-const occurrences = (text: string, pattern: RegExp): number => text.match(pattern)?.length ?? 0
-
 export interface PackageReport {
   notes: string[]
   /** The file has macros (a VBA project), which no saved copy keeps. */
   macros: boolean
 }
 
+/** The pivot tables, tables, and slicer and timeline caches fed by a data connection or the data model, which Herald does not keep. */
+async function fedFromElsewhere(pkg: XlsxPackage): Promise<{ pivotTables: number; tables: number; slicers: number }> {
+  const relationships = async (part: string) => parseRelationships(part, await pkg.read(relsPathOf(part)))
+  const worksheets = pkg.sheets.filter((sheet) => sheet.kind === 'worksheet')
+  const keptCaches = new Set<string>()
+  const keptTables = new Set<string>()
+  let pivotTables = 0
+  let tables = 0
+  let slicers = 0
+
+  for (const sheet of worksheets) {
+    for (const rel of sheet.related.filter((entry) => entry.type === 'pivotTable' && !entry.external)) {
+      const cache = (await relationships(rel.target)).find((entry) => entry.type.endsWith('/pivotCacheDefinition') && !entry.external)
+      const xml = cache ? await pkg.read(cache.target) : undefined
+      const id = xml && keepsPivotCache(xml) ? pivotCacheIdOf(xml) : undefined
+
+      if (id) {
+        keptCaches.add(id)
+      }
+
+      pivotTables += xml && keepsPivotCache(xml) ? 0 : 1
+    }
+
+    for (const rel of sheet.related.filter((entry) => entry.type === 'table' && !entry.external)) {
+      const table = readTable((await pkg.read(rel.target)) ?? '')
+
+      if (table.type === 'worksheet') {
+        keptTables.add(table.id)
+      } else {
+        tables++
+      }
+    }
+  }
+
+  for (const file of pkg.files.filter((name) => /^xl\/(slicerCaches|timelineCaches)\/[^/]+\.xml$/i.test(name))) {
+    const xml = (await pkg.read(file)) ?? ''
+    const table = /<(?:[\w.-]+:)?tableSlicerCache\b[^>]*?\stableId="(\d+)"/.exec(xml)?.[1]
+    const cache = /\spivotCacheId="(\d+)"/.exec(xml)?.[1]
+    slicers += !/<(?:[\w.-]+:)?olap\b/.test(xml) && (table ? keptTables.has(table) : cache !== undefined && keptCaches.has(cache)) ? 0 : 1
+  }
+
+  return { pivotTables, tables, slicers }
+}
+
 export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Promise<PackageReport> {
   const notes: string[] = []
   const files = pkg.files
   const count = (pattern: RegExp) => files.filter((file) => pattern.test(file)).length
-  const readAll = async (pattern: RegExp) => (await Promise.all(files.filter((file) => pattern.test(file)).map((file) => pkg.read(file)))).join('\n')
   const macros = files.some((file) => /(^|\/)vbaProject\.bin$/i.test(file)) || extension === '.xlsm'
 
   if (macros) {
     notes.push('Macros (VBA) are not kept: Herald Sheets does not run them, and a copy it saves has none.')
-  }
-
-  const charts = count(/^xl\/charts\/chart(?:Ex)?\d*\.xml$/i)
-  const chartSheets = pkg.sheets.filter((sheet) => sheet.kind === 'chartsheet').length
-
-  if (charts) {
-    notes.push(`${capital(counted(charts, 'chart'))} ${charts === 1 ? 'is' : 'are'} not kept; the data ${charts === 1 ? 'it shows stays' : 'they show stays'}.`)
-  }
-
-  if (chartSheets) {
-    notes.push(`${capital(counted(chartSheets, 'chart sheet'))} (a sheet holding only a chart) ${chartSheets === 1 ? 'is' : 'are'} left out.`)
   }
 
   const otherSheets = pkg.sheets.filter((sheet) => sheet.kind === 'dialogsheet' || sheet.kind === 'macrosheet' || sheet.kind === 'other').length
@@ -51,54 +85,21 @@ export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Pro
     notes.push(`${capital(counted(otherSheets, 'dialog or Excel 4.0 macro sheet'))} ${otherSheets === 1 ? 'is' : 'are'} left out.`)
   }
 
-  const pivots = count(/^xl\/pivotTables\/pivotTable\d*\.xml$/i)
+  const fed = await fedFromElsewhere(pkg)
 
-  if (pivots) {
-    notes.push(`${capital(counted(pivots, 'pivot table'))}: ${pivots === 1 ? 'its' : 'their'} cells stay as plain values, without the pivot table that made them.`)
+  if (fed.pivotTables) {
+    notes.push(`${capital(counted(fed.pivotTables, 'pivot table'))} fed by a data connection or the data model: ${fed.pivotTables === 1 ? 'its' : 'their'} cells stay as plain values, without the pivot table that made them.`)
   }
 
-  const drawings = await readAll(/^xl\/drawings\/drawing\d*\.xml$/i)
-  const pictures = occurrences(drawings, /<xdr:pic>/g) + occurrences(drawings, /<xdr:pic\s/g)
-  const shapes = occurrences(drawings, /<xdr:sp[\s>]/g) + occurrences(drawings, /<xdr:cxnSp[\s>]/g)
-
-  if (pictures) {
-    notes.push(`${capital(counted(pictures, 'picture'))} ${pictures === 1 ? 'is' : 'are'} not shown or kept.`)
+  if (fed.tables) {
+    notes.push(`${capital(counted(fed.tables, 'table'))} fed by a data connection or an XML map ${fed.tables === 1 ? 'becomes a plain range' : 'become plain ranges'}: data and formatting stay.`)
   }
 
-  if (shapes) {
-    notes.push(`${capital(counted(shapes, 'shape or text box', 'shapes and text boxes'))} ${shapes === 1 ? 'is' : 'are'} not shown or kept.`)
-  }
-
-  const comments = occurrences(await readAll(/^xl\/comments\d*\.xml$/i), /<comment\s/g)
-  const threads = occurrences(await readAll(/^xl\/threadedComments\/threadedComment\d*\.xml$/i), /<threadedComment\s(?![^>]*parentId=)/g)
-
-  if (threads) {
-    notes.push(`${capital(counted(threads, 'comment thread'))} ${threads === 1 ? 'is' : 'are'} not shown or kept.`)
-  } else if (comments) {
-    notes.push(`${capital(counted(comments, 'note'))} on cells ${comments === 1 ? 'is' : 'are'} not shown or kept.`)
-  }
-
-  const externals = count(/^xl\/externalLinks\/externalLink\d*\.xml$/i)
-
-  if (externals) {
-    notes.push(`Links to ${counted(externals, 'other workbook')} are not kept; formulas that use them keep their last values until they are worked out again.`)
-  }
-
-  const tables = count(/^xl\/tables\/table\d*\.xml$/i)
-
-  if (tables) {
-    notes.push(`${capital(counted(tables, 'table'))} ${tables === 1 ? 'becomes a plain range' : 'become plain ranges'}: data and formatting stay, the table and formulas that name its columns do not.`)
-  }
-
-  if (count(/^xl\/(slicers|slicerCaches|timelines|timelineCaches)\//i)) {
-    notes.push('Slicers and timelines are not kept.')
+  if (fed.slicers) {
+    notes.push('Slicers and timelines on a data connection or the data model are not kept.')
   }
 
   const sheetParts = pkg.sheets.map((sheet) => `${sheet.head}${sheet.tail}`).join('\n')
-
-  if (/<(?:\w+:)?sparklineGroup[\s>]/.test(sheetParts)) {
-    notes.push('Sparklines (small charts in cells) are not kept.')
-  }
 
   if (/<(?:\w+:)?(sheetProtection|protectedRange)[\s>]/.test(sheetParts) || /<(?:\w+:)?(workbookProtection|fileSharing)[\s>]/.test(pkg.workbookXml)) {
     notes.push('Protection (locked sheets, structure or a password to open for editing) is not kept: a saved copy is unprotected.')
@@ -112,15 +113,12 @@ export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Pro
     notes.push('Grouped rows and columns are shown ungrouped; rows and columns that were collapsed stay hidden.')
   }
 
-  if (/<(?:\w+:)?picture\s/.test(sheetParts)) {
-    notes.push('Sheet background pictures are not kept.')
-  }
-
   if (count(/^xl\/(ctrlProps|activeX)\//i) || /<(?:\w+:)?controls[\s>]/.test(sheetParts)) {
     notes.push('Form controls (buttons, check boxes, lists) are not kept.')
   }
 
-  if (count(/^xl\/embeddings\//i) || /<(?:\w+:)?oleObjects[\s>]/.test(sheetParts)) {
+  // Embedded workbooks that charts show from come along with the charts; objects on sheets do not.
+  if (/<(?:\w+:)?oleObjects[\s>]/.test(sheetParts) || pkg.sheets.some((sheet) => sheet.related.some((rel) => rel.type === 'oleObject' || rel.type === 'package'))) {
     notes.push('Embedded objects (other documents inside the workbook) are not kept.')
   }
 
@@ -150,10 +148,6 @@ export async function inspectPackage(pkg: XlsxPackage, extension = '.xlsx'): Pro
 
   if (count(/^_xmlsignatures\//i)) {
     notes.push('The digital signature does not survive saving: a saved copy is unsigned.')
-  }
-
-  if (count(/^docProps\/custom\.xml$/i)) {
-    notes.push('Custom document properties are not kept.')
   }
 
   return { notes, macros }

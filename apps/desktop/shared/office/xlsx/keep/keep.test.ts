@@ -25,7 +25,7 @@ async function opened(bytes: Uint8Array) {
   const text = async (path: string) => (await zip.file(path)?.async('string')) ?? ''
   const workbook = await text('xl/workbook.xml')
   const workbookRels = parseRelationships('xl/workbook.xml', await text('xl/_rels/workbook.xml.rels'))
-  const sheets = elementsOf(firstElement(workbook, 'sheets')?.inner ?? '', 'sheet').map(({ attributes }) => ({ ...attributes, path: workbookRels.find((rel) => rel.id === attributes['r:id'])?.target ?? '' }))
+  const sheets = elementsOf(firstElement(workbook, 'sheets')?.inner ?? '', 'sheet').map(({ attributes }) => ({ name: attributes.name ?? '', sheetId: attributes.sheetId ?? '', path: workbookRels.find((rel) => rel.id === attributes['r:id'])?.target ?? '' }))
   const relationships = async (part: string) => parseRelationships(part, await text(relsPathOf(part)))
   const related = async (part: string, type: string) => (await relationships(part)).filter((rel) => rel.type.endsWith(`/${type}`)).map((rel) => rel.target)
   const files = (pattern: RegExp) => Object.keys(zip.files).filter((name) => pattern.test(name))
