@@ -27,5 +27,10 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'chrome130',
     sourcemap: true
+  },
+  // Module workers split like the window does. A single-file worker carries every lazy import with it:
+  // Univer's hyphenation dictionaries would make Herald Sheets' formula worker, one per workbook, 7 MB.
+  worker: {
+    format: 'es'
   }
 })
