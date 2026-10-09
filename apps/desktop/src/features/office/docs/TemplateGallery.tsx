@@ -154,7 +154,7 @@ export function TemplateGallery() {
     close()
     const names = docsSession.$documents.get().map((doc) => doc.name)
     const model = card.saved ? structuredClone(card.saved.doc) : card.key === 'blank' ? null : documentFromTemplate(card.key, { locale: locale() })
-    const doc = model ? docsSession.create(model, freshName(card.name, names)) : docsSession.create()
+    const doc = model ? docsSession.create({ model, name: freshName(card.name, names) }) : docsSession.create()
     focusWhenReady(doc.key)
   }
 
