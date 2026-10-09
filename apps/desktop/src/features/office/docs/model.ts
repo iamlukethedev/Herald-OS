@@ -193,14 +193,14 @@ export type Place = 'start' | 'end' | 'selection' | { heading: string | number; 
 /** What a change applies to: the selection, everything, a heading's section, matches of some text, or a range. */
 export type Target = 'selection' | 'all' | { heading: string | number; part?: 'heading' | 'section' | 'all' } | { text: string; all?: boolean; options?: SearchOptions } | { from: number; to: number }
 
-interface Range {
+export interface Range {
   from: number
   to: number
 }
 
 const isEmptyParagraph = (node: PMNode | null | undefined): boolean => Boolean(node && node.type.name === 'paragraph' && node.content.size === 0)
 
-function placeRange(state: EditorState, place: Place): Range & { inline: boolean } {
+export function placeRange(state: EditorState, place: Place): Range & { inline: boolean } {
   const { doc, selection } = state
   const size = doc.content.size
 
@@ -233,7 +233,7 @@ function placeRange(state: EditorState, place: Place): Range & { inline: boolean
   return place.mode === 'replace' ? { ...section, inline: false } : { from: section.to, to: section.to, inline: false }
 }
 
-function targetRanges(state: EditorState, target: Target): Range[] {
+export function targetRanges(state: EditorState, target: Target): Range[] {
   const { doc, selection } = state
 
   if (target === 'selection') {
@@ -770,7 +770,7 @@ export const insertList = (spec: ListSpec, place: Place = 'end'): Op => insertNo
 export const insertPageBreak = (place: Place = 'selection'): Op => insertNodes((schema) => [schema.nodes.pageBreak.create()], place)
 
 /** Blocks between blocks: at a caret in a paragraph, the paragraph is split around them. */
-function insertNodes(build: (schema: Schema) => PMNode[], place: Place): Op {
+export function insertNodes(build: (schema: Schema) => PMNode[], place: Place): Op {
   return (state) => {
     const tr = insertBlocks(state.tr, placeRange(state, place), build(state.schema), place)
 
@@ -800,5 +800,7 @@ export function setPage(change: PageChange): Op {
   }
 }
 
+export * from './page-ops.ts'
+export * from './review-ops.ts'
 export { documentFromTemplate, TEMPLATES, type TemplateInfo, type TemplateOptions } from './templates/index.ts'
 export { type DocumentStatistics, documentStatistics, type Readability, type StatisticsOptions } from './statistics.ts'

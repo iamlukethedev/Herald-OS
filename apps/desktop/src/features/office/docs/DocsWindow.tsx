@@ -1,7 +1,7 @@
 import './docs.css'
 import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { type CalloutKind, pageOf, type PageSettings, pageSizeName } from '../../../../shared/office/document.ts'
+import type { CalloutKind } from '../../../../shared/office/document.ts'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
 import { officeAbilities } from '../session.ts'
@@ -12,6 +12,9 @@ import { CALLOUT_LABELS, LINE_SPACINGS } from './choices.ts'
 import { DocsEditor, dragPoint } from './DocsEditor.tsx'
 import { mimeOfName } from './editor.ts'
 import { BLOCK_STYLES, styleAt } from './model.ts'
+import { navigationViewItems } from './navigation-menus.ts'
+import { pageMenuItems } from './page-menus.ts'
+import { reviewMenuItems } from './review-menus.ts'
 import { $pickImage } from './slash.ts'
 import { $statistics, StatisticsDialog } from './StatisticsDialog.tsx'
 import { activeEditor, docsSession } from './store.ts'
@@ -22,15 +25,10 @@ import { DocsToolbar } from './Toolbar.tsx'
 
 const STYLE_SHORTCUTS: Record<string, string> = { normal: 'mod+alt+0', heading1: 'mod+alt+1', heading2: 'mod+alt+2', heading3: 'mod+alt+3' }
 
-/** Whether the page of the document in front passes `test`, for the checks in Page Setup. */
-const pageIs = (test: (page: PageSettings) => boolean) => () => {
-  const editor = activeEditor()
-
-  return Boolean(editor && test(pageOf({ type: 'doc', attrs: editor.state.doc.attrs })))
-}
-
 function docsMenus(): OfficeMenu[] {
   const has = act.hasEditor
+  const pageItems = pageMenuItems()
+  const review = reviewMenuItems()
   const mark = (id: act.MarkName, label: string, shortcut: string): OfficeCommand => ({ id, label, shortcut, enabled: has, checked: () => act.isActive(id), run: () => act.toggleMark(id) })
 
   const insert: OfficeCommand[] = [
@@ -41,7 +39,9 @@ function docsMenus(): OfficeMenu[] {
     { id: 'page-break', label: 'Page Break', shortcut: 'mod+enter', enabled: has, run: act.pageBreak },
     { id: 'panel', label: 'Panel', enabled: has, run: () => act.callout('info'), submenu: (Object.entries(CALLOUT_LABELS) as [CalloutKind, string][]).map(([kind, label]) => ({ id: `panel-${kind}`, label, enabled: has, run: () => act.callout(kind) })) },
     { id: 'code-block', label: 'Code Block', shortcut: 'mod+alt+c', enabled: has, run: () => act.style('code'), dividerBefore: true },
-    { id: 'quote', label: 'Quote', shortcut: 'mod+shift+b', enabled: has, run: () => act.style('quote') }
+    { id: 'quote', label: 'Quote', shortcut: 'mod+shift+b', enabled: has, run: () => act.style('quote') },
+    ...pageItems.insert,
+    ...review.insert
   ]
 
   const format: OfficeCommand[] = [
@@ -87,22 +87,7 @@ function docsMenus(): OfficeMenu[] {
     },
     { id: 'indent', label: 'Increase Indent', shortcut: 'mod+]', enabled: has, run: () => act.shiftIndent(1) },
     { id: 'outdent', label: 'Decrease Indent', shortcut: 'mod+[', enabled: has, run: () => act.shiftIndent(-1) },
-    {
-      id: 'page',
-      label: 'Page Setup',
-      enabled: has,
-      dividerBefore: true,
-      run: () => {},
-      submenu: [
-        { id: 'page-a4', label: 'A4', enabled: has, checked: pageIs((page) => pageSizeName(page) === 'a4'), run: () => act.page({ size: 'a4' }) },
-        { id: 'page-letter', label: 'Letter', enabled: has, checked: pageIs((page) => pageSizeName(page) === 'letter'), run: () => act.page({ size: 'letter' }) },
-        { id: 'page-portrait', label: 'Portrait', enabled: has, dividerBefore: true, checked: pageIs((page) => page.width <= page.height), run: () => act.page({ orientation: 'portrait' }) },
-        { id: 'page-landscape', label: 'Landscape', enabled: has, checked: pageIs((page) => page.width > page.height), run: () => act.page({ orientation: 'landscape' }) },
-        { id: 'margins-normal', label: 'Normal Margins (2.54 cm)', enabled: has, dividerBefore: true, run: () => act.page({ margins: 72 }) },
-        { id: 'margins-narrow', label: 'Narrow Margins (1.27 cm)', enabled: has, run: () => act.page({ margins: 36 }) },
-        { id: 'margins-wide', label: 'Wide Margins (3.81 cm)', enabled: has, run: () => act.page({ margins: 108 }) }
-      ]
-    }
+    ...pageItems.format
   ]
 
   const table: OfficeCommand[] = [
@@ -125,6 +110,7 @@ function docsMenus(): OfficeMenu[] {
 
   const key = () => docsSession.$activeKey.get()
   const view: OfficeCommand[] = [
+    ...navigationViewItems(),
     { id: 'zoom-in', label: 'Zoom In', shortcut: 'mod+=', enabled: has, run: () => key() && act.zoom(key()!, 'in') },
     { id: 'zoom-out', label: 'Zoom Out', shortcut: 'mod+-', enabled: has, run: () => key() && act.zoom(key()!, 'out') },
     { id: 'zoom-reset', label: 'Actual Size', shortcut: 'mod+0', enabled: has, run: () => key() && act.zoom(key()!, 'reset') }
@@ -145,6 +131,7 @@ function docsMenus(): OfficeMenu[] {
       { id: 'insert', label: 'Insert', items: insert },
       { id: 'format', label: 'Format', items: format },
       { id: 'table', label: 'Table', items: table },
+      ...(review.menu ? [review.menu] : []),
       { id: 'view', label: 'View', items: view },
       { id: 'tools', label: 'Tools', items: tools }
     ]

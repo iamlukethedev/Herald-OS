@@ -8,17 +8,21 @@ import { countWords, type DocJSON, pageOf } from '../../../../shared/office/docu
 import type { EditorHandle, OfficeDocument } from '../types.ts'
 import * as act from './actions.ts'
 import { BubbleBar } from './BubbleBar.tsx'
+import { CommentsPanel } from './CommentsPanel.tsx'
 import { createDocsEditor } from './editor.ts'
 import { FindBar } from './FindBar.tsx'
 import { ImageBar } from './ImageBar.tsx'
 import { LinkPopover } from './LinkPopover.tsx'
 import { counts, outline } from './model.ts'
+import { NavigationPane } from './NavigationPane.tsx'
 import { useScrollTick } from './overlay.ts'
 import { pageCss } from './pages/css.ts'
 import { pageAt } from './pages/map.ts'
 import { paginatorOf } from './pages/paginator.ts'
+import { flushPartEdits, PartEditors } from './PartEditor.tsx'
 import { SlashMenu } from './SlashMenu.tsx'
 import { $editors, $find, $noteEdit, $pages, $partEdit, $zoom, docsSession, type ScreenRect } from './store.ts'
+import { withTocPages } from './toc.ts'
 
 /** Where a file was last dragged over a page, so a picture dropped from Files lands there. */
 export const dragPoint = { key: '', left: 0, top: 0 }
@@ -96,7 +100,11 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
       return counted
     }
     const handle: EditorHandle<DocJSON> = {
-      snapshot: () => instance.getJSON() as DocJSON,
+      snapshot: () => {
+        flushPartEdits(doc.key)
+
+        return withTocPages(instance.getJSON() as DocJSON, doc.key)
+      },
       load: (model) => {
         // A new state: the version on disk, with history starting again from it.
         instance.view.updateState(EditorState.create({ doc: instance.schema.nodeFromJSON(model), plugins: instance.state.plugins }))
@@ -212,23 +220,28 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
   return (
     <div ref={frame} className="docs-frame relative flex min-h-0 min-w-0 flex-1 flex-col">
       {editor && find?.key === doc.key && <FindBar key={editor.instanceId} editor={editor} replace={find.replace} at={find.at} onClose={() => $find.set(null)} />}
-      <div
-        ref={desk}
-        className="docs-desk min-h-0 flex-1 overflow-auto"
-        onDragOver={(event) => Object.assign(dragPoint, { key: doc.key, left: event.clientX, top: event.clientY })}
-        onMouseDown={(event) => {
-          if (editor && event.target === event.currentTarget) {
-            event.preventDefault()
-            editor.commands.focus('end')
-          }
-        }}
-      >
-        <style>{css}</style>
-        <div ref={sheet} className="docs-sheet" data-docs-page={doc.key} style={{ width: `${page.width}pt`, minHeight: `${page.height}pt`, zoom }} onMouseDown={onSheetDown}>
-          <div ref={layer} className="docs-pages" aria-hidden="true" />
-          <div ref={mount} className="docs-mount" />
+      <div className="flex min-h-0 min-w-0 flex-1">
+        {editor && <NavigationPane key={editor.instanceId} editor={editor} docKey={doc.key} />}
+        <div
+          ref={desk}
+          className="docs-desk min-h-0 min-w-0 flex-1 overflow-auto"
+          onDragOver={(event) => Object.assign(dragPoint, { key: doc.key, left: event.clientX, top: event.clientY })}
+          onMouseDown={(event) => {
+            if (editor && event.target === event.currentTarget) {
+              event.preventDefault()
+              editor.commands.focus('end')
+            }
+          }}
+        >
+          <style>{css}</style>
+          <div ref={sheet} className="docs-sheet" data-docs-page={doc.key} style={{ width: `${page.width}pt`, minHeight: `${page.height}pt`, zoom }} onMouseDown={onSheetDown}>
+            <div ref={layer} className="docs-pages" aria-hidden="true" />
+            <div ref={mount} className="docs-mount" />
+          </div>
         </div>
+        {editor && <CommentsPanel key={editor.instanceId} editor={editor} docKey={doc.key} />}
       </div>
+      {editor && <PartEditors key={editor.instanceId} editor={editor} docKey={doc.key} frame={frame.current} desk={desk.current} active={active} />}
       {editor && active && (
         <Fragment key={editor.instanceId}>
           <BubbleBar editor={editor} frame={frame.current} tick={tick} />
