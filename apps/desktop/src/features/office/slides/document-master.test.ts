@@ -22,8 +22,9 @@ describe('the master view of a SlidesDocument', () => {
 
     expect(doc.mode).toBe('master')
     expect(doc.deck).toBe(model.masterDeck(deck))
-    expect(doc.history.present).toBe(doc.deck)
+    expect(doc.base).toBe(doc.deck)
     expect(doc.presentation).toBe(deck)
+    expect(doc.history.present).toBe(deck)
     expect(doc.slideId).toBe(model.layoutSlideId('title-content'))
     expect(doc.pickedSlides).toEqual([model.layoutSlideId('title-content')])
 
@@ -46,7 +47,7 @@ describe('the master view of a SlidesDocument', () => {
     const doc = new SlidesDocument(threeSlides(), edited)
     const before = doc.presentation
     doc.enterMaster('master')
-    const added = model.addShape(doc.history.present, model.MASTER_SLIDE_ID, { shape: 'rect' })
+    const added = model.addShape(doc.base, model.MASTER_SLIDE_ID, { shape: 'rect' })
     doc.commit({ ...added, focus: { selected: [added.elementId] } })
     const onMaster = () => masterOf(doc.presentation).elements.some((element) => element.id === added.elementId)
 
@@ -69,7 +70,7 @@ describe('the master view of a SlidesDocument', () => {
     const doc = new SlidesDocument(model.newDeck('Pitch'), () => {})
     doc.enterMaster('master')
     const title = doc.slide.elements.find((element) => element.placeholder?.role === 'title')!
-    const moved = (y: number) => withElements(doc.history.present, model.MASTER_SLIDE_ID, new Set([title.id]), (element) => ({ ...element, y }))
+    const moved = (y: number) => withElements(doc.base, model.MASTER_SLIDE_ID, new Set([title.id]), (element) => ({ ...element, y }))
 
     doc.show(moved(10))
     doc.show(moved(20))
@@ -90,7 +91,7 @@ describe('the master view of a SlidesDocument', () => {
     doc.show(slidesPreview)
     expect(doc.preview).toBeNull()
 
-    const masterPreview = doc.history.present
+    const masterPreview = doc.base
     doc.exitMaster()
     doc.show(masterPreview)
     expect(doc.preview).toBeNull()
@@ -119,7 +120,7 @@ describe('the master view of a SlidesDocument', () => {
   it('maps a change of the master’s deck into the master even after the view has closed', () => {
     const doc = new SlidesDocument(model.newDeck('Pitch'), () => {})
     doc.enterMaster('master')
-    const late = model.addShape(doc.history.present, model.MASTER_SLIDE_ID, { shape: 'ellipse' })
+    const late = model.addShape(doc.base, model.MASTER_SLIDE_ID, { shape: 'ellipse' })
     doc.exitMaster()
     doc.commit(late)
 
@@ -131,8 +132,8 @@ describe('the master view of a SlidesDocument', () => {
     const doc = new SlidesDocument(model.newDeck('Pitch'), () => {})
     const before = doc.presentation
     doc.enterMaster('title')
-    doc.commit(model.setLayout(doc.history.present, model.layoutSlideId('title'), 'blank'))
-    doc.commit(model.setSize(doc.history.present, SLIDE_SIZES.standard))
+    doc.commit(model.setLayout(doc.base, model.layoutSlideId('title'), 'blank'))
+    doc.commit(model.setSize(doc.base, SLIDE_SIZES.standard))
 
     expect(doc.presentation).toBe(before)
     expect(doc.history.canUndo).toBe(false)

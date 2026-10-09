@@ -211,7 +211,7 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
     session?.finish()
     scroller.current?.focus({ preventScroll: true })
     const point = toSlide(event)
-    const base = doc.history.present
+    const base = doc.base
     const here = findSlide(base, doc.slideId)
 
     if (!here) {
@@ -315,7 +315,7 @@ export function Stage({ doc, onContextMenu }: { doc: SlidesDocument; onContextMe
         return
       }
 
-      let base = doc.history.present
+      let base = doc.base
       let ids = [...doc.selected]
 
       if (now.duplicate) {

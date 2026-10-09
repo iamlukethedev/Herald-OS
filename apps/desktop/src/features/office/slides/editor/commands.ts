@@ -60,9 +60,9 @@ export function change<T extends DeckChange>(make: (deck: Deck, doc: SlidesDocum
   }
 
   flushTyping(doc)
-  const next = make(doc.history.present, doc)
+  const next = make(doc.base, doc)
 
-  if (next && next.deck !== doc.history.present) {
+  if (next && next.deck !== doc.base) {
     doc.commit(next)
   }
 
@@ -281,7 +281,7 @@ function changeAtCell(doc: SlidesDocument | undefined, make: (deck: Deck, slideI
   const cell = doc.cell
   const typing = doc.editing === table.id && Boolean(textSessionOf(doc))
   textSessionOf(doc)?.finish()
-  const deck = doc.history.present
+  const deck = doc.base
   const made = make(deck, doc.slideId, model.requireTable(deck, doc.slideId, table.id), cell)
 
   if (!made) {
@@ -435,8 +435,8 @@ export function pickPictures(doc = live()): void {
 
 /** New presentations made from documents picked, in the theme of the deck in front. */
 export async function newFromDocument(access: FileAccess = officeFiles()): Promise<void> {
-  for (const { name, deck } of await decksFromDocuments(access, notify, live()?.history.present.theme)) {
-    slidesSession.create(deck, name)
+  for (const { name, deck } of await decksFromDocuments(access, notify, live()?.presentation.theme)) {
+    slidesSession.create({ name, model: deck })
   }
 }
 

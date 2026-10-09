@@ -13,15 +13,6 @@ import type { CellRef } from './tables.ts'
  * deck, and each change of it goes back into the deck's master as one step of the deck's history.
  */
 
-/** What edits start from and step through: the deck's history, in the master view with the master's deck as its present. */
-export interface Steps {
-  readonly present: Deck
-  readonly canUndo: boolean
-  readonly canRedo: boolean
-  readonly undoLabel: string | null
-  readonly redoLabel: string | null
-}
-
 /** How the slide view draws a slide beyond its own content. */
 export interface ViewOptions {
   inherit?: boolean
@@ -58,9 +49,7 @@ function backdrop(background: Background, size: SlideSize): SlideElement {
 
 export class SlidesDocument {
   /** The deck's own history, whichever view is in front. */
-  private readonly steps: DeckHistory
-  /** The same steps as the master view sees them. */
-  private readonly masterSteps: Steps
+  readonly history: DeckHistory
   slideId: string
   /** Slides picked in the slide list, the one in front among them. */
   picked: string[]
@@ -89,43 +78,24 @@ export class SlidesDocument {
     deck: Deck,
     private readonly onEdit: () => void
   ) {
-    const steps = new DeckHistory(deck)
-    const masterView = () => this.masterDeck
-    this.steps = steps
-    this.masterSteps = {
-      get present() {
-        return masterView()
-      },
-      get canUndo() {
-        return steps.canUndo
-      },
-      get canRedo() {
-        return steps.canRedo
-      },
-      get undoLabel() {
-        return steps.undoLabel
-      },
-      get redoLabel() {
-        return steps.redoLabel
-      }
-    }
+    this.history = new DeckHistory(deck)
     this.slideId = deck.slides[0]?.id ?? ''
     this.picked = [this.slideId]
   }
 
-  /** The history edits start from: the deck's, or in the master view the same steps with the master's deck as the present. */
-  get history(): Steps {
-    return this.mode === 'master' ? this.masterSteps : this.steps
+  /** The deck edits start from: the deck itself, or in the master view the master's deck. */
+  get base(): Deck {
+    return this.mode === 'master' ? this.masterDeck : this.history.present
   }
 
   /** The deck itself as it stands, whichever view is in front: what is saved and presented. */
   get presentation(): Deck {
-    return this.steps.present
+    return this.history.present
   }
 
   /** The master's deck for the deck as it stands; the same deck while the deck is. */
   private get masterDeck(): Deck {
-    const from = this.steps.present
+    const from = this.history.present
 
     if (this.made?.from !== from) {
       const deck = masterDeck(from)
@@ -142,12 +112,12 @@ export class SlidesDocument {
 
   /** Whether a deck is the master view's or made from it: its master is one the view made, or its slides are the master's and layouts' as the deck's own are not. */
   private ofMasterView(deck: Deck): boolean {
-    return (deck.master !== undefined && viewMasters.has(deck.master)) || (hasMasterSlides(deck) && !hasMasterSlides(this.steps.present))
+    return (deck.master !== undefined && viewMasters.has(deck.master)) || (hasMasterSlides(deck) && !hasMasterSlides(this.history.present))
   }
 
   /** The deck with an edit of the master's deck in its master. Only backgrounds and drawings go in: a master's slide put on another layout, or the whole of it resized, says nothing of the master. */
   private intoMaster(edited: Deck): Deck {
-    const deck = this.steps.present
+    const deck = this.history.present
 
     if (edited.size.width !== deck.size.width || edited.size.height !== deck.size.height) {
       return deck
@@ -159,7 +129,7 @@ export class SlidesDocument {
   }
 
   get deck(): Deck {
-    return this.preview ?? this.history.present
+    return this.preview ?? this.base
   }
 
   get slide(): Slide {
@@ -179,7 +149,7 @@ export class SlidesDocument {
       return ON_ITS_OWN
     }
 
-    const shows = layoutOf(masterOf(this.steps.present), layout).showMaster
+    const shows = layoutOf(masterOf(this.history.present), layout).showMaster
     const background = slide.background ? null : master.background
     const size = this.deck.size
     const key = `${shows}:${background ? 'master' : 'own'}`
@@ -258,7 +228,7 @@ export class SlidesDocument {
   commit(change: DeckChange): void {
     this.preview = null
     const ofMaster = this.ofMasterView(change.deck)
-    this.steps.commit(ofMaster ? this.intoMaster(change.deck) : change.deck, change.label, change.join)
+    this.history.commit(ofMaster ? this.intoMaster(change.deck) : change.deck, change.label, change.join)
     const { slideId, selected } = change.focus ?? {}
     // A change of the deck's own slides made from the master view goes to its slide on the way back.
     const away = this.mode === 'master' && (slideId ? !isMasterSlideId(slideId) : !ofMaster)
@@ -294,13 +264,13 @@ export class SlidesDocument {
   reset(deck: Deck): void {
     this.preview = null
     this.editing = null
-    this.steps.reset(deck)
+    this.history.reset(deck)
     this.settle()
     this.changed()
   }
 
   undo(): string | null {
-    const label = this.steps.undo()
+    const label = this.history.undo()
     this.editing = null
     this.settle()
     this.changed()
@@ -313,7 +283,7 @@ export class SlidesDocument {
   }
 
   redo(): string | null {
-    const label = this.steps.redo()
+    const label = this.history.redo()
     this.editing = null
     this.settle()
     this.changed()

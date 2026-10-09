@@ -126,7 +126,7 @@ export function TextEditor({ doc, slideId, elementId, cell = null, onTab, body, 
 
     /** The element as it would be with what is typed: its paragraphs, and its height when it grows with its text (a cell's rows only ever grow). */
     const current = (): { paragraphs: TextBody['paragraphs']; height: number | null } => {
-      const element = findElement(findSlide(doc.history.present, slideId), elementId)
+      const element = findElement(findSlide(doc.base, slideId), elementId)
       const paragraphs = paragraphsFromDoc(editor.getJSON(), body)
 
       if (cell) {
@@ -152,14 +152,14 @@ export function TextEditor({ doc, slideId, elementId, cell = null, onTab, body, 
 
     const preview = () => {
       const { paragraphs, height } = current()
-      doc.show(withText(doc.history.present, slideId, elementId, cell, paragraphs, height))
+      doc.show(withText(doc.base, slideId, elementId, cell, paragraphs, height))
     }
 
     /** Record the typing so far as one step. */
     const record = () => {
       const { paragraphs, height } = current()
 
-      if (!findElement(findSlide(doc.history.present, slideId), elementId)) {
+      if (!findElement(findSlide(doc.base, slideId), elementId)) {
         doc.show(null)
 
         return
@@ -174,7 +174,7 @@ export function TextEditor({ doc, slideId, elementId, cell = null, onTab, body, 
       }
 
       baseline = paragraphs
-      doc.commit({ deck: withText(doc.history.present, slideId, elementId, cell, paragraphs, height), label: 'Typing' })
+      doc.commit({ deck: withText(doc.base, slideId, elementId, cell, paragraphs, height), label: 'Typing' })
     }
 
     const session: TextSession = {
