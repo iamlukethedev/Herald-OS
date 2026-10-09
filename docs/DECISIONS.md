@@ -416,8 +416,9 @@ Compositor lacks. What only Herald has goes in fields of its own beside a record
 
 ## ADR-021: Herald Office: Sheets on Univer, Docs on TipTap, Slides on a slide editor of its own
 
-**Status: Proposed.** Rewritten for what Herald Office's second phase built; it becomes final once
-the three apps have shipped.
+**Status: Proposed.** Rewritten for what Herald Office's second phase built, and extended with
+the depth phases of Sheets and Docs; it becomes final once the three apps have been polished and
+shipped.
 
 Herald OS needs documents, spreadsheets and presentations that Hermes can work in while the person
 watches, and that open and save the files people already have. Herald Docs, Herald Sheets and
@@ -433,12 +434,15 @@ themselves go through the command registry (ADR-014).
   are installed one by one at 1.0.3, never through a preset: core, design, ui, themes,
   engine-render, engine-formula, rpc, docs and docs-ui (for the cell editor), and sheets with its
   formula, number format, filter, sort, conditional formatting, data validation, find-and-replace
-  and hyperlink plugins. A test fails if `@univerjs-pro` or an advanced or collaboration preset
-  appears in the lockfile, or if a Univer package there has a licence other than Apache-2.0 (MIT
-  for its icons). Sheets loads only when its window opens: the shell's main chunk carries none of
-  Univer, and the Sheets window is a 6.3 MB chunk (1.6 MB compressed). In the packaged build a
-  window is up 0.2 s after it is asked for and a new workbook draws 0.12 s later; the first
-  workbook adds about 26 MB of JavaScript heap and 58 MB to the window's process, worker included.
+  and hyperlink plugins; the depth phase added drawing, drawing-ui, docs-drawing, sheets-drawing
+  and sheets-drawing-ui (for charts), and thread-comment, sheets-thread-comment and sheets-note
+  with their UIs (for comments and notes). A test fails if `@univerjs-pro` or an advanced or
+  collaboration preset appears in the lockfile, or if a Univer package there has a licence other
+  than Apache-2.0 (MIT for its icons). Sheets loads only when its window opens: the shell's main
+  chunk carries none of Univer, and the Sheets window loads 7.7 MB beyond it (2.1 MB compressed).
+  In the packaged build, measured before the depth phase, a window is up 0.2 s after it is asked
+  for and a new workbook draws 0.12 s later; the first workbook adds about 26 MB of JavaScript heap
+  and 58 MB to the window's process, worker included.
 - **Formulas in a worker.** Sheets work formulas out in a module worker (7.4 MB, loaded with the
   first workbook) that gets the filters too, so SUBTOTAL leaves out the rows a filter hides. On
   20,000 rows of formulas the window's thread was blocked 141 ms instead of 889 ms, with results as
@@ -464,6 +468,54 @@ themselves go through the command registry (ADR-014).
   a file never gains a colour nobody chose. Each Univer editor is a React root of its own, whose
   events never reach the window's React handlers, so the Office window takes its shortcuts and
   dropped files with native listeners.
+- **Charts: Univer's floating objects, drawn by ECharts.** A chart is a floating DOM object of
+  Univer's sheet drawings, so Univer places, moves, resizes, layers and undoes it as it does a
+  picture, and a React component inside it draws the chart's spec with ECharts (Apache-2.0) from
+  the numbers in its cells, again as they change: column, bar, line, area, pie, doughnut, scatter
+  and combo charts, recommended from the shape of the selection. A chart's ranges move with rows
+  and columns inserted or deleted. ECharts is built with only what these charts draw and loads the
+  first time a chart shows. In a workbook with nothing drawn (Hermes on a file that is not open)
+  the same change goes through Univer's drawing mutation, and Herald files it for undo. Univer's
+  own charts are in its paid tier.
+- **Excel charts written by Herald, and Herald's part in a workbook.** ExcelJS writes no charts,
+  so a finishing stage after it writes each chart as an Excel chart (a DrawingML chart part and
+  its anchor in the sheet's drawing, in the order the file format sets, in files Excel and
+  openpyxl open) and reads charts of those kinds back from any file, those wrapped for newer
+  versions of Excel included. An Excel chart left unchanged goes back as the file had it, and a
+  chart Herald cannot read or write never stops a workbook from opening or saving. What only
+  Herald reads back goes into a part of its own, `herald/sheets.json`, with its content type and
+  package relationship, which Excel, Numbers and LibreOffice pass over: a chart's exact spec, how
+  each summary was made, and each sheet's Herald data. A section that depends on parts another app
+  may have changed carries their fingerprint, and a file changed since is read from its parts, as
+  Slides does with `herald/deck.json`.
+- **Kept parts on save.** The parts of the file a workbook came from that Sheets does not model
+  are carried into the file it saves, with their relationships and content types, where that is
+  safe: pivot tables and their caches (set to refresh when Excel opens them), slicers and
+  timelines, tables, sparklines, pictures, shapes, SmartArt, charts and pivot charts Herald does
+  not draw, chart sheets, links to other workbooks, custom properties, background pictures and
+  sensitivity labels. A sheet's parts stay with it when it is renamed or moved. A table or pivot
+  table that a filter, merged cells or a formula in its headers would break in Excel, or whose
+  name a defined name has taken, is left out and named. The fidelity report names only what a file
+  really loses, so a workbook Herald saved reopens with nothing to report.
+- **Summaries with whole-column formulas, not pivot tables.** A summary in the style of a pivot
+  table is portable formulas: its row and column labels are the distinct values of their fields
+  when it is made or refreshed, and each number is a SUMIFS, COUNTIFS, AVERAGEIFS, MINIFS or
+  MAXIFS over the source's whole columns, matching the label cells, so the numbers follow the data
+  as it changes, rows added with known labels count at once, and Excel and LibreOffice work them
+  out alike. Labels and numbers take the formats of the columns they come from. How a summary was
+  made is kept in its sheet's custom data (Herald's part, in a file); a refresh reads the table
+  again and rewrites the labels, and refuses a summary that rows or columns have moved, so nothing
+  put in its old place is cleared. Pivot tables proper are Univer's paid tier, and their caches are
+  Excel's to work out.
+- **Data tools, names, validation, comments and notes.** The Data menu's tools (remove
+  duplicates, split text, trim, change case, convert to numbers or dates, fill down, highlight
+  duplicates, sort by several columns, summarize) are each one step to undo, with a preview before
+  a removal. Names are checked as Excel checks them, marks and accents included, for the workbook
+  or one sheet, and kept through `.xlsx`; validation sets list, number, date, text-length and
+  formula rules with input messages and error alerts, and keeps every rule. Comment threads, with
+  their replies, authors and resolved state, and notes are written as Excel writes them (threaded
+  comments with their persons, notes with their VML). Univer keeps comment threads out of its undo
+  history, so adding or deleting a comment cannot be undone; Hermes's commands say so.
 - **Herald Docs on TipTap 3 (MIT).** A document is TipTap's JSON with its page size, margins and
   style looks on the document node. The editor, the converters, the print view and the document
   API share that one schema, which builds without a window, so the API changes a live editor or a
@@ -477,15 +529,46 @@ themselves go through the command registry (ADR-014).
 - **Word files through a reader of our own and the docx package.** A `.docx` (or a `.docm`,
   without its macros) is read by Herald's own WordprocessingML reader through JSZip (MIT): styles
   with their basedOn chains and the theme's fonts, run and paragraph formatting, lists from
-  numbering.xml, links, tables with merges and shading, inline and floating pictures, breaks and
-  the page. It is written with docx (MIT), with Title, Subtitle and headings as Word's own styles.
-  Both load only when a Word file is opened or saved (the writer is 0.45 MB). Markdown goes
-  through the GFM parser the app already had.
-- **What Univer Docs did better.** It paginates: text is laid out into pages, so the screen shows
-  where each page ends, and headers, footers and page numbers are part of its model. Herald Docs
-  draws one sheet of paper at the page's width and margins that grows with the text, keeps the
-  page breaks a document has, and leaves paging to Chromium when it prints; a file's headers and
-  footers are named in the fidelity report rather than kept.
+  numbering.xml, links, tables with merges and shading, inline and floating pictures, breaks, the
+  page and its sections, headers and footers, fields, footnotes and endnotes, comments, text boxes
+  and tables of contents. It is written with docx (MIT), with Title, Subtitle and headings as
+  Word's own styles, and a small repacker adds what docx cannot write (the parts Herald keeps, its
+  table of contents' styles) with their content types and relationships. Both load only when a
+  Word file is opened or saved (the writer is 0.45 MB): opening one never loads docx. Markdown
+  goes through the GFM parser the app already had.
+- **Pages on screen as the PDF has them.** Herald Docs lays its text out into pages in the one
+  editor, which was what Univer Docs did better: the text runs down a single column, and a spacer
+  where each page starts (before a block, between two lines of a paragraph, or before a table row)
+  moves what follows to the next page's text area, keeping two lines of a paragraph on each side
+  of a break and a heading with what follows it; each page is drawn behind the text with its
+  header, footer and footnotes. The print view lays the document out with the same code and cuts
+  it where each page starts, so the PDF has the pages the screen shows, and the word count gives
+  the pages as laid out. A layout runs in the frame after a change, and again when fonts or
+  pictures load or the zoom changes.
+- **Headers and footers, fields, notes and sections.** Word's headers and footers (for every
+  page, the first page and even pages), page number, page count, date and time fields, footnotes
+  and endnotes, section breaks with each section's own page, and text boxes open and save in
+  `.docx`; headers, footers and notes are edited right on the page, and the page and its sections
+  are set up in a dialog of their own. Markdown keeps notes as footnotes and fields as the text
+  they show. A section's own page numbering is not kept (pages are numbered on from the first),
+  and the fidelity report says so.
+- **A table of contents of Herald's own.** A table of contents is a node of the document (its
+  levels, title and the page of each entry), drawn on the page with the print view's own HTML so
+  the page and the PDF lay it out alike, its entries worked out from the headings and its page
+  numbers from the pages on screen, kept up to date as they change. It goes into Word as Word
+  writes one: a TOC field with an entry per heading, linked to a bookmark on the heading and with
+  a dotted tab to its page number, in Word's TOC styles; the page numbers are written when every
+  entry has one, and otherwise Word updates the field when it opens the file. A Word TOC field
+  reads back as one table of contents (a table of figures is not one).
+- **Comments, templates and statistics.** Comments are threads with replies, authors, initials,
+  dates and a resolved state, shown beside the pages; in Word files they are comments.xml with
+  commentsExtended.xml for replies and resolved threads, and the people who commented, custom XML
+  parts and the file's properties are kept as they were. Twelve built-in templates are pure
+  functions of the paper and the locale, each with its own look, page setup, and headers and
+  footers, shown in a gallery of live thumbnails; the person's own templates are saved by main as
+  JSON files named by UUID in `office-templates/<app>/` under the Herald OS data folder.
+  Statistics count words, characters, paragraphs and sentences, with reading and speaking times
+  and how easy the text is to read.
 - **Herald Slides on a DOM slide editor of its own, with PowerPoint's model.** A deck is
   PowerPoint's model in Herald's JSON: slides in points on a fixed 16:9 or 4:3 surface, layouts
   with placeholders, themes of ten colour slots with a heading and a body font, shapes as
@@ -522,12 +605,36 @@ themselves go through the command registry (ADR-014).
   deck is saved, and the reader (44 KB) and JSZip (96 KB) only when one is opened. Herald maintains
   the reader and the finishing pass itself, and the pass depends on how PptxGenJS lays out what it
   writes, so a PptxGenJS upgrade waits for the export tests.
+- **What the depth phases cost.** Measured as what a window loads beyond the shell's main chunk,
+  before and after them: the Sheets window grew from 7.1 MB to 7.7 MB (1.9 MB to 2.1 MB
+  compressed) with the drawing, comment and note plugins and the data tools' dialogs, ECharts adds
+  0.57 MB (0.19 MB compressed) the first time a chart shows, and the `.xlsx` worker grew from
+  1.09 MB to 1.19 MB; the Docs window grew from 0.86 MB to 1.02 MB (0.29 MB to 0.34 MB
+  compressed) with pagination, comments, templates and their dialogs; the shell's main chunk grew
+  by 0.04 MB.
+- **Hermes in the depth features.** Each depth feature is a command on its app's model API (35
+  for Sheets, 26 for Docs), so Hermes, voice, the command bar and `herald-os os` reach them alike,
+  and the bridge's `sheets` and `docs` tools have an action for each. Reading is `read`, changing
+  is `act`, and removing what the person made (a chart, a name, validation rules, a comment, a
+  note, a header or footer, a section break, a table of contents) is `mutate`, which asks. An edit
+  batch asks as its most guarded op does, its ops matched in any case as the shell takes them, and
+  a change to a file that is not open asks every time unless it only previews. Review > Review
+  with Hermes goes through the document's Ask Hermes bar: Hermes reads the document and leaves its
+  clarity, grammar and tone comments on exact passages in one `add_comments` call, signed Hermes
+  and one step to undo, without changing the text.
+- **One name on comments.** The name on the person's comments, replies and notes is one
+  preference for every Office app, in Herald's prefs. The first time they comment, a small
+  question asks which name to show, proposing the account's full name; nothing writes the
+  account's name into a file before they confirm one, a cancel adds nothing, and Settings >
+  General changes or clears it. Commands sign with the confirmed name or a neutral one and never
+  ask.
 - **Never less than the file had, silently.** What a file holds that Herald cannot keep is listed
   in a fidelity report, shown before the first save over that file: for a Word file, tracked
-  changes, comments, footnotes, headers and footers, text boxes, equations, fields, charts and
-  macros among others; for a workbook, what the package's parts hold that Sheets does not map; for
-  a presentation, each element counted as kept, approximated or left out, with its charts,
-  SmartArt, media, animations, embedded fonts, OLE objects and macros named.
+  changes (shown accepted), a section's own page numbering, equations, embedded objects, charts
+  and SmartArt, text in columns and macros among others; for a workbook, what its parts hold that
+  Sheets neither maps nor keeps; for a presentation, each element counted as kept, approximated or
+  left out, with its charts, SmartArt, media, animations, embedded fonts, OLE objects and macros
+  named.
   Main copies the original into `office-backups` under the Herald OS data folder the first time
   Herald saves over it in a session, with a cap on their size and age. Herald saves a document by
   itself only after the person has saved it once, and stops when a save would lose something new.
@@ -538,11 +645,13 @@ themselves go through the command registry (ADR-014).
   text. electron-builder would also copy Univer's npm packages into `app.asar` (148 MB the renderer
   bundle already contains), so the build leaves them out, and the Office apps' other libraries too
   (TipTap and ProseMirror, ExcelJS, docx, PptxGenJS, JSZip, the Markdown parsers and what only
-  they bring in): 58 MB less in `app.asar`, which main never loads. TipTap, ProseMirror, ExcelJS,
-  docx, PptxGenJS and JSZip are MIT (JSZip, licensed MIT or GPL-3.0, is used under MIT). JSZip
-  brings pako, which is MIT and Zlib; the zlib licence is permissive, and Herald already ships pako
-  with Herald Canvas. Everything else they bring in is MIT, Apache-2.0, ISC or BSD: ExcelJS's old
-  unzipper is pinned to the 0.12 line and its uuid to 11.1.1, so npm audit finds nothing new.
+  they bring in): 58 MB less in `app.asar`, which main never loads, and ECharts with ZRender
+  another 67 MB. ECharts is Apache-2.0 and brings ZRender (BSD-3-Clause) and tslib (0BSD), which
+  NOTICE names with it. TipTap, ProseMirror, ExcelJS, docx, PptxGenJS and JSZip are MIT (JSZip,
+  licensed MIT or GPL-3.0, is used under MIT). JSZip brings pako, which is MIT and Zlib; the zlib
+  licence is permissive, and Herald already ships pako with Herald Canvas. Everything else they
+  bring in is MIT, Apache-2.0, ISC or BSD: ExcelJS's old unzipper is pinned to the 0.12 line and
+  its uuid to 11.1.1, so npm audit finds nothing new.
 
 Alternatives considered:
 
@@ -551,10 +660,13 @@ Alternatives considered:
 - **Rejected: LibreOffice or Collabora Online as the editors.** Hundreds of megabytes per platform
   (Collabora also a server), and their own interface rather than Herald's. LibreOffice stays an
   optional converter.
-- **Rejected: Univer Docs for Herald Docs** (the first draft), for the reasons above; its
-  pagination is what Herald Docs gives up.
+- **Rejected: Univer Docs for Herald Docs** (the first draft), for the reasons above. Its
+  pagination, what it did better, Herald Docs now has of its own.
 - **Rejected: Univer Slides or the Herald Canvas engine for Herald Slides,** for the reasons above.
   Univer Slides is worth another look once its open-source edition can present and undo.
 - **Rejected: Univer's paid tier.** Its import and export, printing, charts, pivot tables and
   collaboration are closed and licensed per deployment; Herald writes the formats and prints
-  itself.
+  itself, draws its charts with ECharts and summarizes tables with formulas.
+- **Rejected: pivot tables for Sheets' summaries.** A real pivot table needs a cache that Excel
+  works out and Univer's open-source packages cannot show; formulas over whole columns give the
+  same table, stay live in every spreadsheet app, and need nothing of Herald's to read.

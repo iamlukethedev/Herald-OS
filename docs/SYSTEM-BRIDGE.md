@@ -23,8 +23,8 @@ unrestricted machine access.
 | `system_documents` | read | Read PDFs page by page (scans and photos of documents through on-device OCR) with hints for filing: kind, vendor, dates, number, total, a suggested name and a fingerprint for duplicates; `places` lists the folders documents are already filed in, with their layout and naming. Used by the `file-documents` skill |
 | `os_ui` | per command | Operate the Herald OS interface: open pages and apps, add memories, run automations, start missions and Studio builds. Each command carries its own tier; `action=state` also lists the documents open in Herald Docs, Sheets and Slides (`office`) |
 | `canvas` | read / act / mutate | Herald Canvas, the layered image editor: new and open projects (`.comp`, images, PSD), layers, text, shapes, adjustments, effects, masks, guides, aligning, resizing and cropping, filters, on-device background removal and content-aware fill, previews, exports and undo. Each action is a `canvas.*` command that lands in the open window as one undoable step; saving a project, or exporting over an existing file, asks first. Used by the `herald-canvas` skill |
-| `docs` | read / act / mutate / destructive | Herald Docs, the word processor: what is open (`list_all` across Herald Docs, Sheets and Slides), opening and starting documents (blank, from a template, or with Markdown), reading, finding, writing Markdown where it belongs (the end, a heading's section, the selection, the text marked for the request), find and replace, formatting, tables, pictures, page setup, a Herald Sheets range as a table, several edits as one step, saving, PDFs and undo. Each action is a `docs.*` command; saving over a file, or changing a file that is not open, asks every time. Used by the `herald-docs` skill |
-| `sheets` | read / act / mutate / destructive | Herald Sheets, the spreadsheet: what is open, opening and starting workbooks, reading ranges (values, formulas and what the cells show), finding, writing values and formulas, filling, formatting, sorting, filtering, freezing, adding, renaming and removing sheets, replacing, cleaning data (duplicates, spaces, numbers and dates kept as text, splitting, case), several edits as one step, saving (`.xlsx`, `.csv`), PDFs and undo. Each action is a `sheets.*` command; removing a sheet asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-sheets` skill |
+| `docs` | read / act / mutate / destructive | Herald Docs, the word processor: what is open (`list_all` across Herald Docs, Sheets and Slides), opening and starting documents (blank, from a template, or with Markdown), reading, finding, writing Markdown where it belongs (the end, a heading's section, the selection, the text marked for the request), find and replace, formatting, tables, pictures, page setup for the document or one section, headers and footers, page numbers and other fields, footnotes and endnotes, section breaks, comments (adding one or a review's worth in one step, replying, resolving, deleting), tables of contents, templates, statistics, a Herald Sheets range as a table, several edits as one step, saving, PDFs and undo. Each action is a `docs.*` command; removing a header or footer, a note, a section break, a comment or a table of contents asks, and saving over a file, or changing a file that is not open, asks every time. Used by the `herald-docs` skill |
+| `sheets` | read / act / mutate / destructive | Herald Sheets, the spreadsheet: what is open, opening and starting workbooks, reading ranges (values, formulas and what the cells show), finding, writing values and formulas, filling, formatting, sorting, filtering, freezing, adding, renaming and removing sheets, replacing, cleaning data (duplicates, spaces, numbers and dates kept as text, splitting, case, filling down, highlighting duplicates, sorting by several columns, with previews), charts (recommending, inserting, describing, changing, moving, removing), summaries of tables in live formulas, named ranges, validation and dropdown lists, comments and notes, several edits as one step, saving (`.xlsx`, `.csv`), PDFs and undo. Each action is a `sheets.*` command; removing a sheet, a chart, a name, validation rules, a comment or a note asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-sheets` skill |
 | `slides` | read / act / mutate / destructive | Herald Slides, the presentation editor: what is open, opening and starting decks (a whole deck in one call), reading, finding, adding, changing, duplicating, moving, hiding and removing slides, speaker notes, text boxes, shapes, pictures, tables, themes, find and replace, slides from a Herald Docs document, a Herald Sheets range as a table, several edits as one step, saving (`.pptx`), PDFs and undo. Each action is a `slides.*` command; removing a slide asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-slides` skill |
 | `system_os` | act / mutate | Herald OS Linux only: install apps and anything in the install catalog (`catalog_list`, `catalog_install`, `catalog_remove`), widget plugins (`plugin_list`, `plugin_add`, `plugin_update`, `plugin_disable`, `plugin_remove`; turning one on is left to the user), reminders, themes, screenshots, lock, suspend, update |
 
@@ -59,9 +59,11 @@ person changes their mind.
 Like `canvas`, each action is one command of the shell's registry (`docs.*`, `sheets.*` and
 `slides.*`, and `office.list` for `list_all`), run over the control socket with a long timeout
 (100 seconds; the shell gives these commands 90). Arguments the action does not take are dropped;
-table cells, rows of values, edits, cell formats, filter conditions, a new deck's slides and a
-two-column slide's bodies travel as JSON text; `sheets action=clean` takes its own action as
-`clean`.
+table cells, rows of values, edits, cell formats, filter conditions, a chart's series and axes, a
+summary's fields and filters, sort keys, validation rules with their input messages and alerts, a
+review's comments, a new deck's slides and a two-column slide's bodies travel as JSON text;
+`sheets action=clean` takes its own action as `clean`. The schema of each tool is flat, so every
+argument has one type whatever the action; the shell's commands take the bridge's names.
 
 - **Where a change lands.** `document` (docs), `workbook` (sheets) and `presentation` (slides)
   name a file by its path or an open one by its tab; left out, the one in front. Any other file a
@@ -71,16 +73,27 @@ two-column slide's bodies travel as JSON text; `sheets action=clean` takes its o
   changed and written back to disk: the shell refuses when Herald cannot keep everything in it,
   and the main process backs the original up the first time Herald writes over a file.
 - **Tiers.** An action starts at its command's tier: listing, reading and finding are `read`;
-  opening, starting, writing, formatting, exporting and undo are `act`; saving, removing a sheet
-  and removing a slide are `mutate`. An `edit` batch takes at least the tier of its most guarded
-  op that is a command of its own, so a batch that removes a sheet or a slide asks as removing it
-  alone does. Three cases raise a call to `destructive`, so the person is asked every time and
-  "always" never sticks: saving over a file (`save` without `to`, which writes the document's own
-  file, `to` naming a file that exists, or `overwrite`), exporting a PDF over a file, and any
-  other change to a document named by the path of a file that exists and is not open, which
-  writes that file on disk. For the last one the tool asks the shell what is open
-  (`office.list`); when the shell cannot say, the file counts as closed. A tier is never lowered
-  (`office_tier` in `bridge/tools.py`).
+  opening, starting, writing, formatting, adding charts, comments and notes, exporting and undo
+  are `act`; saving and removing what the person made are `mutate`: a sheet, a chart, a name,
+  validation rules, a Sheets comment or note, a Docs header or footer, note, section break,
+  comment or table of contents, a slide. An `edit` batch takes at least the tier of its most
+  guarded op that is a command of its own, matching ops in any case and with spaces round them as
+  the shell does, so a batch that removes any of these asks as removing it alone does. Three cases
+  raise a call to `destructive`, so the person is asked every time and "always" never sticks:
+  saving over a file (`save` without `to`, which writes the document's own file, `to` naming a
+  file that exists, or `overwrite`), exporting a PDF over a file, and any other change to a
+  document named by the path of a file that exists and is not open, which writes that file on
+  disk; a call with `preview=true` (removing duplicates, splitting, converting, summarizing) only
+  reads the file, so it stays at its command's tier. For the last one the tool asks the shell what
+  is open (`office.list`); when the shell cannot say, the file counts as closed. A tier is never
+  lowered (`office_tier` in `bridge/tools.py`).
+- **Comments.** Comments, replies and notes Hermes adds are signed Hermes; those the person adds
+  carry the one name they confirmed for every Office app (Settings > General), and a command run
+  from the command bar or by voice signs with that name or a neutral one. Review > Review with
+  Hermes in Herald Docs asks Hermes, through the document's Ask Hermes bar, to read the document
+  and leave its clarity, grammar and tone comments on exact passages in one `docs
+  action=add_comments` call: one step to undo, and the text unchanged. In Herald Sheets, Univer
+  keeps comment threads out of undo, so a comment added or deleted stays that way.
 - **What is open.** `office.list` (`list_all` in each tool) lists every document open in Herald
   Docs, Sheets and Slides: its app, name, path and unsaved edits, the one in front in each app
   (`active`) and of them all (`front`), and what is selected in each (text, a range, a slide).
@@ -100,7 +113,9 @@ slides theme midnight`, `herald-os slides pdf`. With no arguments they open the 
 the one in front with `*`, `docs read` prints the outline and then the content, `sheets read`
 prints tab-separated rows of what the cells show, `slides read` prints each slide's title, layout,
 text and notes, and `--json` prints a command's data instead. `herald-os commands` lists every
-form.
+form. The depth commands have no forms of their own: `herald-os os <command.id> [json args]` runs
+any of them, as in `herald-os os sheets.insertChart '{"range": "A1:B13", "kind": "line"}'` or
+`herald-os os docs.insertToc '{"levels": 2}'`.
 
 ## Where the tools run
 

@@ -74,9 +74,10 @@ preview of the site.
 
 ## Documents, spreadsheets and presentations (Herald Docs, Sheets and Slides)
 
-Letters, reports, resumes and other documents are Herald Docs, through the `docs` tool; budgets,
-lists and any table of figures are Herald Sheets, through the `sheets` tool; decks for talks and
-reviews are Herald Slides, through the `slides` tool. They work on what the person has open
+Letters, reports, resumes and other documents, and comments or a review on one, are Herald Docs,
+through the `docs` tool; budgets, lists, charts and any table of figures are Herald Sheets,
+through the `sheets` tool; decks for talks and reviews are Herald Slides, through the `slides`
+tool. They work on what the person has open
 (`os_ui action=state` lists it as `office`, with the one in front and what is selected) or on
 Word, Markdown, Excel, CSV and PowerPoint files on disk, and each change is one step the person
 can undo. Use them instead of writing Office files with scripts of your own. Before a real job
