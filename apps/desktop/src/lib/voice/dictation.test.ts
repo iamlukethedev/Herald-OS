@@ -25,6 +25,35 @@ describe('dictation', () => {
     expect(applySpokenPunctuation('line one new line line two')).toBe('line one\nline two')
   })
 
+  it('lets a spoken mark take the place of the same mark the transcriber wrote beside it', () => {
+    expect(applySpokenPunctuation('Hello comma, world')).toBe('Hello, world')
+    expect(applySpokenPunctuation('Hello, comma world')).toBe('Hello, world')
+    expect(applySpokenPunctuation('Hello, comma, world')).toBe('Hello, world')
+    expect(applySpokenPunctuation('The end period. Next')).toBe('The end. Next')
+    expect(applySpokenPunctuation('The end. Full stop. Next')).toBe('The end. Next')
+    expect(applySpokenPunctuation('Is it ready question mark? Yes')).toBe('Is it ready? Yes')
+    expect(applySpokenPunctuation('Is it ready? question mark')).toBe('Is it ready?')
+    expect(applySpokenPunctuation('Wow exclamation mark! Great')).toBe('Wow! Great')
+    expect(applySpokenPunctuation('Wow! Exclamation point')).toBe('Wow!')
+    expect(applySpokenPunctuation('Dear Sam colon: thanks')).toBe('Dear Sam: thanks')
+    expect(applySpokenPunctuation('Milk; semicolon eggs')).toBe('Milk; eggs')
+  })
+
+  it('keeps a mark said twice, other marks beside a spoken one, ellipses and words that only contain a mark', () => {
+    expect(applySpokenPunctuation('Hello comma comma world')).toBe('Hello,, world')
+    expect(applySpokenPunctuation('Wait... comma then')).toBe('Wait..., then')
+    expect(applySpokenPunctuation('Wait... what')).toBe('Wait... what')
+    expect(applySpokenPunctuation('Use commas, said the commander')).toBe('Use commas, said the commander')
+    expect(applySpokenPunctuation('A periodic colonel')).toBe('A periodic colonel')
+  })
+
+  it('keeps a period said at the end and drops only the transcriber one', () => {
+    expect(parseDictationText('Hello period.')).toEqual({ text: 'Hello.', submit: false })
+    expect(parseDictationText('Hello comma.')).toEqual({ text: 'Hello,', submit: false })
+    expect(parseDictationText('Hello comma, world.')).toEqual({ text: 'Hello, world', submit: false })
+    expect(parseDictationText('To be continued...')).toEqual({ text: 'To be continued...', submit: false })
+  })
+
   it('adds the space between dictations only after a word', () => {
     expect(withLeadingSpace('d', 'and then')).toBe(' and then')
     expect(withLeadingSpace('.', '42 people')).toBe(' 42 people')
@@ -34,5 +63,18 @@ describe('dictation', () => {
     expect(withLeadingSpace('', 'and then')).toBe('and then')
     expect(withLeadingSpace(null, 'and then')).toBe('and then')
     expect(withLeadingSpace('d', ', and then')).toBe(', and then')
+  })
+
+  it('does not repeat the mark the caret follows already', () => {
+    expect(withLeadingSpace(',', ', world')).toBe(' world')
+    expect(withLeadingSpace(',', ',world')).toBe(' world')
+    expect(withLeadingSpace(',', ',')).toBe('')
+    expect(withLeadingSpace('.', '. Next')).toBe(' Next')
+    expect(withLeadingSpace('?', '?')).toBe('')
+    expect(withLeadingSpace('!', '! Wow')).toBe(' Wow')
+    expect(withLeadingSpace(':', ': two')).toBe(' two')
+    expect(withLeadingSpace(';', ';')).toBe('')
+    expect(withLeadingSpace('.', '..')).toBe('..')
+    expect(withLeadingSpace('.', ', and')).toBe(', and')
   })
 })

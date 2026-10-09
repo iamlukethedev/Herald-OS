@@ -1,13 +1,26 @@
 // Dictation: turn "type how are you question mark and press enter" into the text to type and
 // whether to submit it. Pure, unit-tested; used by the voice matcher and the `text.type` command.
 
+const SPOKEN_MARKS: ReadonlyArray<readonly [words: string, mark: string]> = [
+  ['question\\s+mark', '?'],
+  ['exclamation\\s+(?:mark|point)', '!'],
+  ['full\\s+stop|period', '.'],
+  ['comma', ','],
+  ['colon', ':'],
+  ['semicolon', ';']
+]
+
+/** The mark a dictation starts with, unless it starts a run (an ellipsis). */
+const LEADING_MARK = /^([?!.,:;])(?![?!.,:;])/
+
+// A spoken mark takes the place of the same mark the transcriber wrote beside it ("Hello, comma world",
+// "Hello comma, world"); any other mark beside it stays.
 const SPOKEN_PUNCTUATION: Array<[RegExp, string]> = [
-  [/\s*\b(question mark)\b/gi, '?'],
-  [/\s*\b(exclamation (mark|point))\b/gi, '!'],
-  [/\s*\b(full stop|period)\b/gi, '.'],
-  [/\s*\bcomma\b/gi, ','],
-  [/\s*\bcolon\b/gi, ':'],
-  [/\s*\bsemicolon\b/gi, ';'],
+  ...SPOKEN_MARKS.map(([words, mark]): [RegExp, string] => {
+    const literal = mark.replace(/[.?]/g, '\\$&')
+
+    return [new RegExp(`\\s*(?:${literal}[ \\t]*)?\\b(?:${words})\\b(?:[ \\t]*${literal})?`, 'gi'), mark]
+  }),
   [/\s*\b(new line|newline|next line)\b\s*/gi, '\n'],
   [/\s*\b(new paragraph)\b\s*/gi, '\n\n']
 ]
@@ -44,16 +57,22 @@ export function parseDictationText(raw: string): Dictation {
 
   // Strip quotes the transcriber sometimes adds around dictated text.
   text = text.replace(/^["“'‘]+|["”'’]+$/g, '').trim()
-  text = applySpokenPunctuation(text)
-  // Transcribers end most utterances with a period the user did not dictate; keep ? and !.
+  // Transcribers end most utterances with a period the user did not dictate; keep ? and !. Before the
+  // spoken marks, so a "period" said at the end stays.
   text = text.replace(/(?<![.])\.$/, '')
+  text = applySpokenPunctuation(text)
 
   return { text, submit }
 }
 
-/** Consecutive dictations read as one sentence: the space the person did not say, when the caret follows a word. */
+/**
+ * Consecutive dictations read as one sentence: the space the person did not say when the caret follows
+ * a word, and not the mark the caret follows already ("Hello," then "comma world").
+ */
 export function withLeadingSpace(before: string | null, text: string): string {
-  return before && !/\s/.test(before) && /^[\p{L}\p{N}"'(]/u.test(text) ? ` ${text}` : text
+  const words = before && LEADING_MARK.exec(text)?.[1] === before ? text.slice(1) : text
+
+  return before && !/\s/.test(before) && /^[\p{L}\p{N}"'(]/u.test(words) ? ` ${words}` : words
 }
 
 /** The raw words after "type …" (original casing and punctuation), or null when not a dictation. */

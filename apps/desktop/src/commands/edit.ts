@@ -85,9 +85,13 @@ export const editCommands: readonly OsCommand[] = [
 
       const insert = withLeadingSpace(charBeforeCaret(), parsed.text)
 
+      if (parsed.text && !insert && !pressEnter) {
+        return ok(`Already after "${parsed.text}"`, { spoken: 'Done.' })
+      }
+
       return edit(
         async () => {
-          const result = parsed.text ? await performEdit({ kind: 'insert', text: insert }, { needsField: true }) : { target: '' }
+          const result = insert ? await performEdit({ kind: 'insert', text: insert }, { needsField: true }) : { target: '' }
 
           if (pressEnter) {
             return performEdit({ kind: 'key', key: 'enter' }, { needsField: true })

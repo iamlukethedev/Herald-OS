@@ -82,6 +82,13 @@ export function typed(text: string, submit = false): Op {
   }
 }
 
+/** Dictated words that add nothing at the caret: only the mark it follows already. */
+export function addsNothing(state: EditorState, text: string, submit = false): boolean {
+  const lines = dictatedLines(text)
+
+  return !submit && lines.length === 1 && Boolean(lines[0]) && !withLeadingSpace(characterBefore(state), lines[0])
+}
+
 /** Where dictated lines go in a sheet: from the selection's first cell down its column; `next` is the cell after them (below the first when there are none, as Enter goes), where dictation carries on. */
 export function columnPlacement(selection: string, lines: number): { first: string; next: { row: number; column: number; name: string } } | null {
   const range = parseRange(selection)
@@ -109,6 +116,8 @@ function afterwards(step: () => void): void {
 
 const typedCaption = (text: string, submit: boolean, name: string): string => (text.trim() ? `Typed "${quoted(text)}"${submit ? ' and pressed Enter' : ''} in ${name}` : `Pressed Enter in ${name}`)
 
+const alreadyCaption = (text: string, name: string): string => `Already after "${quoted(text)}" in ${name}`
+
 /** The Office app whose window is in front here, when it has a document open in this window. */
 async function officeInFront(): Promise<OfficeApp | null> {
   const { $focusedWindowId, $windows } = await import('../../store/windows.ts')
@@ -135,6 +144,10 @@ async function typeIntoDocs(text: string, submit: boolean): Promise<string | nul
   // A field outside the page (the find bar, a dialog, Hermes's composer) takes the words itself.
   if (!doc || !editor || editor.isDestroyed || !editor.isEditable || (isEditable(focused) && !editor.view.dom.contains(focused))) {
     return null
+  }
+
+  if (addsNothing(editor.view.state, text, submit)) {
+    return alreadyCaption(text, doc.name)
   }
 
   if (!applyLive(editor.view, typed(text, submit))) {
@@ -182,6 +195,10 @@ async function typeIntoSlides(text: string, submit: boolean): Promise<string | n
   // Only a text box being edited takes words: on the slide itself there is no caret to type at.
   if (!doc || !session || session.editor.isDestroyed || (isEditable(focused) && !session.editor.view.dom.contains(focused))) {
     return null
+  }
+
+  if (addsNothing(session.editor.view.state, text, submit)) {
+    return alreadyCaption(text, doc.name)
   }
 
   // What the person typed before becomes a step of its own, so undo takes the dictation back alone.

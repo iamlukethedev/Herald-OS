@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../shared/office/doc-text.ts'
 import { applyLive, findText } from './docs/model.ts'
 import { docsSchema } from './docs/schema.ts'
-import { characterBefore, columnPlacement, dictatedLines, quoted, typed } from './typing.ts'
+import { addsNothing, characterBefore, columnPlacement, dictatedLines, quoted, typed } from './typing.ts'
 
 /** A document with the editor's history, the caret after the first match of `text` (or the match selected). */
 function at(markdown: string, text: string, select = false): EditorState {
@@ -124,5 +124,16 @@ describe('dictation into Herald Docs', () => {
 
   it('changes nothing when there is nothing to type', () => {
     expect(typed('')(at('Hello', 'Hello'))).toBeNull()
+  })
+
+  it('does not repeat the mark the caret follows already', () => {
+    expect(caret(run(at('Hello,', 'Hello,'), ', world'))).toBe('Hello, world|')
+    expect(caret(run(at('The end.', 'The end.'), '. Next'))).toBe('The end. Next|')
+    expect(caret(run(at('Wait.', 'Wait.'), '..'))).toBe('Wait...|')
+    expect(addsNothing(at('Hello,', 'Hello,'), ',')).toBe(true)
+    expect(addsNothing(at('Really?', 'Really?'), '?')).toBe(true)
+    expect(addsNothing(at('Hello', 'Hello'), ',')).toBe(false)
+    expect(addsNothing(at('Hello,', 'Hello,'), ',', true)).toBe(false)
+    expect(addsNothing(at('Hello,', 'Hello,'), ',\nnext')).toBe(false)
   })
 })
