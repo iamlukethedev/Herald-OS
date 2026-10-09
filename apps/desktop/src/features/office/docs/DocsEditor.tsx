@@ -225,7 +225,7 @@ export function DocsEditor({ doc, active }: { doc: OfficeDocument<DocJSON>; acti
       >
         <style>{css}</style>
         <div ref={sheet} className="docs-sheet" data-docs-page={doc.key} style={{ width: `${page.width}pt`, minHeight: `${page.height}pt`, zoom }} onMouseDown={onSheetDown}>
-          <div ref={layer} className="docs-pages" />
+          <div ref={layer} className="docs-pages" aria-hidden="true" />
           <div ref={mount} className="docs-mount" />
         </div>
       </div>
