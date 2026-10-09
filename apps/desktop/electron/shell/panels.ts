@@ -8,6 +8,7 @@ import { audienceWindow } from '../office/presenter.ts'
 import { devServerUrl, isShellPage, rendererIndex } from '../paths.ts'
 import type { Compositor } from '../wm/compositor.ts'
 import { NiriClient } from '../wm/niri.ts'
+import { FocusHistory } from './focus.ts'
 import type { ShellHost } from './host.ts'
 import { FLOATING_APPS, shellMode, surfaceTitle } from './mode.ts'
 
@@ -48,18 +49,18 @@ export class PanelShell implements ShellHost {
   private readonly pending = new Map<ShellSurface, ShellCommand[]>()
   private readonly loaded = new Set<ShellSurface>()
   private readonly webApps = new Map<string, BrowserWindow>()
-  /** The last focused window that is not one of our panels: where focus goes back to after an overlay. */
-  private lastAppFocus: number | null = null
+  /** Where focus goes back to after an overlay or a dialog closes. */
+  private readonly focus = new FocusHistory(isPanel)
 
   constructor(private readonly onMainCreated: (win: BrowserWindow) => void) {}
 
   start(): void {
     this.wm.start()
     this.wm.onState(state => {
-      const focused = state.windows.find(w => w.id === state.focusedWindowId)
+      const back = this.focus.follow(state)
 
-      if (focused && !isPanel(focused)) {
-        this.lastAppFocus = focused.id
+      if (back !== null) {
+        void this.wm.action({ type: 'focus-window', id: back }).catch(() => undefined)
       }
 
       for (const win of BrowserWindow.getAllWindows()) {
@@ -240,11 +241,10 @@ export class PanelShell implements ShellHost {
       return
     }
 
-    const activeWorkspace = state.workspaces.find(ws => ws.focused)?.id
-    const target = state.windows.find(w => w.id === this.lastAppFocus)
+    const target = this.focus.back(state)
 
-    if (target && target.workspaceId === activeWorkspace) {
-      await this.wm.action({ type: 'focus-window', id: target.id }).catch(() => undefined)
+    if (target !== null) {
+      await this.wm.action({ type: 'focus-window', id: target }).catch(() => undefined)
     }
   }
 

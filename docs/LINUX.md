@@ -446,6 +446,13 @@ can still drive Herald's UI.
 ## Known limits
 
 - No calendar (`calendar.today` reports `unavailable`); Evolution Data Server integration is later.
+- No print server (CUPS) ships in the image or the VM yet, and Electron opens no print dialog on a
+  system without a printer, so File > Print in Herald Docs, Sheets and Slides offers Print to File
+  there instead: a PDF where you choose, the same pages Export as PDF writes. With CUPS and a
+  printer it opens GTK's print dialog.
+- The VM has one display, so Herald Slides' audience window (the slides on a second display while
+  the presenter view stays on the first) has not been tried under niri; with one display the
+  presenter view shows the slides beside it, full screen.
 - QEMU has no GPU acceleration on macOS: niri runs nested inside cage, which renders with pixman,
   and Electron runs with `--disable-gpu`. UTM's Apple Virtualization backend gives virtio-gpu-gl.
 - Under the `HERALD_OS_COMPOSITOR=cage` kiosk, a launched app (Firefox, Nautilus) covers the shell

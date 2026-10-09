@@ -241,6 +241,15 @@ window-rule {
     match app-id=r#"^(herald-os|Herald OS)$"# title="^Herald OS · (Docs|Sheets|Slides)$"
     default-column-width { proportion 0.75; }
 }
+// The shell's file and print dialogs float over the app. niri floats a dialog whose parent it
+// knows, but the first one each window opens maps before GTK has named its parent. GTK names
+// them after the binary: electron in a checkout, herald-os packaged.
+window-rule {
+    match app-id="^electron$"
+    match app-id=r#"^(herald-os|Herald OS)$"# title=r#"^(Open a (document|spreadsheet|presentation)|Open in Herald Canvas|Save as|Save project|Export|Export as PDF|Print|Print to File)$"#
+    open-floating true
+    open-focused true
+}
 
 // Foreign apps get the same rounding and open as tiles even when they remember being maximized
 // or fullscreen elsewhere (apps that genuinely need fullscreen can still ask for it later).
