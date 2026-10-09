@@ -162,6 +162,8 @@ export function contentCss(scope: string, medium: 'screen' | 'print'): string {
     `${s('.doc-note-label')} { margin-right: 2pt }`,
     `${s('.doc-notes-rule')} { width: 144pt; max-width: 40%; height: 0; border-top: 0.75pt solid #000; margin: 0 0 4pt }`,
     `${s('.doc-endnotes')} { margin-top: 18pt }`,
+    // Breaks and tables of contents never let margins collapse through them, so pages line up after them alike on screen and on paper.
+    `${s('.doc-page-break, .doc-section-break, .doc-toc')} { display: flow-root }`,
     `${s('.doc-toc')} { margin: 6pt 0 }`,
     `${s('.doc-toc-title')} { margin: 0 0 6pt; font-weight: 700; font-size: 1.15em }`,
     `${s('.doc-toc-entry')} { margin: 0 0 3pt }`,
