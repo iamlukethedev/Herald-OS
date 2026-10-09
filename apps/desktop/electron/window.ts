@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { HeraldOSPrefs } from '../shared/ipc.ts'
 import { osEnv } from './env.ts'
+import { audienceWindow } from './office/presenter.ts'
 import { devServerUrl, isShellPage, rendererIndex } from './paths.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -51,7 +52,13 @@ export function createMainWindow(prefs: HeraldOSPrefs): BrowserWindow {
   })
 
   // Links stay outside: the renderer must never navigate away from the shell.
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    const audience = audienceWindow(win, { url, frameName })
+
+    if (audience) {
+      return audience
+    }
+
     if (/^https?:/i.test(url)) {
       void shell.openExternal(url)
     }

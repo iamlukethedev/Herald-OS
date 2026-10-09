@@ -1,13 +1,54 @@
-import { type Deck, DeckHistory, findElement, findSlide, type Slide, type SlideElement } from './deck.ts'
+import { type Background, type Deck, DeckHistory, type Fill, findElement, findSlide, type LayoutId, type Master, type Slide, type SlideElement, type SlideSize } from './deck.ts'
+import { coverCrop, imageElement, shapeElement } from './elements.ts'
+import { layoutOf, masterOf } from './layouts.ts'
+import { applyMasterDeck, layoutSlideId, MASTER_SLIDE_ID, masterDeck, slideLayoutId } from './masters.ts'
 import type { DeckChange } from './model.ts'
 import type { CellRef } from './tables.ts'
 
 /*
  * One open deck in the editor: its history, the slide in front, the slides picked in the list, what
  * is selected on the slide and what is being typed into. A drag shows its deck as a preview and
- * becomes one step when it ends; every other change is a step as it happens.
+ * becomes one step when it ends; every other change is a step as it happens. In the master view the
+ * master and its layouts are the slides of a deck of their own (`masterDeck`): edits start from that
+ * deck, and each change of it goes back into the deck's master as one step of the deck's history.
  */
+
+/** How the slide view draws a slide beyond its own content. */
+export interface ViewOptions {
+  inherit?: boolean
+  behind?: readonly SlideElement[]
+}
+
+const AS_IS: ViewOptions = {}
+
+const ON_ITS_OWN: ViewOptions = { inherit: false }
+
+/** The masters of the decks the master view made; no deck of slides has one of them. */
+const viewMasters = new WeakSet<Master>()
+
+/** Whether a slide id names the master's own slide or a layout's in the master's deck. */
+export const isMasterSlideId = (id: string): boolean => id === MASTER_SLIDE_ID || slideLayoutId(id) !== null
+
+const hasMasterSlides = (deck: Deck): boolean => deck.slides.some((slide) => isMasterSlideId(slide.id))
+
+/** The master's background as a picture or a box over the whole slide, for a layout without a background of its own. */
+function backdrop(background: Background, size: SlideSize): SlideElement {
+  const box = { x: 0, y: 0, width: size.width, height: size.height }
+
+  if (background.kind === 'image') {
+    const crop = coverCrop(background.natural, box)
+
+    return imageElement(background.src, background.natural, box, { id: 'master-background', name: 'Background', ...(crop ? { crop } : {}) })
+  }
+
+  const fill: Fill =
+    background.kind === 'solid' ? { color: background.color } : { color: background.stops[0]?.color ?? 'bg1', gradient: { stops: background.stops, angle: background.angle, ...(background.radial ? { radial: true } : {}) } }
+
+  return shapeElement('rect', box, { id: 'master-background', name: 'Background', fill })
+}
+
 export class SlidesDocument {
+  /** The deck's own history, whichever view is in front. */
   readonly history: DeckHistory
   slideId: string
   /** Slides picked in the slide list, the one in front among them. */
@@ -22,8 +63,16 @@ export class SlidesDocument {
   preview: Deck | null = null
   /** How big the slide is shown: fitted to the window, or CSS pixels a point. */
   zoom: 'fit' | number = 'fit'
+  /** What is edited: the deck's slides, or its master and layouts as the slides of a deck of their own. */
+  mode: 'slides' | 'master' = 'slides'
   revision = 0
   private readonly listeners = new Set<() => void>()
+  /** Where the slides view was when the master view opened: the slide in front, its place and the picked slides. */
+  private away: { slideId: string; index: number; picked: string[] } | null = null
+  /** The master's deck as last made, and the deck it was made from. */
+  private made: { from: Deck; deck: Deck } | null = null
+  /** What was last drawn behind a layout, by whether it shows the master's drawings and background. */
+  private readonly drawnBehind = new Map<string, { elements: readonly SlideElement[]; background: Background | null; size: SlideSize; options: ViewOptions }>()
 
   constructor(
     deck: Deck,
@@ -34,12 +83,87 @@ export class SlidesDocument {
     this.picked = [this.slideId]
   }
 
+  /** The deck edits start from: the deck itself, or in the master view the master's deck. */
+  get base(): Deck {
+    return this.mode === 'master' ? this.masterDeck : this.history.present
+  }
+
+  /** The deck itself as it stands, whichever view is in front: what is saved and presented. */
+  get presentation(): Deck {
+    return this.history.present
+  }
+
+  /** The master's deck for the deck as it stands; the same deck while the deck is. */
+  private get masterDeck(): Deck {
+    const from = this.history.present
+
+    if (this.made?.from !== from) {
+      const deck = masterDeck(from)
+
+      if (deck.master) {
+        viewMasters.add(deck.master)
+      }
+
+      this.made = { from, deck }
+    }
+
+    return this.made.deck
+  }
+
+  /** Whether a deck is the master view's or made from it: its master is one the view made, or its slides are the master's and layouts' as the deck's own are not. */
+  private ofMasterView(deck: Deck): boolean {
+    return (deck.master !== undefined && viewMasters.has(deck.master)) || (hasMasterSlides(deck) && !hasMasterSlides(this.history.present))
+  }
+
+  /** The deck with an edit of the master's deck in its master. Only backgrounds and drawings go in: a master's slide put on another layout, or the whole of it resized, says nothing of the master. */
+  private intoMaster(edited: Deck): Deck {
+    const deck = this.history.present
+
+    if (edited.size.width !== deck.size.width || edited.size.height !== deck.size.height) {
+      return deck
+    }
+
+    const kept = edited.slides.filter((slide) => slide.layout === (slideLayoutId(slide.id) ?? 'blank'))
+
+    return applyMasterDeck(deck, kept.length === edited.slides.length ? edited : { ...edited, slides: kept })
+  }
+
   get deck(): Deck {
-    return this.preview ?? this.history.present
+    return this.preview ?? this.base
   }
 
   get slide(): Slide {
     return findSlide(this.deck, this.slideId) ?? this.deck.slides[0]
+  }
+
+  /** How a slide of `deck` is drawn beyond its own content: in the master view, a layout over the master's background and drawings. */
+  viewOptions(slide: Slide): ViewOptions {
+    if (this.mode !== 'master' || !slide) {
+      return AS_IS
+    }
+
+    const layout = slideLayoutId(slide.id)
+    const master = layout ? findSlide(this.deck, MASTER_SLIDE_ID) : undefined
+
+    if (!layout || !master) {
+      return ON_ITS_OWN
+    }
+
+    const shows = layoutOf(masterOf(this.history.present), layout).showMaster
+    const background = slide.background ? null : master.background
+    const size = this.deck.size
+    const key = `${shows}:${background ? 'master' : 'own'}`
+    const known = this.drawnBehind.get(key)
+
+    if (known && known.elements === master.elements && known.background === background && known.size === size) {
+      return known.options
+    }
+
+    const behind = [...(background ? [backdrop(background, size)] : []), ...(shows ? master.elements.filter((element) => !element.placeholder) : [])]
+    const options = behind.length ? { inherit: false, behind } : ON_ITS_OWN
+    this.drawnBehind.set(key, { elements: master.elements, background, size, options })
+
+    return options
   }
 
   get index(): number {
@@ -100,19 +224,25 @@ export class SlidesDocument {
     }
   }
 
-  /** Record a change as one step and go where it says. */
+  /** Record a change as one step and go where it says; a change of the master's deck goes into the deck's master. */
   commit(change: DeckChange): void {
     this.preview = null
-    this.history.commit(change.deck, change.label, change.join)
+    const ofMaster = this.ofMasterView(change.deck)
+    this.history.commit(ofMaster ? this.intoMaster(change.deck) : change.deck, change.label, change.join)
+    const { slideId, selected } = change.focus ?? {}
+    // A change of the deck's own slides made from the master view goes to its slide on the way back.
+    const away = this.mode === 'master' && (slideId ? !isMasterSlideId(slideId) : !ofMaster)
 
-    if (change.focus?.slideId && change.focus.slideId !== this.slideId) {
-      this.slideId = change.focus.slideId
-      this.picked = [change.focus.slideId]
+    if (away && slideId) {
+      this.away = { slideId, index: this.away?.index ?? 0, picked: [slideId] }
+    } else if (!away && slideId && slideId !== this.slideId) {
+      this.slideId = slideId
+      this.picked = [slideId]
       this.editing = null
     }
 
-    if (change.focus?.selected) {
-      this.selected = [...change.focus.selected]
+    if (!away && selected) {
+      this.selected = [...selected]
     }
 
     this.settle()
@@ -121,6 +251,11 @@ export class SlidesDocument {
   }
 
   show(preview: Deck | null): void {
+    // A preview made in the other view (a drag under way as the view changed) is dropped.
+    if (preview && this.ofMasterView(preview) !== (this.mode === 'master')) {
+      return
+    }
+
     this.preview = preview
     this.changed()
   }
@@ -160,13 +295,54 @@ export class SlidesDocument {
     return label
   }
 
-  /** Bring a slide to the front; `extend` adds it to the picked slides (or takes it out again). */
+  /** Open the master view with the layout of the slide in front in front (or the master, or another layout). */
+  enterMaster(at?: 'master' | LayoutId): void {
+    if (this.mode === 'master') {
+      if (at) {
+        this.goTo(at === 'master' ? MASTER_SLIDE_ID : layoutSlideId(at))
+      }
+
+      return
+    }
+
+    const layout = at ?? this.slide.layout
+    this.away = { slideId: this.slideId, index: this.index, picked: [...this.picked] }
+    this.mode = 'master'
+    this.preview = null
+    this.editing = null
+    this.selected = []
+    this.slideId = layout === 'master' ? MASTER_SLIDE_ID : layoutSlideId(layout)
+    this.picked = [this.slideId]
+    this.settle()
+    this.changed()
+  }
+
+  /** Close the master view and go back to the slide that was in front (or one in its place). */
+  exitMaster(): void {
+    if (this.mode !== 'master') {
+      return
+    }
+
+    const away = this.away
+    this.mode = 'slides'
+    this.away = null
+    this.preview = null
+    this.editing = null
+    this.selected = []
+    const slides = this.deck.slides
+    this.slideId = away && findSlide(this.deck, away.slideId) ? away.slideId : slides[Math.min(away?.index ?? 0, slides.length - 1)].id
+    this.picked = away?.picked ?? [this.slideId]
+    this.settle()
+    this.changed()
+  }
+
+  /** Bring a slide to the front; `extend` adds it to the picked slides (or takes it out again). The master view picks one at a time. */
   goTo(slideId: string, extend = false): void {
     if (!findSlide(this.deck, slideId)) {
       return
     }
 
-    if (extend) {
+    if (extend && this.mode === 'slides') {
       this.picked = this.picked.includes(slideId) && this.picked.length > 1 ? this.picked.filter((id) => id !== slideId) : [...new Set([...this.picked, slideId])]
       this.slideId = this.picked.includes(slideId) ? slideId : this.picked[this.picked.length - 1]
     } else {

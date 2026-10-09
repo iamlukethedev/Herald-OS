@@ -1,7 +1,7 @@
 import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 import { type Deck, type ImageElement, type LineElement, type ShapeElement, SLIDE_SIZES, type TableElement, type TextElement } from '../deck.ts'
-import { placeholderFor } from '../layouts.ts'
+import { LAYOUT_NAMES, placeholderFor } from '../layouts.ts'
 import * as model from '../model.ts'
 import { settleSpans, withCell } from '../tables.ts'
 import { themeById } from '../themes.ts'
@@ -115,7 +115,7 @@ describe('writing PowerPoint files', () => {
     const titleLayout = layouts.find((layout) => attr(find(layout, 'p:cSld'), 'name') === 'Title')!
 
     expect(Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))).toHaveLength(4)
-    expect(layouts.map((layout) => attr(find(layout, 'p:cSld'), 'name')).sort()).toEqual(['Blank', 'DEFAULT', 'Section Header', 'Title', 'Title and Content'].sort())
+    expect(layouts.map((layout) => attr(find(layout, 'p:cSld'), 'name')).sort()).toEqual(Object.values(LAYOUT_NAMES).sort())
     expect(descendants(title, 'a:t').map(textOf).join('')).toBe('Quarterly review')
     expect(attr(find(title, 'p:nvSpPr/p:cNvPr'), 'name')).toBe('Title 1')
     expect(descendants(typed('subTitle')!, 'a:t').map(textOf).join('')).toBe('Herald OS')
@@ -248,7 +248,7 @@ describe('writing PowerPoint files', () => {
     expect(attr(find(gradient, 'p:cSld/p:bg/p:bgPr/a:gradFill/a:lin'), 'ang')).toBe('5400000')
     expect(find(hidden, 'p:cSld/p:bg/p:bgPr/a:blipFill/a:blip')).toBeDefined()
     expect(attr(hidden, 'show')).toBe('0')
-    expect(find(gradient, 'p:transition/p:push')).toBeDefined()
+    expect(find(gradient, 'mc:AlternateContent/mc:Fallback/p:transition/p:push')).toBeDefined()
     expect(descendants(notesBody, 'a:p').map(textOf)).toEqual(['Welcome everyone', '', 'Then the agenda'])
   })
 

@@ -31,8 +31,13 @@ export function count(report: ImportReport, kind: ReportKind, outcome: keyof Kin
   report.counts[kind][outcome]++
 
   for (const reason of typeof reasons === 'string' ? [reasons] : (reasons ?? [])) {
-    report.reasons[reason] = (report.reasons[reason] ?? 0) + 1
+    note(report, reason)
   }
+}
+
+/** Note why something was shown differently (`times` adds to what is known), for an element counted already or for no one element (a slide's transition). */
+export function note(report: ImportReport, reason: string, times = 1): void {
+  report.reasons[reason] = (report.reasons[reason] ?? 0) + times
 }
 
 /** Note something of the deck as a whole that is not kept (`times` adds to what is known). */

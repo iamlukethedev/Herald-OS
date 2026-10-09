@@ -1,4 +1,4 @@
-import type { BodyStyle, Box, Fill, TableCell, TableElement, TextBody } from './deck.ts'
+import type { BodyStyle, Box, CellBorders, Fill, Stroke, TableCell, TableElement, TextBody } from './deck.ts'
 import { newId } from './deck.ts'
 import { plainText, textBody } from './text.ts'
 
@@ -55,6 +55,8 @@ export function tableElement(box: Box, rows: number, columns: number, text: read
   }
 }
 
+const lines = (cell: TableCell): Pick<TableCell, 'borders'> => (cell.borders ? { borders: cell.borders } : {})
+
 /**
  * Cells made whole for a grid `columns` wide: a merged cell reaches no further than the table nor
  * over a cell another merged cell covers, and exactly the cells merged cells cover are marked.
@@ -65,7 +67,7 @@ export function settleSpans(cells: readonly (readonly TableCell[])[], columns: n
   return cells.map((row, r) =>
     row.map((cell, c): TableCell => {
       if (covered[r][c]) {
-        return { body: cell.body, fill: cell.fill, merged: true }
+        return { body: cell.body, fill: cell.fill, merged: true, ...lines(cell) }
       }
 
       let across = whole(cell.colSpan ?? 1, 1, columns - c)
@@ -85,7 +87,7 @@ export function settleSpans(cells: readonly (readonly TableCell[])[], columns: n
         }
       }
 
-      return { body: cell.body, fill: cell.fill, ...(across > 1 ? { colSpan: across } : {}), ...(down > 1 ? { rowSpan: down } : {}) }
+      return { body: cell.body, fill: cell.fill, ...(across > 1 ? { colSpan: across } : {}), ...(down > 1 ? { rowSpan: down } : {}), ...lines(cell) }
     })
   )
 }
@@ -94,7 +96,7 @@ export function settleSpans(cells: readonly (readonly TableCell[])[], columns: n
 function blankLike(like: TableCell): TableCell {
   const first = like.body.paragraphs[0] ?? { runs: [] }
 
-  return { body: { ...like.body, paragraphs: [{ ...first, runs: [{ ...first.runs[0], text: '' }] }] }, fill: like.fill }
+  return { body: { ...like.body, paragraphs: [{ ...first, runs: [{ ...first.runs[0], text: '' }] }] }, fill: like.fill, ...lines(like) }
 }
 
 /** A table with a blank row at `at` formatted as row `like`; a merged cell across `at` reaches over it. */
@@ -143,8 +145,19 @@ function dropRows(table: TableElement, which: readonly number[]): TableElement |
   return { ...table, rows, height: total(rows), cells: settleSpans(cells.filter((_, r) => !gone.has(r)), table.columns.length) }
 }
 
+const ACROSS: Record<keyof CellBorders, keyof CellBorders> = { left: 'top', top: 'left', right: 'bottom', bottom: 'right' }
+
 function crossCell(cell: TableCell): TableCell {
-  return { body: cell.body, fill: cell.fill, ...(cell.rowSpan ? { colSpan: cell.rowSpan } : {}), ...(cell.colSpan ? { rowSpan: cell.colSpan } : {}), ...(cell.merged ? { merged: true } : {}) }
+  const borders = cell.borders && (Object.fromEntries(Object.entries(cell.borders).map(([side, line]) => [ACROSS[side as keyof CellBorders], line])) as CellBorders)
+
+  return {
+    body: cell.body,
+    fill: cell.fill,
+    ...(cell.rowSpan ? { colSpan: cell.rowSpan } : {}),
+    ...(cell.colSpan ? { rowSpan: cell.colSpan } : {}),
+    ...(cell.merged ? { merged: true } : {}),
+    ...(borders ? { borders } : {})
+  }
 }
 
 /** Rows as columns and columns as rows, so what is done to rows can be done to columns. */
@@ -246,6 +259,76 @@ export function fillCells(table: TableElement, cells: readonly CellRef[] | 'all'
   const wanted = cells === 'all' ? null : new Set(cells.map((cell) => `${cell.row}:${cell.column}`))
 
   return { ...table, cells: table.cells.map((row, r) => row.map((cell, c) => (!wanted || wanted.has(`${r}:${c}`) ? { ...cell, fill } : cell))) }
+}
+
+/**
+ * Which lines of some cells a border goes on, as PowerPoint's Borders menu offers them: a side of
+ * the cells together (`left` is the left edge of what is picked), all of their outside, the lines
+ * between them, or both.
+ */
+export type BorderSide = 'left' | 'top' | 'right' | 'bottom' | 'outer' | 'inner' | 'all'
+
+const sameStroke = (a: Stroke | null | undefined, b: Stroke | null | undefined): boolean =>
+  a && b ? a.color === b.color && a.width === b.width && a.dash === b.dash && (a.alpha ?? 1) === (b.alpha ?? 1) : a === b
+
+/**
+ * A table with a line (null for none) on some sides of some of its cells, or all of them. A line
+ * between two cells is set on both, so either cell says the same; the line around a merged cell is
+ * its own, and a covered cell picked stands for the merged cell over it.
+ */
+export function borderCells(table: TableElement, cells: readonly CellRef[] | 'all', sides: readonly BorderSide[], stroke: Stroke | null): TableElement {
+  const down = table.rows.length
+  const across = table.columns.length
+  const key = (at: CellRef) => `${at.row}:${at.column}`
+  const inside = (at: CellRef) => Number.isInteger(at.row) && Number.isInteger(at.column) && at.row >= 0 && at.row < down && at.column >= 0 && at.column < across
+  const grid = table.cells.map((row, r) => row.map((_, c) => cellUnder(table, { row: r, column: c })))
+  const picked = new Set(cells === 'all' ? grid.flat().map(key) : cells.filter(inside).map((at) => key(cellUnder(table, at))))
+  const wanted = new Set(sides.flatMap((side) => (side === 'all' ? ['left', 'top', 'right', 'bottom', 'inner'] : side === 'outer' ? ['left', 'top', 'right', 'bottom'] : [side])))
+  const changes = new Map<string, CellBorders>()
+  const mark = (at: CellRef | undefined, side: keyof CellBorders) => at && changes.set(key(at), { ...changes.get(key(at)), [side]: stroke })
+  const edge = (before: CellRef | undefined, after: CellRef | undefined, sideOf: { before: keyof CellBorders; after: keyof CellBorders }) => {
+    if (before && after && key(before) === key(after)) {
+      return
+    }
+
+    const first = before !== undefined && picked.has(key(before))
+    const second = after !== undefined && picked.has(key(after))
+    const kind = first && second ? 'inner' : first ? sideOf.before : second ? sideOf.after : null
+
+    if (kind && wanted.has(kind)) {
+      mark(before, sideOf.before)
+      mark(after, sideOf.after)
+    }
+  }
+
+  for (let r = 0; r < down; r++) {
+    for (let c = 0; c <= across; c++) {
+      edge(grid[r][c - 1], grid[r][c], { before: 'right', after: 'left' })
+    }
+  }
+
+  for (let c = 0; c < across; c++) {
+    for (let r = 0; r <= down; r++) {
+      edge(grid[r - 1]?.[c], grid[r]?.[c], { before: 'bottom', after: 'top' })
+    }
+  }
+
+  let changed = false
+  const next = table.cells.map((row, r) =>
+    row.map((cell, c) => {
+      const change = changes.get(key({ row: r, column: c }))
+
+      if (!change || Object.entries(change).every(([side, line]) => cell.borders && side in cell.borders && sameStroke(cell.borders[side as keyof CellBorders], line))) {
+        return cell
+      }
+
+      changed = true
+
+      return { ...cell, borders: { ...cell.borders, ...change } }
+    })
+  )
+
+  return changed ? { ...table, cells: next } : table
 }
 
 /** The cell after `at` in reading order (or before it), past the cells merged cells cover; null past either end. */

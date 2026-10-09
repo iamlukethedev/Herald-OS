@@ -1,12 +1,15 @@
 import type { CSSProperties } from 'react'
 import type { Box, SlideElement } from '../deck.ts'
-import { boundsOfAll, lineEnds } from '../elements.ts'
-import { type GuideLine, HANDLES, handleDirection, type Handle } from './gestures.ts'
+import { boundsOfAll, lineEndsOnSlide } from '../elements.ts'
+import { ConnectorSites } from './ConnectorSites.tsx'
+import { type GuideLine, HANDLES, handleDirection, type Handle, type SiteTarget } from './gestures.ts'
 
 /*
  * What sits over the slide while editing, in screen pixels so it stays crisp at any zoom: the
- * selection's outline and handles (turned with a rotated element), the line ends, the guides a drag
- * lines up with, and the selection rectangle.
+ * selection's outline and handles (turned with a rotated element; one frame for a group, its
+ * members dashed, and the group a selection was taken into dashed around it), the line ends, the
+ * connection sites a connector's end is near, the guides a drag lines up with, and the selection
+ * rectangle.
  */
 
 const ACCENT = 'var(--color-accent)'
@@ -54,16 +57,40 @@ function Frame({ box, rotation, scale, handles, rotate, dashed, thin }: { box: B
   )
 }
 
-export function Overlay({ selection, editing, scale, guides, marquee }: { selection: SlideElement[]; editing: SlideElement | null; scale: number; guides: GuideLine[]; marquee: Box | null }) {
+/** Tables and kept objects stay upright, as in PowerPoint. */
+const turns = (element: SlideElement): boolean => element.kind !== 'table' && element.kind !== 'object'
+
+export function Overlay({
+  selection,
+  editing,
+  scale,
+  guides,
+  marquee,
+  group = false,
+  context = null,
+  sites = null
+}: {
+  selection: SlideElement[]
+  editing: SlideElement | null
+  scale: number
+  guides: GuideLine[]
+  marquee: Box | null
+  /** The selection is one group. */
+  group?: boolean
+  /** The box of the group the selection was taken into. */
+  context?: Box | null
+  sites?: SiteTarget | null
+}) {
   const single = selection.length === 1 ? selection[0] : null
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-visible" aria-hidden="true">
+      {context && !editing && <Frame box={context} rotation={0} scale={scale} dashed thin />}
       {editing ? (
         <Frame box={editing} rotation={editing.rotation} scale={scale} dashed />
       ) : single?.kind === 'line' ? (
         (() => {
-          const { from, to } = lineEnds(single)
+          const { from, to } = lineEndsOnSlide(single)
 
           return (['from', 'to'] as const).map((end) => {
             const [x, y] = end === 'from' ? from : to
@@ -72,13 +99,14 @@ export function Overlay({ selection, editing, scale, guides, marquee }: { select
           })
         })()
       ) : single ? (
-        <Frame box={single} rotation={single.rotation} scale={scale} handles rotate={single.kind !== 'table'} />
+        <Frame box={single} rotation={single.rotation} scale={scale} handles rotate={turns(single)} />
       ) : selection.length > 1 ? (
         <>
-          {selection.map((element) => (element.kind === 'line' ? null : <Frame key={element.id} box={element} rotation={element.rotation} scale={scale} thin />))}
-          <Frame box={boundsOfAll(selection)!} rotation={0} scale={scale} handles dashed />
+          {selection.map((element) => (element.kind === 'line' ? null : <Frame key={element.id} box={element} rotation={element.rotation} scale={scale} thin dashed={group} />))}
+          <Frame box={boundsOfAll(selection)!} rotation={0} scale={scale} handles rotate={group} dashed={!group} />
         </>
       ) : null}
+      {sites && <ConnectorSites sites={sites.sites} site={sites.site} scale={scale} />}
       {guides.map((guide, index) => (
         <span
           key={index}

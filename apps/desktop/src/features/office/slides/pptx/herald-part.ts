@@ -1,13 +1,14 @@
 import type JSZip from 'jszip'
-import type { Deck } from '../deck.ts'
+import type { Background, Deck, KeptPart, SlideElement } from '../deck.ts'
 import { normalizeDeck } from '../normalize.ts'
 import { attr, childrenNamed, parseXml, serializeXml, xml } from './xml.ts'
 
 /*
  * Herald's own copy of a deck inside a PowerPoint file it saved: `herald/deck.json`, a part with
  * its content type and a package relationship of its own, which PowerPoint, Keynote and LibreOffice
- * pass over. Reading it gives the deck back exactly. Pictures are not stored twice: the copy names
- * the media part PowerPoint's slides use. It also records a fingerprint of the slides as written,
+ * pass over. Reading it gives the deck back exactly. Nothing is stored twice: a picture (on a slide,
+ * the master or a layout, or a kept object's) names the media part with the same bytes, and a kept
+ * object's part the part it was copied to. It also records a fingerprint of the slides as written,
  * so a file changed by another app since is read from its slides instead.
  */
 
@@ -15,7 +16,8 @@ export const HERALD_PART = 'herald/deck.json'
 export const HERALD_CONTENT_TYPE = 'application/vnd.herald-os.slides+json'
 export const HERALD_RELATIONSHIP = 'urn:herald-os:slides:deck'
 const FORMAT = 'herald-slides'
-const VERSION = 1
+/** Version 2 may name kept objects' parts; version 1 copies are read as before. */
+const VERSION = 2
 
 /** A quick 53-bit hash, enough to notice a part that changed. */
 function hash(text: string): string {
@@ -48,35 +50,97 @@ export async function slidesFingerprint(zip: JSZip): Promise<string> {
 
 const MIME_BY_EXTENSION: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' }
 
-type Visit = (src: string) => string
+const mimeOf = (name: string): string | undefined => MIME_BY_EXTENSION[name.split('.').pop()?.toLowerCase() ?? '']
 
-/** The deck with every picture source passed through `visit` (elements and backgrounds). */
-function mapSources(deck: Deck, visit: Visit): Deck {
+interface Visits {
+  /** A picture's source. */
+  src: (src: string) => string
+  /** A kept part's bytes. */
+  data: (part: KeptPart) => string
+}
+
+const mapBackground = (background: Background | null, visit: Visits): Background | null => (background?.kind === 'image' ? { ...background, src: visit.src(background.src) } : background)
+
+const mapPart = (part: KeptPart, visit: Visits): KeptPart => ({ ...part, data: visit.data(part), ...(part.parts ? { parts: part.parts.map((inner) => mapPart(inner, visit)) } : {}) })
+
+function mapElement(element: SlideElement, visit: Visits): SlideElement {
+  if (element.kind === 'image') {
+    return element.src ? { ...element, src: visit.src(element.src) } : element
+  }
+
+  if (element.kind !== 'object') {
+    return element
+  }
+
+  return {
+    ...element,
+    ...(element.preview ? { preview: { ...element.preview, src: visit.src(element.preview.src) } } : {}),
+    ...(element.shapes ? { shapes: element.shapes.map((shape) => mapElement(shape, visit)) } : {}),
+    source: { ...element.source, parts: element.source.parts.map((part) => mapPart(part, visit)) }
+  }
+}
+
+/** The deck with every picture source and kept part passed through `visit`: on slides, the master and its layouts. */
+function mapSources(deck: Deck, visit: Visits): Deck {
   return {
     ...deck,
-    slides: deck.slides.map((slide) => ({
-      ...slide,
-      background: slide.background?.kind === 'image' ? { ...slide.background, src: visit(slide.background.src) } : slide.background,
-      elements: slide.elements.map((element) => (element.kind === 'image' && element.src ? { ...element, src: visit(element.src) } : element))
-    }))
+    ...(deck.master
+      ? {
+          master: {
+            ...deck.master,
+            background: mapBackground(deck.master.background, visit),
+            elements: deck.master.elements.map((element) => mapElement(element, visit)),
+            layouts: deck.master.layouts.map((layout) => ({ ...layout, background: mapBackground(layout.background, visit), elements: layout.elements.map((element) => mapElement(element, visit)) }))
+          }
+        }
+      : {}),
+    slides: deck.slides.map((slide) => ({ ...slide, background: mapBackground(slide.background, visit), elements: slide.elements.map((element) => mapElement(element, visit)) }))
   }
+}
+
+const folderOf = (name: string): string => name.slice(0, name.lastIndexOf('/') + 1)
+
+/** The folders kept parts were copied into (each keeps its folder under a fresh name). */
+function partFolders(deck: Deck): Set<string> {
+  const folders = new Set<string>()
+  const visit: Visits = {
+    src: (src) => src,
+    data: (part) => {
+      folders.add(folderOf(part.path.replace(/^\/+/, '')))
+
+      return part.data
+    }
+  }
+  mapSources(deck, visit)
+
+  return folders
 }
 
 /** Add Herald's copy of `deck` to a PowerPoint file just written. */
 export async function embedDeck(zip: JSZip, deck: Deck): Promise<void> {
-  // Pictures already in the file are named by their part instead of copied.
-  const media = new Map<string, string>()
+  // What is already in the file is named by its part instead of copied: pictures among the media, kept parts in their folders.
+  const folders = new Set(['ppt/media/', ...partFolders(deck)])
+  const parts = new Map<string, string[]>()
 
-  for (const name of Object.keys(zip.files).filter((entry) => entry.startsWith('ppt/media/') && !zip.files[entry].dir)) {
+  for (const name of Object.keys(zip.files).filter((entry) => !zip.files[entry].dir && folders.has(folderOf(entry)))) {
     const base64 = await zip.file(name)!.async('base64')
-    media.set(base64, name)
+    parts.set(base64, [...(parts.get(base64) ?? []), name])
   }
 
-  const light = mapSources(deck, (src) => {
-    const payload = src.slice(src.indexOf(',') + 1).replace(/\s+/g, '')
-    const part = media.get(payload)
+  // A reference is made only where reading it gives back the very same text.
+  const light = mapSources(deck, {
+    src: (src) => {
+      const payload = src.slice(src.indexOf(',') + 1)
+      const part = parts.get(payload)?.find((name) => name.startsWith('ppt/media/') && src === `data:${mimeOf(name)};base64,${payload}`)
 
-    return part ? `part:/${part}` : src
+      return part ? `part:/${part}` : src
+    },
+    data: (kept) => {
+      const folder = folderOf(kept.path.replace(/^\/+/, ''))
+      const part = parts.get(kept.data)?.find((name) => folderOf(name) === folder)
+
+      return part ? `part:/${part}` : kept.data
+    }
   })
   const fingerprint = await slidesFingerprint(zip)
   zip.file(HERALD_PART, JSON.stringify({ format: FORMAT, version: VERSION, fingerprint, deck: light }))
@@ -128,18 +192,26 @@ export async function readEmbeddedDeck(zip: JSZip, title: string): Promise<Embed
     return { stale: true }
   }
 
-  const sources = new Map<string, string>()
+  const bytes = new Map<string, string>()
 
   for (const name of new Set(JSON.stringify(parsed.deck ?? null).match(/part:\/[\w./-]+/g) ?? [])) {
     const file = zip.file(name.slice('part:/'.length))
-    const mime = MIME_BY_EXTENSION[name.split('.').pop()?.toLowerCase() ?? '']
 
-    if (file && mime) {
-      sources.set(name, `data:${mime};base64,${await file.async('base64')}`)
+    if (file) {
+      bytes.set(name, await file.async('base64'))
     }
   }
 
-  const resolved = JSON.parse(JSON.stringify(parsed.deck ?? null), (key, value) => (key === 'src' && typeof value === 'string' && value.startsWith('part:/') ? (sources.get(value) ?? '') : value))
+  const resolved = JSON.parse(JSON.stringify(parsed.deck ?? null), (key, value) => {
+    if (typeof value !== 'string' || !value.startsWith('part:/')) {
+      return value
+    }
+
+    const base64 = bytes.get(value)
+    const mime = mimeOf(value)
+
+    return key === 'src' ? (base64 !== undefined && mime ? `data:${mime};base64,${base64}` : '') : key === 'data' ? (base64 ?? '') : value
+  })
 
   try {
     return { deck: normalizeDeck(resolved, title) }

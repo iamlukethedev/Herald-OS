@@ -44,7 +44,7 @@ export function makeTargets(io: TargetIO) {
       io.flush?.(doc)
     }
 
-    return { deck: doc?.history.present ?? open.initial, doc, open, path: open.path, notes: open.notes }
+    return { deck: doc?.presentation ?? open.initial, doc, open, path: open.path, notes: open.notes }
   }
 
   /** The deck a command works on: the file named (open or on disk), or the deck in front. */
@@ -78,7 +78,7 @@ export function makeTargets(io: TargetIO) {
   async function apply(on: SlidesTarget, make: (deck: Deck) => DeckChange, options: { accept?: boolean } = {}): Promise<DeckChange> {
     if (on.doc) {
       io.flush?.(on.doc)
-      const change = make(on.doc.history.present)
+      const change = make(on.doc.presentation)
       on.doc.commit(change)
 
       return change
