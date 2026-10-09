@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { type CalloutKind, pageOf, type PageSettings, pageSizeName } from '../../../../shared/office/document.ts'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
+import { docsHermesMenu } from '../hermes/actions.ts'
 import { officeAbilities } from '../session.ts'
 import { type OfficeCommand, type OfficeMenu, officeMenus } from '../shell/commands.ts'
 import { OfficeWindow } from '../shell/OfficeWindow.tsx'
@@ -137,7 +138,8 @@ function docsMenus(): OfficeMenu[] {
       { id: 'insert', label: 'Insert', items: insert },
       { id: 'format', label: 'Format', items: format },
       { id: 'table', label: 'Table', items: table },
-      { id: 'view', label: 'View', items: view }
+      { id: 'view', label: 'View', items: view },
+      docsHermesMenu({ docKey: () => (has() ? key() : null), hasSelection: () => Boolean(activeEditor() && !activeEditor()!.state.selection.empty) })
     ]
   })
 }

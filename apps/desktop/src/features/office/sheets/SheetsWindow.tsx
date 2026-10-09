@@ -3,6 +3,8 @@ import './fonts.css'
 import { useEffect, useMemo, useState } from 'react'
 import { officeAppFor, openFormats } from '../../../../shared/office/files.ts'
 import { messageOf } from '../../canvas/errors.ts'
+import { sheetsHermesMenu } from '../hermes/actions.ts'
+import { activeCell } from '../hermes/sheets-live.ts'
 import { officeAbilities } from '../session.ts'
 import { type OfficeCommand, type OfficeMenu, officeMenus } from '../shell/commands.ts'
 import { OfficeWindow } from '../shell/OfficeWindow.tsx'
@@ -115,7 +117,15 @@ function sheetMenus(): { edit: OfficeCommand[]; menus: OfficeMenu[] } {
         id: 'sheet',
         label: 'Sheet',
         items: [univerCommand('sheet-new', 'New sheet', 'sheet.command.insert-sheet')]
-      }
+      },
+      sheetsHermesMenu({
+        docKey: activeKey,
+        cell: () => {
+          const key = activeKey()
+
+          return key ? activeCell(key) : null
+        }
+      })
     ]
   }
 }
