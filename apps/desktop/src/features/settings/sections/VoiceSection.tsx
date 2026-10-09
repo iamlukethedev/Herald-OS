@@ -10,7 +10,7 @@ import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
 import { $inputDevices } from '../../../lib/voice/audio-capture.ts'
 import { LOCAL_STT_MODELS } from '../../../lib/voice/stt-tuning.ts'
-import { $inputChoice, $micHeldElsewhere, $micLevelPercent, $microphoneTest, chooseInputDevice, startMicrophoneTest, stopMicrophoneTest, watchAudioDevices } from '../../../store/audio-devices.ts'
+import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../../store/audio-devices.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $voice, $voiceActive, LIVE_RATE_PER_MINUTE, liveSecondsToday, speakWithFreeFallback, startVoice } from '../../../store/voice.ts'
@@ -147,8 +147,6 @@ export function VoiceSection() {
   const micDevices = useStore($inputDevices)
   const micChoice = useStore($inputChoice)
   const micLevel = useStore($micLevelPercent)
-  const testingMic = useStore($microphoneTest)
-  const micHeldElsewhere = useStore($micHeldElsewhere)
 
   useEffect(() => watchAudioDevices(), [])
 
@@ -213,17 +211,8 @@ export function VoiceSection() {
             keywords="microphone input device airpods bluetooth headset usb audio"
             below={
               voice.enabled ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center">
                   <Meter value={micLevel} className="flex-1" />
-                  <GlassButton
-                    size="sm"
-                    onClick={() => (testingMic ? stopMicrophoneTest() : void startMicrophoneTest())}
-                    disabled={micHeldElsewhere}
-                    title={micHeldElsewhere ? 'The microphone is already open' : 'Hear the microphone for a few seconds'}
-                    aria-label={testingMic ? 'Stop the microphone test' : 'Test the microphone'}
-                  >
-                    {testingMic ? 'Stop' : 'Test'}
-                  </GlassButton>
                 </div>
               ) : undefined
             }

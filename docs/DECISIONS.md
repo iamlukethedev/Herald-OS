@@ -892,8 +892,9 @@ placeholder output and no inputs at all.
 - **Identity is the id, with the name as fallback.** `deviceId` is stable only for one origin, so a
   choice stores `{ id, label }`: the label identifies the device after a cache clear or a switch from
   a dev build to a packaged one, and the stored id is rewritten to the one found.
-- **The microphone is still only opened deliberately.** A conversation, the armed wake word, or the
-  explicit test button; never by opening a panel, and never while voice is off.
+- **The microphone is still only opened deliberately.** A conversation or the armed wake word; never
+  by opening a panel, and never while voice is off. The level bar in the pickers is live exactly
+  while the microphone is open.
 - **Rejected: changing the macOS system default device.** It affects every other app and needs a
   native helper; Herald OS already declines that for Bluetooth.
 - **Rejected: a separate microphone for the wake word.** The capture graph is deliberately single.
