@@ -58,6 +58,17 @@ describe('where a write goes', () => {
     expect(documentText(next.doc)).toContain('Sales grew in March.\nSummary: up.\nSales fell in May.')
   })
 
+  it('puts content after the marked text’s paragraph, wherever the person has clicked since', () => {
+    let state = selecting(stateFrom(REPORT), 'grew')
+    state = state.apply(state.tr.setMeta(markedKey, { range: { from: state.selection.from, to: state.selection.to } }))
+    state = selecting(state, 'two people')
+    const next = state.apply(insert('Summary: up.', placeFor(state, { at: 'after' }, markedRangeOf(state)))(state)!)
+
+    expect(documentText(next.doc)).toContain('Sales grew in March.\nSummary: up.\nSales fell in May.')
+    expect(documentText(next.doc)).toContain('Hire two people.')
+    expect(documentText(next.doc)).not.toContain('Hire two people.\nSummary: up.')
+  })
+
   it('replaces the marked text even after the person typed elsewhere', () => {
     let state = selecting(stateFrom(REPORT), 'Sales grew in March.')
     state = state.apply(state.tr.setMeta(markedKey, { range: { from: state.selection.from, to: state.selection.to } }))

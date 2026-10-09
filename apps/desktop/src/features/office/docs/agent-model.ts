@@ -52,7 +52,11 @@ export interface Marked {
   to: number
 }
 
-/** Where a write's content goes in a document, from `at`, `heading` and `mode`; `marked` is the text Herald marked for the request. */
+/**
+ * Where a write's content goes in a document, from `at`, `heading` and `mode`; `marked` is the text
+ * Herald marked for the request, which `after` goes under too while there is one, since the person
+ * may have clicked elsewhere since asking.
+ */
 export function placeFor(state: EditorState | null, args: Args, marked: Marked | null): Place {
   const where = whereOf(args)
 
@@ -74,7 +78,7 @@ export function placeFor(state: EditorState | null, args: Args, marked: Marked |
     throw new Error(`at=${where} needs the document open in Herald Docs, where it has a selection: open it first (docs.open)`)
   }
 
-  const range = where === 'marked' ? marked : { from: state.selection.from, to: state.selection.to }
+  const range = where === 'marked' || (where === 'after' && marked) ? marked : { from: state.selection.from, to: state.selection.to }
 
   if (!range) {
     throw new Error('Nothing is marked for Hermes in this document: use at=selection, a heading, or end')

@@ -1780,7 +1780,7 @@ DOCS_SCHEMA = _schema(
         "wholeWord": _desc(_BOOL, "find, replace, format at=text: whole words only"),
         "regex": _desc(_BOOL, "find, replace, format at=text: the text is a regular expression"),
         "format": _desc(_STR, "write: markdown (the default) or text"),
-        "at": _desc(_STR, "write, table, image, insert_range: where it goes: end (the default), start, selection (in place of what is selected, or at the caret), marked (in place of the text Herald marked for this request), after (under the paragraph the selection is in) or heading; format: what to format: selection (the default), marked, all, heading (the heading line), section (the heading and its section) or text"),
+        "at": _desc(_STR, "write, table, image, insert_range: where it goes: end (the default), start, selection (in place of what is selected, or at the caret), marked (in place of the text Herald marked for this request), after (under the paragraph the marked text is in, or the selection when nothing is marked) or heading; format: what to format: selection (the default), marked, all, heading (the heading line), section (the heading and its section) or text"),
         "mode": _desc(_STR, "With heading: append (at the end of its section, the default), prepend (right under the heading) or replace (in place of the section, keeping the heading)"),
         "find": _desc(_STR, "replace: the text to replace"),
         "replacement": _desc(_STR, "replace: what goes in its place (left out deletes the matches); each replacement keeps the formatting where its match starts"),
