@@ -60,15 +60,17 @@ function freeId(name: string, themes: readonly Theme[]): string {
 const OWN_ID = /^custom-[a-z0-9-]+$/
 
 async function readThemes(home: string): Promise<Theme[]> {
-  let preview: FilePreview
+  const location = customThemesPath(home)
 
-  // Asked first, since main logs every read that fails and most people have no themes of their own.
-  if (!(await window.heraldOS.canvas.exists(customThemesPath(home)))) {
+  // Main logs every read that fails, so a file nobody has written yet is not read.
+  if ((await window.heraldOS.canvas.exists(location)) !== 'file') {
     return []
   }
 
+  let preview: FilePreview
+
   try {
-    preview = await window.heraldOS.fs.readFile(customThemesPath(home))
+    preview = await window.heraldOS.fs.readFile(location)
   } catch (error) {
     if (/ENOENT|no such file/i.test(error instanceof Error ? error.message : String(error))) {
       return []

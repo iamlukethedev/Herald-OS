@@ -124,16 +124,21 @@ describe('applying themes', () => {
 describe('custom themes', () => {
   let files: Map<string, string>
   let writes: number
+  let reads: number
 
   beforeEach(() => {
     files = new Map()
     writes = 0
+    reads = 0
     $env.set({ platform: 'darwin', hermesHome: '/home/me/.hermes/', homeDir: '/home/me', version: '0.0.0', isDev: false, shellMode: 'panels' })
     ;(globalThis as unknown as { window: unknown }).window = {
       heraldOS: {
-        canvas: { exists: async (path: string) => (files.has(path) ? 'file' : null) },
+        canvas: {
+          exists: async (path: string) => (files.has(path) ? 'file' : null)
+        },
         fs: {
           readFile: async (path: string) => {
+            reads++
             const content = files.get(path)
 
             if (content === undefined) {
@@ -163,6 +168,8 @@ describe('custom themes', () => {
     expect(customThemesPath('/home/me/.hermes/')).toBe(path)
     expect(await loadCustomThemes()).toEqual([])
     expect(writes).toBe(0)
+    // Main logs a read that fails, so a file not written yet is never read.
+    expect(reads).toBe(0)
 
     const acme = await saveCustomTheme(editTheme(themeById('herald')!, { name: 'Acme Café', colors: { accent1: '#ff0066' }, background: GRADIENT }))
     const second = await saveCustomTheme(editTheme(themeById('mono')!, { name: 'Acme Café' }))
