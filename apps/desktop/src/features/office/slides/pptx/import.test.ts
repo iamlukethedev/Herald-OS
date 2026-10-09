@@ -1,7 +1,9 @@
 import JSZip from 'jszip'
 import PptxGenJS from 'pptxgenjs'
 import { describe, expect, it } from 'vitest'
-import type { Deck, ImageElement, LineElement, ShapeElement, Slide, SlideElement, TableElement, TextElement } from '../deck.ts'
+import type { Deck, ImageElement, LayoutId, LineElement, ObjectElement, ShapeElement, Slide, SlideElement, TableElement, TextElement } from '../deck.ts'
+import { LAYOUTS as LAYOUT_IDS } from '../deck.ts'
+import { defaultMaster } from '../layouts.ts'
 import { plainText } from '../text.ts'
 import { colorIn, OFFICE_SCHEME, type Paint, type Palette, STANDARD_MAP } from './color.ts'
 import { imageSize } from './image-size.ts'
@@ -496,7 +498,6 @@ describe('importPresentation: placeholders', () => {
     const subtitle = named<TextElement>(first, 'Subtitle')
     const agenda = named<TextElement>(second, 'Title')
     const body = named<TextElement>(second, 'Body')
-    const number = named<TextElement>(second, 'Number')
 
     expect(title).toMatchObject({ x: 120, y: 160, width: 720, height: 120, placeholder: { role: 'title', prompt: 'Click to add title' } })
     expect(title.body).toMatchObject({ style: { font: '+heading', size: 60, color: 'tx1' }, anchor: 'bottom', paragraphs: [{ align: 'center', lineSpacing: 0.9, runs: [{ text: 'Welcome' }] }] })
@@ -515,8 +516,8 @@ describe('importPresentation: placeholders', () => {
         { list: 'bullet', level: 1, bullet: '•', margin: 54, indent: -18, runs: [{ text: 'Second', size: 24 }] }
       ]
     })
-    expect(number).toMatchObject({ x: 680, y: 500, body: { style: { size: 12 }, paragraphs: [{ align: 'right', runs: [{ text: '2' }] }] } })
-    expect(number.placeholder).toBeUndefined()
+    expect(second.elements.map((element) => element.name)).toEqual(['Title', 'Body'])
+    expect(deck.headerFooter).toEqual({ date: false, dateFormat: 'datetime1', number: true, footer: false, footerText: '', skipTitle: true })
     expect(counts(report)).toEqual({ text: { imported: 5, approximated: 0, skipped: 0 } })
   })
 
@@ -557,7 +558,7 @@ describe('importPresentation: placeholders', () => {
     expect(named<ImageElement>(deck.slides[1], 'Photo')).toMatchObject({ kind: 'image', x: 400, y: 50, width: 450, height: 400, natural: { width: 400, height: 200 }, placeholder: { role: 'picture' } })
   })
 
-  it('draws the shapes of the master and layout behind those of each slide, counted once', async () => {
+  it('keeps the drawings of the master and layout there, giving each slide its own copy only of what shows its number, counted once', async () => {
     const logo = sp({ id: 10, name: 'Logo', props: xfrm(880, 10, 60, 30) + geometry('ellipse') + solid(scheme('accent1')) })
     const numberBox = sp({ id: 11, name: 'Page', textBox: true, props: xfrm(900, 510, 50, 20), text: paragraph('<a:fld id="{2}" type="slidenum"><a:rPr lang="en-GB"/><a:t>‹#›</a:t></a:fld>') })
     const rule = sp({ id: 12, name: 'Rule', props: xfrm(60, 132, 840, 0) + geometry('line') + line(1, scheme('accent2')) })
@@ -566,14 +567,171 @@ describe('importPresentation: placeholders', () => {
       layouts: [{ type: 'obj', tree: tree(sp({ name: 'Title 1', ph: '<p:ph type="title"/>' }) + rule) }],
       slides: [{ layout: 1, shapes: sp({ name: 'Own', textBox: true, props: xfrm(0, 0, 10, 10), text: paragraph(run('Mine')) }) }, { layout: 1 }, { layout: 1, attrs: ' showMasterSp="0"' }]
     })
+    const drawings = deck.master?.elements.filter((element) => !element.placeholder)
 
-    expect(deck.slides[0].elements.map((element) => element.name)).toEqual(['Logo', 'Page', 'Rule', 'Own'])
-    expect(deck.slides[1].elements.map((element) => element.name)).toEqual(['Logo', 'Page', 'Rule'])
+    expect(drawings?.map((element) => element.name)).toEqual(['Logo'])
+    expect(drawings?.[0]).toMatchObject({ kind: 'shape', shape: 'ellipse', fill: { color: 'accent1' } })
+    expect(deck.master?.layouts.find((layout) => layout.id === 'title-content')?.elements.map((element) => element.name)).toEqual(['Title 1', 'Rule'])
+    expect(deck.slides[0].elements.map((element) => element.name)).toEqual(['Page', 'Own'])
+    expect(deck.slides[1].elements.map((element) => element.name)).toEqual(['Page'])
     expect(deck.slides[2].elements).toEqual([])
     expect(named<TextElement>(deck.slides[1], 'Page').body.paragraphs[0].runs[0].text).toBe('2')
-    expect(named<ShapeElement>(deck.slides[0], 'Logo')).toMatchObject({ kind: 'shape', shape: 'ellipse', fill: { color: 'accent1' } })
     expect(deck.slides[0].elements[0].id).not.toBe(deck.slides[1].elements[0].id)
     expect(counts(report)).toEqual({ text: { imported: 2, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 0, skipped: 0 }, line: { imported: 1, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'background graphics shown on slides that did not show them': 1 })
+  })
+})
+
+describe('importPresentation: the master and its layouts', () => {
+  it('keeps the master’s background, drawings and placeholders, each placeholder in its place with the look its text starts from', async () => {
+    const logo = pic({ id: 12, name: 'Logo', embed: 'rIdLogo', props: xfrm(860, 20, 80, 40) + geometry('rect') })
+    const band = sp({ id: 13, name: 'Band', props: xfrm(0, 520, 960, 20) + geometry('rect') + solid(scheme('accent1')) })
+    const { deck, report } = await open({
+      master: { shapes: logo + band, bg: `<p:bg><p:bgPr>${solid(srgb('F0F0F0'))}<a:effectLst/></p:bgPr></p:bg>`, rels: [['rIdLogo', 'image', '../media/logo.png']] },
+      files: { 'ppt/media/logo.png': png(160, 80) },
+      slides: [{}]
+    })
+    const master = deck.master
+    const placeholder = (role: string) => master?.elements.find((element) => element.placeholder?.role === role)
+
+    expect(master?.background).toEqual({ kind: 'solid', color: '#f0f0f0' })
+    expect(master?.elements.map((element) => element.placeholder?.role ?? element.name)).toEqual(['title', 'body', 'date', 'number', 'Logo', 'Band'])
+    expect(master?.elements[4]).toMatchObject({ kind: 'image', x: 860, y: 20, width: 80, height: 40, natural: { width: 160, height: 80 } })
+    expect(placeholder('title')).toMatchObject({
+      kind: 'text',
+      x: 60,
+      y: 30,
+      width: 840,
+      height: 100,
+      placeholder: { role: 'title', prompt: 'Click to add title' },
+      body: { anchor: 'middle', style: { font: '+heading', size: 44, color: 'tx1' }, paragraphs: [{ lineSpacing: 0.9, runs: [{ text: '' }] }] }
+    })
+    expect(placeholder('body')).toMatchObject({ x: 60, y: 140, width: 840, height: 340, body: { fit: 'shrink', style: { font: '+body', size: 28, color: 'tx1' }, paragraphs: [{ list: 'bullet', spaceBefore: 10, margin: 18, indent: -18 }] } })
+    expect(placeholder('date')).toMatchObject({ x: 60, y: 500, width: 220, height: 30, placeholder: { role: 'date', prompt: 'Date' }, body: { style: { font: '+body', size: 12 } } })
+    expect(placeholder('number')).toMatchObject({ x: 680, y: 500, placeholder: { role: 'number', prompt: '‹#›' }, body: { style: { size: 12 }, paragraphs: [{ align: 'right' }] } })
+    expect(deck.slides[0]).toMatchObject({ background: null, elements: [] })
+    expect(counts(report)).toEqual({ picture: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 0, skipped: 0 } })
+  })
+
+  it('keeps a layout for each of Herald’s, the first the file has for it, placed and styled over the master, and Herald’s own for the rest', async () => {
+    const layouts: LayoutSpec[] = [
+      { type: 'title', name: 'Cover', attrs: ' showMasterSp="0"', tree: `<p:bg><p:bgPr>${solid(srgb('112233'))}<a:effectLst/></p:bgPr></p:bg>${TITLE_LAYOUT}` },
+      {
+        type: 'obj',
+        tree: tree(
+          sp({ id: 2, name: 'Title 1', ph: '<p:ph type="title"/>' }) +
+            sp({ id: 3, name: 'Content 2', ph: '<p:ph idx="1"/>', props: xfrm(60, 150, 400, 300) }) +
+            sp({ id: 4, name: 'Stripe', props: xfrm(0, 0, 960, 10) + geometry('rect') + solid(scheme('accent2')) }) +
+            sp({ id: 5, name: 'Number 4', ph: '<p:ph type="sldNum" sz="quarter" idx="12"/>', props: xfrm(800, 480, 100, 40) })
+        )
+      },
+      { type: 'obj', name: 'Content again' },
+      {
+        type: 'picTx',
+        name: 'Photo',
+        tree: tree(
+          sp({ id: 2, name: 'Title 1', ph: '<p:ph type="title"/>' }) +
+            sp({ id: 3, name: 'Picture 2', ph: '<p:ph type="pic" idx="1"/>', props: xfrm(400, 50, 450, 400) }) +
+            sp({ id: 4, name: 'Text 3', ph: '<p:ph type="body" sz="half" idx="2"/>', props: xfrm(60, 180, 300, 300) })
+        )
+      }
+    ]
+    const { deck, report } = await open({ layouts, slides: [{ layout: 1 }] })
+    const layout = (id: LayoutId) => deck.master?.layouts.find((entry) => entry.id === id)
+    const roles = (id: LayoutId) => layout(id)?.elements.map((element) => element.placeholder?.role ?? element.name)
+
+    expect(deck.master?.layouts.map((entry) => entry.id)).toEqual([...LAYOUT_IDS])
+    expect(layout('title')).toMatchObject({ name: 'Cover', background: { kind: 'solid', color: '#112233' }, showMaster: false })
+    expect(layout('title')?.elements).toMatchObject([
+      { kind: 'text', x: 120, y: 160, width: 720, height: 120, placeholder: { role: 'title' }, body: { anchor: 'bottom', style: { font: '+heading', size: 60, color: 'tx1' }, paragraphs: [{ align: 'center' }] } },
+      { kind: 'text', x: 120, y: 290, width: 720, height: 80, placeholder: { role: 'subtitle', prompt: 'Click to add subtitle' }, body: { style: { size: 24, color: 'tx2' }, paragraphs: [{ align: 'center' }] } }
+    ])
+    expect(layout('title-content')).toMatchObject({ name: 'Title and Content', background: null, showMaster: true })
+    expect(roles('title-content')).toEqual(['title', 'body', 'Stripe', 'number'])
+    expect(layout('title-content')?.elements[0]).toMatchObject({ x: 60, y: 30, width: 840, height: 100, body: { anchor: 'middle', style: { size: 44 } } })
+    expect(layout('title-content')?.elements[1]).toMatchObject({ x: 60, y: 150, width: 400, height: 300, body: { style: { size: 28 }, paragraphs: [{ list: 'bullet' }] } })
+    expect(layout('title-content')?.elements[3]).toMatchObject({ x: 800, y: 480, width: 100, height: 40, placeholder: { role: 'number', prompt: '‹#›' }, body: { style: { size: 12 }, paragraphs: [{ align: 'right' }] } })
+    expect(layout('picture-caption')?.name).toBe('Photo')
+    expect(roles('picture-caption')).toEqual(['title', 'picture', 'caption'])
+    expect(layout('picture-caption')?.elements[1]).toMatchObject({ kind: 'image', src: '', x: 400, y: 50, width: 450, height: 400 })
+    expect(layout('two-content')).toEqual(defaultMaster(deck.size).layouts.find((entry) => entry.id === 'two-content'))
+    expect(counts(report)).toEqual({ shape: { imported: 1, approximated: 0, skipped: 0 } })
+    expect(report.dropped).toEqual({ 'slide layouts Herald has no place for': 1 })
+  })
+
+  it('gives a slide on a layout Herald does not keep that layout’s drawings and background as its own', async () => {
+    const stripe = (name: string, color: string) => sp({ id: 20, name, props: xfrm(0, 0, 960, 20) + geometry('rect') + solid(srgb(color)) })
+    const layouts: LayoutSpec[] = [
+      { type: 'obj', tree: tree(stripe('First stripe', 'FF0000')) },
+      { type: 'obj', name: 'Content again', tree: `<p:bg><p:bgPr>${solid(srgb('333333'))}<a:effectLst/></p:bgPr></p:bg>${tree(stripe('Second stripe', '00FF00'))}` }
+    ]
+    const { deck, report } = await open({ layouts, slides: [{ layout: 1 }, { layout: 2 }] })
+
+    expect(deck.slides.map((slide) => slide.layout)).toEqual(['title-content', 'title-content'])
+    expect(deck.slides[0]).toMatchObject({ background: null, elements: [] })
+    expect(deck.slides[1].background).toEqual({ kind: 'solid', color: '#333333' })
+    expect(deck.slides[1].elements.map((element) => element.name)).toEqual(['Second stripe'])
+    expect(counts(report)).toEqual({ shape: { imported: 2, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'background graphics shown on slides that did not show them': 1 })
+    expect(report.dropped).toEqual({ 'slide layouts Herald has no place for': 1 })
+  })
+})
+
+describe('importPresentation: header and footer', () => {
+  const field = (type: string) => `<a:fld id="{4}" type="${type}"><a:rPr lang="en-GB"/><a:t>9 October 2026</a:t></a:fld>`
+  const carried = (date: string, footer?: string, number = true) =>
+    sp({ id: 10, name: 'Date', ph: '<p:ph type="dt" sz="half" idx="10"/>', text: paragraph(date) }) +
+    (footer === undefined ? '' : sp({ id: 11, name: 'Footer', ph: '<p:ph type="ftr" sz="quarter" idx="11"/>', text: paragraph(run(footer)) })) +
+    (number ? sp({ id: 12, name: 'Number', ph: '<p:ph type="sldNum" sz="quarter" idx="12"/>', text: paragraph('<a:fld id="{3}" type="slidenum"><a:rPr lang="en-GB"/><a:t>‹#›</a:t></a:fld>') }) : '')
+
+  const footerPlace = sp({ id: 6, name: 'Footer Placeholder 5', ph: '<p:ph type="ftr" sz="quarter" idx="3"/>', props: xfrm(320, 500, 320, 30), text: '<a:p/>' })
+
+  it('shows the date, footer and slide number most slides carry, with the footer most carry, and leaves them off title slides without them', async () => {
+    const { deck, report } = await open({
+      master: { shapes: footerPlace },
+      slides: [
+        { layout: 1, shapes: sp({ name: 'Title', ph: '<p:ph type="ctrTitle"/>', text: paragraph(run('Cover')) }) },
+        { shapes: carried(field('datetime3'), 'Acme') },
+        { shapes: carried(field('datetime3'), 'Acme') },
+        { shapes: carried(field('datetime3'), 'Draft') },
+        { shapes: carried(field('datetime11'), undefined, false) }
+      ]
+    })
+
+    expect(deck.headerFooter).toEqual({ date: true, dateFormat: 'datetime3', number: true, footer: true, footerText: 'Acme', skipTitle: true })
+    expect(deck.master?.elements.map((element) => element.placeholder?.role)).toEqual(['title', 'body', 'date', 'number', 'footer'])
+    expect(deck.slides.slice(1).every((slide) => slide.elements.length === 0)).toBe(true)
+    expect(counts(report)).toEqual({ text: { imported: 9, approximated: 2, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'dates, footers and slide numbers shown as most slides have them': 4 })
+  })
+
+  it('counts a footer the master has no place for as shown differently', async () => {
+    const { deck, report } = await open({ slides: [{ shapes: carried(field('datetime1'), 'Acme', false) }, { shapes: carried(field('datetime1'), 'Acme', false) }] })
+
+    expect(deck.headerFooter).toMatchObject({ date: true, footer: true, footerText: 'Acme' })
+    expect(counts(report)).toEqual({ text: { imported: 2, approximated: 2, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'dates, footers and slide numbers shown as most slides have them': 2 })
+  })
+
+  it('keeps a date written as text, and shows nothing that most slides do not carry', async () => {
+    const dated = await open({ slides: [{ shapes: carried(run('Q3 review'), undefined, false) }, { shapes: carried(run('Q3 review'), undefined, false) }] })
+
+    expect(dated.deck.headerFooter).toEqual({ date: true, dateFormat: 'datetime1', dateText: 'Q3 review', number: false, footer: false, footerText: '', skipTitle: false })
+    expect(dated.report.reasons).toEqual({})
+
+    const { deck, report } = await open({ slides: [{ shapes: carried(run('Q3'), 'Acme') }, {}, {}] })
+
+    expect(deck.headerFooter).toBeUndefined()
+    expect(counts(report)).toEqual({ text: { imported: 0, approximated: 3, skipped: 0 } })
+  })
+
+  it('counts a date, footer or slide number moved from where the layout puts it as shown differently', async () => {
+    const number = (props = '') => sp({ id: 12, name: 'Number', ph: '<p:ph type="sldNum" sz="quarter" idx="12"/>', props, text: paragraph('<a:fld id="{3}" type="slidenum"><a:rPr lang="en-GB"/><a:t>‹#›</a:t></a:fld>') })
+    const { deck, report } = await open({ slides: [{ shapes: number() }, { shapes: number(xfrm(680, 500, 220, 30)) }, { shapes: number(xfrm(10, 10, 50, 20)) }] })
+
+    expect(deck.headerFooter).toMatchObject({ number: true, date: false, footer: false })
+    expect(counts(report)).toEqual({ text: { imported: 2, approximated: 1, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'dates, footers and slide numbers shown as most slides have them': 1 })
   })
 })
 
@@ -615,7 +773,7 @@ describe('importPresentation: colours', () => {
     })
   })
 
-  it('keeps the colours and fonts of a master with another theme as they look', async () => {
+  it('gives the slides of a master with another theme that theme, their colours and fonts staying the theme’s', async () => {
     const content = filled('Accent', solid(scheme('accent1'))) + sp({ id: 3, name: 'Words', textBox: true, props: xfrm(0, 0, 100, 50), text: paragraph(run('Hello')) })
     const { deck } = await open({
       files: {
@@ -633,10 +791,31 @@ describe('importPresentation: colours', () => {
     const [mine, theirs] = deck.slides
 
     expect(deck.theme.name).toBe('Test Theme')
+    expect(mine.theme).toBeUndefined()
+    expect(theirs.theme).toMatchObject({ id: 'imported-slideMaster2', name: 'Other', fonts: { heading: 'Impact', body: 'Tahoma' }, colors: { accent1: '#ff00ff', bg1: '#ffffff', tx1: '#000000' } })
     expect(named<ShapeElement>(mine, 'Accent').fill).toEqual({ color: 'accent1' })
     expect(named<TextElement>(mine, 'Words').body.style).toEqual({ font: '+body', size: 18, color: 'tx1' })
-    expect(named<ShapeElement>(theirs, 'Accent').fill).toEqual({ color: '#ff00ff' })
-    expect(named<TextElement>(theirs, 'Words').body.style).toEqual({ font: 'Tahoma', size: 18, color: '#000000' })
+    expect(named<ShapeElement>(theirs, 'Accent').fill).toEqual({ color: 'accent1' })
+    expect(named<TextElement>(theirs, 'Words').body.style).toEqual({ font: '+body', size: 18, color: 'tx1' })
+  })
+
+  it('takes the deck’s theme and master from the master most slides use', async () => {
+    const { deck, report } = await open({
+      files: {
+        'ppt/theme/theme2.xml': themeXml('Other', ['Impact', 'Tahoma'], { ...SCHEME, accent1: 'FF00FF' }),
+        'ppt/slideMasters/slideMaster2.xml': masterXml({ bg: `<p:bg><p:bgPr>${solid(srgb('222222'))}<a:effectLst/></p:bgPr></p:bg>` }),
+        'ppt/slideMasters/_rels/slideMaster2.xml.rels': rels([['rIdLayout', 'slideLayout', '../slideLayouts/slideLayout9.xml'], ['rIdTheme', 'theme', '../theme/theme2.xml']]),
+        'ppt/slideLayouts/slideLayout9.xml': layoutXml({ type: 'blank' }),
+        'ppt/slideLayouts/_rels/slideLayout9.xml.rels': rels([['rIdMaster', 'slideMaster', '../slideMasters/slideMaster2.xml']])
+      },
+      slides: [{ layout: 3 }, { layout: 9 }, { layout: 9 }]
+    })
+
+    expect(deck.theme).toMatchObject({ name: 'Other', fonts: { heading: 'Impact', body: 'Tahoma' }, colors: { accent1: '#ff00ff' } })
+    expect(deck.master?.background).toEqual({ kind: 'solid', color: '#222222' })
+    expect(deck.slides.map((slide) => slide.theme?.name)).toEqual(['Test Theme', undefined, undefined])
+    expect(deck.slides.map((slide) => slide.background)).toEqual([{ kind: 'solid', color: 'bg1' }, null, null])
+    expect(report.dropped).toEqual({ 'slide masters besides the one most slides use': 1 })
   })
 
   it('maps scheme colours onto the slots a dark colour map gives them', async () => {
@@ -666,7 +845,8 @@ describe('importPresentation: colours', () => {
     expect(named<ShapeElement>(slide, 'Styled')).toMatchObject({ kind: 'shape', shape: 'rect', fill: { color: 'accent1' }, stroke: { color: '#2f528f', width: 1, dash: 'solid' }, body: { anchor: 'middle', style: { color: 'bg1', font: '+body' } } })
     expect(named<ShapeElement>(slide, 'Shadowed').fill).toEqual({ color: '#2f528f' })
     expect(named<ShapeElement>(slide, 'Gradient').fill?.color).toMatch(/^#[0-9a-f]{6}$/)
-    expect(report.reasons).toEqual({ 'shadows and other effects left out': 1, 'gradient fills shown as a solid colour': 1 })
+    expect(named<ShapeElement>(slide, 'Gradient').fill?.gradient).toMatchObject({ angle: 90, stops: [{ at: 0, color: named<ShapeElement>(slide, 'Gradient').fill?.color }, { at: 1, color: 'accent1' }] })
+    expect(report.reasons).toEqual({ 'shadows and other effects left out': 1 })
   })
 
   it('reads colour elements and their modifiers', () => {
@@ -719,21 +899,45 @@ describe('importPresentation: shapes and lines', () => {
     expect(counts(report)).toEqual({ shape: { imported: 3, approximated: 0, skipped: 0 } })
   })
 
-  it('shows presets Herald does not draw as the nearest it does, and custom shapes as rectangles', async () => {
+  it('keeps the presets Herald draws with their adjust values, others as the nearest it draws, and freeforms as their paths', async () => {
     const content = [
-      filled('Decision', solid(srgb('FF0000')), 'star16'),
+      filled('Star', solid(srgb('FF0000')), 'star16'),
       filled('Cube', solid(srgb('FF0000')), 'cube'),
+      filled('Decision', solid(srgb('FF0000')), 'flowChartDecision'),
+      sp({ name: 'Wave', props: xfrm(0, 0, 50, 50) + geometry('wave', '<a:gd name="adj1" fmla="val 20000"/><a:gd name="adj2" fmla="val -5000"/>') + solid(srgb('FF0000')) }),
       sp({ name: 'Custom', props: xfrm(0, 0, 50, 50) + '<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo></a:path></a:pathLst></a:custGeom>' + solid(srgb('FF0000')) }),
+      sp({ name: 'Unknown', props: xfrm(0, 0, 50, 50) + '<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="nowhere" y="0"/></a:moveTo></a:path></a:pathLst></a:custGeom>' + solid(srgb('FF0000')) }),
       sp({ name: 'Invisible', props: xfrm(0, 0, 50, 50) + '<a:custGeom/>', text: paragraph(run('Just text')) })
     ].join('')
     const { slide, report } = await shapes(content)
 
-    expect(named<ShapeElement>(slide, 'Decision').shape).toBe('star5')
+    expect(named<ShapeElement>(slide, 'Star').shape).toBe('star12')
     expect(named<ShapeElement>(slide, 'Cube').shape).toBe('cube')
-    expect(named<ShapeElement>(slide, 'Custom').shape).toBe('rect')
+    expect(named<ShapeElement>(slide, 'Decision').shape).toBe('flowChartDecision')
+    expect(named<ShapeElement>(slide, 'Wave')).toMatchObject({ shape: 'wave', adjust: { adj1: 20000, adj2: -5000 } })
+    expect(named<ShapeElement>(slide, 'Custom')).toMatchObject({ shape: 'rect', paths: [{ width: 10, height: 10, d: 'M 0 0 L 10 10' }] })
+    expect(named<ShapeElement>(slide, 'Unknown')).toMatchObject({ shape: 'rect' })
+    expect(named<ShapeElement>(slide, 'Unknown').paths).toBeUndefined()
     expect(named(slide, 'Invisible').kind).toBe('text')
-    expect(counts(report)).toEqual({ text: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 2, skipped: 0 } })
+    expect(counts(report)).toEqual({ text: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 4, approximated: 2, skipped: 0 } })
     expect(report.reasons).toEqual({ 'shapes Herald does not draw shown as the nearest shape it does': 1, 'custom shapes drawn as rectangles': 1 })
+  })
+
+  it('reads a freeform’s arcs as curves, its guides worked out, and the parts of it drawn without a fill or outline', async () => {
+    const outline =
+      '<a:custGeom><a:avLst/><a:gdLst><a:gd name="half" fmla="*/ w 1 2"/><a:gd name="quarter" fmla="val 5400000"/></a:gdLst><a:pathLst>' +
+      '<a:path><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:arcTo wR="half" hR="half" stAng="cd2" swAng="quarter"/><a:close/></a:path>' +
+      '<a:path w="100" h="50" fill="none" stroke="0"><a:moveTo><a:pt x="0" y="50"/></a:moveTo><a:cubicBezTo><a:pt x="10" y="0"/><a:pt x="90" y="0"/><a:pt x="100" y="50"/></a:cubicBezTo><a:quadBezTo><a:pt x="50" y="60"/><a:pt x="0" y="50"/></a:quadBezTo></a:path>' +
+      '</a:pathLst></a:custGeom>'
+    const { slide, report } = await shapes(sp({ name: 'Freeform', props: xfrm(0, 0, 100, 50) + outline + solid(srgb('FF0000')) }))
+    const [arc, open] = named<ShapeElement>(slide, 'Freeform').paths ?? []
+    const half = emu(100) / 2
+
+    expect(arc).toMatchObject({ width: emu(100), height: emu(50) })
+    expect(arc.d).toMatch(new RegExp(`^M 0 0 C [-\\d. ]+ ${half} ${-half} Z$`))
+    expect(arc.fill).toBeUndefined()
+    expect(open).toEqual({ width: 100, height: 50, d: 'M 0 50 C 10 0 90 0 100 50 Q 50 60 0 50', fill: false, stroke: false })
+    expect(counts(report)).toEqual({ shape: { imported: 1, approximated: 0, skipped: 0 } })
   })
 
   it('reads lines with arrowheads and flips, folding rotation into their ends', async () => {
@@ -745,15 +949,46 @@ describe('importPresentation: shapes and lines', () => {
     ].join('')
     const { slide, report } = await shapes(content)
 
-    expect(named<LineElement>(slide, 'Arrow')).toMatchObject({ kind: 'line', x: 100, y: 100, width: 200, height: 50, flipH: true, flipV: false, rotation: 0, start: 'triangle', end: 'oval', stroke: { color: '#333333', width: 1.5, dash: 'solid' } })
+    expect(named<LineElement>(slide, 'Arrow')).toMatchObject({ kind: 'line', x: 100, y: 100, width: 200, height: 50, flipH: true, flipV: false, rotation: 0, start: 'triangle', end: 'oval', stroke: { color: '#333333', width: 1.5, dash: 'solid' }, connector: { preset: 'straightConnector1' } })
     expect(named<LineElement>(slide, 'Turned')).toMatchObject({ x: 150, y: 150, width: 0, height: 100, flipH: false, flipV: false, rotation: 0 })
-    expect(named<LineElement>(slide, 'Bent')).toMatchObject({ start: 'none', end: 'none', stroke: { color: 'accent1', width: 0.5 } })
-    expect(named<LineElement>(slide, 'Unseen').stroke.alpha).toBe(0)
-    expect(counts(report)).toEqual({ line: { imported: 3, approximated: 1, skipped: 0 } })
-    expect(report.reasons).toEqual({ 'connectors drawn straight': 1 })
+    expect(named<LineElement>(slide, 'Turned').connector).toBeUndefined()
+    expect(named<LineElement>(slide, 'Bent')).toMatchObject({ x: 0, y: 0, width: 50, height: 50, start: 'none', end: 'none', stroke: { color: 'accent1', width: 0.5 }, connector: { preset: 'bentConnector3' } })
+    expect(named<LineElement>(slide, 'Unseen')).toMatchObject({ stroke: { alpha: 0 }, connector: { preset: 'straightConnector1' } })
+    expect(counts(report)).toEqual({ line: { imported: 4, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({})
   })
 
-  it('flattens groups, placing members from the coordinates of their group', async () => {
+  it('reads connectors as they run, turned and flipped, with their ends glued to the shapes they name', async () => {
+    const box = (id: number, name: string, x: number) => sp({ id, name, props: xfrm(x, 100, 100, 50) + geometry('rect') + solid(srgb('FF0000')) })
+    const glued = (props: string, ends: string, name: string) =>
+      `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="30" name="${name}"/><p:cNvCxnSpPr>${ends}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr>${props}${line(1, srgb('000000'))}</p:spPr></p:cxnSp>`
+    const content = [
+      box(3, 'Left', 0),
+      glued(xfrm(100, 125, 200, 60, ' rot="5400000" flipV="1"') + geometry('bentConnector3', '<a:gd name="adj1" fmla="val 30000"/>'), '<a:stCxn id="3" idx="3"/><a:endCxn id="4" idx="1"/>', 'Elbow'),
+      glued(xfrm(100, 125, 200, 0) + geometry('curvedConnector3'), '<a:stCxn id="3" idx="3"/><a:endCxn id="99" idx="1"/>', 'Loose'),
+      group([300, 0, 200, 200], [300, 0, 200, 200], box(4, 'Right', 300)),
+      glued(xfrm(0, 0, 10, 10) + geometry('rect'), '', 'Odd')
+    ].join('')
+    const { slide, report } = await shapes(content)
+    const right = named(slide, 'Right')
+
+    expect(named<LineElement>(slide, 'Elbow')).toMatchObject({
+      x: 100,
+      y: 125,
+      width: 200,
+      height: 60,
+      rotation: 90,
+      flipH: false,
+      flipV: true,
+      connector: { preset: 'bentConnector3', adjust: { adj1: 30000 }, start: { element: named(slide, 'Left').id, site: 3 }, end: { element: right.id, site: 1 } }
+    })
+    expect(named<LineElement>(slide, 'Loose').connector).toEqual({ preset: 'curvedConnector3', start: { element: named(slide, 'Left').id, site: 3 } })
+    expect(named<LineElement>(slide, 'Odd').connector).toEqual({ preset: 'straightConnector1' })
+    expect(counts(report)).toEqual({ shape: { imported: 2, approximated: 0, skipped: 0 }, line: { imported: 2, approximated: 1, skipped: 0 }, group: { imported: 1, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'connectors Herald does not draw shown straight': 1 })
+  })
+
+  it('keeps groups, their members placed from the coordinates of their group and told the groups they are in', async () => {
     const member = (name: string, x: number, y: number, width: number, height: number, attrs = '') => sp({ name, props: xfrm(x, y, width, height, attrs) + geometry('rect') + solid(srgb('FF0000')) })
     const inner = group([0, 100, 200, 100], [0, 0, 100, 50], member('C', 0, 0, 50, 50), '', 'Inner')
     const content = [
@@ -774,8 +1009,15 @@ describe('importPresentation: shapes and lines', () => {
     expect(box('C')).toEqual([100, 150, 50, 50, 0, false])
     expect(box('Turned')).toEqual([150, 50, 100, 100, 90, false])
     expect(box('Mirrored')).toEqual([200, 100, 100, 100, 330, true])
-    expect(counts(report)).toEqual({ shape: { imported: 5, approximated: 0, skipped: 0 }, group: { imported: 0, approximated: 4, skipped: 0 } })
-    expect(report.reasons).toEqual({ 'grouped elements kept as separate elements': 4 })
+
+    const [outerGroup, innerGroup] = named(slide, 'C').group ?? []
+
+    expect(named(slide, 'A').group).toEqual([outerGroup])
+    expect(named(slide, 'B').group).toEqual([outerGroup])
+    expect(innerGroup).toMatch(/^group-/)
+    expect(new Set([outerGroup, innerGroup, named(slide, 'Turned').group?.[0], named(slide, 'Mirrored').group?.[0]]).size).toBe(4)
+    expect(counts(report)).toEqual({ shape: { imported: 5, approximated: 0, skipped: 0 }, group: { imported: 4, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({})
   })
 
   it('gives members a group fill from their group', async () => {
@@ -918,6 +1160,22 @@ describe('importPresentation: backgrounds', () => {
     expect(backgrounds[6]).toBeNull()
     expect(report.reasons).toEqual({ 'background pictures fill the slide without stretching': 1 })
   })
+
+  it('keeps linear and radial gradients on shapes, text boxes and backgrounds, each stop with its opacity', async () => {
+    const stops = `<a:gsLst><a:gs pos="0">${srgb('FF0000')}</a:gs><a:gs pos="35000">${scheme('accent1', '<a:alpha val="50000"/>')}</a:gs><a:gs pos="100000">${srgb('0000FF')}</a:gs></a:gsLst>`
+    const { slide, report } = await shapes(
+      filled('Linear', `<a:gradFill rotWithShape="1">${stops}<a:lin ang="2700000" scaled="0"/></a:gradFill>`, 'ellipse') +
+        sp({ name: 'Glow', textBox: true, props: xfrm(0, 0, 100, 50) + `<a:gradFill>${stops}<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>`, text: paragraph(run('Hi')) }),
+      { slides: [{ bg: `<p:bg><p:bgPr><a:gradFill>${stops}<a:path path="circle"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>` }] }
+    )
+    const gradient = { stops: [{ at: 0, color: '#ff0000' }, { at: 0.35, color: 'accent1', alpha: 0.5 }, { at: 1, color: '#0000ff' }] }
+
+    expect(named<ShapeElement>(slide, 'Linear').fill).toEqual({ color: '#ff0000', gradient: { ...gradient, angle: 45 } })
+    expect(named<TextElement>(slide, 'Glow')).toMatchObject({ kind: 'text', fill: { color: '#ff0000', gradient: { ...gradient, angle: 90, radial: true } } })
+    expect(slide.background).toEqual({ kind: 'gradient', ...gradient, angle: 90, radial: true })
+    expect(counts(report)).toEqual({ text: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({})
+  })
 })
 
 const TABLE = 'http://schemas.openxmlformats.org/drawingml/2006/table'
@@ -993,14 +1251,207 @@ describe('importPresentation: tables', () => {
     expect(new Set(fills).size).toBe(3)
     expect(table.cells[0][0].body.style).toMatchObject({ color: 'bg1', bold: true })
     expect(table.stroke).toEqual({ color: 'bg1', width: 1, dash: 'solid' })
+    expect(table.cells.map((row) => row.map((cell) => cell.borders))).toEqual([
+      [{ bottom: { color: 'bg1', width: 3, dash: 'solid' } }, { bottom: { color: 'bg1', width: 3, dash: 'solid' } }],
+      [undefined, undefined],
+      [undefined, undefined]
+    ])
     expect(named<TableElement>(slide, 'Turned').rotation).toBe(0)
-    expect(counts(report)).toEqual({ table: { imported: 0, approximated: 3, skipped: 0 } })
-    expect(report.reasons).toEqual({ 'table borders shown as one kind of line for the whole table': 2, 'table styles not in the file shown as the default table style': 1, 'turned tables shown upright': 1 })
+    expect(counts(report)).toEqual({ table: { imported: 1, approximated: 2, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'table styles not in the file shown as the default table style': 1, 'turned tables shown upright': 1 })
+  })
+
+  it('keeps the sides of cells that differ from the table’s line, and leaves out only diagonals', async () => {
+    const thick = (side: string) => `<${side} w="${emu(3)}">${solid(srgb('FF0000'))}</${side}>`
+    const none = (side: string) => `<${side}><a:noFill/></${side}>`
+    const cells = (props: readonly string[]) => props.map((inner, index) => tc(`${index}`, '', `<a:tcPr>${inner}</a:tcPr>`)).join('')
+    const content = tableFrame(
+      [100, 100],
+      [
+        [30, cells([sides('000000'), sides('000000').replace(/<a:lnB[^]*?<\/a:lnB>/, thick('a:lnB'))])],
+        [30, cells([sides('000000').replace(/<a:lnL[^]*?<\/a:lnL>/, none('a:lnL')), sides('000000') + `<a:lnTlToBr w="${emu(1)}">${solid(srgb('000000'))}</a:lnTlToBr>`])]
+      ]
+    )
+    const { slide, report } = await shapes(content)
+    const table = named<TableElement>(slide, 'Table')
+
+    expect(table.stroke).toEqual({ color: '#000000', width: 1, dash: 'solid' })
+    expect(table.cells.map((row) => row.map((cell) => cell.borders))).toEqual([
+      [undefined, { bottom: { color: '#ff0000', width: 3, dash: 'solid' } }],
+      [{ left: null }, undefined]
+    ])
+    expect(counts(report)).toEqual({ table: { imported: 0, approximated: 1, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'diagonal lines in table cells left out': 1 })
+  })
+})
+
+describe('importPresentation: charts, SmartArt and embedded objects', () => {
+  const DGM = 'http://schemas.openxmlformats.org/drawingml/2006/diagram'
+  const DSP = 'http://schemas.microsoft.com/office/drawing/2008/diagram'
+  const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+  const CX = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
+  const OLE = 'http://schemas.openxmlformats.org/presentationml/2006/ole'
+  const XLSX = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4])
+  const types = (overrides: Record<string, string>) =>
+    `${Object.entries(overrides)
+      .map(([part, type]) => `<Override PartName="/${part}" ContentType="${type}"/>`)
+      .join('')}<Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>`
+  const decoded = (data: string) => new TextDecoder().decode(Uint8Array.from(atob(data), (char) => char.charCodeAt(0)))
+  const diagramFrame = (name: string) => frame(DGM, `<dgm:relIds xmlns:dgm="${DGM}" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>`, name)
+  const diagramParts = (data: string): Record<string, string> => ({
+    'ppt/diagrams/data1.xml': data,
+    'ppt/diagrams/layout1.xml': `${HEADER}<dgm:layoutDef xmlns:dgm="${DGM}"/>`,
+    'ppt/diagrams/quickStyle1.xml': `${HEADER}<dgm:styleDef xmlns:dgm="${DGM}"/>`,
+    'ppt/diagrams/colors1.xml': `${HEADER}<dgm:colorsDef xmlns:dgm="${DGM}"/>`
+  })
+  const diagramRels: Rel[] = [
+    ['rIdDm', 'diagramData', '../diagrams/data1.xml'],
+    ['rIdLo', 'diagramLayout', '../diagrams/layout1.xml'],
+    ['rIdQs', 'diagramQuickStyle', '../diagrams/quickStyle1.xml'],
+    ['rIdCs', 'diagramColors', '../diagrams/colors1.xml']
+  ]
+
+  it('keeps SmartArt as it was, shown as the drawing the file keeps for it', async () => {
+    const data = `${HEADER}<dgm:dataModel xmlns:dgm="${DGM}" xmlns:a="${A}"><dgm:ptLst/><dgm:cxnLst/><dgm:bg/><dgm:whole/><dgm:extLst><a:ext uri="${DSP}"><dsp:dataModelExt xmlns:dsp="${DSP}" relId="rIdDrawing" minVer="${DGM}"/></a:ext></dgm:extLst></dgm:dataModel>`
+    const step = (name: string, box: string, apart: string) =>
+      `<dsp:sp modelId="{${name}}"><dsp:nvSpPr><dsp:cNvPr id="0" name="${name}"/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr>${box}${geometry('roundRect')}${solid(scheme('accent1'))}</dsp:spPr><dsp:style><a:lnRef idx="0">${scheme('accent1')}</a:lnRef><a:fillRef idx="1">${scheme('accent1')}</a:fillRef><a:effectRef idx="0">${scheme('accent1')}</a:effectRef><a:fontRef idx="minor">${scheme('lt1')}</a:fontRef></dsp:style><dsp:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/>${paragraph(run(name, ' sz="1800"'))}</dsp:txBody>${apart}</dsp:sp>`
+    const drawing = `${HEADER}<dsp:drawing xmlns:dgm="${DGM}" xmlns:dsp="${DSP}" xmlns:a="${A}"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>${step('Plan', xfrm(0, 0, 80, 40), `<dsp:txXfrm><a:off x="${emu(10)}" y="${emu(5)}"/><a:ext cx="${emu(60)}" cy="${emu(30)}"/></dsp:txXfrm>`)}${step('Do', xfrm(100, 0, 80, 40), `<dsp:txXfrm><a:off x="${emu(100)}" y="0"/><a:ext cx="${emu(80)}" cy="${emu(40)}"/></dsp:txXfrm>`)}</dsp:spTree></dsp:drawing>`
+    const { slide, report } = await shapes(diagramFrame('Diagram'), {
+      files: { ...diagramParts(data), 'ppt/diagrams/drawing1.xml': drawing },
+      contentTypes: types({
+        'ppt/diagrams/data1.xml': 'application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml',
+        'ppt/diagrams/layout1.xml': 'application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml',
+        'ppt/diagrams/quickStyle1.xml': 'application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml',
+        'ppt/diagrams/colors1.xml': 'application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml',
+        'ppt/diagrams/drawing1.xml': 'application/vnd.ms-office.drawingml.diagramDrawing+xml'
+      }),
+      slides: [{ rels: [...diagramRels, ['rIdDrawing', 'http://schemas.microsoft.com/office/2007/relationships/diagramDrawing', '../diagrams/drawing1.xml']] }]
+    })
+    const diagram = named<ObjectElement>(slide, 'Diagram')
+    const text = (element: SlideElement) => (element.kind === 'text' || element.kind === 'shape' ? plainText(element.body) : '')
+
+    expect(diagram).toMatchObject({ kind: 'object', object: 'diagram', x: 50, y: 60, width: 200, height: 100, drawnIn: { width: 200, height: 100 } })
+    expect(diagram.preview).toBeUndefined()
+    expect(diagram.shapes?.map((shape) => [shape.kind, shape.name ?? '', shape.x, shape.y, shape.width, shape.height, text(shape)])).toEqual([
+      ['shape', 'Plan', 0, 0, 80, 40, ''],
+      ['text', '', 10, 5, 60, 30, 'Plan'],
+      ['shape', 'Do', 100, 0, 80, 40, 'Do']
+    ])
+    expect(diagram.shapes?.[1]).toMatchObject({ fill: null, stroke: null, body: { anchor: 'middle', style: { color: 'bg1', size: 18 } } })
+    expect(diagram.source.xml).toMatch(/^<p:graphicFrame xmlns:a="[^"]+" xmlns:r="[^"]+" xmlns:p="[^"]+">/)
+    expect(diagram.source.xml).toContain(`<dgm:relIds xmlns:dgm="${DGM}" r:dm="rIdDm" r:lo="rIdLo" r:qs="rIdQs" r:cs="rIdCs"/>`)
+    expect(diagram.source.parts.map(({ id, type, path, contentType }) => [id, type, path, contentType])).toEqual([
+      ['rIdDm', `${RELATIONSHIPS}diagramData`, 'ppt/diagrams/data1.xml', 'application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml'],
+      ['rIdLo', `${RELATIONSHIPS}diagramLayout`, 'ppt/diagrams/layout1.xml', 'application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml'],
+      ['rIdQs', `${RELATIONSHIPS}diagramQuickStyle`, 'ppt/diagrams/quickStyle1.xml', 'application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml'],
+      ['rIdCs', `${RELATIONSHIPS}diagramColors`, 'ppt/diagrams/colors1.xml', 'application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml'],
+      ['rIdDrawing', 'http://schemas.microsoft.com/office/2007/relationships/diagramDrawing', 'ppt/diagrams/drawing1.xml', 'application/vnd.ms-office.drawingml.diagramDrawing+xml']
+    ])
+    expect(decoded(diagram.source.parts[0].data)).toBe(data)
+    expect(counts(report)).toEqual({ smartart: { imported: 1, approximated: 0, skipped: 0 } })
+    expect(report.reasons).toEqual({})
+  })
+
+  it('keeps charts with their parts, each shown as the picture the file keeps for it, else as a box', async () => {
+    const waterfall = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1">${frame(CX, `<cx:chart xmlns:cx="${CX}" r:id="rIdChartEx"/>`, 'Waterfall')}</mc:Choice><mc:Fallback>${pic({ name: 'Waterfall picture', embed: 'rIdPreview', props: xfrm(50, 60, 200, 100) + geometry('rect') })}</mc:Fallback></mc:AlternateContent>`
+    const linked = frame(C, `<c:chart xmlns:c="${C}" r:id="rIdChart"/>`, 'Bars').replace('name="Bars"/>', 'name="Bars"><a:hlinkClick r:id="rIdLink"/></p:cNvPr>')
+    const { slide, report } = await shapes(waterfall + linked, {
+      files: {
+        'ppt/charts/chartEx1.xml': `${HEADER}<cx:chartSpace xmlns:cx="${CX}"/>`,
+        'ppt/charts/_rels/chartEx1.xml.rels': rels([
+          ['rId1', 'package', '../embeddings/Microsoft_Excel_Worksheet1.xlsx'],
+          ['rId2', 'http://schemas.microsoft.com/office/2011/relationships/chartStyle', 'style1.xml']
+        ]),
+        'ppt/charts/style1.xml': `${HEADER}<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle"/>`,
+        'ppt/charts/chart2.xml': `${HEADER}<c:chartSpace xmlns:c="${C}" xmlns:r="${RELATIONSHIPS.slice(0, -1)}"><c:chart/><c:externalData r:id="rId1"/></c:chartSpace>`,
+        'ppt/charts/_rels/chart2.xml.rels': rels([['rId1', 'package', '../embeddings/Microsoft_Excel_Worksheet1.xlsx']]),
+        'ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx': XLSX,
+        'ppt/media/preview.png': png(400, 200)
+      },
+      contentTypes: types({
+        'ppt/charts/chartEx1.xml': 'application/vnd.ms-office.chartex+xml',
+        'ppt/charts/style1.xml': 'application/vnd.ms-office.chartstyle+xml',
+        'ppt/charts/chart2.xml': 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'
+      }),
+      slides: [
+        {
+          rels: [
+            ['rIdChartEx', 'http://schemas.microsoft.com/office/2014/relationships/chartEx', '../charts/chartEx1.xml'],
+            ['rIdPreview', 'image', '../media/preview.png'],
+            ['rIdChart', 'chart', '../charts/chart2.xml'],
+            ['rIdLink', 'hyperlink', 'https://example.com/', true]
+          ]
+        }
+      ]
+    })
+    const chart = named<ObjectElement>(slide, 'Waterfall')
+    const bars = named<ObjectElement>(slide, 'Bars')
+    const workbook = ['rId1', 'ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+
+    expect(slide.elements.map((element) => element.name)).toEqual(['Waterfall', 'Bars'])
+    expect(chart).toMatchObject({ kind: 'object', object: 'chart', x: 50, y: 60, width: 200, height: 100, preview: { natural: { width: 400, height: 200 } } })
+    expect(chart.preview?.src).toMatch(/^data:image\/png;base64,/)
+    expect(chart.source.xml).toMatch(/^<mc:AlternateContent xmlns:a="[^"]+" xmlns:r="[^"]+" xmlns:p="[^"]+" xmlns:mc="[^"]+"><mc:Choice xmlns:cx1=.*<\/mc:Fallback><\/mc:AlternateContent>$/)
+    expect(chart.source.parts.map((part) => [part.id, part.path, part.contentType, part.parts?.map((inner) => [inner.id, inner.path, inner.contentType])])).toEqual([
+      ['rIdChartEx', 'ppt/charts/chartEx1.xml', 'application/vnd.ms-office.chartex+xml', [workbook, ['rId2', 'ppt/charts/style1.xml', 'application/vnd.ms-office.chartstyle+xml']]],
+      ['rIdPreview', 'ppt/media/preview.png', 'image/png', undefined]
+    ])
+    expect(bars.preview).toBeUndefined()
+    expect(bars.source.xml).toContain('<a:hlinkClick r:id="rIdLink"/>')
+    expect(bars.source.parts.map((part) => [part.id, part.path, part.parts?.map((inner) => [inner.id, inner.path, inner.contentType])])).toEqual([['rIdChart', 'ppt/charts/chart2.xml', [workbook]]])
+    expect(counts(report)).toEqual({ chart: { imported: 1, approximated: 1, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'charts shown as a box (kept in the file as they were)': 1, 'links on objects left out': 1 })
+  })
+
+  it('keeps an embedded object with its part, shown as its picture', async () => {
+    const choice = `<mc:AlternateContent ${MC}><mc:Choice xmlns:v="urn:schemas-microsoft-com:vml" Requires="v"><p:oleObj spid="_x0000_s1026" name="Worksheet" r:id="rIdObject" progId="Excel.Sheet.12"><p:embed/></p:oleObj></mc:Choice><mc:Fallback><p:oleObj name="Worksheet" r:id="rIdObject" progId="Excel.Sheet.12"><p:embed/>${pic({ name: 'Preview', embed: 'rIdImage' })}</p:oleObj></mc:Fallback></mc:AlternateContent>`
+    const { slide, report } = await shapes(frame(OLE, choice, 'Worksheet'), {
+      files: { 'ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx': XLSX, 'ppt/media/image1.png': png(400, 200) },
+      contentTypes: types({}),
+      slides: [{ rels: [['rIdObject', 'package', '../embeddings/Microsoft_Excel_Worksheet1.xlsx'], ['rIdImage', 'image', '../media/image1.png']] }]
+    })
+    const object = named<ObjectElement>(slide, 'Worksheet')
+
+    expect(object).toMatchObject({ kind: 'object', object: 'ole', x: 50, y: 60, width: 200, height: 100, preview: { natural: { width: 400, height: 200 } } })
+    expect(object.source.xml).toMatch(/^<p:graphicFrame [^>]+>.*<p:oleObj spid="_x0000_s1026"/)
+    expect(object.source.parts.map((part) => [part.id, part.type, part.path, part.contentType])).toEqual([
+      ['rIdObject', `${RELATIONSHIPS}package`, 'ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['rIdImage', `${RELATIONSHIPS}image`, 'ppt/media/image1.png', 'image/png']
+    ])
+    expect(object.source.parts[0].data).toBe(btoa(String.fromCharCode(...XLSX)))
+    expect(counts(report)).toEqual({ ole: { imported: 1, approximated: 0, skipped: 0 } })
+  })
+
+  it('shows what it cannot keep as before (an object linked to a file outside, or with a part too large), and SmartArt without a drawing as a box', async () => {
+    const content = [
+      frame(C, `<c:chart xmlns:c="${C}" r:id="rIdLinked"/>`, 'Linked'),
+      frame(OLE, `<p:oleObj name="Huge" r:id="rIdHuge"><p:embed/>${pic({ name: 'Preview', embed: 'rIdImage' })}</p:oleObj>`, 'Huge'),
+      diagramFrame('Bare')
+    ].join('')
+    const { slide, report } = await shapes(content, {
+      files: {
+        ...diagramParts(`${HEADER}<dgm:dataModel xmlns:dgm="${DGM}"/>`),
+        'ppt/charts/chart1.xml': `${HEADER}<c:chartSpace xmlns:c="${C}"/>`,
+        'ppt/charts/_rels/chart1.xml.rels': rels([['rId1', 'oleObject', 'file:///C:/Data/sales.xlsx', true]]),
+        'ppt/embeddings/huge.bin': new Uint8Array(20 * 1024 * 1024 + 1),
+        'ppt/media/image1.png': png(400, 200)
+      },
+      slides: [{ rels: [...diagramRels, ['rIdLinked', 'chart', '../charts/chart1.xml'], ['rIdHuge', 'oleObject', '../embeddings/huge.bin'], ['rIdImage', 'image', '../media/image1.png']] }]
+    })
+
+    expect(slide.elements.map((element) => [element.name, element.kind])).toEqual([
+      ['Huge', 'image'],
+      ['Bare', 'object']
+    ])
+    expect(named<ObjectElement>(slide, 'Bare')).toMatchObject({ object: 'diagram', source: { parts: [{ id: 'rIdDm' }, { id: 'rIdLo' }, { id: 'rIdQs' }, { id: 'rIdCs' }] } })
+    expect(named<ObjectElement>(slide, 'Bare').shapes).toBeUndefined()
+    expect(counts(report)).toEqual({ chart: { imported: 0, approximated: 0, skipped: 1 }, smartart: { imported: 0, approximated: 1, skipped: 0 }, ole: { imported: 0, approximated: 1, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'embedded objects shown as their picture': 1, 'SmartArt without a drawing shown as a box (kept in the file as it was)': 1 })
   })
 })
 
 describe('importPresentation: what Herald leaves out', () => {
-  it('counts charts, SmartArt, ink, hidden objects and tables without cells as left out', async () => {
+  it('counts charts, SmartArt and embedded objects whose parts are missing, ink, hidden objects and tables without cells as left out', async () => {
     const content = [
       frame('http://schemas.openxmlformats.org/drawingml/2006/table', '<a:tbl/>'),
       frame('http://schemas.openxmlformats.org/drawingml/2006/chart', '<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart"/>'),
@@ -1027,7 +1478,7 @@ describe('importPresentation: what Herald leaves out', () => {
     expect(report.reasons).toEqual({ 'tables without cells left out': 1, 'hidden objects left out': 2 })
   })
 
-  it('reports transitions, animations, timings, embedded fonts, macros, comments and sections', async () => {
+  it('reads each slide’s transition, and reports animations, timings, embedded fonts, macros, comments and sections', async () => {
     const timing = '<p:timing><p:tnLst><p:par><p:cTn id="1" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="2" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="3" presetClass="entr"><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="4" dur="500"/><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>'
     const vortex = `<mc:AlternateContent ${MC}><mc:Choice Requires="p14"><p:transition spd="slow" p14:dur="2000"><p14:vortex dir="r"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="slow"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>`
     const sections = `<p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><p14:sectionLst ${MC}><p14:section name="One" id="{1}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section><p14:section name="Two" id="{2}"><p14:sldIdLst/></p14:section></p14:sectionLst></p:ext></p:extLst>`
@@ -1044,10 +1495,16 @@ describe('importPresentation: what Herald leaves out', () => {
       ]
     })
 
-    expect(deck.transition).toBe('fade')
+    expect(deck.transition).toBe('push')
+    expect(deck.slides.map((slide) => slide.transition)).toEqual([
+      { kind: 'fade', duration: 750 },
+      { kind: 'push', duration: 500, direction: 'up' },
+      { kind: 'push', duration: 2000, direction: 'right' },
+      { kind: 'none', duration: 500 }
+    ])
+    expect(report.reasons).toEqual({ 'transitions shown as the nearest one Herald plays': 1 })
     expect(report.dropped).toEqual({
       animations: 1,
-      'transitions (Herald uses one transition for the whole deck)': 3,
       'automatic slide timings': 1,
       'embedded fonts': 2,
       macros: 1,
@@ -1062,7 +1519,51 @@ describe('importPresentation: what Herald leaves out', () => {
     const { deck, report } = await open({ slides: [{ after: fade }, { after: fade }] })
 
     expect(deck.transition).toBe('fade')
+    expect(deck.slides.map((slide) => slide.transition)).toEqual([
+      { kind: 'fade', duration: 500 },
+      { kind: 'fade', duration: 500 }
+    ])
+    expect(report.reasons).toEqual({})
     expect(report.dropped).toEqual({})
+  })
+
+  it('reads the way each transition goes and how long it takes, the effects Herald does not play as the nearest it does', async () => {
+    const choice = (inner: string, fallback = '<p:fade/>') => `${MASTER_MAPPING}<mc:AlternateContent ${MC}><mc:Choice Requires="p14"><p:transition spd="slow" p14:dur="1600">${inner}</p:transition></mc:Choice><mc:Fallback><p:transition spd="slow">${fallback}</p:transition></mc:Fallback></mc:AlternateContent>`
+    const plain = (attrs: string, inner: string) => `${MASTER_MAPPING}<p:transition${attrs}>${inner}</p:transition>`
+    const effects = [
+      plain(' spd="slow"', '<p:wipe dir="d"/>'),
+      plain(' spd="fast"', '<p:cover dir="r"/>'),
+      plain('', '<p:pull dir="u"/>'),
+      plain(' spd="med"', '<p:split orient="vert" dir="in"/>'),
+      plain('', '<p:zoom/>'),
+      plain('', '<p:cut/>'),
+      plain('', '<p:fade thruBlk="1"/>'),
+      plain('', '<p:cover dir="lu"/>'),
+      choice('<p14:doors dir="vert"/>'),
+      choice('<p14:flythrough dir="in"/>', '<p:zoom dir="in"/>'),
+      choice('<p14:honeycomb/>'),
+      plain(' advTm="2000"', ''),
+      plain('', '<p:randomBar dir="vert"/><p:sndAc><p:stSnd><p:snd r:embed="rIdSound" name="chime.wav"/></p:stSnd></p:sndAc>')
+    ]
+    const { deck, report } = await open({ slides: effects.map((after) => ({ after })) })
+
+    expect(deck.slides.map((slide) => slide.transition)).toEqual([
+      { kind: 'wipe', duration: 1000, direction: 'down' },
+      { kind: 'cover', duration: 500, direction: 'right' },
+      { kind: 'uncover', duration: 500, direction: 'up' },
+      { kind: 'split', duration: 750, direction: 'in', orientation: 'vertical' },
+      { kind: 'zoom', duration: 500, direction: 'out' },
+      { kind: 'none', duration: 500 },
+      { kind: 'fade', duration: 500 },
+      { kind: 'cover', duration: 500, direction: 'left' },
+      { kind: 'split', duration: 1600, direction: 'out', orientation: 'vertical' },
+      { kind: 'zoom', duration: 1600, direction: 'in' },
+      { kind: 'fade', duration: 1600 },
+      { kind: 'none', duration: 500 },
+      { kind: 'wipe', duration: 500, direction: 'left' }
+    ])
+    expect(report.reasons).toEqual({ 'transitions shown as the nearest one Herald plays': 6 })
+    expect(report.dropped).toEqual({ 'automatic slide timings': 1, 'transition sounds': 1 })
   })
 
   it('reads a macro-enabled file the same way, noting its macros', async () => {
@@ -1078,16 +1579,17 @@ describe('importPresentation: what Herald leaves out', () => {
       filled('Gradient', `<a:gradFill><a:gsLst><a:gs pos="0">${srgb('FF0000')}</a:gs><a:gs pos="100000">${srgb('0000FF')}</a:gs></a:gsLst></a:gradFill>`),
       filled('Pattern', `<a:pattFill prst="pct50"><a:fgClr>${srgb('FF0000')}</a:fgClr><a:bgClr>${srgb('FFFFFF')}</a:bgClr></a:pattFill>`),
       filled('Another gradient', `<a:gradFill><a:gsLst><a:gs pos="0">${srgb('FF0000')}</a:gs></a:gsLst></a:gradFill>`),
+      sp({ name: 'Faded line', props: xfrm(0, 0, 100, 0) + geometry('line') + `<a:ln w="12700"><a:gradFill><a:gsLst><a:gs pos="0">${srgb('FF0000')}</a:gs><a:gs pos="100000">${srgb('0000FF')}</a:gs></a:gsLst></a:gradFill></a:ln>` }),
       frame('http://schemas.openxmlformats.org/drawingml/2006/table')
     ].join('')
     const { report } = await shapes(content, { presentation: '<p:embeddedFontLst><p:embeddedFont><p:font typeface="Lato"/></p:embeddedFont></p:embeddedFontLst>' })
 
     expect(reportNotes(report)).toEqual([
-      'Kept 1 of 5 elements as they were.',
-      'Shown approximately: 3 shapes.',
+      'Kept 3 of 6 elements as they were.',
+      'Shown approximately: 1 shape and 1 line.',
       'Left out: 1 table.',
-      'Gradient fills shown as a solid colour (2).',
       'Pattern fills shown as a solid colour.',
+      'Gradient lines and text shown in one colour.',
       'Tables without cells left out.',
       'Not kept: embedded fonts.'
     ])
@@ -1126,7 +1628,7 @@ describe('importPresentation: damaged files', () => {
     const { slide, report } = await shapes(nested)
 
     expect(slide.elements).toEqual([])
-    expect(report.counts.group).toEqual({ imported: 0, approximated: 32, skipped: 1 })
+    expect(report.counts.group).toEqual({ imported: 32, approximated: 0, skipped: 1 })
     expect(report.reasons['groups nested too deeply left out']).toBe(1)
   })
 })
@@ -1229,14 +1731,25 @@ describe('importPresentation: PptxGenJS decks', () => {
       ['B', null]
     ])
     expect(table.rows[0]).toBeGreaterThan(12)
+
+    const chart = slide.elements[6] as ObjectElement
+
+    expect(chart).toMatchObject({ kind: 'object', object: 'chart', x: 432, y: 288, width: 288, height: 216 })
+    expect(chart.preview).toBeUndefined()
+    expect(chart.source.xml).toMatch(/^<p:graphicFrame [^>]*xmlns:a="http:\/\/schemas\.openxmlformats\.org\/drawingml\/2006\/main"/)
+    expect(chart.source.parts.map(({ type, path, contentType }) => ({ type, path, contentType }))).toEqual([
+      { type: `${RELATIONSHIPS}chart`, path: expect.stringMatching(/^ppt\/charts\/chart\d+\.xml$/), contentType: 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml' }
+    ])
+    expect(chart.source.parts[0].parts?.map((part) => part.path)).toEqual([expect.stringMatching(/^ppt\/embeddings\/.+\.xlsx$/)])
     expect(counts(report)).toEqual({
       text: { imported: 2, approximated: 0, skipped: 0 },
       shape: { imported: 1, approximated: 0, skipped: 0 },
       picture: { imported: 1, approximated: 0, skipped: 0 },
       line: { imported: 1, approximated: 0, skipped: 0 },
       table: { imported: 1, approximated: 0, skipped: 0 },
-      chart: { imported: 0, approximated: 0, skipped: 1 }
+      chart: { imported: 0, approximated: 1, skipped: 0 }
     })
+    expect(report.reasons).toEqual({ 'charts shown as a box (kept in the file as they were)': 1 })
   })
 })
 
