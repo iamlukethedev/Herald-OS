@@ -36,7 +36,6 @@ function docsMenus(): OfficeMenu[] {
     { id: 'picture', label: 'Picture…', enabled: has, run: () => $pickImage.set($pickImage.get() + 1) },
     { id: 'insert-table', label: 'Table', enabled: has, run: () => act.table(3, 3) },
     { id: 'rule', label: 'Divider', enabled: has, run: act.rule, dividerBefore: true },
-    { id: 'page-break', label: 'Page Break', shortcut: 'mod+enter', enabled: has, run: act.pageBreak },
     { id: 'panel', label: 'Panel', enabled: has, run: () => act.callout('info'), submenu: (Object.entries(CALLOUT_LABELS) as [CalloutKind, string][]).map(([kind, label]) => ({ id: `panel-${kind}`, label, enabled: has, run: () => act.callout(kind) })) },
     { id: 'code-block', label: 'Code Block', shortcut: 'mod+alt+c', enabled: has, run: () => act.style('code'), dividerBefore: true },
     { id: 'quote', label: 'Quote', shortcut: 'mod+shift+b', enabled: has, run: () => act.style('quote') },

@@ -24,7 +24,7 @@ export function pageMenuItems(): { insert: OfficeCommand[]; format: OfficeComman
         ]
       },
       { id: 'footnote', label: 'Footnote', shortcut: 'mod+alt+f', enabled: inText, dividerBefore: true, run: () => act.note('footnote') },
-      { id: 'endnote', label: 'Endnote', shortcut: 'mod+alt+d', enabled: inText, run: () => act.note('endnote') },
+      { id: 'endnote', label: 'Endnote', shortcut: 'mod+alt+e', enabled: inText, run: () => act.note('endnote') },
       {
         id: 'break',
         label: 'Break',
