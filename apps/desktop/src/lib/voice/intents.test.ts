@@ -179,3 +179,86 @@ describe('document requests', () => {
     expect(route('copy that', { afterHermesAction: true })).toMatchObject({ command: 'edit.copy' })
   })
 })
+
+describe('Office requests', () => {
+  const command = (id: string, phrases: CommandSummary['phrases'], args: CommandSummary['args'] = []): CommandSummary => ({ id, title: id, description: '', tier: 'act', hidden: false, args, phrases })
+  const named = [{ name: 'name', type: 'string' as const, description: '', required: true }]
+  const withOffice: CommandSummary[] = [
+    ...commands,
+    command('edit.undo', ['undo', 'undo that', 'undo it', 'take that back']),
+    command('docs.open', ['open herald docs', 'open docs', 'open the word processor']),
+    command('docs.new', ['new document', 'start a new document', 'new doc']),
+    command('docs.save', ['save the document']),
+    command('sheets.open', ['open herald sheets', 'open sheets', 'open the spreadsheet app']),
+    command('sheets.new', ['new spreadsheet', 'new workbook', 'start a new spreadsheet']),
+    command('sheets.save', ['save the spreadsheet', 'save the workbook']),
+    command('window.maximize', ['maximize', 'make it bigger', 'maximize {name}', 'make {name} bigger'], named),
+    command('software.install', ['install {name}', 'get me {name}'], named)
+  ]
+  const route = (text: string) => matchIntent(text, withOffice)
+
+  it('hands making and changing documents, sheets and decks to Hermes, whole', () => {
+    for (const text of [
+      'Make a budget for my trip.',
+      'Hey Hermes, write a cover letter',
+      'draft a report on our Q3 numbers',
+      'turn this into slides',
+      'Make this a table.',
+      'convert this into bullet points',
+      'Create a presentation about volcanoes.',
+      'put together an itinerary',
+      'add a total row',
+      'Add a column for tax.',
+      'fill in the rest of this column',
+      'sum the March sales',
+      'Summarise this document.',
+      'translate this paragraph into Spanish',
+      'clean up this sheet',
+      'sort this by date',
+      'make the heading bold',
+      'can you make me a spreadsheet of my expenses',
+      'make a slide deck for my app launch',
+      'create a presentation about our new web app',
+      'build me a budget for my trip',
+      'get me a spreadsheet of my monthly costs',
+      'create a spreadsheet called Budget',
+      'make the title bigger',
+      'add a new slide about pricing',
+      'insert a table',
+      'make this bold',
+      'make it more formal',
+      'highlight the duplicates',
+      'put this in a table'
+    ]) {
+      expect(route(text), text).toBeNull()
+    }
+  })
+
+  it('keeps the bare app commands, file names and builds on the fast path', () => {
+    expect(route('new document')).toMatchObject({ command: 'docs.new' })
+    expect(route('Start a new document.')).toMatchObject({ command: 'docs.new' })
+    expect(route('new spreadsheet')).toMatchObject({ command: 'sheets.new' })
+    expect(route('start a new spreadsheet')).toMatchObject({ command: 'sheets.new' })
+    expect(route('Open Herald Docs')).toMatchObject({ command: 'docs.open' })
+    expect(route('open sheets')).toMatchObject({ command: 'sheets.open' })
+    expect(route('open the word processor')).toMatchObject({ command: 'docs.open' })
+    expect(route('save the document')).toMatchObject({ command: 'docs.save' })
+    expect(route('save the workbook')).toMatchObject({ command: 'sheets.save' })
+    expect(route('undo')).toMatchObject({ command: 'edit.undo' })
+    expect(route('open the file report.docx')).toMatchObject({ command: 'file.open', args: { name: 'report.docx' } })
+    expect(route('open budget.xlsx')).toMatchObject({ command: 'open.any', args: { name: 'budget.xlsx' } })
+    expect(route('make it bigger')).toMatchObject({ command: 'window.maximize', args: {} })
+    expect(route('make the terminal bigger')).toMatchObject({ command: 'window.maximize', args: { name: 'terminal' } })
+    expect(route('get me Spotify')).toMatchObject({ command: 'software.install', args: { name: 'Spotify' } })
+    expect(route('build me a portfolio site')).toMatchObject({ command: 'build.start', args: { goal: 'a portfolio site' } })
+    expect(route('create a website for a hair salon')).toMatchObject({ command: 'build.start' })
+    expect(route('remember that I make a budget every month')).toMatchObject({ command: 'memory.add', args: { text: 'I make a budget every month' } })
+    expect(route('add the meeting notes to my memory')).toMatchObject({ command: 'memory.add', args: { text: 'meeting notes' } })
+    expect(route('hide the sidebar')).toMatchObject({ command: 'sidebar.toggle', args: { collapsed: true } })
+  })
+
+  it('still types what follows "type", word for word', () => {
+    expect(route('type make this a table')).toMatchObject({ command: 'text.type', args: { text: 'make this a table' } })
+    expect(route('Type add a total row.')).toMatchObject({ command: 'text.type', args: { text: 'add a total row.' } })
+  })
+})

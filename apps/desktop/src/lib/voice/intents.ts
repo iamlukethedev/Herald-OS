@@ -159,6 +159,34 @@ const HERMES_MARKERS = /\b(why|how come|explain|summari[sz]e|write|draft|fix|deb
  */
 const FILING_REQUEST = /\b(renam(?:e|ing)|organi[sz]e|tidy up|sort (?:out|through)|where (?:it|they|this|these|those|that) (?:belongs?|goes|go|should go))\b|(?:^|\b(?:and|then|to|please|also)\s+)file (?:it|them|this|these|those|that|the|my|all|every|everything)\b/i
 
+/** What Herald Docs, Sheets and Slides make, and the parts of one that a request changes. */
+const DOCUMENTS = 'spreadsheet|sheet|workbook|document|doc|report|letter|memo|essay|resume|cv|invoice|quote|estimate|budget|forecast|itinerary|plan|schedule|timetable|rota|agenda|outline|summary|proposal|presentation|deck|slideshow|slide|chart|graph|table|list|checklist|tracker|calendar|timeline|newsletter|brochure|flyer|poster|template|form|minutes|notes'
+const PARTS = 'row|column|cell|heading|title|subtitle|header|footer|paragraph|section|sentence|bullet points?|bullets|page numbers|footnote|caption|formula|total|text|words?|line|selection|numbers|values|dates|names'
+const LINKS = 'for|about|on|of|with|that|to|from|in|by|and|so|called|named|titled|showing|comparing|listing|covering|tracking|using|based|per|at'
+/** A describing word before the noun ("a monthly sales report"), never a link or an article ("a website with a table" is a website). */
+const MODIFIER = `(?!(?:${LINKS}|an?|the|my|our|this|it)\\b)[\\w'&-]+`
+const THING = `(?:${DOCUMENTS}|${PARTS})s?\\b`
+
+/**
+ * Making or changing what a document holds: Hermes does that work in Herald Docs, Sheets and
+ * Slides, so these never fill a command's slot ("build me {goal}", "make {name} bigger") or start a
+ * build; a whole command phrase ("new document", "make it bigger") still runs.
+ */
+const OFFICE_REQUESTS: readonly RegExp[] = [
+  // "Make a budget for my trip", "create a presentation about volcanoes", "put together an itinerary".
+  new RegExp(`^(?:i (?:need|want) |(?:make|create|build|design|generate|prepare|produce|put together|set up|start|draft|write|do|give|get)(?: me| us| for me)? )(?:(?:an?|some|the|my|our|this|that|new) )?(?:${MODIFIER} ){0,3}?(?:${DOCUMENTS})s?(?=$|[,;:]| (?:${LINKS})\\b)`),
+  // "Turn this into slides", "make this a table", "convert the list into bullet points".
+  new RegExp(`^(?:turn|convert|change|make|format|reformat|transform|put|present|lay out|split|merge) (?:it|this|that|these|those|them|everything|(?:the|this|that|my|our) (?:${MODIFIER} ){0,3}?[\\w'-]+)(?: (?:into|in to|to|as|in))? (?:(?:an?|some|the) )?(?:${MODIFIER} ){0,2}?${THING}`),
+  // "Add a total row", "add a column for tax", "insert a chart"; "add … to my memory" is memory's.
+  new RegExp(`^(?:add|insert|append|include) (?!.*\\bto (?:my )?memory$)(?:(?:an?|some|the|another|one more|a new|new|two|three|four|five|\\d+) )?(?:${MODIFIER} ){0,3}?${THING}`),
+  // "Sum the March sales", "sort this by date", "translate this paragraph into Spanish", "fill in the rest of this column".
+  /^(?:bold|unbold|italici[sz]e|underline|highlight|cent(?:er|re)|align|justify|indent|outdent|capitali[sz]e|uppercase|lowercase|strike ?through|merge|wrap|freeze|unfreeze|sum|total|add up|average|count|calculate|work out|sort|filter|dedupe|de-?duplicate|transpose|translate|proofread|rephrase|reword|rewrite|shorten|lengthen|condense|simplify|reformat|restyle|clean up|fill)\b/,
+  // "Make the heading bold", "set the title to Q3 results", "make the first row bigger".
+  new RegExp(`^(?:make|set|turn|change|colou?r|format|style|resize) (?:the|this|that|these|those|all the|all|every|each|my) (?:${MODIFIER} ){0,3}?${THING}`),
+  // "Make this bold", "make it more formal".
+  /^(?:make|turn) (?:it|this|that|these|those|them|everything|the selection) (?:bold|italics?|italici[sz]ed|underlined|bigger|smaller|larger|shorter|longer|uppercase|lowercase|all caps|capitals|cent(?:ered|red)|justified|(?:left|right)[ -]aligned|red|orange|yellow|green|blue|purple|pink|black|white|gr[ae]y|more|less)\b/
+]
+
 /** A slot that describes a document by what it is or who sent it ("the invoice from Acme") rather than naming it. */
 const DOCUMENT_DESCRIPTION = /\b(invoices?|receipts?|bills|statements?|payslips?|contracts?|from|sent by|dated)\b/i
 const NAMED_FILE = /\.[a-z0-9]{1,5}$|\s+dot\s+[a-z0-9]{1,5}$/i
@@ -201,8 +229,10 @@ export function matchIntent(text: string, commands: readonly CommandSummary[] = 
     return { command: 'file.open', args: { name }, title: `Open a file: ${name}`, confidence: 0.8 }
   }
 
+  const office = OFFICE_REQUESTS.some(pattern => pattern.test(utterance))
+
   // "Create a website for a hair salon where people can book": any length, the Studio takes it from here.
-  const build = BUILD_REQUEST.exec(utterance)
+  const build = office ? null : BUILD_REQUEST.exec(utterance)
 
   if (build && commands.some(c => c.id === 'build.start')) {
     // People repeat themselves ("create a website, create a website for a hair salon"): keep the last ask.
@@ -217,6 +247,10 @@ export function matchIntent(text: string, commands: readonly CommandSummary[] = 
   }
 
   for (const entry of compiledFor(commands)) {
+    if (office && entry.slots.length > 0) {
+      continue
+    }
+
     const match = entry.regex.exec(utterance)
 
     if (!match) {
