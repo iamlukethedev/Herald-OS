@@ -31,6 +31,8 @@ export interface Theme {
   name: string
   colors: Record<Slot, string>
   fonts: { heading: string; body: string }
+  /** The master's background this theme brings with it (a gradient, say); none keeps the background colour. */
+  background?: Background
 }
 
 /** `+heading` and `+body` stand for the theme's fonts; anything else is a family. */
@@ -103,7 +105,12 @@ export interface TextBody {
   wrap: boolean
 }
 
-export type PlaceholderRole = 'title' | 'subtitle' | 'body' | 'heading' | 'caption' | 'picture'
+/** The date, footer and slide number: placed by the master and its layouts, shown on slides as the deck's header and footer settings say. */
+export const FOOTER_ROLES = ['date', 'footer', 'number'] as const
+
+export type FooterRole = (typeof FOOTER_ROLES)[number]
+
+export type PlaceholderRole = 'title' | 'subtitle' | 'body' | 'heading' | 'caption' | 'picture' | FooterRole
 
 export interface Placeholder {
   role: PlaceholderRole
@@ -127,12 +134,37 @@ interface Frame extends Box {
   flipV?: boolean
   name?: string
   placeholder?: Placeholder
+  /**
+   * The groups the element is in, outermost first, by ids unique on its slide. Grouped elements
+   * stay elements of the slide in their own right (so each draws, edits and keeps its place in
+   * the drawing order as any other), are picked and moved together, and go into a PowerPoint file
+   * as its groups.
+   */
+  group?: string[]
+}
+
+export interface GradientStop {
+  /** 0 to 1 along the gradient. */
+  at: number
+  color: Color
+  /** 0 (clear) to 1 (solid). */
+  alpha?: number
+}
+
+export interface Gradient {
+  stops: GradientStop[]
+  /** Degrees: 0 runs left to right, 90 top to bottom (linear gradients). */
+  angle: number
+  /** Spreading from the middle instead of along a line. */
+  radial?: boolean
 }
 
 export interface Fill {
   color: Color
   /** 0 (clear) to 1 (solid). */
   alpha?: number
+  /** A gradient in place of the colour, which then names its first stop for whatever draws one colour. */
+  gradient?: Gradient
 }
 
 export const DASHES = ['solid', 'dash', 'dot', 'dashDot', 'longDash'] as const
@@ -174,10 +206,107 @@ export const SHAPE_KINDS = [
   'chevron',
   'homePlate',
   'wedgeRectCallout',
-  'wedgeRoundRectCallout'
+  'wedgeRoundRectCallout',
+  'snip1Rect',
+  'snip2SameRect',
+  'round1Rect',
+  'round2SameRect',
+  'plaque',
+  'foldedCorner',
+  'frame',
+  'halfFrame',
+  'corner',
+  'diagStripe',
+  'bevel',
+  'heptagon',
+  'decagon',
+  'dodecagon',
+  'star4',
+  'star6',
+  'star8',
+  'star10',
+  'star12',
+  'donut',
+  'noSmoking',
+  'blockArc',
+  'pie',
+  'chord',
+  'teardrop',
+  'heart',
+  'lightningBolt',
+  'sun',
+  'moon',
+  'cloud',
+  'smileyFace',
+  'can',
+  'cube',
+  'bracketPair',
+  'bracePair',
+  'leftBracket',
+  'rightBracket',
+  'leftBrace',
+  'rightBrace',
+  'upDownArrow',
+  'quadArrow',
+  'notchedRightArrow',
+  'stripedRightArrow',
+  'bentArrow',
+  'uturnArrow',
+  'wedgeEllipseCallout',
+  'cloudCallout',
+  'mathPlus',
+  'mathMinus',
+  'mathMultiply',
+  'mathDivide',
+  'mathEqual',
+  'mathNotEqual',
+  'wave',
+  'doubleWave',
+  'flowChartProcess',
+  'flowChartAlternateProcess',
+  'flowChartDecision',
+  'flowChartInputOutput',
+  'flowChartPredefinedProcess',
+  'flowChartInternalStorage',
+  'flowChartDocument',
+  'flowChartMultidocument',
+  'flowChartTerminator',
+  'flowChartPreparation',
+  'flowChartManualInput',
+  'flowChartManualOperation',
+  'flowChartConnector',
+  'flowChartOffpageConnector',
+  'flowChartPunchedCard',
+  'flowChartPunchedTape',
+  'flowChartSummingJunction',
+  'flowChartOr',
+  'flowChartCollate',
+  'flowChartSort',
+  'flowChartExtract',
+  'flowChartMerge',
+  'flowChartOnlineStorage',
+  'flowChartDelay',
+  'flowChartMagneticDisk',
+  'flowChartDisplay'
 ] as const
 
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
+
+/**
+ * A freeform outline as DrawingML's custom geometry keeps it: a path in units of its own,
+ * stretched over the element's box. `d` is SVG path data with absolute M, L, C, Q and Z commands
+ * only (arcs become cubic curves), so it reads and writes one for one as DrawingML's moveTo,
+ * lnTo, cubicBezTo, quadBezTo and close.
+ */
+export interface CustomPath {
+  width: number
+  height: number
+  d: string
+  /** False for a path drawn without its fill (DrawingML's fill="none"). */
+  fill?: boolean
+  /** False for a path drawn without its outline. */
+  stroke?: boolean
+}
 
 /** How much of a picture is cut off at each side, as fractions of it. */
 export interface Crop {
@@ -202,6 +331,8 @@ export interface ShapeElement extends Frame {
   body: TextBody
   /** DrawingML's adjust values by guide name (`adj`, `adj1`…), where they differ from the preset's. */
   adjust?: Record<string, number>
+  /** A freeform outline drawn in place of the preset, which then only places the text. */
+  paths?: CustomPath[]
 }
 
 export interface ImageElement extends Frame {
@@ -215,13 +346,52 @@ export interface ImageElement extends Frame {
   stroke: Stroke | null
 }
 
-/** A straight line across its box: from the top left to the bottom right, unless flipped. */
+/** DrawingML's connector presets: straight, bent at right angles, or curved, through 1 to 4 turns. */
+export const CONNECTOR_PRESETS = [
+  'straightConnector1',
+  'bentConnector2',
+  'bentConnector3',
+  'bentConnector4',
+  'bentConnector5',
+  'curvedConnector2',
+  'curvedConnector3',
+  'curvedConnector4',
+  'curvedConnector5'
+] as const
+
+export type ConnectorPreset = (typeof CONNECTOR_PRESETS)[number]
+
+/** A connector's end glued to an element on the same slide, at one of its connection sites (DrawingML's numbering for its shape). */
+export interface ConnectorEnd {
+  element: string
+  site: number
+}
+
+/** What makes a line a connector: how it runs from end to end, and what its ends are glued to. */
+export interface Connector {
+  preset: ConnectorPreset
+  /** DrawingML's adjust values (`adj1`…), where they differ from the preset's. */
+  adjust?: Record<string, number>
+  start?: ConnectorEnd
+  end?: ConnectorEnd
+}
+
+/** A line across its box: from the top left to the bottom right, unless flipped; a connector runs between the same two ends as its preset says. */
 export interface LineElement extends Frame {
   kind: 'line'
   stroke: Stroke
   /** The ends at the line's start and at its end. */
   start: ArrowHead
   end: ArrowHead
+  connector?: Connector
+}
+
+/** A cell's own lines, side by side: a side left out takes the table's line, null has none. */
+export interface CellBorders {
+  left?: Stroke | null
+  top?: Stroke | null
+  right?: Stroke | null
+  bottom?: Stroke | null
 }
 
 export interface TableCell {
@@ -232,6 +402,7 @@ export interface TableCell {
   rowSpan?: number
   /** Covered by a merged cell: not drawn, and its text kept only for the file. */
   merged?: boolean
+  borders?: CellBorders
 }
 
 /**
@@ -250,47 +421,153 @@ export interface TableElement extends Frame {
   stroke: Stroke | null
 }
 
-export type SlideElement = TextElement | ShapeElement | ImageElement | LineElement | TableElement
+/** A part of a PowerPoint file that an object refers to, carried as it was with the parts it refers to in turn. */
+export interface KeptPart {
+  /** The relationship id its referrer names it by. */
+  id: string
+  /** The relationship's type. */
+  type: string
+  /** Where it was in the file it came from (`ppt/charts/chart1.xml`); another name may be given on writing. */
+  path: string
+  contentType: string
+  /** Its bytes, as base64. */
+  data: string
+  parts?: KeptPart[]
+}
+
+export const OBJECT_KINDS = ['chart', 'diagram', 'ole', 'media', 'other'] as const
+
+export type ObjectKind = (typeof OBJECT_KINDS)[number]
+
+/**
+ * Something a PowerPoint file holds that Herald does not edit (a chart, SmartArt, an embedded
+ * object), kept whole so a file saved again still has it: the XML of its graphic frame and the
+ * parts it refers to are written back as they were, moved and sized to its box. Herald shows the
+ * picture or the drawing the file keeps for it, or a labelled box.
+ */
+export interface ObjectElement extends Frame {
+  kind: 'object'
+  object: ObjectKind
+  /** The picture the file keeps for it (an embedded object's, or a chart's fallback), as a data URL. */
+  preview?: { src: string; natural: { width: number; height: number } }
+  /** The drawing the file keeps for it (SmartArt's shapes), in slide points as laid out at its box. */
+  shapes?: SlideElement[]
+  /** The frame's XML as the file had it (`p:graphicFrame`, or the `mc:AlternateContent` around one), and the parts it names. */
+  source: { xml: string; parts: KeptPart[] }
+}
+
+export type SlideElement = TextElement | ShapeElement | ImageElement | LineElement | TableElement | ObjectElement
 
 export type ElementKind = SlideElement['kind']
-
-export interface GradientStop {
-  /** 0 to 1 along the gradient. */
-  at: number
-  color: Color
-}
 
 export type Background =
   | { kind: 'solid'; color: Color }
   /** `angle` in degrees: 0 runs left to right, 90 top to bottom. */
-  | { kind: 'gradient'; stops: GradientStop[]; angle: number }
+  | { kind: 'gradient'; stops: GradientStop[]; angle: number; radial?: boolean }
   | { kind: 'image'; src: string; natural: { width: number; height: number } }
 
 export const LAYOUTS = ['title', 'title-content', 'two-content', 'section', 'title-only', 'blank', 'picture-caption', 'comparison'] as const
 
 export type LayoutId = (typeof LAYOUTS)[number]
 
+export const TRANSITIONS = ['none', 'fade', 'push', 'wipe', 'cover', 'uncover', 'split', 'zoom'] as const
+
+export type Transition = (typeof TRANSITIONS)[number]
+
+export const TRANSITION_DIRECTIONS = ['left', 'right', 'up', 'down', 'in', 'out'] as const
+
+export type TransitionDirection = (typeof TRANSITION_DIRECTIONS)[number]
+
+/** How long a transition takes when nothing says, in milliseconds. */
+export const DEFAULT_TRANSITION_MS = 500
+
+/** How a slide comes in when presenting. */
+export interface SlideTransition {
+  kind: Transition
+  /** Milliseconds. */
+  duration: number
+  /**
+   * Push, wipe, cover and uncover: the way the slide travels, as PowerPoint's files say it (`left`
+   * comes in from the right). Split and zoom: `in` or `out`.
+   */
+  direction?: TransitionDirection
+  /** Split: across (`horizontal`) or up and down. */
+  orientation?: 'horizontal' | 'vertical'
+}
+
 export interface Slide {
   id: string
   layout: LayoutId
-  /** Null: the theme's background. */
+  /** Null: its layout's background, else the master's, else the theme's. */
   background: Background | null
   elements: SlideElement[]
   notes: string
   hidden: boolean
+  /** Its own transition; none takes the deck's. */
+  transition?: SlideTransition
+  /** A theme of its own in place of the deck's (PowerPoint keeps it as a master of its own). */
+  theme?: Theme
 }
 
-export const TRANSITIONS = ['none', 'fade', 'push'] as const
+/**
+ * One of a master's layouts: its placeholders (empty text and picture elements with a role, whose
+ * boxes and text are where and how a slide's placeholders start) and its own drawings, in drawing
+ * order, over its background.
+ */
+export interface SlideLayout {
+  id: LayoutId
+  /** The name PowerPoint shows for it. */
+  name: string
+  /** Null: the master's. */
+  background: Background | null
+  elements: SlideElement[]
+  /** Whether the master's drawings show on its slides too (PowerPoint's "Hide background graphics" unticked). */
+  showMaster: boolean
+}
 
-export type Transition = (typeof TRANSITIONS)[number]
+/**
+ * The slide master: the background and drawings every slide has (a logo, a band), its title and
+ * text placeholders (whose look the layouts' take), the date, footer and slide number
+ * placeholders, and a layout for each of Herald's layouts. Its elements are a slide's in kind;
+ * placeholders among them are not drawn on slides, but place and style the layouts' own.
+ */
+export interface Master {
+  /** Null: the theme's background colour. */
+  background: Background | null
+  elements: SlideElement[]
+  /** One for each of `LAYOUTS`, in that order. */
+  layouts: SlideLayout[]
+}
+
+/** PowerPoint's date fields Herald draws: 10/9/2026, Friday, October 9, 2026, 9 October 2026 and October 9, 2026. */
+export const DATE_FORMATS = ['datetime1', 'datetime2', 'datetime3', 'datetime4'] as const
+
+export type DateFormat = (typeof DATE_FORMATS)[number]
+
+/** What slides show in the master's date, footer and slide number places. */
+export interface HeaderFooter {
+  date: boolean
+  dateFormat: DateFormat
+  /** Text shown in place of the date of the day. */
+  dateText?: string
+  number: boolean
+  footer: boolean
+  footerText: string
+  /** Left off slides with the Title layout. */
+  skipTitle: boolean
+}
 
 export interface Deck {
   id: string
   title: string
   size: SlideSize
   theme: Theme
-  /** How one slide gives way to the next when presenting. */
+  /** How a slide without a transition of its own comes in when presenting. */
   transition: Transition
+  /** The slide master; none is Herald's own for the size (`masterOf` in layouts.ts). */
+  master?: Master
+  /** None shows no date, footer or slide number. */
+  headerFooter?: HeaderFooter
   slides: Slide[]
 }
 

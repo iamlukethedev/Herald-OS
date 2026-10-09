@@ -153,8 +153,12 @@ export const ARROW_NAMES: Record<ArrowHead, string> = { none: 'None', triangle: 
 /** What an element is called in menus and in what Hermes is told. */
 export function describeElement(element: SlideElement): string {
   if (element.placeholder) {
-    return { title: 'Title', subtitle: 'Subtitle', body: 'Text', heading: 'Heading', caption: 'Caption', picture: 'Picture' }[element.placeholder.role]
+    return { title: 'Title', subtitle: 'Subtitle', body: 'Text', heading: 'Heading', caption: 'Caption', picture: 'Picture', date: 'Date', footer: 'Footer', number: 'Slide number' }[element.placeholder.role]
   }
 
-  return element.kind === 'text' ? 'Text box' : element.kind === 'image' ? 'Picture' : element.kind === 'line' ? 'Line' : element.kind === 'table' ? 'Table' : 'Shape'
+  if (element.kind === 'object') {
+    return { chart: 'Chart', diagram: 'SmartArt', ole: 'Embedded object', media: 'Media', other: 'Object' }[element.object]
+  }
+
+  return element.kind === 'text' ? 'Text box' : element.kind === 'image' ? 'Picture' : element.kind === 'line' ? (element.connector ? 'Connector' : 'Line') : element.kind === 'table' ? 'Table' : 'Shape'
 }

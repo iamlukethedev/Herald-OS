@@ -721,19 +721,19 @@ describe('importPresentation: shapes and lines', () => {
 
   it('shows presets Herald does not draw as the nearest it does, and custom shapes as rectangles', async () => {
     const content = [
-      filled('Decision', solid(srgb('FF0000')), 'flowChartDecision'),
+      filled('Decision', solid(srgb('FF0000')), 'star16'),
       filled('Cube', solid(srgb('FF0000')), 'cube'),
       sp({ name: 'Custom', props: xfrm(0, 0, 50, 50) + '<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo></a:path></a:pathLst></a:custGeom>' + solid(srgb('FF0000')) }),
       sp({ name: 'Invisible', props: xfrm(0, 0, 50, 50) + '<a:custGeom/>', text: paragraph(run('Just text')) })
     ].join('')
     const { slide, report } = await shapes(content)
 
-    expect(named<ShapeElement>(slide, 'Decision').shape).toBe('diamond')
-    expect(named<ShapeElement>(slide, 'Cube').shape).toBe('rect')
+    expect(named<ShapeElement>(slide, 'Decision').shape).toBe('star5')
+    expect(named<ShapeElement>(slide, 'Cube').shape).toBe('cube')
     expect(named<ShapeElement>(slide, 'Custom').shape).toBe('rect')
     expect(named(slide, 'Invisible').kind).toBe('text')
-    expect(counts(report)).toEqual({ text: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 0, approximated: 3, skipped: 0 } })
-    expect(report.reasons).toEqual({ 'shapes Herald does not draw shown as the nearest shape it does': 2, 'custom shapes drawn as rectangles': 1 })
+    expect(counts(report)).toEqual({ text: { imported: 1, approximated: 0, skipped: 0 }, shape: { imported: 1, approximated: 2, skipped: 0 } })
+    expect(report.reasons).toEqual({ 'shapes Herald does not draw shown as the nearest shape it does': 1, 'custom shapes drawn as rectangles': 1 })
   })
 
   it('reads lines with arrowheads and flips, folding rotation into their ends', async () => {

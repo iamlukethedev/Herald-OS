@@ -278,8 +278,10 @@ export function ElementView({ element, theme, mode, hidden, editor, cell }: { el
     content = <PictureView element={element} theme={theme} mode={mode} />
   } else if (element.kind === 'table') {
     content = <TableView table={element} theme={theme} editor={editor} cell={cell} />
-  } else {
+  } else if (element.kind === 'line') {
     content = <LineView element={element} theme={theme} mode={mode} />
+  } else {
+    content = null
   }
 
   return (

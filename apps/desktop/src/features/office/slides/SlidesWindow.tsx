@@ -23,7 +23,7 @@ const hasSelection = () => Boolean(commands.live()?.selected.length)
 const notTyping = () => !$textSession.get()
 const canEditSelection = () => hasSelection() && notTyping()
 const canFormat = () => commands.canFormatText()
-const TRANSITION_NAMES = { none: 'None', fade: 'Fade', push: 'Push' } as const
+const TRANSITION_NAMES = { none: 'None', fade: 'Fade', push: 'Push', wipe: 'Wipe', cover: 'Cover', uncover: 'Uncover', split: 'Split', zoom: 'Zoom' } as const
 
 function slideCommands(): OfficeCommand[] {
   return [

@@ -156,6 +156,10 @@ function addElement(target: PptxGenJS.Slide, element: SlideElement, deck: Deck, 
     return
   }
 
+  if (element.kind === 'object') {
+    return
+  }
+
   const body = element.body
   const placeholder = slots.get(element.id)
   const anchor = body.anchor === 'middle' ? 'middle' : body.anchor === 'bottom' ? 'bottom' : 'top'

@@ -447,6 +447,10 @@ export function setStroke(patch: Partial<Stroke> | null): void {
       return patch ? { ...element, stroke: { ...element.stroke, ...patch } } : element
     }
 
+    if (element.kind === 'object') {
+      return element
+    }
+
     const base: Stroke = element.stroke ?? { color: 'tx1', width: 1, dash: 'solid' }
 
     return { ...element, stroke: patch ? { ...base, ...patch } : null }

@@ -2,23 +2,38 @@ import {
   ARROW_HEADS,
   type Background,
   type BodyStyle,
+  type CellBorders,
   type Color,
+  type Connector,
+  CONNECTOR_PRESETS,
+  type ConnectorEnd,
   type Crop,
+  type CustomPath,
   DASHES,
+  DATE_FORMATS,
   type Deck,
+  DEFAULT_TRANSITION_MS,
   type Fill,
   type FontRef,
+  type Gradient,
   type GradientStop,
+  type HeaderFooter,
+  type KeptPart,
   LAYOUTS,
+  type Master,
   newId,
   NUMBER_STYLES,
+  OBJECT_KINDS,
   type Paragraph,
   type Placeholder,
   type PlaceholderRole,
   SHAPE_KINDS,
   type Slide,
   type SlideElement,
+  type SlideLayout,
   SLIDE_SIZES,
+  type SlideSize,
+  type SlideTransition,
   SLOTS,
   type Stroke,
   type TableCell,
@@ -26,9 +41,10 @@ import {
   type TextBody,
   type TextRun,
   type Theme,
+  TRANSITION_DIRECTIONS,
   TRANSITIONS
 } from './deck.ts'
-import { PROMPTS } from './layouts.ts'
+import { defaultMaster, LAYOUT_NAMES, PROMPTS } from './layouts.ts'
 import { MAX_COLUMNS, MAX_ROWS, ROW_HEIGHT, settleSpans } from './tables.ts'
 import { colorOf, DEFAULT_THEME, normalHex } from './themes.ts'
 import { DEFAULT_INSET, MAX_LEVEL } from './text.ts'
@@ -88,13 +104,19 @@ function theme(value: unknown): Theme {
   const colors = isObject(value.colors) ? value.colors : {}
   const fonts = isObject(value.fonts) ? value.fonts : {}
 
+  const own = background(value.background)
+
   return {
     id: str(value.id, 'custom', 80) || 'custom',
     name: str(value.name, 'Theme', 120) || 'Theme',
     colors: Object.fromEntries(SLOTS.map((slot) => [slot, normalHex(colors[slot]) ?? DEFAULT_THEME.colors[slot]])) as Theme['colors'],
-    fonts: { heading: font(fonts.heading, DEFAULT_THEME.fonts.heading).replace(/^\+.*/, DEFAULT_THEME.fonts.heading), body: font(fonts.body, DEFAULT_THEME.fonts.body).replace(/^\+.*/, DEFAULT_THEME.fonts.body) }
+    fonts: { heading: font(fonts.heading, DEFAULT_THEME.fonts.heading).replace(/^\+.*/, DEFAULT_THEME.fonts.heading), body: font(fonts.body, DEFAULT_THEME.fonts.body).replace(/^\+.*/, DEFAULT_THEME.fonts.body) },
+    ...(own && own.kind !== 'image' ? { background: own } : {})
   }
 }
+
+/** A theme checked as `theme` does, for a custom theme read from a file of themes. */
+export const normalizeTheme = (value: unknown): Theme => theme(value)
 
 function run(value: unknown): TextRun | null {
   if (!isObject(value)) {
@@ -171,7 +193,30 @@ function body(value: unknown): TextBody {
   }
 }
 
-const fill = (value: unknown): Fill | null => (isObject(value) ? { color: color(value.color, 'accent1'), ...(value.alpha !== undefined ? { alpha: num(value.alpha, 1, 0, 1) } : {}) } : null)
+const stops = (value: unknown, fallback: Color): GradientStop[] =>
+  list(value, 16)
+    .filter(isObject)
+    .map((stop): GradientStop => ({ at: num(stop.at, 0, 0, 1), color: color(stop.color, fallback), ...(stop.alpha !== undefined ? { alpha: num(stop.alpha, 1, 0, 1) } : {}) }))
+
+function gradient(value: unknown): Gradient | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+
+  const points = stops(value.stops, 'accent1')
+
+  return points.length >= 2 ? { stops: points, angle: num(value.angle, 90, -3600, 3600), ...(value.radial === true ? { radial: true } : {}) } : undefined
+}
+
+function fill(value: unknown): Fill | null {
+  if (!isObject(value)) {
+    return null
+  }
+
+  const shaded = gradient(value.gradient)
+
+  return { color: color(value.color, 'accent1'), ...(value.alpha !== undefined ? { alpha: num(value.alpha, 1, 0, 1) } : {}), ...(shaded ? { gradient: shaded } : {}) }
+}
 
 function stroke(value: unknown): Stroke | null {
   if (!isObject(value)) {
@@ -197,21 +242,98 @@ function placeholder(value: unknown): Placeholder | undefined {
     return undefined
   }
 
-  const role = oneOf<PlaceholderRole>(value.role, ['title', 'subtitle', 'body', 'heading', 'caption', 'picture'], 'body')
+  const role = oneOf<PlaceholderRole>(value.role, ['title', 'subtitle', 'body', 'heading', 'caption', 'picture', 'date', 'footer', 'number'], 'body')
 
   return { role, prompt: str(value.prompt, PROMPTS[role], 200) || PROMPTS[role] }
+}
+
+function borders(value: unknown): CellBorders | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+
+  const out: CellBorders = {}
+
+  for (const side of ['left', 'top', 'right', 'bottom'] as const) {
+    if (value[side] === null) {
+      out[side] = null
+    } else if (isObject(value[side])) {
+      out[side] = stroke(value[side])
+    }
+  }
+
+  return Object.keys(out).length ? out : undefined
 }
 
 function cell(value: unknown): TableCell {
   const raw = isObject(value) ? value : {}
   const across = Math.round(num(raw.colSpan, 1, 1, MAX_COLUMNS))
   const down = Math.round(num(raw.rowSpan, 1, 1, MAX_ROWS))
+  const lines = borders(raw.borders)
 
-  return { body: body(raw.body), fill: fill(raw.fill), ...(across > 1 ? { colSpan: across } : {}), ...(down > 1 ? { rowSpan: down } : {}) }
+  return { body: body(raw.body), fill: fill(raw.fill), ...(across > 1 ? { colSpan: across } : {}), ...(down > 1 ? { rowSpan: down } : {}), ...(lines ? { borders: lines } : {}) }
+}
+
+const PATH_DATA = /^[MLCQZ0-9eE.,\s+-]*$/
+
+function paths(value: unknown): CustomPath[] | undefined {
+  const out = list(value, 64)
+    .filter(isObject)
+    .map((path): CustomPath | null => {
+      const d = str(path.d, '', 2_000_000).trim()
+
+      return d && PATH_DATA.test(d)
+        ? { width: num(path.width, 1, 0, 100_000_000), height: num(path.height, 1, 0, 100_000_000), d, ...(path.fill === false ? { fill: false } : {}), ...(path.stroke === false ? { stroke: false } : {}) }
+        : null
+    })
+    .filter((path): path is CustomPath => path !== null)
+
+  return out.length ? out : undefined
+}
+
+const adjustOf = (value: unknown): Record<string, number> | undefined => {
+  const adjust = isObject(value) ? Object.fromEntries(Object.entries(value).filter(([key, entry]) => /^adj\d?$/.test(key) && typeof entry === 'number' && Number.isFinite(entry))) : undefined
+
+  return adjust && Object.keys(adjust).length ? (adjust as Record<string, number>) : undefined
+}
+
+const end = (value: unknown): ConnectorEnd | undefined => (isObject(value) && typeof value.element === 'string' && value.element ? { element: str(value.element, '', 80), site: Math.round(num(value.site, 0, 0, 1000)) } : undefined)
+
+function connector(value: unknown): Connector | undefined {
+  if (!isObject(value) || !CONNECTOR_PRESETS.includes(value.preset as Connector['preset'])) {
+    return undefined
+  }
+
+  const adjust = adjustOf(value.adjust)
+  const start = end(value.start)
+  const finish = end(value.end)
+
+  return { preset: value.preset as Connector['preset'], ...(adjust ? { adjust } : {}), ...(start ? { start } : {}), ...(finish ? { end: finish } : {}) }
+}
+
+const PART_PATH = /^[\w./-]+$/
+
+function keptParts(value: unknown, depth = 0): KeptPart[] {
+  if (depth > 4) {
+    return []
+  }
+
+  return list(value, 64)
+    .filter(isObject)
+    .map((part): KeptPart | null => {
+      const path = str(part.path, '', 300).replace(/^\/+/, '')
+      const data = str(part.data, '', 64_000_000)
+      const inner = keptParts(part.parts, depth + 1)
+
+      return path && PART_PATH.test(path) && !path.includes('..') && /^[A-Za-z0-9+/=\r\n]*$/.test(data)
+        ? { id: str(part.id, '', 80), type: str(part.type, '', 300), path, contentType: str(part.contentType, 'application/octet-stream', 300), data, ...(inner.length ? { parts: inner } : {}) }
+        : null
+    })
+    .filter((part): part is KeptPart => part !== null)
 }
 
 /** A table whole: a cell for every row and column, merged cells that fit, its size its columns' and rows'; never rotated, flipped or a placeholder. */
-function table(value: Raw, frame: Pick<TableElement, 'id' | 'x' | 'y' | 'name'>): TableElement | null {
+function table(value: Raw, frame: Pick<TableElement, 'id' | 'x' | 'y' | 'name' | 'group'>): TableElement | null {
   const columns = list(value.columns, MAX_COLUMNS).map((width) => num(width, 72, 1, 100_000))
   const rows = list(value.rows, MAX_ROWS).map((height) => num(height, ROW_HEIGHT, 1, 100_000))
 
@@ -231,6 +353,7 @@ function table(value: Raw, frame: Pick<TableElement, 'id' | 'x' | 'y' | 'name'>)
     height: rows.reduce((sum, height) => sum + height, 0),
     rotation: 0,
     ...(frame.name ? { name: frame.name } : {}),
+    ...(frame.group ? { group: frame.group } : {}),
     columns,
     rows,
     cells: settleSpans(cells, columns.length),
@@ -238,13 +361,16 @@ function table(value: Raw, frame: Pick<TableElement, 'id' | 'x' | 'y' | 'name'>)
   }
 }
 
-function element(value: unknown): SlideElement | null {
+const cleanId = (value: unknown): string => str(value, '', 80).replace(/[^\w-]/g, '')
+
+function element(value: unknown, depth = 0): SlideElement | null {
   if (!isObject(value)) {
     return null
   }
 
+  const groups = list(value.group, 32).map(cleanId).filter(Boolean)
   const frame = {
-    id: str(value.id, '', 80).replace(/[^\w-]/g, '') || newId('element'),
+    id: cleanId(value.id) || newId('element'),
     x: num(value.x, 0),
     y: num(value.y, 0),
     width: num(value.width, 100, 0),
@@ -253,16 +379,44 @@ function element(value: unknown): SlideElement | null {
     ...(typeof value.flipH === 'boolean' ? { flipH: value.flipH } : {}),
     ...(typeof value.flipV === 'boolean' ? { flipV: value.flipV } : {}),
     ...(typeof value.name === 'string' && value.name ? { name: str(value.name, '', 200) } : {}),
-    ...(placeholder(value.placeholder) ? { placeholder: placeholder(value.placeholder) } : {})
+    ...(placeholder(value.placeholder) ? { placeholder: placeholder(value.placeholder) } : {}),
+    ...(groups.length ? { group: groups } : {})
   }
 
   switch (value.kind) {
     case 'text':
       return { ...frame, kind: 'text', body: body(value.body), fill: fill(value.fill), stroke: stroke(value.stroke) }
     case 'shape': {
-      const adjust = isObject(value.adjust) ? Object.fromEntries(Object.entries(value.adjust).filter(([key, entry]) => /^adj\d?$/.test(key) && typeof entry === 'number' && Number.isFinite(entry))) : undefined
+      const adjust = adjustOf(value.adjust)
+      const outline = paths(value.paths)
 
-      return { ...frame, kind: 'shape', shape: oneOf(value.shape, SHAPE_KINDS, 'rect'), fill: fill(value.fill), stroke: stroke(value.stroke), body: body(value.body), ...(adjust && Object.keys(adjust).length ? { adjust: adjust as Record<string, number> } : {}) }
+      return { ...frame, kind: 'shape', shape: oneOf(value.shape, SHAPE_KINDS, 'rect'), fill: fill(value.fill), stroke: stroke(value.stroke), body: body(value.body), ...(adjust ? { adjust } : {}), ...(outline ? { paths: outline } : {}) }
+    }
+    case 'object': {
+      const source = isObject(value.source) ? value.source : {}
+      const xml = str(source.xml, '', 4_000_000)
+      const preview = isObject(value.preview) ? value.preview : null
+      const picture = preview ? imageSource(preview.src) : ''
+      const natural = preview && isObject(preview.natural) ? preview.natural : {}
+      const drawing =
+        depth < 1
+          ? list(value.shapes, 2000)
+              .map((entry) => element(entry, depth + 1))
+              .filter((entry): entry is SlideElement => entry !== null && entry.kind !== 'object')
+          : []
+
+      if (!xml.trim().startsWith('<')) {
+        return null
+      }
+
+      return {
+        ...frame,
+        kind: 'object',
+        object: oneOf(value.object, OBJECT_KINDS, 'other'),
+        ...(picture ? { preview: { src: picture, natural: { width: num(natural.width, 0, 0, 1_000_000), height: num(natural.height, 0, 0, 1_000_000) } } } : {}),
+        ...(drawing.length ? { shapes: drawing } : {}),
+        source: { xml, parts: keptParts(source.parts) }
+      }
     }
     case 'image': {
       const natural = isObject(value.natural) ? value.natural : {}
@@ -282,8 +436,11 @@ function element(value: unknown): SlideElement | null {
         stroke: stroke(value.stroke)
       }
     }
-    case 'line':
-      return { ...frame, kind: 'line', stroke: stroke(value.stroke) ?? { color: 'tx1', width: 2, dash: 'solid' }, start: oneOf(value.start, ARROW_HEADS, 'none'), end: oneOf(value.end, ARROW_HEADS, 'none') }
+    case 'line': {
+      const link = connector(value.connector)
+
+      return { ...frame, kind: 'line', stroke: stroke(value.stroke) ?? { color: 'tx1', width: 2, dash: 'solid' }, start: oneOf(value.start, ARROW_HEADS, 'none'), end: oneOf(value.end, ARROW_HEADS, 'none'), ...(link ? { connector: link } : {}) }
+    }
     case 'table':
       return table(value, frame)
     default:
@@ -301,11 +458,9 @@ function background(value: unknown): Background | null {
   }
 
   if (value.kind === 'gradient') {
-    const stops = list(value.stops, 16)
-      .filter(isObject)
-      .map((stop): GradientStop => ({ at: num(stop.at, 0, 0, 1), color: color(stop.color, 'bg1') }))
+    const points = stops(value.stops, 'bg1')
 
-    return stops.length >= 2 ? { kind: 'gradient', stops, angle: num(value.angle, 90, -3600, 3600) } : null
+    return points.length >= 2 ? { kind: 'gradient', stops: points, angle: num(value.angle, 90, -3600, 3600), ...(value.radial === true ? { radial: true } : {}) } : null
   }
 
   if (value.kind === 'image') {
@@ -318,30 +473,87 @@ function background(value: unknown): Background | null {
   return null
 }
 
-function slide(value: unknown): Slide | null {
-  if (!isObject(value)) {
-    return null
-  }
-
+/** Elements with ids unique among them, since ids name elements in commands and selections. */
+function elementsOf(value: unknown): SlideElement[] {
   const seen = new Set<string>()
-  const elements = list(value.elements, 5000)
-    .map(element)
+
+  return list(value, 5000)
+    .map((entry) => element(entry))
     .filter((entry): entry is SlideElement => entry !== null)
     .map((entry) => {
-      // Ids name elements in commands and selections, so each must be unique on its slide.
       const unique = seen.has(entry.id) ? { ...entry, id: newId(entry.kind) } : entry
       seen.add(unique.id)
 
       return unique
     })
+}
+
+function transition(value: unknown): SlideTransition | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+
+  const direction = TRANSITION_DIRECTIONS.includes(value.direction as never) ? { direction: value.direction as SlideTransition['direction'] } : {}
+  const orientation = value.orientation === 'horizontal' || value.orientation === 'vertical' ? { orientation: value.orientation as SlideTransition['orientation'] } : {}
+
+  return { kind: oneOf(value.kind, TRANSITIONS, 'fade'), duration: Math.round(num(value.duration, DEFAULT_TRANSITION_MS, 0, 60_000)), ...direction, ...orientation }
+}
+
+function slide(value: unknown): Slide | null {
+  if (!isObject(value)) {
+    return null
+  }
+
+  const own = transition(value.transition)
 
   return {
-    id: str(value.id, '', 80).replace(/[^\w-]/g, '') || newId('slide'),
+    id: cleanId(value.id) || newId('slide'),
     layout: oneOf(value.layout, LAYOUTS, 'blank'),
     background: background(value.background),
-    elements,
+    elements: elementsOf(value.elements),
     notes: str(value.notes, '', 200_000),
-    hidden: flag(value.hidden)
+    hidden: flag(value.hidden),
+    ...(own ? { transition: own } : {}),
+    ...(isObject(value.theme) ? { theme: theme(value.theme) } : {})
+  }
+}
+
+/** A master whole: its background and drawings, and a layout for each of Herald's layouts (Herald's own where one is missing). */
+function master(value: unknown, size: SlideSize): Master | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+
+  const fallback = defaultMaster(size)
+  const given = list(value.layouts, 64).filter(isObject)
+  const layouts = LAYOUTS.map((id): SlideLayout => {
+    const raw = given.find((entry) => entry.id === id)
+
+    if (!raw) {
+      return fallback.layouts.find((layout) => layout.id === id)!
+    }
+
+    return { id, name: str(raw.name, LAYOUT_NAMES[id], 200) || LAYOUT_NAMES[id], background: background(raw.background), elements: elementsOf(raw.elements), showMaster: raw.showMaster !== false }
+  })
+
+  return { background: background(value.background), elements: elementsOf(value.elements), layouts }
+}
+
+function headerFooter(value: unknown): HeaderFooter | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+
+  const fixed = str(value.dateText, '', 200)
+
+  return {
+    date: flag(value.date),
+    dateFormat: oneOf(value.dateFormat, DATE_FORMATS, 'datetime1'),
+    ...(fixed ? { dateText: fixed } : {}),
+    number: flag(value.number),
+    footer: flag(value.footer),
+    footerText: str(value.footerText, '', 500),
+    skipTitle: flag(value.skipTitle)
   }
 }
 
@@ -351,7 +563,8 @@ export function normalizeDeck(value: unknown, title?: string): Deck {
     throw new Error('This is not a Herald Slides deck')
   }
 
-  const size = isObject(value.size) ? value.size : {}
+  const raw = isObject(value.size) ? value.size : {}
+  const size = { width: num(raw.width, SLIDE_SIZES.wide.width, 72, 10_000), height: num(raw.height, SLIDE_SIZES.wide.height, 72, 10_000) }
   const seen = new Set<string>()
   const slides = list(value.slides, 5000)
     .map(slide)
@@ -362,13 +575,17 @@ export function normalizeDeck(value: unknown, title?: string): Deck {
 
       return unique
     })
+  const own = master(value.master, size)
+  const footers = headerFooter(value.headerFooter)
 
   return {
-    id: str(value.id, '', 80).replace(/[^\w-]/g, '') || newId('deck'),
+    id: cleanId(value.id) || newId('deck'),
     title: title ?? (str(value.title, 'Untitled', 500) || 'Untitled'),
-    size: { width: num(size.width, SLIDE_SIZES.wide.width, 72, 10_000), height: num(size.height, SLIDE_SIZES.wide.height, 72, 10_000) },
+    size,
     theme: theme(value.theme),
     transition: oneOf(value.transition, TRANSITIONS, 'fade'),
+    ...(own ? { master: own } : {}),
+    ...(footers ? { headerFooter: footers } : {}),
     slides: slides.length ? slides : [{ id: newId('slide'), layout: 'blank', background: null, elements: [], notes: '', hidden: false }]
   }
 }

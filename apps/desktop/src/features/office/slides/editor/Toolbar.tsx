@@ -183,7 +183,8 @@ function ShapeTools({ doc }: { doc: SlidesDocument }) {
   const line = selection.find((element): element is LineElement => element.kind === 'line')
   const typing = filled?.kind === 'table' && doc.editing === filled.id ? doc.cell : null
   const fill = filled?.kind === 'table' ? ((typing ? filled.cells[typing.row][typing.column] : filled.cells[0]?.[0])?.fill ?? null) : (filled?.fill ?? null)
-  const stroke = selection[0]?.stroke ?? null
+  const first = selection[0]
+  const stroke = first && first.kind !== 'object' ? (first.stroke ?? null) : null
 
   return (
     <>

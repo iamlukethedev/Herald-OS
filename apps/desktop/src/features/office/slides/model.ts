@@ -1,4 +1,4 @@
-import type { ArrowHead, Background, Box, Color, Deck, Fill, LayoutId, ListKind, ShapeKind, Slide, SlideElement, SlideSize, Stroke, TableElement, TextAlign, Theme, Transition } from './deck.ts'
+import type { ArrowHead, Background, Box, Color, Deck, Fill, LayoutId, ListKind, Master, ShapeKind, Slide, SlideElement, SlideSize, Stroke, TableElement, TextAlign, Theme, Transition } from './deck.ts'
 import { findElement, findSlide, newId, SLIDE_SIZES, withElements, withSlide } from './deck.ts'
 import { boundsOf, boundsOfAll, copyElement, coverCrop, DEFAULT_LINE, imageElement, keepOnSlide, lineElement, moveElement, type Point, shapeElement, textElement, withBox } from './elements.ts'
 import { changeLayout, isEmptyPlaceholder, LAYOUT_NAMES, newSlide, placeholderFor } from './layouts.ts'
@@ -55,7 +55,7 @@ function linesToParagraphs(lines: readonly string[], list: ListKind | null | und
  * A slide's text element of a role, made from its layout's placeholder when the slide has none. A
  * slide's text is its body, or else its subtitle (a title or section slide) or caption.
  */
-function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth = 0): { slide: Slide; element: SlideElement } {
+function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth = 0, master?: Master): { slide: Slide; element: SlideElement } {
   const found = placeholderFor(slide, role, nth) ?? (role === 'body' && nth === 0 ? (placeholderFor(slide, 'subtitle') ?? placeholderFor(slide, 'caption')) : undefined)
 
   if (found) {
@@ -63,7 +63,7 @@ function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth =
   }
 
   const layout: LayoutId = role === 'title' ? (slide.layout === 'blank' ? 'title-only' : slide.layout) : slide.layout === 'title' || slide.layout === 'blank' || slide.layout === 'title-only' || slide.layout === 'section' ? 'title-content' : slide.layout
-  const moved = changeLayout(slide, layout, size)
+  const moved = changeLayout(slide, layout, size, master)
   const element = placeholderFor(moved, role, nth)
 
   if (!element) {
@@ -75,7 +75,7 @@ function ensureText(slide: Slide, role: 'title' | 'body', size: SlideSize, nth =
 
 /** A new slide after `after` (at the end without one), with its title and text when given. */
 export function addSlide(deck: Deck, options: { layout?: LayoutId; after?: string | null; title?: string; body?: string | string[] } = {}): DeckChange & { slideId: string } {
-  const slide = newSlide(options.layout ?? 'title-content', deck.size)
+  const slide = newSlide(options.layout ?? 'title-content', deck.size, deck.master)
   const index = options.after ? deck.slides.findIndex((entry) => entry.id === options.after) + 1 : deck.slides.length
   const slides = [...deck.slides]
   slides.splice(index > 0 ? index : slides.length, 0, slide)
@@ -120,7 +120,7 @@ export function removeSlides(deck: Deck, ids: readonly string[]): DeckChange {
   }
 
   if (!slides.length) {
-    slides = [newSlide('blank', deck.size)]
+    slides = [newSlide('blank', deck.size, deck.master)]
   }
 
   const focus = slides[Math.min(first, slides.length - 1)].id
@@ -152,7 +152,7 @@ export function setHidden(deck: Deck, ids: readonly string[], hidden: boolean): 
 export function setLayout(deck: Deck, slideId: string, layout: LayoutId): DeckChange {
   requireSlide(deck, slideId)
 
-  return { deck: withSlide(deck, slideId, (slide) => changeLayout(slide, layout, deck.size)), label: 'Layout', focus: { selected: [] } }
+  return { deck: withSlide(deck, slideId, (slide) => changeLayout(slide, layout, deck.size, deck.master)), label: 'Layout', focus: { selected: [] } }
 }
 
 /** A background for some slides, or all of them; null goes back to the theme's. */
@@ -170,7 +170,7 @@ export function setNotes(deck: Deck, slideId: string, notes: string): DeckChange
 
 /** The slide's title, in its title placeholder (the slide gets one from its layout if it has none). */
 export function setTitle(deck: Deck, slideId: string, text: string): DeckChange {
-  const { slide, element } = ensureText(requireSlide(deck, slideId), 'title', deck.size)
+  const { slide, element } = ensureText(requireSlide(deck, slideId), 'title', deck.size, 0, deck.master)
 
   if (element.kind !== 'text' && element.kind !== 'shape') {
     throw new Error('The title is not text')
@@ -189,7 +189,7 @@ export function setTitle(deck: Deck, slideId: string, text: string): DeckChange 
  * bullets unless `list` says otherwise (null for none).
  */
 export function setBody(deck: Deck, slideId: string, text: string | readonly string[], options: { list?: ListKind | null; nth?: number } = {}): DeckChange {
-  const { slide, element } = ensureText(requireSlide(deck, slideId), 'body', deck.size, options.nth ?? 0)
+  const { slide, element } = ensureText(requireSlide(deck, slideId), 'body', deck.size, options.nth ?? 0, deck.master)
 
   if (element.kind !== 'text' && element.kind !== 'shape') {
     throw new Error('That is not text')
@@ -225,8 +225,9 @@ export function setSize(deck: Deck, size: SlideSize): DeckChange {
   const sx = size.width / deck.size.width
   const sy = size.height / deck.size.height
   const scale = (element: SlideElement): SlideElement => withBox(element, { x: element.x * sx, y: element.y * sy, width: element.width * sx, height: element.height * sy })
+  const master = deck.master && { ...deck.master, elements: deck.master.elements.map(scale), layouts: deck.master.layouts.map((layout) => ({ ...layout, elements: layout.elements.map(scale) })) }
 
-  return { deck: { ...deck, size: { ...size }, slides: deck.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scale) })) }, label: 'Slide Size' }
+  return { deck: { ...deck, size: { ...size }, ...(master ? { master } : {}), slides: deck.slides.map((slide) => ({ ...slide, elements: slide.elements.map(scale) })) }, label: 'Slide Size' }
 }
 
 export const setTransition = (deck: Deck, transition: Transition): DeckChange => ({ deck: { ...deck, transition }, label: 'Transition' })
