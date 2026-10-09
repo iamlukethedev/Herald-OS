@@ -3,7 +3,7 @@ import { EditorState, TextSelection } from '@tiptap/pm/state'
 import { describe, expect, it } from 'vitest'
 import { documentFromMarkdown } from '../../../../shared/office/doc-text.ts'
 import { cellsOf, chain, chainBuilt, editsOf, findWithContext, headingRef, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, sectionDocument, styleOf, targetFor, templateOf, TEMPLATES, whereOf } from './agent-model.ts'
-import { markedPlugin, markedRangeOf, markedKey } from './marked.ts'
+import { markedKey, markedPlugin, markedRangeOf, writeMarked } from './marked.ts'
 import { applyLive, documentText, insert, jsonOf, replaceText, setMarks, setStyle } from './model.ts'
 import { docsSchema } from './schema.ts'
 
@@ -152,6 +152,23 @@ describe('one step to undo', () => {
     expect(undoDepth(view.state)).toBe(1)
     undo(view.state, view.dispatch)
     expect(documentText(view.state.doc)).toBe(documentText(stateFrom(REPORT).doc))
+  })
+
+  it('keeps Hermes rewriting the marked text as one step, unless the person changed something meanwhile', () => {
+    const view = viewOf(selecting(stateFrom(REPORT), 'Sales grew in March.'))
+    view.dispatch(view.state.tr.setMeta(markedKey, { range: { from: view.state.selection.from, to: view.state.selection.to } }))
+    const rewrite = (text: string) => writeMarked(view, (state) => insert(text, placeFor(state, { at: 'marked' }, markedRangeOf(state))))
+
+    rewrite('Sales rose in March.')
+    rewrite('March sales rose.')
+    rewrite('March sales rose sharply.')
+    expect(undoDepth(view.state)).toBe(1)
+    expect(documentText(view.state.doc)).toContain('March sales rose sharply.\nSales fell in May.')
+    view.dispatch(view.state.tr.insertText('Note: ', 1))
+    rewrite('Sales jumped in March.')
+    expect(undoDepth(view.state)).toBe(3)
+    undo(view.state, view.dispatch)
+    expect(documentText(view.state.doc)).toContain('March sales rose sharply.')
   })
 
   it('chains formatting on the same text', () => {

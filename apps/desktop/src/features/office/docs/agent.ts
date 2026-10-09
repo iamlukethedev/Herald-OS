@@ -9,9 +9,9 @@ import { exists, homeDir, type Local, locate, openEntries, type Outcome, resolve
 import { documentFileName, fileName, freePath, stepCount, tildePath } from '../agent-model.ts'
 import { openInOffice } from '../open.ts'
 import { docsAdapter } from './adapter.ts'
-import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, templateOf } from './agent-model.ts'
+import { alignmentOf, cellsOf, chain, chainBuilt, editsOf, findWithContext, type Marked, markChangeOf, pageArgsOf, placeFor, readDocument, readOptions, searchOptions, styleOf, targetFor, templateOf, whereOf } from './agent-model.ts'
 import { pictureFrom } from './editor.ts'
-import { markedRangeOf } from './marked.ts'
+import { markedRangeOf, writeMarked } from './marked.ts'
 import { applyLive, applyToJSON, clearFormatting, insert, insertImage, insertPageBreak, insertTable, jsonOf, type Op, replaceText, setAlignment, setLineSpacing, setMarks, setPage, setStyle, stateOf, textWidthOf } from './model.ts'
 import { docsSession as session, editorOf } from './store.ts'
 
@@ -71,7 +71,7 @@ async function reading(target: Local<DocJSON>): Promise<Reading> {
  * Make one change: built from the document as it is (and the text marked for Hermes), it is one step
  * to undo in an open document, or the file written back.
  */
-async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op): Promise<{ changed: boolean; name: string; path: string | null }> {
+async function change(target: Local<DocJSON>, build: (state: EditorState, marked: Marked | null, live: boolean) => Op, options: { intoMarked?: boolean } = {}): Promise<{ changed: boolean; name: string; path: string | null }> {
   if (target.kind === 'file') {
     const file = target.path
     const read = await readFile(file)
@@ -103,7 +103,10 @@ async function change(target: Local<DocJSON>, build: (state: EditorState, marked
   const editor = editorOf(doc.key)
 
   if (editor) {
-    return { changed: applyLive(editor.view, build(editor.state, markedRangeOf(editor.state), true)), name: doc.name, path: doc.path }
+    const make = (state: EditorState) => build(state, markedRangeOf(state), true)
+    const changed = options.intoMarked ? writeMarked(editor.view, make) : applyLive(editor.view, make(editor.state))
+
+    return { changed, name: doc.name, path: doc.path }
   }
 
   // Its window would not show it: the change goes into what the document holds, like a typed edit.
@@ -335,7 +338,7 @@ export async function write(args: Args): Promise<Outcome> {
 
   const target = await located(args.document)
   const content = await prepared(args, target)
-  const result = await change(target, (state, marked, live) => insert(content, placeFor(live ? state : null, args, marked)))
+  const result = await change(target, (state, marked, live) => insert(content, placeFor(live ? state : null, args, marked)), { intoMarked: whereOf(args) === 'marked' })
 
   return {
     summary: result.changed ? `Wrote ${wordsIn(args.content).toLocaleString('en-US')} words ${placeLabel(args)} of ${result.name}` : `Nothing changed in ${result.name}`,
