@@ -31,6 +31,9 @@ const CHAT_EVENTS = new Set<GatewayEvent['type']>([
   'error'
 ])
 
+/** Chats started in the background for a surface that shows their replies itself (an Office window's Ask Hermes bar). */
+const quietChats = new Set<string>()
+
 function adopt(result: SessionCreateResult | SessionResumeResult, fallbackStored?: string): ChatState {
   const stored = result.stored_session_id ?? fallbackStored ?? result.session_id
   const state = emptyChat(result.session_id, stored, result.info)
@@ -69,7 +72,7 @@ export function bindChatEvents(): () => void {
       $chats.setKey(sid, next)
     }
 
-    if (event.type === 'message.complete' && $activeChatId.get() !== sid) {
+    if (event.type === 'message.complete' && $activeChatId.get() !== sid && !quietChats.has(sid)) {
       notify({ title: next.title || 'Hermes', body: 'Finished a turn in another session', level: 'info', surface: 'chat' })
     }
 
@@ -79,7 +82,7 @@ export function bindChatEvents(): () => void {
   })
 }
 
-/** A new chat; it becomes the one the Hermes window shows unless `activate` is false. */
+/** A new chat; it becomes the one the Hermes window shows unless `activate` is false, and then its turns end without a notification. */
 export async function createChat(options: { cwd?: string; title?: string; activate?: boolean } = {}): Promise<ChatState> {
   const cwd = options.cwd ?? $prefs.get().defaultCwd ?? $env.get()?.homeDir ?? null
   const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null })
@@ -88,6 +91,8 @@ export async function createChat(options: { cwd?: string; title?: string; activa
 
   if (options.activate !== false) {
     $activeChatId.set(state.sessionId)
+  } else {
+    quietChats.add(state.sessionId)
   }
 
   void refreshSessions()
