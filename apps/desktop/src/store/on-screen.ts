@@ -21,3 +21,14 @@ export function screenFacts(): ScreenFacts {
 export function screenContextLine(): string | null {
   return describeScreen(screenFacts())
 }
+
+/** What Herald Office has open, for a spoken request ("Office: in front is Budget.xlsx …"), or null; the Office code loads on first use. */
+export async function officeContextLine(): Promise<string | null> {
+  try {
+    const office = await import('../features/office/agent.ts')
+
+    return await office.officeContextLine()
+  } catch {
+    return null
+  }
+}

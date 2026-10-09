@@ -1,6 +1,7 @@
 // What is on screen, as one line for Hermes: the folder the Files page shows and the selected file,
-// and the document in a viewer window in front. Spoken requests carry it so "this folder" and "this
-// file" have a referent; typed ones can ask `os_ui action=state`. Pure, so it is tested in node.
+// and the document in a viewer window in front. Spoken requests carry it, after the line about what
+// Herald Office has open, so "this folder", "this file" and "this sheet" have a referent; typed ones
+// can ask `os_ui action=state`. Pure, so it is tested in node.
 
 export interface FilesView {
   /** The folder listed, or null on the Recent and Favorites views. */
@@ -35,9 +36,12 @@ export function describeScreen(facts: ScreenFacts): string | null {
   return parts.length > 0 ? `Screen: ${parts.join('; ')}.` : null
 }
 
-/** The spoken context the backend hands the model, with the screen line last (never mixed into the person's words). */
-export function withScreenContext(voiceContext: string | undefined, screen: string | null): string | undefined {
-  const lines = [voiceContext?.trim(), screen].filter((line): line is string => Boolean(line))
+/**
+ * The spoken context the backend hands the model, never mixed into the person's words: the exchange,
+ * then what Herald Office has open ("Office: in front is Budget.xlsx …"), then the screen line last.
+ */
+export function withScreenContext(voiceContext: string | undefined, screen: string | null, office: string | null = null): string | undefined {
+  const lines = [voiceContext?.trim(), office?.trim(), screen].filter((line): line is string => Boolean(line))
 
   return lines.length > 0 ? lines.join('\n') : undefined
 }
