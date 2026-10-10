@@ -27,6 +27,9 @@ alsa-utils
 kernel-modules
 NetworkManager
 NetworkManager-wifi
+# Intel CNVi Wi-Fi firmware (iwlwifi): not in linux-firmware proper since Fedora split it
+# out; without it, most modern laptops (e.g. Surface Go) have no wireless at all.
+iwlwifi-mvm-firmware
 bluez
 upower
 # Electron runtime libraries and fonts.
@@ -65,6 +68,8 @@ libnotify
 iproute
 procps-ng
 util-linux
+# Mount exFAT removable media (udisks has no exFAT support without these).
+exfatprogs
 grim
 socat
 curl
