@@ -3,16 +3,20 @@ import { IconBellRinging, IconBolt, IconClockPause, IconCoin, IconEar, IconEye, 
 import { useEffect, useState } from 'react'
 import type { MicPermission, VoiceEngine, VoicePrefs } from '../../../../shared/ipc.ts'
 import { GlassButton, Pill, Toggle } from '../../../components/ui/glass.tsx'
-import { deviceNoun } from '../../../lib/platform-labels.ts'
+import { Meter } from '../../../components/ui/primitives.tsx'
+import { describeDeviceChoice } from '../../../lib/audio-devices.ts'
+import { audioScope, deviceNoun } from '../../../lib/platform-labels.ts'
 import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
+import { $inputDevices } from '../../../lib/voice/audio-capture.ts'
 import { LOCAL_STT_MODELS } from '../../../lib/voice/stt-tuning.ts'
+import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../../store/audio-devices.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $voice, $voiceActive, LIVE_RATE_PER_MINUTE, liveSecondsToday, speakWithFreeFallback, startVoice } from '../../../store/voice.ts'
 import { fetchLiveStatus, type LiveStatus } from '../../../store/voice-live-status.ts'
 import { $wake, setWakeWordEnabled } from '../../../store/wake.ts'
-import { errorText, focusSettings, InlineNote, markSaved, MenuDropdown, RadioCard, SectionTitle, SettingsGroup, SettingsRow, Stepper } from './shared.tsx'
+import { errorText, focusSettings, InlineNote, markSaved, MenuDropdown, type MenuItem, RadioCard, SectionTitle, SettingsGroup, SettingsRow, Stepper } from './shared.tsx'
 
 /*
  * Voice: the two engines (free chained pipeline, paid GPT-Live), how a conversation starts (wake
@@ -47,6 +51,9 @@ const TTS_PROVIDERS = [
 
 const IDLE_OPTIONS = [20, 30, 45, 60, 120, 300]
 const CAP_OPTIONS = [0, 15, 30, 60, 120, 240]
+
+/** The picker entry that means "follow the system"; prefixed so it can never be a device id. */
+const AUTOMATIC_DEVICE = '__automatic__'
 
 export function VoiceSection() {
   const prefs = useStore($prefs)
@@ -135,6 +142,30 @@ export function VoiceSection() {
   const todayMinutes = Math.round(liveSecondsToday(voice) / 60)
   const todayCost = ((liveSecondsToday(voice) / 60) * LIVE_RATE_PER_MINUTE).toFixed(2)
 
+  // Audio devices: Herald keeps its own microphone where it is one app among others, and the Sound
+  // panel in the menu bar shows the same control. Herald OS Linux sets the machine's devices instead.
+  const micDevices = useStore($inputDevices)
+  const micChoice = useStore($inputChoice)
+  const micLevel = useStore($micLevelPercent)
+
+  useEffect(() => watchAudioDevices(), [])
+
+  const automaticMic = micDevices.devices.find(device => device.isSystem)
+  const chosenMic = voice.inputDevice
+  const selectedMic = chosenMic && micDevices.devices.some(device => device.id === chosenMic.id) ? chosenMic.id : AUTOMATIC_DEVICE
+  const micItems: readonly MenuItem[] = [
+    { id: AUTOMATIC_DEVICE, label: 'Automatic', description: automaticMic ? `Follow the system: ${automaticMic.label}` : 'Follow the system' },
+    ...micDevices.devices.map(device => ({ id: device.id, label: device.label, description: device.isSystem ? 'The system default right now' : undefined }))
+  ]
+  const micLabel = micDevices.devices.find(device => device.id === selectedMic)?.label ?? 'Automatic'
+
+  const selectMicrophone = async (id: string) => {
+    const device = micDevices.devices.find(one => one.id === id)
+
+    await chooseInputDevice(id === AUTOMATIC_DEVICE || !device ? null : { id: device.id, label: device.label })
+    markSaved()
+  }
+
   return (
     <>
       <SectionTitle title="Voice" subtitle="Talk to Hermes and hear it answer. Hermes stays the brain in every mode; only the audio path changes." />
@@ -170,6 +201,33 @@ export function VoiceSection() {
           </GlassButton>
         </SettingsRow>
       </SettingsGroup>
+
+      {audioScope() === 'app' && (
+        <SettingsGroup title="Audio devices">
+          <SettingsRow
+            icon={<IconMicrophone />}
+            label="Microphone"
+            description={describeDeviceChoice(micChoice, 'input')}
+            keywords="microphone input device airpods bluetooth headset usb audio"
+            below={
+              voice.enabled ? (
+                <div className="flex items-center">
+                  <Meter value={micLevel} className="flex-1" />
+                </div>
+              ) : undefined
+            }
+          >
+            <MenuDropdown
+              ariaLabel="Microphone"
+              label={micLabel}
+              items={micItems}
+              value={selectedMic}
+              onSelect={id => void selectMicrophone(String(id))}
+              disabled={!voice.enabled}
+            />
+          </SettingsRow>
+        </SettingsGroup>
+      )}
 
       <SettingsGroup title="Engine">
         <SettingsRow

@@ -66,6 +66,13 @@ vi.mock('../lib/voice/audio-capture.ts', async () => {
   return {
     $micOpen: atom(false),
     $micLevel: atom(0),
+    $micDevice: atom(null),
+    $inputDevices: atom({ devices: [], labelsAvailable: false }),
+    $captureNotice: atom(null),
+    refreshInputDevices: async () => ({ devices: [], labelsAvailable: false }),
+    setCaptureConversing: () => undefined,
+    acknowledgeCaptureNotice: () => undefined,
+    preferredInputDevice: () => null,
     MicrophoneUnavailableError: class extends Error {},
     setMicrophoneMuted: () => undefined,
     isMicrophoneOpen: () => true,

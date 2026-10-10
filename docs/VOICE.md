@@ -178,12 +178,38 @@ memory, pause an automation, change a setting) runs and is shown in the caption;
 ## Settings
 
 Settings > Voice: enable, microphone permission, engine, wake word, hotkey (Electron accelerator
-syntax), follow-up window, speak notifications aloud, speech providers, Live limits, and two test
-buttons ("Say hello", "Start talking").
+syntax), follow-up window, speak notifications aloud, speech providers, Live limits, the microphone
+the voice listens through with a level bar, and two test buttons ("Say hello", "Start talking").
 
 Preferences live in Herald OS's `prefs.json` (`voice.*`). Speech providers and the wake word's
 enabled flag are written to the Hermes runtime's `config.yaml` (`stt.provider`, `tts.provider`,
 `wake_word.enabled`) so `hermes tools` and the CLI see the same choice.
+
+### Choosing the microphone
+
+Hermes is the brain in every mode, so a conversation's microphone is Herald OS's to choose. On
+Herald OS Linux the shell *is* the session, so the Sound panel sets the machine's PipeWire default
+and that is what the voice uses. Everywhere else Herald OS is one app among others, so its choice
+belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Chromium's
+`getUserMedia({ deviceId: { exact } })`, and the machine's default is left to the system.
+
+- **Automatic** (`null`, the default) follows the system default, so wearing a headset and having
+  the system pick it up is enough.
+- A **chosen device wins while it is connected**, even when another device is plugged in later.
+  That is what makes "AirPods for the speakers, a desk microphone for the voice" possible.
+- A chosen device that **goes away** falls back to the system default and is remembered; when it
+  comes back it is used again. The fallback is quiet: the panel names the device in use and no
+  notice is posted. A device that disappears mid-conversation reopens the stream
+  immediately; a change caused by the system waits for the conversation to end.
+- Device ids are stable only for one origin, so the name is the fallback identity: if the id is gone
+  but a device with the same name is there, that device is used (and the stored id is rewritten).
+- The picker shows the devices as Chromium reports them, with its own `(Bluetooth)`, `(Built-in)`
+  and `(Virtual)` suffixes; virtual devices are ordered last but never hidden.
+- The microphone is only ever opened by a conversation or by the armed wake word, so the level bar
+  is live exactly while the microphone is open, and "voice off" still means it is never opened.
+
+The same control is in the menu bar's Sound panel (macOS and the other desktop hosts) and in
+Settings > Voice, and the `audio.input` and `audio.devices` commands reach it without the mouse.
 
 Local transcription accuracy: Hermes's default local model (`base`) mishears short commands. Once,
 when voice is on and `stt.provider` is `local`, Herald OS sets `stt.local.model: small.en` (about
@@ -208,13 +234,20 @@ model switches between fast, accurate, multilingual and most-accurate models.
 - The wake word runs inside the Hermes runtime (openWakeWord, on-device). On runtimes older than
   0.21.3 the runtime opens the host mic itself; newer ones take audio from Herald OS. Only one
   Hermes client can own the detector at a time.
+- A conversation that hears nothing closes with "Heard nothing": the microphone opened but no speech
+  reached the endpointing. Check the level meter in Settings > Voice or the Sound panel, and that
+  the device in use is the one you are speaking into. A device that is virtual (BlackHole, a screen
+  recorder) or asleep delivers a flat signal, which looks the same as a silent room.
 
 ## Architecture
 
 ```
 apps/desktop/src/store/voice.ts          state machine, hotkey/CLI commands, announcements, Live accounting
 apps/desktop/src/store/wake.ts           wake.start / wake.feed / wake.detected
+apps/desktop/src/store/audio-devices.ts  which microphones exist, which one is used, the mic test
+apps/desktop/src/lib/audio-devices.ts    device list, identity of a stored choice, name matcher (pure)
 apps/desktop/src/lib/voice/audio-capture.ts   one mic graph (AudioWorklet -> 16 kHz int16 frames)
+apps/desktop/src/lib/voice/capture-policy.ts  when to reopen the mic and when to wait (pure)
 apps/desktop/src/lib/voice/vad.ts        energy endpointing (utterance start/end, barge-in)
 apps/desktop/src/lib/voice/chained-engine.ts  free engine
 apps/desktop/src/lib/voice/live-engine.ts     GPT-Live engine (WebRTC + delegation loop)
@@ -225,4 +258,4 @@ apps/desktop/src/features/office/typing.ts     dictation into the Docs page, She
 apps/desktop/electron/ipc/voice.ts        mic permission, audio WebSocket URL, global hotkey
 ```
 
-Decisions: `docs/DECISIONS.md` ADR-013 (and the ADR-007 amendment).
+Decisions: `docs/DECISIONS.md` ADR-013, ADR-022 (and the ADR-007 amendment).
