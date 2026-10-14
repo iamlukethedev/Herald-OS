@@ -21,7 +21,7 @@ GitHub takes files of up to 2 GB, so the ISO comes in two parts. Download
 On macOS or Linux:
 
 ```bash
-VERSION=0.1.0-alpha.4    # the version you downloaded
+VERSION=0.1.0-alpha.4    # replace with the version you downloaded
 cat "herald-os-$VERSION-x86_64.iso.part"* > "herald-os-$VERSION-x86_64.iso"
 shasum -a 256 -c "herald-os-$VERSION-x86_64.iso.sha256"    # sha256sum -c on Linux
 ```

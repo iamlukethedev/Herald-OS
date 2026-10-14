@@ -10,8 +10,7 @@ Apple's Virtualization framework, so the graphics are accelerated:
 
 ```bash
 brew install qemu zstd
-git clone https://github.com/iamlukethedev/Herald-OS.git && cd Herald-OS || exit
-bash linux/vm/try.sh
+git clone https://github.com/iamlukethedev/Herald-OS.git && cd Herald-OS && bash linux/vm/try.sh
 ```
 
 The first start sets itself up in a few minutes, Hermes Agent included, then asks for your name and
