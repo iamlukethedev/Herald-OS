@@ -64,7 +64,12 @@ fi
 
 PAYLOAD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export HERMES_USER="${HERMES_USER:-hermes}"
-HERMES_UID_HOME="$(getent passwd "$HERMES_USER" | cut -d: -f6)"
+if ! HERMES_PASSWD="$(getent passwd "$HERMES_USER")"; then
+  echo "provision.sh: there is no account named '$HERMES_USER'. In the development VM cloud-init creates" >&2
+  echo "it from the seed (linux/vm/make-seed.sh); set HERMES_USER for another one. Nothing has been changed." >&2
+  exit 1
+fi
+HERMES_UID_HOME="$(printf '%s\n' "$HERMES_PASSWD" | cut -d: -f6)"
 STATE_DIR=/var/lib/herald-os
 LOG=/var/log/herald-os-provision.log
 

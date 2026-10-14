@@ -23,7 +23,7 @@ def executable(path: Path, body: str) -> None:
 
 
 def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[str, ...] | None = None,
-              uid: int = 0, env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+              uid: int = 0, account: str | None = "hermes", env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
     """Runs provision.sh; `labels` are the filesystem labels blkid reports (cidata when `seed`, plus
     the root disk's)."""
     payload = tmp_path / "payload"
@@ -36,8 +36,9 @@ def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[st
     executable(bin_dir / "systemd-detect-virt", f'echo "systemd-detect-virt $*" >>"$CALLS"; [ "$*" = "--quiet --vm" ] && exit {0 if vm else 1}; exit 2')
     executable(bin_dir / "blkid", f'echo "blkid $*" >>"$CALLS"; [ "$*" = "-s LABEL -o value" ] && {{ printf "%s\\n" {" ".join(labels)}; exit 0; }}; exit 2')
     executable(bin_dir / "id", f'echo "id $*" >>"$CALLS"; [ "$*" = -u ] && echo {uid}')
-    for name in ("mkdir", "getent"):
-        executable(bin_dir / name, f'echo "{name} $*" >>"$CALLS"')
+    # getent's answer when the account is missing: nothing, and exit 2.
+    executable(bin_dir / "getent", f'echo "getent $*" >>"$CALLS"; [ "$*" = "passwd {account}" ] || exit 2; echo "$2:x:1000:1000::/home/$2:/bin/bash"')
+    executable(bin_dir / "mkdir", 'echo "mkdir $*" >>"$CALLS"')
     executable(bin_dir / "tee", 'echo "tee $*" >>"$CALLS"; exec cat')
     executable(payload / "image" / "packages.sh", 'echo "packages.sh $*" >>"$CALLS"; exit 1')
     result = subprocess.run(
@@ -114,6 +115,21 @@ def test_dev_vm_provisions_without_looking(tmp_path):
     assert "packages.sh --dev" in calls
     assert not any(call.startswith(("systemd-detect-virt ", "blkid ")) for call in calls)
     assert "Nothing has been changed" not in result.stderr
+
+
+@pytest.mark.parametrize("user, env", [("hermes", None), ("someone", {"HERMES_USER": "someone"})])
+def test_a_missing_account_is_explained_before_anything_is_written(tmp_path, user, env):
+    result, calls = provision(tmp_path, vm=True, seed=True, account=None, env=env)
+    assert result.returncode == 1
+    assert f"there is no account named '{user}'" in result.stderr
+    assert "Nothing has been changed" in result.stderr
+    assert changes(calls) == [f"getent passwd {user}"]
+
+
+def test_the_account_named_by_hermes_user_is_the_one_looked_up(tmp_path):
+    result, calls = provision(tmp_path, vm=True, seed=True, account="someone", env={"HERMES_USER": "someone"})
+    assert "getent passwd someone" in calls
+    assert "packages.sh --dev" in calls
 
 
 @pytest.mark.parametrize("args", [(), ("--dev-vm",)], ids=["looking", "--dev-vm"])
