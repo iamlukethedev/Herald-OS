@@ -120,6 +120,26 @@ def test_the_pet_floats_above_the_dock_never_takes_the_keys_as_it_opens_and_has_
         assert _last(rules, "clip-to-geometry") == "clip-to-geometry false"
 
 
+def test_the_dock_menu_floats_above_the_dock_leaves_the_keys_to_it_and_has_no_frame():
+    mode = (DESKTOP / "electron" / "shell" / "mode.ts").read_text()
+    title = re.search(r"DOCK_MENU_TITLE = '([^']+)'", mode).group(1)
+    dock = re.search(r"dock: '([^']+)'", mode).group(1)
+    for app_id in ("herald-os", "Herald OS"):
+        rules = props(app_id, title)
+        assert FLOATS in rules
+        # Opened with the keys, it would pull the pointer to it (warp-mouse-to-focus).
+        assert _last(rules, "open-focused") == "open-focused false"
+        # The shell's geometry puts the menu over the Dock's middle icon exactly there.
+        assert _last(rules, "default-floating-position") == 'default-floating-position x=0 y=68 relative-to="bottom"'
+        assert _last(rules, "border") == "border { off; }"
+        assert _last(rules, "focus-ring") == "focus-ring { off; }"
+        assert _last(rules, "shadow") == "shadow { off; }"
+        assert _last(rules, "geometry-corner-radius") == "geometry-corner-radius 0"
+        assert _last(rules, "clip-to-geometry") == "clip-to-geometry false"
+        # And the Dock keeps its own place.
+        assert _last(props(app_id, dock), "default-floating-position") == 'default-floating-position x=0 y=0 relative-to="bottom"'
+
+
 def test_super_ctrl_h_hides_or_shows_the_pet():
     binds = [line.strip() for line in CONFIG.splitlines() if line.strip().startswith("Mod+Ctrl+H ")]
     assert binds == ['Mod+Ctrl+H hotkey-overlay-title="Hide or show the pet" repeat=false { spawn "herald-os" "os" "pet.toggle"; }']

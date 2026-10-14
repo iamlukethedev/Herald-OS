@@ -20,6 +20,9 @@ export const SURFACE_TITLE: Record<Exclude<ShellSurface, `window:${string}`>, st
   pet: 'Herald OS · Pet'
 }
 
+/** The Dock's menu for a running app: a window the Dock opens and draws into (electron/shell/dock-menu.ts). */
+export const DOCK_MENU_TITLE = 'Herald OS · Dock Menu'
+
 /** Floating Hermes apps that may open as their own window in panels mode. */
 export const FLOATING_APPS: Record<string, { title: string; width: number; height: number }> = {
   terminal: { title: 'Herald OS · Terminal', width: 900, height: 560 },

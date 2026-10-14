@@ -2,8 +2,9 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { layoutChanges, moveFloatingWindowArgs, moveFloatingWindowRequest, niriRequest, type RawWindow, toLayout, toWindow } from './niri.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { WmWindow } from '../../shared/ipc.ts'
+import { floatingSteps, layoutChanges, moveFloatingWindowArgs, moveFloatingWindowRequest, NiriClient, niriRequest, type RawWindow, toLayout, toWindow } from './niri.ts'
 
 const raw = (overrides: Partial<RawWindow> = {}): RawWindow => ({
   id: 7,
@@ -72,11 +73,40 @@ describe('moving a floating window', () => {
   })
 })
 
+/** niri animates a floating move when its square is more than 10 * 10 (`move_and_animate` in its floating layout). */
+const animated = (a: { x: number; y: number }, b: { x: number; y: number }) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2 > 100
+
+describe('moving a floating window without niri sliding it', () => {
+  it('goes in whole-pixel steps niri does not animate, ending where it was asked', () => {
+    for (const [from, to] of [
+      [{ x: 828, y: 905 }, { x: 516, y: 905 }],
+      [{ x: 828, y: 905 }, { x: 1140, y: 841 }],
+      [{ x: 600.5, y: 995.25 }, { x: 0, y: 0 }],
+      [{ x: 10, y: 10 }, { x: 17, y: 3 }]
+    ]) {
+      const steps = floatingSteps(from, to)
+
+      expect(steps.at(-1)).toEqual(to)
+      steps.forEach((step, index) => {
+        expect(Number.isInteger(step.x) && Number.isInteger(step.y)).toBe(true)
+        expect(animated(index === 0 ? from : steps[index - 1], step)).toBe(false)
+      })
+    }
+  })
+
+  it('takes as few steps as that allows, and none when the window is there already', () => {
+    expect(floatingSteps({ x: 828, y: 905 }, { x: 516, y: 905 })).toHaveLength(39)
+    expect(floatingSteps({ x: 4, y: 4 }, { x: 0, y: 1 })).toEqual([{ x: 0, y: 1 }])
+    expect(floatingSteps({ x: 5, y: 5 }, { x: 5, y: 5 })).toEqual([])
+  })
+})
+
 describe('niriRequest', () => {
   let dir = ''
   let server: net.Server | null = null
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await new Promise<void>(resolve => (server ? server.close(() => resolve()) : resolve()))
     server = null
 
@@ -123,5 +153,18 @@ describe('niriRequest', () => {
     await expect(niriRequest(niri.socket, { Garbled: true })).rejects.toThrow('unreadable')
     await expect(niriRequest(niri.socket, { Quiet: true }, 100)).rejects.toThrow('did not answer')
     await expect(niriRequest(path.join(dir, 'missing.sock'), {})).rejects.toThrow()
+  })
+
+  it('places a floating window in steps, and in one move where niri gave no position', async () => {
+    const niri = await fakeNiri(() => '{"Ok":"Handled"}\n')
+    vi.stubEnv('NIRI_SOCKET', niri.socket)
+    const menu: WmWindow = { id: 12, title: 'Herald OS · Dock Menu', appId: 'herald-os', pid: 1, workspaceId: 1, focused: false, floating: true, urgent: false, ours: true, layout: { width: 264, height: 107, x: 828, y: 905, column: null, tile: null, tileWidth: 264, tileHeight: 107 } }
+
+    await new NiriClient().placeFloatingWindow(menu, 800, 905)
+    expect(niri.lines).toEqual(['821', '814', '807', '800'].map(x => `{"Action":{"MoveFloatingWindow":{"id":12,"x":{"SetFixed":${x}},"y":{"SetFixed":905}}}}`))
+
+    niri.lines.length = 0
+    await new NiriClient().placeFloatingWindow({ ...menu, layout: null }, 700, 905)
+    expect(niri.lines).toEqual([JSON.stringify(moveFloatingWindowRequest(12, 700, 905))])
   })
 })

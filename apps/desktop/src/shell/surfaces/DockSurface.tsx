@@ -1,7 +1,6 @@
 import { useStore } from '@nanostores/react'
-import { IconX } from '@tabler/icons-react'
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import type { InstalledApp, WmWindow } from '../../../shared/ipc.ts'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { InstalledApp, ShellCommand, WmWindow } from '../../../shared/ipc.ts'
 import { AppGlyph, AppTile, HermesAvatar } from '../../components/app-icon.tsx'
 import { openInCanvas } from '../../features/canvas/open.ts'
 import { cn } from '../../lib/cn.ts'
@@ -12,12 +11,31 @@ import { $wm, openSurface, wmAction } from '../../store/shell.ts'
 import { showPage } from '../../store/windows.ts'
 import { appById, distinctAppLabel, type FloatingAppId } from '../apps.ts'
 import { isOfficeApp, NativeIcon, pinnedFor, useDockMagnification } from '../Dock.tsx'
-import { OUR_MAIN_TITLE, ourFloatingAppId, windowLabel } from './shell-utils.ts'
+import { DOCK_MENU_NAME, dockMenuFeatures, dockMenuPlacement, dockRect, menuLosesKeys } from './dock-menu.ts'
+import { DockMenu } from './DockMenu.tsx'
+import { OUR_MAIN_TITLE, ourFloatingAppId, useShellCommands, windowLabel } from './shell-utils.ts'
 
 /** The dock window is 720 x 84; a gentler magnification keeps swollen icons inside it. */
 const PANELS_MAGNIFY_MAX = 0.28
 /** Icons are 44px + 8px gap; this many fit in the fixed-width window with the fixed entries. */
 const MAX_ITEMS = 13
+/** How long a menu waits for main to say its window is over the icon before it shows wherever the window is. */
+const PLACE_TIMEOUT_MS = 1500
+/** How often an open menu checks whether its window was closed from outside (niri's close-window). */
+const CLOSED_POLL_MS = 400
+
+interface DockMenuState {
+  /** The entry whose windows it lists. */
+  id: string
+  /** The name its window opened under, which main sends back once the window is in place. */
+  name: string
+  win: Window
+  listHeight: number
+  /** Main has moved the window over the icon; nothing is drawn in it before. */
+  placed: boolean
+}
+
+let menusOpened = 0
 
 interface DockEntry {
   id: string
@@ -65,33 +83,131 @@ function nextWindow(windows: WmWindow[], lastId: number | undefined): WmWindow {
 /**
  * Panels mode: the Dock is a transparent 720 x 84 window niri keeps along the bottom edge (a strut
  * reserves the space, so there is no auto-hide). Besides the pinned entries it shows every running
- * compositor window grouped by app; clicking focuses (and cycles), middle-click closes.
+ * compositor window grouped by app; clicking focuses (and cycles), middle-click closes, and a
+ * right-click lists the windows, with Close and Close all, in a menu of its own above the Dock
+ * (DockMenu.tsx).
  */
 export function DockSurface() {
   const wm = useStore($wm)
   const { apps, iconFor } = useNativeApps()
   const platform = useStore($env)?.platform ?? 'linux'
   const [bouncing, setBouncing] = useState<string | null>(null)
-  const [menu, setMenu] = useState<{ id: string; x: number } | null>(null)
+  const [menu, setMenu] = useState<DockMenuState | null>(null)
+  const menuRef = useRef<DockMenuState | null>(null)
+  menuRef.current = menu
+  /** The window that last had the keys while a menu was open. */
+  const keysWith = useRef<number | null>(null)
   const lastFocused = useRef<Record<string, number>>({})
   const barRef = useRef<HTMLDivElement>(null)
   const { onMove, onLeave } = useDockMagnification(barRef, PANELS_MAGNIFY_MAX)
   const trashPath = platform === 'darwin' ? '~/.Trash' : '~/.local/share/Trash/files'
+
+  const closeMenu = useCallback(() => {
+    const open = menuRef.current
+
+    if (open && !open.win.closed) {
+      open.win.close()
+    }
+
+    menuRef.current = null
+    setMenu(null)
+  }, [])
+
+  const openMenu = (entry: DockEntry, icon: DOMRect) => {
+    closeMenu()
+    const state = $wm.get()
+    const screen = { width: window.screen.width, height: window.screen.height }
+    const placement = dockMenuPlacement({
+      iconX: icon.left + icon.width / 2,
+      barTop: barRef.current?.getBoundingClientRect().top ?? 0,
+      dock: dockRect(state, { width: window.innerWidth, height: window.innerHeight }, screen),
+      screen,
+      count: entry.windows?.length ?? 0
+    })
+    const name = `${DOCK_MENU_NAME}-${++menusOpened}`
+    const win = window.open('about:blank', name, dockMenuFeatures(placement.window))
+
+    if (!win) {
+      return
+    }
+
+    // The button the right-click focused would take Enter and Space from the menu.
+    const focused = document.activeElement
+
+    if (focused instanceof HTMLElement) {
+      focused.blur()
+    }
+
+    keysWith.current = state.focusedWindowId
+    menuRef.current = { id: entry.id, name, win, listHeight: placement.listHeight, placed: false }
+    setMenu(menuRef.current)
+  }
+
+  useShellCommands((command: ShellCommand) => {
+    const name = command.args?.[0]
+
+    if (command.type === 'dock-menu-placed' && name && name === menuRef.current?.name) {
+      setMenu(open => (open?.name === name ? { ...open, placed: true } : open))
+    }
+  })
+
+  useEffect(() => {
+    if (!menu || menu.placed) {
+      return
+    }
+
+    const { name } = menu
+    const timer = window.setTimeout(() => setMenu(open => (open?.name === name ? { ...open, placed: true } : open)), PLACE_TIMEOUT_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [menu])
+
+  const menuWindow = menu?.win ?? null
+
+  // A right-click on an icon is left to onContextMenu, which opens that icon's menu or closes its own.
+  useEffect(() => {
+    if (!menuWindow) {
+      return
+    }
+
+    const onDown = (event: MouseEvent) => {
+      if (event.button !== 2 || !(event.target instanceof Element && event.target.closest('.dock-item'))) {
+        closeMenu()
+      }
+    }
+    const check = () => {
+      if (menuWindow.closed && menuRef.current?.win === menuWindow) {
+        menuRef.current = null
+        setMenu(null)
+      }
+    }
+    const onHide = () => window.setTimeout(check, 50)
+    const poll = window.setInterval(check, CLOSED_POLL_MS)
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('pagehide', closeMenu)
+    menuWindow.addEventListener('pagehide', onHide)
+
+    return () => {
+      window.clearInterval(poll)
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('pagehide', closeMenu)
+      menuWindow.removeEventListener('pagehide', onHide)
+    }
+  }, [menuWindow, closeMenu])
 
   useEffect(() => {
     if (!menu) {
       return
     }
 
-    const dismiss = () => setMenu(null)
-    window.addEventListener('mousedown', dismiss)
-    window.addEventListener('blur', dismiss)
-
-    return () => {
-      window.removeEventListener('mousedown', dismiss)
-      window.removeEventListener('blur', dismiss)
+    if (menuLosesKeys(keysWith.current, wm)) {
+      closeMenu()
+    } else {
+      keysWith.current = wm.focusedWindowId
     }
-  }, [menu])
+  }, [menu, wm, closeMenu])
+
+  useEffect(() => closeMenu, [closeMenu])
 
   const launch = async (app: InstalledApp) => {
     setBouncing(app.path)
@@ -240,9 +356,16 @@ export function DockSurface() {
   }, [apps, iconFor, platform, wm.windows, trashPath])
 
   const menuEntry = menu ? entries.find(e => e.id === menu.id) : undefined
+  const menuWindows = menuEntry?.windows ?? []
+
+  useEffect(() => {
+    if (menu && menuWindows.length === 0) {
+      closeMenu()
+    }
+  }, [menu, menuWindows.length, closeMenu])
 
   return (
-    <nav className="relative flex h-full w-full items-end justify-center pb-1" aria-label="Dock">
+    <nav className="flex h-full w-full items-end justify-center pb-1" aria-label="Dock">
       <div ref={barRef} data-dock-bar className="glass dock-bar flex items-end gap-2 rounded-2xl px-3 py-2" onMouseMove={onMove} onMouseLeave={onLeave}>
         {entries.map(entry => (
           <button
@@ -261,9 +384,10 @@ export function DockSurface() {
             onContextMenu={event => {
               event.preventDefault()
 
-              if (entry.windows?.length) {
-                const rect = event.currentTarget.getBoundingClientRect()
-                setMenu({ id: entry.id, x: rect.left + rect.width / 2 })
+              if (entry.windows?.length && menuRef.current?.id !== entry.id) {
+                openMenu(entry, event.currentTarget.getBoundingClientRect())
+              } else {
+                closeMenu()
               }
             }}
             className={cn('dock-item group relative flex flex-col items-center active:brightness-90', bouncing === entry.id && 'dock-bounce')}
@@ -275,67 +399,7 @@ export function DockSurface() {
         ))}
       </div>
 
-      {menu && menuEntry?.windows && (
-        <div
-          role="menu"
-          aria-label={`${menuEntry.label} windows`}
-          className="float absolute bottom-[78px] z-(--z-overlay) w-60 -translate-x-1/2 overflow-hidden rounded-xl p-1 animate-pop"
-          style={{ left: Math.min(Math.max(menu.x, 130), window.innerWidth - 130) }}
-          onMouseDown={event => event.stopPropagation()}
-        >
-          {menuEntry.windows.map(win => (
-            <button
-              key={win.id}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                void wmAction({ type: 'focus-window', id: win.id })
-                setMenu(null)
-              }}
-              className={cn('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] hover:bg-white/8', win.focused ? 'text-fg' : 'text-fg-2')}
-            >
-              <span className={cn('size-1.5 shrink-0 rounded-full', win.focused ? 'bg-accent-strong' : 'bg-fg-4')} />
-              <span className="min-w-0 flex-1 truncate text-left">{windowLabel(win)}</span>
-            </button>
-          ))}
-          <div className="my-1 h-px bg-line" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              const windows = menuEntry.windows ?? []
-              const target = windows.find(w => w.focused) ?? windows[0]
-
-              if (target) {
-                void wmAction({ type: 'close-window', id: target.id })
-              }
-
-              setMenu(null)
-            }}
-            className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] text-fg-2 hover:bg-white/8 hover:text-fg"
-          >
-            <IconX size={14} className="text-fg-3" />
-            <span className="flex-1 text-left">Close</span>
-          </button>
-          {menuEntry.windows.length > 1 && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                for (const win of menuEntry.windows ?? []) {
-                  void wmAction({ type: 'close-window', id: win.id })
-                }
-
-                setMenu(null)
-              }}
-              className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] text-fg-2 hover:bg-white/8 hover:text-fg"
-            >
-              <IconX size={14} className="text-fg-3" />
-              <span className="flex-1 text-left">Close all</span>
-            </button>
-          )}
-        </div>
-      )}
+      {menu && menuEntry && menuWindows.length > 0 && <DockMenu key={menu.name} win={menu.win} placed={menu.placed} label={menuEntry.label} windows={menuWindows} listHeight={menu.listHeight} onClose={closeMenu} />}
     </nav>
   )
 }

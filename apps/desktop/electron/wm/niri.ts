@@ -137,6 +137,30 @@ export class NiriClient implements Compositor {
     await this.raw(moveFloatingWindowArgs(id, x, y))
   }
 
+  /**
+   * Move a floating window to `x`, `y` as `moveFloatingWindow` does, without niri sliding it there as
+   * it slides any floating window moved more than 10 pixels at once: over the socket, in shorter
+   * steps. In one move without the socket, or where niri has not said where the window is.
+   */
+  async placeFloatingWindow(win: WmWindow, x: number, y: number): Promise<void> {
+    const socket = process.env.NIRI_SOCKET
+    const at = win.layout
+
+    if (socket && at && at.x !== null && at.y !== null) {
+      try {
+        for (const step of floatingSteps({ x: at.x, y: at.y }, { x, y })) {
+          await niriRequest(socket, moveFloatingWindowRequest(win.id, step.x, step.y))
+        }
+
+        return
+      } catch {
+        // The one move below puts it there all the same.
+      }
+    }
+
+    await this.moveFloatingWindow(win.id, x, y)
+  }
+
   private handle(line: string): void {
     let event: Record<string, unknown>
 
@@ -427,6 +451,30 @@ export function moveFloatingWindowRequest(id: number, x: number, y: number): unk
 export function moveFloatingWindowArgs(id: number, x: number, y: number): string[] {
   // `niri msg` takes a leading minus for a move relative to where the window is.
   return ['move-floating-window', '--id', String(id), '-x', String(Math.max(0, x)), '-y', String(Math.max(0, y))]
+}
+
+/** niri slides a floating window to where it is moved when that is farther than this from where it was. */
+const UNANIMATED_MOVE = 10
+
+/**
+ * Whole-pixel points from `from` to `to`, each nearer than niri's 10 pixels to the one before, the last
+ * one `to`; none when the window is there already.
+ */
+export function floatingSteps(from: { x: number; y: number }, to: { x: number; y: number }): Array<{ x: number; y: number }> {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y)
+
+  if (distance === 0) {
+    return []
+  }
+
+  // Rounding the points can lengthen a step by up to a pixel on each axis.
+  const count = Math.ceil(distance / (UNANIMATED_MOVE - 2))
+
+  return Array.from({ length: count }, (_, index) => {
+    const t = (index + 1) / count
+
+    return index === count - 1 ? to : { x: Math.round(from.x + (to.x - from.x) * t), y: Math.round(from.y + (to.y - from.y) * t) }
+  })
 }
 
 /** One request on niri's socket: a JSON line out, a JSON line back; rejects with niri's error. */

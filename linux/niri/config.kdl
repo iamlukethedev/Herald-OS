@@ -134,7 +134,7 @@ window-rule {
     clip-to-geometry false
 }
 
-// Dock: bottom centre, no frame; the shell slides it in and out.
+// Dock: bottom centre, no frame; the bottom strut keeps tiles clear of it, so it does not hide.
 window-rule {
     match app-id=r#"^(herald-os|Herald OS)$"# title="^Herald OS · Dock$"
     open-floating true
@@ -232,6 +232,21 @@ window-rule {
     open-floating true
     open-focused false
     default-floating-position x=24 y=104 relative-to="bottom-right"
+    border { off; }
+    focus-ring { off; }
+    shadow { off; }
+    geometry-corner-radius 0
+    clip-to-geometry false
+}
+// The Dock's menu for a running app, a window of its own because the Dock's is too short for it. It
+// opens just above the Dock's middle icon and the shell moves it over the icon clicked before drawing
+// it. Never focused on open: the keys stay with the Dock, and the pointer is not pulled to the menu.
+// After the rule for the Hermes window and its floating apps, which would round and clip it.
+window-rule {
+    match app-id=r#"^(herald-os|Herald OS)$"# title="^Herald OS · Dock Menu$"
+    open-floating true
+    open-focused false
+    default-floating-position x=0 y=68 relative-to="bottom"
     border { off; }
     focus-ring { off; }
     shadow { off; }

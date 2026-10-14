@@ -105,7 +105,7 @@ It runs in one of two modes, chosen by Electron main (`electron/shell/mode.ts`):
 | Mode | Used by | Windows |
 | --- | --- | --- |
 | `desktop` | macOS, Linux under `cage` | One fullscreen Electron window; the renderer's own window manager (`src/store/windows.ts`, `src/shell/wm/`) lays out every app inside it. |
-| `panels` | Linux under `niri` (`HERALD_OS_SHELL_MODE=panels`) | One Electron window per surface (menu bar, dock, main window, command bar, wallpaper, each floating app), tiled by the compositor. `src/shell/ShellRoot.tsx` picks what each window shows. |
+| `panels` | Linux under `niri` (`HERALD_OS_SHELL_MODE=panels`) | One Electron window per surface (menu bar, dock, main window, command bar, wallpaper, each floating app), tiled by the compositor. `src/shell/ShellRoot.tsx` picks what each window shows. The Dock's menu for a running app is a window the Dock opens and draws into itself. |
 
 Code layout (details in [`apps/desktop/README.md`](../apps/desktop/README.md), conventions in
 [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md)): `src/shell` is the desktop chrome,

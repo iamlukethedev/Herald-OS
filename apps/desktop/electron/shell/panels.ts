@@ -7,14 +7,17 @@ import { log } from '../log.ts'
 import { audienceWindow } from '../office/presenter.ts'
 import { devServerUrl, isShellPage, rendererIndex } from '../paths.ts'
 import { NiriClient } from '../wm/niri.ts'
+import { type DockMenuBounds, dockMenuWindow, freshWindow } from './dock-menu.ts'
 import { FocusHistory } from './focus.ts'
 import type { ShellHost } from './host.ts'
-import { FLOATING_APPS, shellMode, surfaceTitle } from './mode.ts'
+import { DOCK_MENU_TITLE, FLOATING_APPS, shellMode, surfaceTitle } from './mode.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const PANEL_TITLES = new Set((['menubar', 'dock', 'command', 'panel', 'screensaver', 'wallpaper', 'pet'] as const).map(surfaceTitle))
+const PANEL_TITLES = new Set([...(['menubar', 'dock', 'command', 'panel', 'screensaver', 'wallpaper', 'pet'] as const).map(surfaceTitle), DOCK_MENU_TITLE])
+/** How long a new window of ours may take to show up in niri's state. */
+const APPEAR_TIMEOUT_MS = 1000
 
-/** The menu bar, dock, overlays, wallpaper renderer and pet: our windows that are not apps. */
+/** The menu bar, the dock and its menu, overlays, wallpaper renderer and pet: our windows that are not apps. */
 function isPanel(win: WmWindow): boolean {
   return win.ours && PANEL_TITLES.has(win.title)
 }
@@ -52,6 +55,8 @@ export class PanelShell implements ShellHost {
   private readonly webApps = new Map<string, BrowserWindow>()
   /** Where focus goes back to after an overlay or a dialog closes. */
   private readonly focus = new FocusHistory(isPanel)
+  /** The Dock's menu for a running app (electron/shell/dock-menu.ts); a newer one replaces it. */
+  private dockMenu: BrowserWindow | null = null
 
   constructor(private readonly onMainCreated: (win: BrowserWindow) => void) {}
 
@@ -267,6 +272,64 @@ export class PanelShell implements ShellHost {
     }
   }
 
+  /**
+   * The Dock opened a menu's window. niri's rule opens it above the Dock's middle and leaves the keys
+   * with the Dock: a window that opened with them would pull the pointer to itself, as Herald's niri
+   * warps the mouse to the focus. It goes over the icon before the Dock draws anything in it, so it is
+   * never seen anywhere else, and it closes with the Dock.
+   */
+  private placeDockMenu(dock: BrowserWindow, menu: BrowserWindow, bounds: DockMenuBounds, name: string): void {
+    if (this.dockMenu && !this.dockMenu.isDestroyed()) {
+      this.dockMenu.destroy()
+    }
+
+    this.dockMenu = menu
+    const before = new Set(this.wm.state().windows.filter(w => w.ours && w.title === DOCK_MENU_TITLE).map(w => w.id))
+    const close = () => !menu.isDestroyed() && menu.close()
+    dock.once('closed', close)
+    menu.once('closed', () => {
+      dock.removeListener('closed', close)
+
+      if (this.dockMenu === menu) {
+        this.dockMenu = null
+      }
+    })
+
+    void this.appeared(DOCK_MENU_TITLE, before)
+      .then(target => (target && this.dockMenu === menu ? this.wm.placeFloatingWindow(target, bounds.x, bounds.y) : undefined))
+      .catch(() => undefined)
+      .finally(() => {
+        if (!dock.isDestroyed()) {
+          dock.webContents.send(IPC.shellCommand, { type: 'dock-menu-placed', args: [name] } satisfies ShellCommand)
+        }
+      })
+  }
+
+  /** The niri window a new window of ours became, once niri reports it: the newest with its title that was not there before. */
+  private appeared(title: string, before: ReadonlySet<number>): Promise<WmWindow | null> {
+    const now = freshWindow(this.wm.state(), title, before)
+
+    if (now || !this.wm.available) {
+      return Promise.resolve(now)
+    }
+
+    return new Promise(resolve => {
+      const done = (win: WmWindow | null) => {
+        clearTimeout(timer)
+        off()
+        resolve(win)
+      }
+      const timer = setTimeout(() => done(null), APPEAR_TIMEOUT_MS)
+      const off = this.wm.onState(state => {
+        const win = freshWindow(state, title, before)
+
+        if (win) {
+          done(win)
+        }
+      })
+    })
+  }
+
   private create(surface: ShellSurface): BrowserWindow {
     const display = screen.getPrimaryDisplay()
     const options = this.optionsFor(surface, display.workAreaSize.width, display.size)
@@ -297,7 +360,7 @@ export class PanelShell implements ShellHost {
 
     // The renderer must not rename the window: niri rules key on the title.
     win.on('page-title-updated', event => event.preventDefault())
-    win.webContents.setWindowOpenHandler(details => audienceWindow(win, details) ?? { action: 'deny' })
+    win.webContents.setWindowOpenHandler(details => audienceWindow(win, details) ?? (surface === 'dock' ? dockMenuWindow(details, (menu, bounds) => this.placeDockMenu(win, menu, bounds, details.frameName)) : null) ?? { action: 'deny' })
 
     win.webContents.on('will-navigate', (event, url) => {
       if (!isShellPage(url)) {

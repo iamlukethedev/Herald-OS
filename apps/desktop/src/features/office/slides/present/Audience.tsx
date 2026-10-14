@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { mirrorStyles } from '../../../../lib/mirror-styles.ts'
 import type { Deck } from '../deck.ts'
 import { addSlideStyles } from '../view/slide-css.ts'
 import { $audience, act, closeAudienceWindow, stopPresenting, usePresentationKeys } from './control.ts'
@@ -12,67 +13,6 @@ import { next, type Presentation, previous } from './state.ts'
  * another display, drawn from this page. Its head holds copies of this page's style sheets (and of
  * those that come later, as chunks load); its keys and its size are its own.
  */
-
-const SHEETS = 'style, link[rel~="stylesheet"]'
-
-/** Keep copies of a page's style sheets, root attributes and base address in another page, until stopped. */
-function mirrorStyles(from: Document, to: Document): () => void {
-  addSlideStyles()
-  const copies = new Map<Element, Element>()
-  const base = to.createElement('base')
-  base.href = from.baseURI
-  to.head.prepend(base)
-  to.body.style.cssText = 'margin: 0; background: #000; overflow: hidden;'
-
-  const sync = () => {
-    const root = from.documentElement
-
-    for (const name of to.documentElement.getAttributeNames()) {
-      if (!root.hasAttribute(name)) {
-        to.documentElement.removeAttribute(name)
-      }
-    }
-
-    for (const name of root.getAttributeNames()) {
-      to.documentElement.setAttribute(name, root.getAttribute(name) ?? '')
-    }
-
-    for (const [original, copy] of copies) {
-      if (!original.isConnected) {
-        copy.remove()
-        copies.delete(original)
-      }
-    }
-
-    for (const original of from.head.querySelectorAll(SHEETS)) {
-      const copy = copies.get(original)
-
-      if (!copy) {
-        const made = to.importNode(original, true)
-
-        if (original instanceof HTMLLinkElement) {
-          made.setAttribute('href', original.href)
-        }
-
-        to.head.append(made)
-        copies.set(original, made)
-      } else if (original.tagName === 'STYLE' && copy.textContent !== original.textContent) {
-        copy.textContent = original.textContent
-      }
-    }
-  }
-
-  sync()
-  const observer = new MutationObserver(sync)
-  observer.observe(from.head, { childList: true, subtree: true, characterData: true })
-  observer.observe(from.documentElement, { attributes: true })
-
-  return () => {
-    observer.disconnect()
-    copies.forEach((copy) => copy.remove())
-    base.remove()
-  }
-}
 
 function AudienceView({ win, deck, state }: { win: Window; deck: Deck; state: Presentation }) {
   const size = useWindowSize(win)
@@ -103,7 +43,9 @@ export function Audience({ win, deck, state }: { win: Window; deck: Deck; state:
   const [root, setRoot] = useState<HTMLElement | null>(null)
 
   useLayoutEffect(() => {
+    addSlideStyles()
     const stop = mirrorStyles(document, page)
+    page.body.style.cssText = 'margin: 0; background: #000; overflow: hidden;'
     const element = page.createElement('div')
     page.body.append(element)
     setRoot(element)

@@ -19,6 +19,11 @@ secondary apps, a dock, a menu bar. For where files live, see [README.md](README
   `shell.openExternal` for links that genuinely belong to another app. Any component that hosts a
   native view (web windows, the Studio preview) places it with `useNativeView` in
   `src/features/web/native-view.ts`, which also trims it around the voice pill and action captions.
+- In panels mode (Herald OS on niri) each surface is a compositor window of its own, and nothing is
+  drawn past a window's edge: a popover taller than its surface's window needs a window of its own.
+  The Dock's menu for a running app (`src/shell/surfaces/DockMenu.tsx`) is one the Dock opens on an
+  empty page and draws into through a portal, as Herald Slides draws its audience window; main sizes
+  it and moves it over the icon through niri first (`electron/shell/dock-menu.ts`).
 - `src/shell/apps.ts` is the registry: `PAGES` (sidebar), `FLOATING_APPS`, `HERMES_APPS`,
   `FEATURED_NATIVE` (macOS apps by name). Icons are ids rendered by `AppGlyph` / `AppTile`
   (`src/components/app-icon.tsx`). Two marks, never swapped: `HeraldLogo`

@@ -149,6 +149,10 @@ Web apps (`herald-os install webapp <name> <url>`) open as their own frameless w
 
 The menu bar's status items open quick panels (`herald-os panel wifi|bluetooth|audio|display|power|clock`,
 backed by `nmcli`, `bluetoothctl`, `pactl`, `niri msg output`, `powerprofilesctl` and `upower`).
+Right-clicking a running app in the Dock lists its windows, with Close and Close all, in a small
+window of its own above the Dock ("Herald OS · Dock Menu"), as the Dock's window is only 84 pixels
+tall: the shell moves it over the icon through niri before drawing it, and the keys stay with the
+Dock. Escape, a click elsewhere or the keys going to another window close it.
 Dictation (`Mod+Ctrl+X`, `herald-os dictate`) records until a pause, transcribes through Hermes's
 speech-to-text and types the words into the focused app with `wtype`; the emoji picker
 (`Mod+Ctrl+E`) types its pick the same way. `herald-os keymap omarchy` renders
