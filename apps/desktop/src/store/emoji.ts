@@ -1,7 +1,8 @@
 import { atom } from 'nanostores'
+import { copiedNotice } from '../lib/typing-notice.ts'
 import { performEdit, rememberFocusedEditable } from './edit-target.ts'
 import { notify } from './notifications.ts'
-import { closeThisSurface, isPanels, openSurface, surface } from './shell.ts'
+import { closeThisSurface, isPanels, openSurface, relayToMain, surface } from './shell.ts'
 
 const RECENT_KEY = 'herald-os:emoji-recent'
 const RECENT_LIMIT = 24
@@ -44,7 +45,13 @@ export async function insertEmoji(char: string): Promise<void> {
     // Main waits for the overlay to close so the keystrokes land in the app that had focus.
     const typing = window.heraldOS.dictation.type(char, { delayMs: 220 })
     closeThisSurface()
-    await typing.catch(() => undefined)
+    const result = await typing.catch(() => null)
+
+    // This window has just closed, so the Hermes window says where the emoji went.
+    if (result?.copied) {
+      const { title, body } = copiedNotice('emoji', char, result.missing)
+      relayToMain({ type: 'notify', args: [title, body] })
+    }
 
     return
   }

@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
 import { rest } from '../lib/rest.ts'
+import { copiedNotice } from '../lib/typing-notice.ts'
 import { subscribeMicrophone } from '../lib/voice/audio-capture.ts'
 import { parseDictationText } from '../lib/voice/dictation.ts'
 import { bytesToBase64, concatInt16, encodeWav, TARGET_SAMPLE_RATE } from '../lib/voice/pcm.ts'
@@ -126,7 +127,7 @@ export async function finishDictation(): Promise<void> {
     const result = await window.heraldOS.dictation.type(text, { submit })
 
     if (result.copied) {
-      notify({ title: 'Dictation copied', body: `Paste it where you want it: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}`, level: 'info' })
+      notify({ ...copiedNotice('dictation', text, result.missing), level: result.missing ? 'warn' : 'info' })
     }
   } catch (error) {
     notify({ title: 'Dictation failed', body: error instanceof Error ? error.message : String(error), level: 'error' })
