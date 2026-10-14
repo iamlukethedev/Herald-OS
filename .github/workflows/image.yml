@@ -103,11 +103,14 @@ jobs:
             exit 0
           fi
           cosign public-key --key env://COSIGN_PRIVATE_KEY >derived.pub
-          if ! diff -u linux/image/cosign.pub derived.pub; then
+          # Compared as DER so PEM formatting (line endings, wrapping, trailing newline) cannot matter.
+          openssl pkey -pubin -in linux/image/cosign.pub -outform DER -out committed.der
+          openssl pkey -pubin -in derived.pub -outform DER -out derived.der
+          if ! cmp -s committed.der derived.der; then
             echo "::error::COSIGN_PRIVATE_KEY does not match linux/image/cosign.pub: installed machines would reject this image's signature."
             exit 1
           fi
-          rm derived.pub
+          rm derived.pub committed.der derived.der
           echo "COSIGN_PRIVATE_KEY matches linux/image/cosign.pub."
       - uses: actions/setup-node@v7
         with:
