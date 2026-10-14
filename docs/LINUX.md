@@ -94,6 +94,13 @@ hermes config set model.default <model>  # a Portal model id, as in the Mac's co
 
 ## What provisioning does (`linux/provision.sh`)
 
+These are system-wide changes meant for the throwaway development VM, so the script refuses to run
+anywhere else: it lists what it would change and exits without touching anything unless it is in a
+virtual machine with the cloud-init seed (the disc labelled `cidata` or `CIDATA`) attached, or is
+given `--dev-vm`.
+cloud-init passes `--dev-vm` on the first boot; to re-run it by hand in a VM whose seed disc has been
+removed, use `sudo bash /usr/local/share/herald-os-linux/provision.sh --dev-vm`.
+
 - SELinux permissive (greetd and the compositors have no tailored policy yet; Stage 2 writes one).
 - `dnf install`: niri, cage, greetd, seatd, PipeWire, NetworkManager, BlueZ, UPower, portals,
   Electron runtime libraries, fonts, Node.js + toolchain, and the CLI tools the Linux adapters use
@@ -254,7 +261,18 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
 - **an x86_64 installer ISO** (bootc-image-builder `anaconda-iso`, `linux/image/iso.toml`): the
   storage screen stays interactive, so it can install next to another system and encrypt the disk
   (btrfs) if you tick "Encrypt my data". Boot it with `inst.ks=<url>` and a kickstart like
-  `linux/image/unattended.ks` for an unattended install.
+  `linux/image/unattended.ks` for an unattended install: its `%pre` picks one disk (`DISK=` set
+  in it, or else the only internal disk) and writes `ignoredisk --only-use` and
+  `clearpart --drives` for it, so other disks are left alone. `DISK=` must be one name (no spaces,
+  commas or options), resolve (`readlink -f`) to a writable `lsblk` `TYPE` `disk`, and not be a
+  disk under the installer's mounts, which `lsblk -s` traces through partitions, LVM and RAID, nor
+  a multipath path or a BIOS (or md) RAID member, which the automatic choice skips too.
+  `/dev/mapper/` multipath targets are not supported as `DISK=` (their `TYPE` is `mpath`, so they
+  are refused). With
+  several internal disks and no `DISK=`, or a `DISK=` that fails those checks, it stops before
+  erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
+  `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.
+  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle

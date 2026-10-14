@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Turn a stock Fedora Cloud install into the Herald OS Linux development VM. Runs as root, idempotent.
-# Invoked by cloud-init on first boot (see linux/vm/make-seed.sh); safe to re-run by hand:
+# Invoked by cloud-init on first boot (see linux/vm/make-seed.sh); safe to re-run by hand inside
+# the development VM:
 #
-#   sudo bash /usr/local/share/herald-os-linux/provision.sh
+#   sudo bash /usr/local/share/herald-os-linux/provision.sh            # the seed disc still attached
+#   sudo bash /usr/local/share/herald-os-linux/provision.sh --dev-vm   # the seed disc removed
+#
+# It refuses to run anywhere else: it carries on only in a virtual machine with the cloud-init seed
+# attached (the disc labelled cidata, in any case), or when given --dev-vm (cloud-init's runcmd
+# passes it).
 #
 # The same two halves build the bootc image (linux/image/Containerfile):
 #   1. image/packages.sh --dev   packages, the session and CLIs, the boot splash, services
@@ -10,9 +16,61 @@
 # and then, for development only: the helper scripts and building the shell from the repo.
 set -euo pipefail
 
+DEV_VM=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev-vm) DEV_VM=1 ;;
+    *) echo "provision.sh: unknown argument '$arg' (the only one is --dev-vm)" >&2; exit 2 ;;
+  esac
+done
+
+# The effective user ID, from id rather than $EUID, which the tests cannot change.
+if [[ "$(id -u 2>/dev/null)" != 0 ]]; then
+  echo "provision.sh: run it as root, with sudo. Nothing has been changed." >&2
+  exit 1
+fi
+
+# The NoCloud seed's label is matched in any case: make-seed.sh writes cidata, other tools CIDATA.
+seed_attached() {
+  local label
+  while IFS= read -r label; do
+    case "$label" in [Cc][Ii][Dd][Aa][Tt][Aa]) return 0 ;; esac
+  done < <(blkid -s LABEL -o value 2>/dev/null)
+  return 1
+}
+
+# Everything below changes the whole system and is meant for a throwaway VM, so this check comes
+# before anything is written, the log included.
+if [[ $DEV_VM -eq 0 ]] && ! { systemd-detect-virt --quiet --vm >/dev/null 2>&1 && seed_attached; }; then
+  # Builtins only, so the explanation is printed even when PATH has no cat.
+  while IFS= read -r line; do printf '%s\n' "$line"; done >&2 <<EOF
+provision.sh turns a fresh Fedora Cloud VM into the Herald OS development VM, and this machine
+does not look like one: it is not a virtual machine with the cloud-init seed (the disc labelled
+cidata or CIDATA) attached. On this machine it would:
+
+  - set SELinux to permissive, now and after every reboot
+  - install greetd and log ${HERMES_USER:-hermes} in automatically on VT 1, with no password prompt
+  - make Herald's firewall zone the default (SSH allowed) and restart firewalld
+  - enable sshd and seatd, and make graphical.target the default
+  - rebuild every initramfs and change the kernel arguments of every installed kernel
+  - install development packages, Flathub and the default apps, and set up Hermes Agent in the
+    session user's home
+
+Nothing has been changed. If this is the development VM, run it again with --dev-vm:
+
+  sudo bash "${BASH_SOURCE[0]}" --dev-vm
+EOF
+  exit 1
+fi
+
 PAYLOAD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export HERMES_USER="${HERMES_USER:-hermes}"
-HERMES_UID_HOME="$(getent passwd "$HERMES_USER" | cut -d: -f6)"
+if ! HERMES_PASSWD="$(getent passwd "$HERMES_USER")"; then
+  echo "provision.sh: there is no account named '$HERMES_USER'. In the development VM cloud-init creates" >&2
+  echo "it from the seed (linux/vm/make-seed.sh); set HERMES_USER for another one. Nothing has been changed." >&2
+  exit 1
+fi
+HERMES_UID_HOME="$(printf '%s\n' "$HERMES_PASSWD" | cut -d: -f6)"
 STATE_DIR=/var/lib/herald-os
 LOG=/var/log/herald-os-provision.log
 

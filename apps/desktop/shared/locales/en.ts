@@ -13,6 +13,7 @@ export const en = {
   'menu.paste': 'Paste',
   'menu.selectAll': 'Select All',
 
+  'permission.openSettings': 'Open System Settings',
   'permission.screen.title': 'Herald OS needs Screen Recording permission',
   'permission.screen.detail': 'Turn on Herald OS in System Settings > Privacy & Security > Screen & System Audio Recording (called Screen Recording on older macOS), then quit and reopen Herald OS.',
   'permission.screen.open': 'Open System Settings',

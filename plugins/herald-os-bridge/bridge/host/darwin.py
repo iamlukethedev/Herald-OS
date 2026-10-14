@@ -190,6 +190,8 @@ SETTINGS_PANES: dict[str, str] = {
     "automation": "com.apple.settings.PrivacySecurity.extension?Privacy_Automation",
     "full_disk_access": "com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
     "microphone": "com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+    "camera": "com.apple.settings.PrivacySecurity.extension?Privacy_Camera",
+    "calendars": "com.apple.settings.PrivacySecurity.extension?Privacy_Calendars",
     "input_monitoring": "com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent",
     "touch_id": "com.apple.Touch-ID-Settings.extension",
     "users_and_groups": "com.apple.Users-Groups-Settings.extension",
