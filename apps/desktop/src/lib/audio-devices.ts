@@ -115,11 +115,13 @@ export function resolveAudioDevice(pref: AudioDevicePref | null, list: AudioDevi
   }
 
   // Device ids are salted per origin, so a cache clear or a packaged build changes them. The label
-  // is the fallback identity; a duplicate label resolves to the first match and rebinding rewrites it.
-  const byLabel = pref.label ? list.devices.find(device => device.label === pref.label) : undefined
+  // is the fallback identity, but only when it names one device: with two of the same name there is
+  // no telling which was chosen, so the choice counts as missing rather than being guessed (and
+  // rewritten onto the wrong one).
+  const byLabel = pref.label ? list.devices.filter(device => device.label === pref.label) : []
 
-  if (byLabel) {
-    return { device: byLabel, reason: 'chosen', rebind: true, absent: null }
+  if (byLabel.length === 1) {
+    return { device: byLabel[0], reason: 'chosen', rebind: true, absent: null }
   }
 
   return { device: system, reason: reason ?? 'missing', rebind: false, absent: pref }

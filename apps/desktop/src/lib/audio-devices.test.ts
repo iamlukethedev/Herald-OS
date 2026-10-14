@@ -74,6 +74,19 @@ describe('resolveAudioDevice', () => {
     expect(choice.device?.id).toBe('i-builtin')
   })
 
+  it('does not guess between two devices with the same label', () => {
+    const twins: AudioDeviceList = {
+      devices: [
+        { id: 'i-yeti-1', label: 'Yeti Stereo Microphone (USB)', groupId: 'g-yeti-1', isSystem: true, isVirtual: false },
+        { id: 'i-yeti-2', label: 'Yeti Stereo Microphone (USB)', groupId: 'g-yeti-2', isSystem: false, isVirtual: false }
+      ],
+      labelsAvailable: true
+    }
+    const pref = { id: 'i-yeti-old', label: 'Yeti Stereo Microphone (USB)' }
+    expect(resolveAudioDevice(pref, twins)).toMatchObject({ reason: 'missing', rebind: false, absent: pref, device: { id: 'i-yeti-1' } })
+    expect(resolveAudioDevice({ id: 'i-yeti-2', label: pref.label }, twins)).toMatchObject({ reason: 'chosen', rebind: false, device: { id: 'i-yeti-2' } })
+  })
+
   it('does not match by label when the labels are missing', () => {
     const anonymised: AudioDeviceList = { devices: devices.devices.map(device => ({ ...device, label: '' })), labelsAvailable: false }
     expect(resolveAudioDevice({ id: 'i-old-id', label: 'Microfono MacBook Air (Built-in)' }, anonymised).reason).toBe('missing')
