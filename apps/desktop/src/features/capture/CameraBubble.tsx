@@ -1,10 +1,14 @@
 import { IconCameraOff } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
+import { GlassButton } from '../../components/ui/glass.tsx'
+import { canOpenPrivacyPanes, openPrivacyPane } from '../../lib/privacy-pane.ts'
+import { logFailure } from '../../lib/report.ts'
 
 /** Your camera in a round bubble, mirrored like a mirror, for screen recordings and demos. */
 export function CameraBubble() {
   const video = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
+  const [denied, setDenied] = useState(false)
 
   useEffect(() => {
     let stream: MediaStream | null = null
@@ -13,6 +17,7 @@ export function CameraBubble() {
     void (async () => {
       try {
         if (!(await window.heraldOS.capture.requestCamera())) {
+          setDenied(true)
           throw new Error('Herald OS is not allowed to use the camera (System Settings > Privacy & Security > Camera).')
         }
 
@@ -45,6 +50,11 @@ export function CameraBubble() {
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-5 text-center text-[11.5px] text-fg-3">
             <IconCameraOff size={22} />
             {error}
+            {denied && canOpenPrivacyPanes() && (
+              <GlassButton size="sm" onClick={() => void openPrivacyPane('camera').catch(logFailure('shell.openExternal'))} aria-label="Open the Camera pane in System Settings">
+                Open System Settings
+              </GlassButton>
+            )}
           </div>
         ) : (
           <video ref={video} autoPlay muted playsInline className="h-full w-full -scale-x-100 object-cover" aria-label="Camera" />

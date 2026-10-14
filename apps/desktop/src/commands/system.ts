@@ -1,5 +1,7 @@
 import { LANGUAGES, type LanguageSetting } from '../../shared/i18n.ts'
 import type { HeraldOSPrefs, VoiceEngine } from '../../shared/ipc.ts'
+import { isPrivacyPane, PRIVACY_PANE_NAMES } from '../../shared/privacy-panes.ts'
+import { canOpenPrivacyPanes, openPrivacyPane } from '../lib/privacy-pane.ts'
 import { $prefs, updatePrefs } from '../store/backend.ts'
 import { $language, setLanguage } from '../store/i18n.ts'
 import { $nativeApps, loadNativeApps } from '../store/native-apps.ts'
@@ -156,6 +158,27 @@ export const systemCommands: readonly OsCommand[] = [
       focusSettings({ section: id ?? undefined, query: query ? String(query) : undefined })
 
       return ok(id ? `Opened ${id} settings` : 'Opened Settings', { page: 'settings', highlight: id ? { kind: 'setting', id } : undefined })
+    }
+  },
+  {
+    id: 'privacy.openPane',
+    title: 'Open a Privacy & Security pane',
+    description: 'Open the list in macOS System Settings > Privacy & Security where Herald OS is allowed a permission (microphone, camera, calendars, screen, accessibility, automation).',
+    tier: 'read',
+    hidden: true,
+    args: [{ name: 'pane', type: 'string', description: 'The permission', required: true, enum: PRIVACY_PANE_NAMES }],
+    run: async ({ pane }) => {
+      if (!canOpenPrivacyPanes()) {
+        return fail('System Settings panes exist only on macOS.')
+      }
+
+      if (!isPrivacyPane(pane)) {
+        return fail(`No Privacy & Security pane called "${String(pane)}". Panes: ${PRIVACY_PANE_NAMES.join(', ')}.`)
+      }
+
+      await openPrivacyPane(pane)
+
+      return ok(`Opened System Settings > Privacy & Security > ${pane}`)
     }
   },
   {
