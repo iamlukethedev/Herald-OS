@@ -197,15 +197,28 @@ export class LiveEngine implements ConversationEngine {
     try {
       // A reopen on another device (a new choice, a lost device) stops the old track; the sender
       // swaps in the new one without renegotiating.
-      this.microphone = await holdMicrophoneStream(track => {
-        for (const sender of senders) {
-          void sender.replaceTrack(track).catch(error => console.warn('[voice] Live could not switch microphone track', error))
-        }
+      this.microphone = await holdMicrophoneStream({
+        onTrack: track => {
+          for (const sender of senders) {
+            void sender.replaceTrack(track).catch(error => console.warn('[voice] Live could not switch microphone track', error))
+          }
+        },
+        // Not even the system default could be reopened: end rather than send a stopped track.
+        onFailed: error => this.finish('microphone_failed', null, `The microphone stopped working: ${error.message}`)
       })
     } catch (error) {
       connection.close()
       this.peer = null
       throw error instanceof MicrophoneUnavailableError ? error : new Error(`Microphone failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    // Stopped while the microphone was being opened: finish() already ran and had nothing to release.
+    if (this.stopping || this.finalized) {
+      this.releaseMicrophone()
+      connection.close()
+      this.peer = null
+
+      return
     }
 
     try {
@@ -668,7 +681,7 @@ export class LiveEngine implements ConversationEngine {
     this.closeTimer = setTimeout(() => this.finish('close_requested', null), CLOSE_TIMEOUT_MS)
   }
 
-  private finish(reason: string, usageSeconds: number | null): void {
+  private finish(reason: string, usageSeconds: number | null, explanation?: string): void {
     if (this.finalized) {
       return
     }
@@ -712,7 +725,7 @@ export class LiveEngine implements ConversationEngine {
 
     // The store already knows when it asked us to stop; everything else is the engine ending itself.
     if (!this.stopping) {
-      const detail = reason === 'connection_lost' ? 'Lost the connection to GPT-Live.' : undefined
+      const detail = explanation ?? (reason === 'connection_lost' ? 'Lost the connection to GPT-Live.' : undefined)
       this.host.ended(
         reason === 'connection_lost' ? 'connection-lost' : reason === 'closed' || reason === 'close_requested' ? 'user' : /idle|timeout|inactiv/i.test(reason) ? 'idle' : 'error',
         detail ?? (reason && !/closed|close_requested/.test(reason) ? `GPT-Live closed the session (${reason}).` : undefined)
