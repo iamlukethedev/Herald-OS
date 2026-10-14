@@ -959,6 +959,8 @@ RESTART_ALIASES = {"wi-fi": "wifi", "audio": "sound", "trackpad": "touchpad"}
 RESTART_LABELS = {"wifi": "Wi-Fi", "bluetooth": "Bluetooth", "sound": "Sound", "touchpad": "The touchpad"}
 RESTART_STEP_TIMEOUT = 15
 SOUND_UNITS = ("wireplumber.service", "pipewire.service", "pipewire-pulse.service")
+SOUND_START_ORDER = ("pipewire.service", "pipewire-pulse.service", "wireplumber.service")
+SYSTEM_BUS_SOCKET = Path("/run/dbus/system_bus_socket")
 SOUND_TIMEOUT = 25
 I2C_HID_DRIVER = Path("/sys/bus/i2c/drivers/i2c_hid_acpi")
 QUICKI2C_MODULE = Path("/sys/module/intel_quicki2c")
@@ -982,22 +984,42 @@ def restart_steps(target: str) -> list[tuple[list[str], bool]]:
     raise ValueError(f"no steps for {target}")
 
 
-def restart_step(argv: list[str], timeout: float = RESTART_STEP_TIMEOUT) -> str | None:
-    """Run one step; None when it worked, otherwise why not."""
+def restart_output(argv: list[str], timeout: float = RESTART_STEP_TIMEOUT) -> tuple[str | None, str]:
+    """Run one step: (None, its output) when it worked, otherwise (why not, its output)."""
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
     except FileNotFoundError:
-        return f"{argv[0]} is not installed"
+        return f"{argv[0]} is not installed", ""
     except subprocess.TimeoutExpired:
-        return f"{' '.join(argv)} did not finish in {timeout:.0f}s"
+        return f"{' '.join(argv)} did not finish in {timeout:.0f}s", ""
     if result.returncode == 0:
-        return None
-    return (result.stderr or result.stdout).strip() or f"{' '.join(argv)} exited {result.returncode}"
+        return None, result.stdout or ""
+    return (result.stderr or result.stdout or "").strip() or f"{' '.join(argv)} exited {result.returncode}", result.stdout or ""
+
+
+def restart_step(argv: list[str], timeout: float = RESTART_STEP_TIMEOUT) -> str | None:
+    return restart_output(argv, timeout)[0]
+
+
+def system_bus_available() -> bool:
+    """Whether the system D-Bus bluez talks through is there; bluetoothctl aborts on an assertion without it."""
+    address = os.environ.get("DBUS_SYSTEM_BUS_ADDRESS", "")
+    path = re.search(r"(?:^|[;,])unix:(?:[^;]*,)?path=([^,;]+)", address)
+    if address and not path:
+        return True
+    return Path(path.group(1)).exists() if path else SYSTEM_BUS_SOCKET.exists()
+
+
+NO_SYSTEM_BUS = "the system D-Bus is not running, and Bluetooth needs it (sudo systemctl start dbus)"
 
 
 def restart_radio(target: str) -> int:
     for argv, required in restart_steps(target):
+        if argv[0] == "bluetoothctl" and not system_bus_available():
+            die(f"could not restart Bluetooth: {NO_SYSTEM_BUS}", 1)
         problem = restart_step(argv)
+        if problem and argv[0] == "bluetoothctl" and re.search(r"assertion|dbus_connection|Failed to connect to (the )?(system )?bus", problem, re.I):
+            problem = NO_SYSTEM_BUS
         if problem and required:
             die(f"could not restart {RESTART_LABELS[target]}: {problem}", 1)
         if problem:
@@ -1006,15 +1028,30 @@ def restart_radio(target: str) -> int:
     return 0
 
 
+def sound_units() -> list[str]:
+    """The sound units this account has: pipewire-pulse (or WirePlumber) is not installed everywhere."""
+    present = []
+    for unit in SOUND_UNITS:
+        problem, state = restart_output(["systemctl", "--user", "show", "--property=LoadState", "--value", unit])
+        if problem:
+            die(f"could not reach this account's services: {problem}", 1)
+        if state.strip() == "loaded":
+            present.append(unit)
+    return present
+
+
 def restart_sound() -> int:
     systemctl = ["systemctl", "--user"]
-    problem = restart_step([*systemctl, "restart", *SOUND_UNITS], timeout=SOUND_TIMEOUT)
+    units = sound_units()
+    if "pipewire.service" not in units:
+        die("PipeWire is not installed for this account (no pipewire.service), so there is no sound service to restart", 1)
+    problem = restart_step([*systemctl, "restart", *units], timeout=SOUND_TIMEOUT)
     if problem:
         # A stuck PipeWire never finishes stopping: force the units down and start them afresh.
         print(f"The sound services did not restart cleanly ({problem}); forcing them down", file=sys.stderr)
-        restart_step([*systemctl, "kill", "--kill-whom=all", "--signal=KILL", *SOUND_UNITS])
-        restart_step([*systemctl, "reset-failed", *SOUND_UNITS])
-        problem = restart_step([*systemctl, "start", "pipewire.service", "pipewire-pulse.service", "wireplumber.service"], timeout=SOUND_TIMEOUT)
+        restart_step([*systemctl, "kill", "--kill-whom=all", "--signal=KILL", *units])
+        restart_step([*systemctl, "reset-failed", *units])
+        problem = restart_step([*systemctl, "start", *(unit for unit in SOUND_START_ORDER if unit in units)], timeout=SOUND_TIMEOUT)
         if problem:
             die(f"could not restart the sound services: {problem}", 1)
     for _ in range(5):
@@ -1037,19 +1074,38 @@ def touchpad_rebind(driver: Path | None = None, quicki2c: Path | None = None) ->
     devices = touchpad_devices(driver)
     if not devices and not quicki2c.exists():
         die("no touchpad driver to restart here (neither i2c_hid_acpi nor intel_quicki2c is in use)", 1)
+    failed = []
     for device in devices:
         print(f"Rebinding {device}")
-        (driver / "unbind").write_text(device)
+        problem = sysfs_write(driver / "unbind", device)
+        if problem:
+            print(f"herald-os: could not unbind {device} ({problem}); binding it anyway", file=sys.stderr)
         time.sleep(1)
-        (driver / "bind").write_text(device)
+        # The bind is tried whatever the unbind did: a device left unbound is a dead touchpad.
+        problem = sysfs_write(driver / "bind", device)
+        if problem:
+            failed.append(f"could not bind {device} again ({problem})")
     if quicki2c.exists():
         print("Reloading intel_quicki2c")
-        for argv in (["modprobe", "-r", "intel_quicki2c"], ["modprobe", "intel_quicki2c"]):
-            problem = restart_step(argv)
-            if problem:
-                die(f"could not reload intel_quicki2c: {problem}", 1)
+        problem = restart_step(["modprobe", "-r", "intel_quicki2c"])
+        if problem:
+            print(f"herald-os: could not unload intel_quicki2c ({problem}); loading it anyway", file=sys.stderr)
+        problem = restart_step(["modprobe", "intel_quicki2c"])
+        if problem:
+            failed.append(f"could not load intel_quicki2c again ({problem})")
+    if failed:
+        die(f"the touchpad did not restart: {'; '.join(failed)}. Restarting the computer brings it back", 1)
     print("The touchpad restarted")
     return 0
+
+
+def sysfs_write(path: Path, value: str) -> str | None:
+    """Write one sysfs attribute; None when it worked, otherwise the kernel's reason."""
+    try:
+        path.write_text(value)
+    except OSError as exc:
+        return exc.strerror or str(exc)
+    return None
 
 
 def restart_touchpad() -> int:
