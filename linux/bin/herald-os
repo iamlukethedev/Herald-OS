@@ -16,7 +16,7 @@ call the tools directly.
   Trigger       reminder <duration> <message> | reminder list | reminder clear
                 notice time|battery|weather | screenshot | ocr | clipboard | notify <title> [body]
   Capture       capture screenshot [region|window|screen] | capture record [region] [audio] | capture stop
-                capture region --ask | capture color | capture qr [--print] | capture text
+                capture region --ask | capture color | capture qr [--json|--print] | capture text
                 capture transcode <file> [gif|mp4|webm] | capture share <file>
   Canvas        canvas open [file] | canvas new [name] [WxH] | canvas status | canvas layers [project] | canvas history
                 canvas text <words> [--x --y --size --font --color --align] | canvas resize <WxH> [--anchor <a>]
@@ -56,6 +56,7 @@ call the tools directly.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -69,6 +70,7 @@ import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from xml.etree import ElementTree
 
 HOME = Path.home()
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
@@ -988,6 +990,28 @@ def describe_qr(raw: str) -> dict:
     return {"kind": "text", "caption": QR_COPIED, "description": "text", "text": text}
 
 
+def zbar_codes(xml: bytes) -> list[str]:
+    """Each code zbarimg --xml found, once, in order. --raw would run several codes into one text."""
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError:
+        return []
+    codes: list[str] = []
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "data":
+            continue
+        data = element.text or ""
+        if element.get("format") == "base64":
+            try:
+                data = base64.b64decode(data.strip()).decode(errors="replace")
+            except ValueError:
+                continue
+        code = data.strip()
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
 def copy_sensitive(text: str) -> None:
     """On the clipboard, marked as a secret so clipboard history (cliphist) skips it.
 
@@ -998,28 +1022,38 @@ def copy_sensitive(text: str) -> None:
         subprocess.run(["wl-copy"], input=text.encode(), **quiet)
 
 
+QR_USAGE = "capture qr [--json | --print]"
+
+
 def capture_qr(args: list[str]) -> int:
     """Select a QR code or barcode; what it says goes on the clipboard and nowhere else.
 
     The notification and the output say what kind of thing it is (a link's host, at most). --json
     prints {kind, caption, description, text?} for the shell; --print prints the contents, for scripts.
+    A selection with several codes is refused: nothing is copied.
     """
+    if len(args) > 1 or (args and args[0] not in ("--json", "--print")):
+        die(f"{QR_USAGE} (one option at most)" if set(args) == {"--json", "--print"} else QR_USAGE, 2)
     need("slurp", "grim", "zbarimg", "wl-copy")
     region = sh(["slurp"], timeout=300)
     if region.returncode != 0 or not region.stdout.strip():
         return 1
     grab = subprocess.run(["grim", "-g", region.stdout.strip(), "-t", "png", "-"], capture_output=True, timeout=30)
-    decoded = subprocess.run(["zbarimg", "--raw", "-q", "-"], input=grab.stdout, capture_output=True, timeout=30)
-    text = decoded.stdout.decode(errors="replace").strip()
-    if not text:
+    decoded = subprocess.run(["zbarimg", "--xml", "-q", "-"], input=grab.stdout, capture_output=True, timeout=30)
+    codes = zbar_codes(decoded.stdout)
+    if not codes:
         notify("No code found", "The selection had no QR code or barcode")
         return 1
+    if len(codes) > 1:
+        notify("Several codes found", "Nothing was copied; select just one code")
+        die("several codes in that selection; select just one", 1)
+    text = codes[0]
     copy_sensitive(text)
     reading = describe_qr(text)
     notify(reading["caption"])
-    if "--print" in args:
+    if args == ["--print"]:
         print(text)
-    elif "--json" in args:
+    elif args == ["--json"]:
         print(json.dumps(reading, ensure_ascii=False))
     else:
         print(reading["caption"])

@@ -852,7 +852,19 @@ def test_qr_contents_are_described_the_way_the_shell_describes_them(case):
             assert secret not in json.dumps(reading, ensure_ascii=False)
 
 
-def qr_scan(monkeypatch, decoded: str, *, sensitive_ok: bool = True):
+def zbar_xml(*symbols: str) -> bytes:
+    """zbarimg --xml output (0.23) for these symbols; each is a CDATA body or a full <data> element."""
+    body = "".join(
+        f"<symbol type='QR-Code' quality='1' orientation='UP'><polygon points='+31,+31 +31,+264 +265,+265 +264,+31'/>"
+        + (symbol if symbol.startswith("<data") else f"<data><![CDATA[{symbol}]]></data>")
+        + "</symbol>\n"
+        for symbol in symbols
+    )
+    index = f"<index num='0'>\n{body}</index>\n" if symbols else ""
+    return f"<barcodes xmlns='http://zbar.sourceforge.net/2008/barcode'>\n<source href='-'>\n{index}</source>\n</barcodes>\n".encode()
+
+
+def qr_scan(monkeypatch, *decoded: str, sensitive_ok: bool = True):
     """Run capture_qr against a fake slurp, grim, zbarimg and wl-copy; returns (copies, notifications)."""
     copies: list[tuple[list[str], bytes]] = []
     notes: list[tuple[str, str]] = []
@@ -861,7 +873,8 @@ def qr_scan(monkeypatch, decoded: str, *, sensitive_ok: bool = True):
         if argv[0] == "grim":
             return subprocess.CompletedProcess(argv, 0, b"png", b"")
         if argv[0] == "zbarimg":
-            return subprocess.CompletedProcess(argv, 0, decoded.encode() + b"\n", b"")
+            assert argv == ["zbarimg", "--xml", "-q", "-"]
+            return subprocess.CompletedProcess(argv, 0 if decoded else 4, zbar_xml(*decoded), b"")
         if argv[0] == "wl-copy":
             copies.append((argv, kwargs.get("input")))
             assert kwargs.get("stdout") is subprocess.DEVNULL and kwargs.get("stderr") is subprocess.DEVNULL
@@ -912,3 +925,61 @@ def test_qr_older_wl_clipboard_still_copies(monkeypatch):
     assert cli.capture_qr([]) == 0
     assert [argv for argv, _ in copies] == [["wl-copy", "--sensitive"], ["wl-copy"]]
     assert copies[-1][1] == OTP.encode()
+
+
+def test_qr_codes_come_from_zbar_xml_one_by_one():
+    assert cli.zbar_codes(zbar_xml("https://example.com\nWIFI:S:Home;P:hunter22;;")) == ["https://example.com\nWIFI:S:Home;P:hunter22;;"]
+    assert cli.zbar_codes(zbar_xml("one", "two", "one")) == ["one", "two"]
+    # zbarimg sends codes that are not text as base64 (this one read from a real code).
+    assert cli.zbar_codes(zbar_xml("<data format='base64' length='13'><![CDATA[\nQ2Fm/6kgXV0+IDx4Pg==\n]]></data>")) == ["Caf\ufffd\ufffd ]]> <x>"]
+    assert cli.zbar_codes(zbar_xml()) == []
+    assert cli.zbar_codes(b"not xml") == []
+    assert cli.zbar_codes(zbar_xml("<data format='base64'><![CDATA[%%%]]></data>")) == []
+
+
+def test_qr_several_codes_are_refused_and_nothing_is_copied(monkeypatch, capsys):
+    copies, notes = qr_scan(monkeypatch, "https://example.com", "WIFI:S:Home;T:WPA;P:hunter22;;")
+    with pytest.raises(SystemExit) as stopped:
+        cli.capture_qr(["--json"])
+    assert stopped.value.code == 1
+    assert copies == []
+    assert notes == [("Several codes found", "Nothing was copied; select just one code")]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "hunter22" not in captured.err and "several codes" in captured.err
+
+
+def test_qr_one_code_with_several_lines_is_hidden_when_any_line_is(monkeypatch, capsys):
+    copies, notes = qr_scan(monkeypatch, "https://example.com\nWIFI:S:Home;T:WPA;P:hunter22;;")
+    assert cli.capture_qr(["--json"]) == 0
+    assert copies == [(["wl-copy", "--sensitive"], b"https://example.com\nWIFI:S:Home;T:WPA;P:hunter22;;")]
+    out = capsys.readouterr().out
+    assert "hunter22" not in out and "example.com" not in out
+    assert json.loads(out)["kind"] == "wifi"
+
+
+def test_qr_no_code_copies_nothing(monkeypatch):
+    copies, notes = qr_scan(monkeypatch)
+    assert cli.capture_qr([]) == 1
+    assert copies == []
+    assert notes == [("No code found", "The selection had no QR code or barcode")]
+
+
+@pytest.mark.parametrize("args", [["--json", "--print"], ["--print", "--json"], ["--jsn"], ["extra"], ["--json", "extra"], ["--print", "--print"]])
+def test_qr_refuses_unknown_flags_extra_arguments_and_both_outputs(monkeypatch, capsys, args):
+    copies, notes = qr_scan(monkeypatch, OTP)
+    monkeypatch.setattr(cli, "sh", lambda argv, **kwargs: pytest.fail("selected a region before checking the arguments"))
+    with pytest.raises(SystemExit) as stopped:
+        cli.capture_qr(args)
+    assert stopped.value.code == 2
+    assert copies == [] and notes == []
+    err = capsys.readouterr().err
+    assert "capture qr [--json | --print]" in err
+    assert ("one option at most" in err) == (set(args) == {"--json", "--print"})
+
+
+def test_capture_passes_the_qr_options_on(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "capture_qr", lambda args: seen.append(args) or 0)
+    assert cli.capture(["qr", "--print"]) == 0
+    assert seen == [["--print"]]
