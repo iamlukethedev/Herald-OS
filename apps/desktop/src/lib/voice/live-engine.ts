@@ -219,15 +219,16 @@ export class LiveEngine implements ConversationEngine {
   }
 
   private async connect(connection: RTCPeerConnection, senders: RTCRtpSender[]): Promise<void> {
+    // Read from the hold now, not when it was taken: a reopen in between replaced the track, and the
+    // sender did not exist yet to be handed the new one.
     const microphone = this.microphone?.stream
+    const track = this.microphone?.track
 
-    if (!microphone) {
+    if (!microphone || !track) {
       throw new MicrophoneUnavailableError('failed', 'Microphone stream unavailable.')
     }
 
-    for (const track of microphone.getAudioTracks()) {
-      senders.push(connection.addTrack(track, microphone))
-    }
+    senders.push(connection.addTrack(track, microphone))
 
     // Register the data channel before the offer so its m-line is negotiated.
     const events = connection.createDataChannel('oai-events')
