@@ -50,6 +50,7 @@ call the tools directly.
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
                 panel wifi|bluetooth|audio|display|power|clock: the menu bar's quick panels
+                restart wifi|bluetooth|sound|touchpad: bring one back when it stopped working
                 toggle nightlight|dnd|idle|screensaver [on|off] | screensaver | idle show|set ...
                 os <command.id> [json args]: run any Herald OS command (the same ones Hermes uses)
 """
@@ -144,6 +145,7 @@ COMMANDS: dict[str, str] = {
     "channel": "Show or set the update channel: channel [stable|edge] (on the image, the image tag it follows)",
     "rollback": "Go back to the previous version: the Herald OS image's at the next start (it stays in the boot menu), a release tarball's at the next login",
     "firmware": "firmware [check|update]: device firmware through fwupd (the BIOS, the dock, the SSD)",
+    "restart": "restart wifi|bluetooth|sound|touchpad: bring one back when it stopped working, before rebooting (the touchpad asks for your password)",
     "reset": "reset: erase this computer's account, apps and files and start setup again (asks to confirm)",
     "omakase": "Install the curated software set (omakase install | omakase list)",
     "wm": "A window-manager action: wm <niri action> [args] (on Hyprland the same names, or a dispatcher)",
@@ -947,6 +949,137 @@ def toggle(args: list[str]) -> int:
     # Do not disturb and the screensaver live in the shell's preferences; no on/off flips them.
     command = {"dnd": "dnd.set", "screensaver": "screensaver.set"}[name]
     return run_os(command, {"enabled": wanted == "on"} if wanted else {})
+
+
+# ---------------------------------------------------------------------------------------------
+# Restarting a device that stopped working, the step before a reboot. Wi-Fi, Bluetooth and sound are
+# this account's to restart; the touchpad's driver needs administrator rights.
+RESTART_TARGETS = ("wifi", "bluetooth", "sound", "touchpad")
+RESTART_ALIASES = {"wi-fi": "wifi", "audio": "sound", "trackpad": "touchpad"}
+RESTART_LABELS = {"wifi": "Wi-Fi", "bluetooth": "Bluetooth", "sound": "Sound", "touchpad": "The touchpad"}
+RESTART_STEP_TIMEOUT = 15
+SOUND_UNITS = ("wireplumber.service", "pipewire.service", "pipewire-pulse.service")
+SOUND_TIMEOUT = 25
+I2C_HID_DRIVER = Path("/sys/bus/i2c/drivers/i2c_hid_acpi")
+QUICKI2C_MODULE = Path("/sys/module/intel_quicki2c")
+# pkexec's exit codes when nobody could be asked (no authentication agent) or the person said no.
+PKEXEC_NO_AGENT, PKEXEC_REFUSED = 127, 126
+
+
+def restart_target(name: str) -> str | None:
+    key = name.strip().lower()
+    key = RESTART_ALIASES.get(key, key)
+    return key if key in RESTART_TARGETS else None
+
+
+def restart_steps(target: str) -> list[tuple[list[str], bool]]:
+    """Omarchy's steps for Wi-Fi and Bluetooth, in order, each with whether the restart fails without it."""
+    if target == "wifi":
+        return [(["rfkill", "unblock", "wifi"], False), (["nmcli", "networking", "on"], True),
+                (["nmcli", "radio", "wifi", "on"], True), (["nmcli", "device", "wifi", "rescan"], False)]
+    if target == "bluetooth":
+        return [(["rfkill", "unblock", "bluetooth"], False), (["bluetoothctl", "power", "on"], True)]
+    raise ValueError(f"no steps for {target}")
+
+
+def restart_step(argv: list[str], timeout: float = RESTART_STEP_TIMEOUT) -> str | None:
+    """Run one step; None when it worked, otherwise why not."""
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except FileNotFoundError:
+        return f"{argv[0]} is not installed"
+    except subprocess.TimeoutExpired:
+        return f"{' '.join(argv)} did not finish in {timeout:.0f}s"
+    if result.returncode == 0:
+        return None
+    return (result.stderr or result.stdout).strip() or f"{' '.join(argv)} exited {result.returncode}"
+
+
+def restart_radio(target: str) -> int:
+    for argv, required in restart_steps(target):
+        problem = restart_step(argv)
+        if problem and required:
+            die(f"could not restart {RESTART_LABELS[target]}: {problem}", 1)
+        if problem:
+            print(f"{' '.join(argv[:2])}: {problem}", file=sys.stderr)
+    print(f"{RESTART_LABELS[target]} restarted")
+    return 0
+
+
+def restart_sound() -> int:
+    systemctl = ["systemctl", "--user"]
+    problem = restart_step([*systemctl, "restart", *SOUND_UNITS], timeout=SOUND_TIMEOUT)
+    if problem:
+        # A stuck PipeWire never finishes stopping: force the units down and start them afresh.
+        print(f"The sound services did not restart cleanly ({problem}); forcing them down", file=sys.stderr)
+        restart_step([*systemctl, "kill", "--kill-whom=all", "--signal=KILL", *SOUND_UNITS])
+        restart_step([*systemctl, "reset-failed", *SOUND_UNITS])
+        problem = restart_step([*systemctl, "start", "pipewire.service", "pipewire-pulse.service", "wireplumber.service"], timeout=SOUND_TIMEOUT)
+        if problem:
+            die(f"could not restart the sound services: {problem}", 1)
+    for _ in range(5):
+        if restart_step(["wpctl", "status"], timeout=5) is None:
+            print("Sound restarted")
+            return 0
+        time.sleep(1)
+    die("the sound services restarted but PipeWire is not answering; unplug and plug back any USB or Bluetooth headset, or restart the computer", 1)
+    return 1
+
+
+def touchpad_devices(driver: Path | None = None) -> list[str]:
+    driver = driver or I2C_HID_DRIVER
+    return sorted(device.name for device in driver.glob("i2c-*")) if driver.is_dir() else []
+
+
+def touchpad_rebind(driver: Path | None = None, quicki2c: Path | None = None) -> int:
+    """As root: unbind and bind each i2c_hid_acpi device, and reload intel_quicki2c where it is in use."""
+    driver, quicki2c = driver or I2C_HID_DRIVER, quicki2c or QUICKI2C_MODULE
+    devices = touchpad_devices(driver)
+    if not devices and not quicki2c.exists():
+        die("no touchpad driver to restart here (neither i2c_hid_acpi nor intel_quicki2c is in use)", 1)
+    for device in devices:
+        print(f"Rebinding {device}")
+        (driver / "unbind").write_text(device)
+        time.sleep(1)
+        (driver / "bind").write_text(device)
+    if quicki2c.exists():
+        print("Reloading intel_quicki2c")
+        for argv in (["modprobe", "-r", "intel_quicki2c"], ["modprobe", "intel_quicki2c"]):
+            problem = restart_step(argv)
+            if problem:
+                die(f"could not reload intel_quicki2c: {problem}", 1)
+    print("The touchpad restarted")
+    return 0
+
+
+def restart_touchpad() -> int:
+    if os.geteuid() == 0:
+        return touchpad_rebind()
+    if not touchpad_devices() and not QUICKI2C_MODULE.exists():
+        die("no touchpad driver to restart here (neither i2c_hid_acpi nor intel_quicki2c is in use)", 1)
+    again = [sys.executable, str(Path(__file__).resolve()), "restart", "touchpad"]
+    in_terminal = "run `herald-os restart touchpad` in a terminal: it asks for your password there"
+    if sys.stdin.isatty():
+        return subprocess.call(["sudo", *again])
+    if not shutil.which("pkexec"):
+        die(f"restarting the touchpad needs administrator rights; {in_terminal}", 1)
+    code = subprocess.call(["pkexec", *again])
+    if code == PKEXEC_NO_AGENT:
+        die(f"nothing here can ask for your password; {in_terminal}", 1)
+    if code == PKEXEC_REFUSED:
+        die("the touchpad was not restarted: administrator rights were not given", 1)
+    return code
+
+
+def restart_cmd(args: list[str]) -> int:
+    target = restart_target(args[0]) if len(args) == 1 else None
+    if not target:
+        die("restart wifi|bluetooth|sound|touchpad", 2)
+    if target == "sound":
+        return restart_sound()
+    if target == "touchpad":
+        return restart_touchpad()
+    return restart_radio(target)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2804,6 +2937,8 @@ def main(argv: list[str]) -> int:
         return rollback()
     if cmd == "firmware":
         return firmware(args)
+    if cmd == "restart":
+        return restart_cmd(args)
     if cmd == "reset":
         return reset(args)
     if cmd == "omakase":

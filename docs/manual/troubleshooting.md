@@ -97,6 +97,25 @@ output of `herald-os debug`. On the tarball, `herald-os rollback` swaps back to
 - **The screen will not lock at all.** Your account has no password yet: set one with
   `herald-os password`.
 
+### Wi-Fi, Bluetooth, sound or the touchpad stopped working
+
+Before you restart the computer, restart only the part that stopped: System > Fix in the Herald OS
+menu (`Super+M`), Restart at the bottom of the Wi-Fi, Bluetooth or Sound panel, or in a terminal:
+
+- `herald-os restart wifi` lifts an airplane-mode block (`rfkill`), turns networking and the Wi-Fi
+  radio back on, and looks for networks again.
+- `herald-os restart bluetooth` lifts the block and turns the Bluetooth adapter back on: try it
+  when a headset will not reconnect.
+- `herald-os restart sound` restarts PipeWire, its PulseAudio server and WirePlumber, and forces
+  them down first if they are stuck: try it when the sound vanished after unplugging a monitor or a
+  headset.
+- `herald-os restart touchpad` rebinds the touchpad's driver (`i2c_hid_acpi`, or reloads
+  `intel_quicki2c`), for a touchpad that went dead after waking up. It needs administrator rights,
+  so it asks for your password; run it in a terminal if the menu cannot ask.
+
+Hermes can do the same: say "my sound stopped working". If that does not help, the steps below go
+further.
+
 ### Wi-Fi stopped working
 
 1. Open the Wi-Fi panel (`Super+Ctrl+W`): turn Wi-Fi off and on, and forget and rejoin the network.

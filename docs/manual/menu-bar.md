@@ -29,8 +29,11 @@ Settings > Appearance > Menu bar shows, hides and reorders them and sets the clo
 | Battery and power | `Super+Ctrl+P` | Charge and time left, and the power profile: Performance, Balanced or Power saver |
 | Calendar | Click the clock | A month and today's events |
 
-Each panel's footer opens the matching page of Settings. `herald-os panel wifi` (or `bluetooth`,
-`audio`, `display`, `power`, `clock`) opens one from a script or a key of your own.
+Each panel's footer opens the matching page of Settings. On Herald OS Linux, the Wi-Fi, Bluetooth
+and Sound panels also have Restart, for when one stopped working (see
+[Troubleshooting](troubleshooting.md#wi-fi-bluetooth-sound-or-the-touchpad-stopped-working)).
+`herald-os panel wifi` (or `bluetooth`, `audio`, `display`, `power`, `clock`) opens one from a
+script or a key of your own.
 
 ## The Herald OS menu
 
@@ -45,7 +48,7 @@ is a `herald-os` command, so Hermes and your scripts can do the same.
 | Trigger | A reminder, asking about part of the screen, and notices of the time, battery and weather |
 | Capture | Screenshots, recording (with the microphone, or the camera bubble), picking a colour, reading a QR code, copying text |
 | Toggle | Night light, do not disturb, stay awake, the screensaver |
-| System | Lock, suspend, restart, shut down, log out |
+| System | Lock, suspend, restart, shut down, log out, and Fix: restart Wi-Fi, Bluetooth, sound or the touchpad |
 | Hermes | Applications, Terminal, Files, Settings and the hotkeys |
 
 Entries of your own go in `~/.config/herald-os/menu.json` and show up in a section called Yours; see

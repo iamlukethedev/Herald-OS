@@ -833,3 +833,184 @@ def test_plugin_add_waits_for_the_clone_and_says_it_is_off(monkeypatch, capsys):
     with pytest.raises(SystemExit) as stopped:
         cli.plugin_cmd(["remove"])
     assert stopped.value.code == 2
+
+
+class FakeRun:
+    """Stands in for subprocess.run: records each argv and answers from `outcomes` (argv prefix -> exit code or exception)."""
+
+    def __init__(self, outcomes: dict[tuple[str, ...], object] | None = None):
+        self.outcomes = outcomes or {}
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        for prefix, outcome in sorted(self.outcomes.items(), key=lambda item: -len(item[0])):
+            if tuple(argv[: len(prefix)]) == prefix:
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return subprocess.CompletedProcess(argv, int(outcome), "", f"{argv[0]} failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def test_restart_takes_one_device_and_its_other_names():
+    assert [cli.restart_target(name) for name in ("wifi", "Wi-Fi", "bluetooth", "sound", "audio", "touchpad", "trackpad")] == ["wifi", "wifi", "bluetooth", "sound", "sound", "touchpad", "touchpad"]
+    assert cli.restart_target("printer") is None
+    for wrong in ([], ["printer"], ["wifi", "bluetooth"]):
+        with pytest.raises(SystemExit) as stopped:
+            cli.restart_cmd(wrong)
+        assert stopped.value.code == 2, wrong
+    assert "restart" in cli.COMMANDS and "restart wifi|bluetooth|sound|touchpad" in cli.COMMANDS["restart"]
+
+
+def test_restart_wifi_unblocks_turns_networking_and_the_radio_on_then_scans(monkeypatch, capsys):
+    fake = FakeRun({("nmcli", "device", "wifi", "rescan"): 1})
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    assert cli.restart_cmd(["wifi"]) == 0
+    assert fake.calls == [["rfkill", "unblock", "wifi"], ["nmcli", "networking", "on"], ["nmcli", "radio", "wifi", "on"], ["nmcli", "device", "wifi", "rescan"]]
+    out = capsys.readouterr()
+    assert out.out.strip() == "Wi-Fi restarted" and "nmcli device: nmcli failed" in out.err
+
+
+def test_restart_wifi_fails_when_networkmanager_will_not_turn_the_radio_on(monkeypatch, capsys):
+    fake = FakeRun({("nmcli", "radio"): 4, ("rfkill",): FileNotFoundError()})
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    with pytest.raises(SystemExit) as stopped:
+        cli.restart_cmd(["wifi"])
+    assert stopped.value.code == 1
+    assert ["nmcli", "device", "wifi", "rescan"] not in fake.calls
+    err = capsys.readouterr().err
+    assert "rfkill is not installed" in err and "could not restart Wi-Fi: nmcli failed" in err
+
+
+def test_restart_bluetooth_unblocks_and_powers_the_adapter_on(monkeypatch, capsys):
+    fake = FakeRun()
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    assert cli.restart_cmd(["bluetooth"]) == 0
+    assert fake.calls == [["rfkill", "unblock", "bluetooth"], ["bluetoothctl", "power", "on"]]
+    # bluetoothctl waits forever for a bluetoothd that is not running; the step gives up instead.
+    fake = FakeRun({("bluetoothctl",): subprocess.TimeoutExpired(["bluetoothctl"], 15)})
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    with pytest.raises(SystemExit) as stopped:
+        cli.restart_cmd(["bluetooth"])
+    assert stopped.value.code == 1 and "did not finish in 15s" in capsys.readouterr().err
+
+
+def test_restart_sound_restarts_the_pipewire_units_and_checks_they_answer(monkeypatch, capsys):
+    fake = FakeRun()
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    assert cli.restart_cmd(["audio"]) == 0
+    assert fake.calls == [["systemctl", "--user", "restart", "wireplumber.service", "pipewire.service", "pipewire-pulse.service"], ["wpctl", "status"]]
+    assert capsys.readouterr().out.strip() == "Sound restarted"
+
+
+def test_restart_sound_forces_stuck_units_down_and_starts_them(monkeypatch, capsys):
+    fake = FakeRun({("systemctl", "--user", "restart"): subprocess.TimeoutExpired(["systemctl"], 25)})
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    assert cli.restart_cmd(["sound"]) == 0
+    assert [call[2] for call in fake.calls[:4]] == ["restart", "kill", "reset-failed", "start"]
+    assert fake.calls[1] == ["systemctl", "--user", "kill", "--kill-whom=all", "--signal=KILL", *cli.SOUND_UNITS]
+    assert fake.calls[3] == ["systemctl", "--user", "start", "pipewire.service", "pipewire-pulse.service", "wireplumber.service"]
+    assert "forcing them down" in capsys.readouterr().err
+
+
+def test_restart_sound_says_so_when_pipewire_never_answers(monkeypatch, capsys):
+    fake = FakeRun({("wpctl",): 1})
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    with pytest.raises(SystemExit) as stopped:
+        cli.restart_cmd(["sound"])
+    assert stopped.value.code == 1
+    assert fake.calls.count(["wpctl", "status"]) == 5
+    assert "PipeWire is not answering" in capsys.readouterr().err
+
+
+def touchpad_sysfs(tmp_path, devices=("i2c-ELAN0676:00",)):
+    driver = tmp_path / "i2c_hid_acpi"
+    driver.mkdir()
+    for name in ("bind", "unbind", "uevent"):
+        (driver / name).write_text("")
+    for device in devices:
+        (driver / device).mkdir()
+    return driver
+
+
+def test_touchpad_rebinds_each_i2c_hid_device_and_reloads_quicki2c(tmp_path, monkeypatch, capsys):
+    driver = touchpad_sysfs(tmp_path)
+    module = tmp_path / "intel_quicki2c"
+    module.mkdir()
+    written = []
+    original = Path.write_text
+    monkeypatch.setattr(Path, "write_text", lambda self, text, *a, **k: written.append((self.name, text)) or original(self, text, *a, **k))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)
+    fake = FakeRun()
+    monkeypatch.setattr(cli.subprocess, "run", fake)
+    assert cli.touchpad_devices(driver) == ["i2c-ELAN0676:00"]
+    assert cli.touchpad_rebind(driver, module) == 0
+    assert written == [("unbind", "i2c-ELAN0676:00"), ("bind", "i2c-ELAN0676:00")]
+    assert fake.calls == [["modprobe", "-r", "intel_quicki2c"], ["modprobe", "intel_quicki2c"]]
+    assert capsys.readouterr().out.strip().endswith("The touchpad restarted")
+
+
+def test_touchpad_without_a_driver_to_restart_asks_for_no_password(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "I2C_HID_DRIVER", tmp_path / "missing")
+    monkeypatch.setattr(cli, "QUICKI2C_MODULE", tmp_path / "no-module")
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cli.subprocess, "call", lambda argv: pytest.fail(f"must not run {argv}"))
+    with pytest.raises(SystemExit) as stopped:
+        cli.restart_cmd(["touchpad"])
+    assert stopped.value.code == 1 and "no touchpad driver" in capsys.readouterr().err
+
+
+@pytest.fixture
+def touchpad_user(tmp_path, monkeypatch):
+    """A touchpad on i2c_hid_acpi, an ordinary account, and the commands it would run recorded."""
+    monkeypatch.setattr(cli, "I2C_HID_DRIVER", touchpad_sysfs(tmp_path))
+    monkeypatch.setattr(cli, "QUICKI2C_MODULE", tmp_path / "no-module")
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    calls: list[list[str]] = []
+    state = {"code": 0}
+    monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or state["code"])
+    return calls, state
+
+
+def test_touchpad_runs_itself_again_through_sudo_at_a_terminal(touchpad_user, monkeypatch):
+    calls, _ = touchpad_user
+    monkeypatch.setattr(cli.sys, "stdin", _Stdin(True))
+    assert cli.restart_cmd(["touchpad"]) == 0
+    assert calls[0][0] == "sudo" and calls[0][-2:] == ["restart", "touchpad"]
+    assert calls[0][1] == cli.sys.executable and Path(calls[0][2]).name == "herald-os"
+
+
+def test_touchpad_asks_through_pkexec_without_a_terminal(touchpad_user, monkeypatch, capsys):
+    calls, state = touchpad_user
+    monkeypatch.setattr(cli.sys, "stdin", _Stdin(False))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert cli.restart_cmd(["touchpad"]) == 0
+    assert calls[-1][0] == "pkexec" and calls[-1][-2:] == ["restart", "touchpad"]
+    # No password dialog in the session: say where it works rather than 127, which the menu reads as "not Linux".
+    for code, needle in ((cli.PKEXEC_NO_AGENT, "in a terminal"), (cli.PKEXEC_REFUSED, "were not given")):
+        state["code"] = code
+        with pytest.raises(SystemExit) as stopped:
+            cli.restart_cmd(["touchpad"])
+        assert stopped.value.code == 1 and needle in capsys.readouterr().err
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit) as stopped:
+        cli.restart_cmd(["touchpad"])
+    assert stopped.value.code == 1 and "in a terminal" in capsys.readouterr().err
+
+
+def test_touchpad_as_root_rebinds_without_asking_again(touchpad_user, monkeypatch):
+    calls, _ = touchpad_user
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    rebinds = []
+    monkeypatch.setattr(cli, "touchpad_rebind", lambda: rebinds.append(True) or 0)
+    assert cli.restart_cmd(["trackpad"]) == 0
+    assert rebinds == [True] and calls == []
+
+
+def test_restart_is_dispatched_and_listed(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(cli, "restart_cmd", lambda args: seen.append(args) or 0)
+    assert cli.main(["restart", "wifi"]) == 0 and seen == [["wifi"]]
+    assert cli.main(["commands"]) == 0
+    assert "restart wifi|bluetooth|sound|touchpad" in capsys.readouterr().out
