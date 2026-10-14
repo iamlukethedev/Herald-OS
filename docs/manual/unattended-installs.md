@@ -10,11 +10,16 @@ wipe a disk without asking.
 
 - erases one disk and partitions it with btrfs, and leaves every other disk alone. The disk is
   the one set with `DISK=` in the `%pre` section at the end of the file: a name `lsblk` lists
-  (`DISK="nvme1n1"`), or `/dev/disk/by-id/<id>` for an exact device. With `DISK=` left empty, it
-  uses the PC's internal disk if there is exactly one, not counting USB and removable disks or
-  the one the installer started from. If it finds no internal disk, or more than one, the install
-  stops before erasing anything and says, on the screen and in `/tmp/herald-os-disk.log`, to set
-  `DISK=`;
+  (`DISK="nvme1n1"`), or `/dev/disk/by-id/<id>` for an exact device. It must be a whole disk
+  (`nvme0n1`, not the partition `nvme0n1p1`) that can be written to, and not the USB stick or the
+  disk holding the installer, even when the ISO file sits on an LVM volume or RAID set. `DISK=`
+  takes one name and nothing else: spaces, commas and options such as `--foo` are refused.
+  With `DISK=` left empty, it uses the PC's internal disk if there is exactly one, not counting
+  USB and removable disks, disks that belong to a multipath device or a BIOS RAID set, or the one
+  the installer started from. If `DISK=` is not usable, or it finds no internal disk or more than
+  one, the install stops before erasing anything and says why, on the screen and in
+  `/tmp/herald-os-disk.log`. With several disks it names them in order (`nvme2n1` before
+  `nvme10n1`);
 - encrypts it with the passphrase `change-me` (change it, or remove `--passphrase=change-me` to be
   asked for one at install time);
 - sets English, a US keyboard and UTC, which you can change in the `lang`, `keyboard` and

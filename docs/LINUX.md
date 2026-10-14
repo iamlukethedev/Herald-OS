@@ -256,8 +256,12 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
   (btrfs) if you tick "Encrypt my data". Boot it with `inst.ks=<url>` and a kickstart like
   `linux/image/unattended.ks` for an unattended install: its `%pre` picks one disk (`DISK=` set
   in it, or else the only internal disk) and writes `ignoredisk --only-use` and
-  `clearpart --drives` for it, so other disks are left alone. With several internal disks and no
-  `DISK=`, it stops before erasing anything.
+  `clearpart --drives` for it, so other disks are left alone. `DISK=` must be one name (no spaces,
+  commas or options), resolve (`readlink -f`) to a writable `lsblk` `TYPE` `disk`, and not be a
+  disk under the installer's mounts, which `lsblk -s` traces through partitions, LVM and RAID. The
+  automatic choice also skips multipath and BIOS RAID members. With several internal disks and no
+  `DISK=`, or a `DISK=` that fails those checks, it stops before erasing anything.
+  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle
