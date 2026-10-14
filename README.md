@@ -136,8 +136,8 @@ Updates come as a whole new version of the system: `herald-os update` installs o
 `herald-os rollback` goes back to the one before. Already on Fedora Silverblue or another bootc
 system? It can switch to the Herald OS image in place, which replaces the system you run: try it on
 a spare machine or in a virtual machine. Afterwards a login screen asks who signs in, and your own
-account and its password keep working. Herald OS also adds a `hermes` administrator account, which
-stays locked until you give it a password (`sudo passwd hermes`).
+account and its password keep working. Herald OS also adds a `hermes` account, which stays locked,
+and is not an administrator, until you give it a password (`sudo passwd hermes`).
 [docs/LINUX.md](docs/LINUX.md#switching-a-bootc-system-to-herald-os) has the steps, what changes and
 how to go back.
 
