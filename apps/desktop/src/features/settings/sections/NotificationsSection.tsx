@@ -12,7 +12,7 @@ import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, Settings
 type NotifyKey = keyof NotifyPrefs
 
 const ROWS: { key: NotifyKey; label: string; description: string; icon: React.ReactNode; keywords?: string }[] = [
-  { key: 'toolCompletions', label: 'Tool completions', description: 'A toast when a long-running tool finishes in a session you are not looking at.', icon: <IconChecklist />, keywords: 'toast finished' },
+  { key: 'toolCompletions', label: 'Finished turns', description: 'A toast when Hermes finishes a turn in a session you are not looking at.', icon: <IconChecklist />, keywords: 'toast finished turn tool completions' },
   { key: 'approvals', label: 'Approvals', description: 'Tell me when Hermes is waiting for a decision.', icon: <IconShieldCheck />, keywords: 'permission request waiting' },
   { key: 'taskUpdates', label: 'Task updates', description: 'Scheduled tasks that ran, failed or changed.', icon: <IconBellRinging />, keywords: 'cron automations' },
   { key: 'nativeWhenUnfocused', label: 'Native notifications when unfocused', description: 'Use system notifications while Herald OS is in the background.', icon: <IconDeviceDesktop />, keywords: 'macos system background' }

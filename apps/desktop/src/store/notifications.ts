@@ -37,6 +37,8 @@ export interface HermesNotification {
   /** Set when this came from another app; clicks and dismissals are reported back to it. */
   desktop?: DesktopNotificationRef
   actions?: NotificationAction[]
+  /** The Alerts switch this one follows, when it has one. */
+  category?: NotifyCategory
 }
 
 export const $notifications = atom<HermesNotification[]>([])
@@ -91,7 +93,8 @@ export function notify(input: NotifyInput): HermesNotification {
     surface: input.surface,
     key: input.key,
     desktop: input.desktop,
-    actions: input.actions?.length ? input.actions : undefined
+    actions: input.actions?.length ? input.actions : undefined,
+    category: input.category
   }
   const rest = $notifications.get().filter(n => n.id !== item.id)
   $notifications.set([item, ...rest].slice(0, MAX))

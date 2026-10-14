@@ -224,7 +224,7 @@ describe('the callers tagged with a category', () => {
     expect(bridge.native.map(n => n.title)).toEqual(['Approval needed', 'Hermes has a question'])
   })
 
-  it('silences "Finished a turn in another session" with Tool completions off', () => {
+  it('silences "Finished a turn in another session" with Finished turns off', () => {
     $chats.set({ s1: emptyChat('s1', 'stored-1') })
     $activeChatId.set('s2')
     const finish = () => gateway.any.forEach(handler => handler({ type: 'message.complete', session_id: 's1', payload: {} }))
@@ -243,8 +243,24 @@ describe('the callers tagged with a category', () => {
     alerts({ taskUpdates: false })
     gateway.events.get('cron.changed')?.({ type: 'cron.changed', payload: {} })
 
-    expect($notifications.get()).toMatchObject([{ title: 'Tasks updated', key: 'cron.changed' }])
+    expect($notifications.get()).toMatchObject([{ title: 'Tasks updated', key: 'cron.changed', category: 'taskUpdate' }])
     expect($toasts.get()).toEqual([])
+  })
+
+  it('tags each caller with its own category, and leaves untagged ones without', () => {
+    $chats.set({ s1: emptyChat('s1', 'stored-1') })
+    $activeChatId.set('s2')
+    request('r5', 'approval', { description: 'Move test.txt' })
+    request('r6', 'clarify', { question: 'Which folder?' })
+    gateway.any.forEach(handler => handler({ type: 'message.complete', session_id: 's1', payload: {} }))
+    gateway.events.get('notification.show')?.({ type: 'notification.show', payload: { text: 'Credits are low', level: 'warn' } })
+
+    expect($notifications.get().map(n => [n.title, n.category])).toEqual([
+      ['Hermes', undefined],
+      ['Hermes', 'toolCompletion'],
+      ['Hermes has a question', 'approval'],
+      ['Approval needed', 'approval']
+    ])
   })
 })
 

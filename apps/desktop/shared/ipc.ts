@@ -350,7 +350,7 @@ export interface CrashHelpPrefs {
 
 /** The Alerts switches in Settings > Notifications (all on by default). The bell keeps everything either way. */
 export interface NotifyPrefs {
-  /** Toast when Hermes finishes in a session the person is not looking at. */
+  /** "Finished turns": toast when Hermes finishes a turn in a session the person is not looking at. */
   toolCompletions: boolean
   /** Toast and system notification when Hermes waits for an approval or an answer. */
   approvals: boolean
