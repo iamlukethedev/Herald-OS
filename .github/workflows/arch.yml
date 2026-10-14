@@ -18,8 +18,11 @@ jobs:
   package:
     name: herald-os-bin (x86_64)
     runs-on: ubuntu-24.04
-    # Docker Hub's official image, mirrored on ECR Public: Docker Hub rate-limits the shared runners' anonymous pulls.
-    container: public.ecr.aws/docker/library/archlinux:base-devel
+    # Arch's official image as Arch publishes it to GHCR (the same build as Docker Hub's archlinux). Docker Hub
+    # rate-limits the shared runners' anonymous pulls, and ECR Public refuses them once its data limit is reached.
+    # A tag, not a digest: the image is a rolling release, and an old pin would leave archlinux-keyring too old
+    # to verify newer packages in `pacman -Syu`.
+    container: ghcr.io/archlinux/archlinux:base-devel
     steps:
       - name: Tools and the package's dependencies
         run: pacman -Syu --noconfirm --needed git nodejs npm python namcap gtk3 nss alsa-lib libsecret libnotify curl wl-clipboard wtype grim slurp
@@ -33,7 +36,10 @@ jobs:
       - name: A user to build as (makepkg refuses root)
         run: useradd -m builder && chown -R builder:builder "$GITHUB_WORKSPACE"
       - name: Build the tarball
-        run: su builder -c 'cd "$GITHUB_WORKSPACE" && npm run sync-upstream && npm ci && npm run dist:linux --workspace apps/desktop -- --x64'
+        run: |
+          # Single quotes on purpose: builder's shell expands $GITHUB_WORKSPACE.
+          # shellcheck disable=SC2016
+          su builder -c 'cd "$GITHUB_WORKSPACE" && npm run sync-upstream && npm ci && npm run dist:linux --workspace apps/desktop -- --x64'
       - name: Package it
         run: |
           tarball="$(ls "$GITHUB_WORKSPACE"/apps/desktop/release/herald-os-*-linux-x64.tar.gz)"
