@@ -42,7 +42,8 @@ seed_attached() {
 # Everything below changes the whole system and is meant for a throwaway VM, so this check comes
 # before anything is written, the log included.
 if [[ $DEV_VM -eq 0 ]] && ! { systemd-detect-virt --quiet --vm >/dev/null 2>&1 && seed_attached; }; then
-  cat >&2 <<EOF
+  # Builtins only, so the explanation is printed even when PATH has no cat.
+  while IFS= read -r line; do printf '%s\n' "$line"; done >&2 <<EOF
 provision.sh turns a fresh Fedora Cloud VM into the Herald OS development VM, and this machine
 does not look like one: it is not a virtual machine with the cloud-init seed (the disc labelled
 cidata or CIDATA) attached. On this machine it would:

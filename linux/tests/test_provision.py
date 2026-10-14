@@ -1,8 +1,8 @@
-"""linux/provision.sh refuses to run outside the development VM: it carries on only in a virtual
-machine with the cloud-init seed attached (labelled cidata, in any case), or when given --dev-vm,
-and otherwise exits before it writes anything. The script runs from a temporary payload folder with stand-ins for
-systemd-detect-virt, blkid and everything that would change the machine; the stand-in packages.sh
-writes down that it was reached and stops the run there."""
+"""linux/provision.sh refuses to run outside the development VM: it carries on only as root, in a
+virtual machine with the cloud-init seed attached (labelled cidata, in any case), or when given
+--dev-vm, and otherwise exits before it writes anything. The script runs from a temporary payload
+folder with stand-ins for id, systemd-detect-virt, blkid, getent and everything that would change
+the machine; the stand-in packages.sh writes down that it was reached and stops the run there."""
 
 import re
 import shutil
@@ -14,6 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 PROVISION = ROOT / "linux" / "provision.sh"
 MAKE_SEED = ROOT / "linux" / "vm" / "make-seed.sh"
+# Found here, because the PATH the script gets may hold nothing but the stand-ins.
+BASH = shutil.which("bash")
 
 
 def executable(path: Path, body: str) -> None:
@@ -23,9 +25,13 @@ def executable(path: Path, body: str) -> None:
 
 
 def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[str, ...] | None = None,
-              uid: int = 0, account: str | None = "hermes", env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+              uid: int = 0, account: str | None = "hermes", virt: str | None = None, path: str = "system",
+              env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
     """Runs provision.sh; `labels` are the filesystem labels blkid reports (cidata when `seed`, plus
-    the root disk's)."""
+    the root disk's). `virt` is what systemd-detect-virt finds: "vm", "container", "none" or
+    "missing" (not installed); by default "vm" or "none" as `vm` says. `path` is the script's PATH:
+    "system" (the stand-ins, then /usr/bin and /bin), "stubs" (only the stand-ins) or "empty"."""
+    virt = virt or ("vm" if vm else "none")
     payload = tmp_path / "payload"
     payload.mkdir(exist_ok=True)
     shutil.copy(PROVISION, payload / "provision.sh")
@@ -33,7 +39,17 @@ def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[st
     calls.write_text("")
     bin_dir = tmp_path / "bin"
     labels = ("fedora", *(labels if labels is not None else ("cidata",) if seed else ()))
-    executable(bin_dir / "systemd-detect-virt", f'echo "systemd-detect-virt $*" >>"$CALLS"; [ "$*" = "--quiet --vm" ] && exit {0 if vm else 1}; exit 2')
+    if virt != "missing":
+        executable(
+            bin_dir / "systemd-detect-virt",
+            'echo "systemd-detect-virt $*" >>"$CALLS"\n'
+            'case "$*" in\n'
+            f'  "--quiet --vm") exit {0 if virt == "vm" else 1} ;;\n'
+            f'  "--quiet --container") exit {0 if virt == "container" else 1} ;;\n'
+            f'  --quiet) exit {1 if virt == "none" else 0} ;;\n'
+            "esac\n"
+            "exit 2",
+        )
     executable(bin_dir / "blkid", f'echo "blkid $*" >>"$CALLS"; [ "$*" = "-s LABEL -o value" ] && {{ printf "%s\\n" {" ".join(labels)}; exit 0; }}; exit 2')
     executable(bin_dir / "id", f'echo "id $*" >>"$CALLS"; [ "$*" = -u ] && echo {uid}')
     # getent's answer when the account is missing: nothing, and exit 2.
@@ -42,8 +58,10 @@ def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[st
     executable(bin_dir / "tee", 'echo "tee $*" >>"$CALLS"; exec cat')
     executable(payload / "image" / "packages.sh", 'echo "packages.sh $*" >>"$CALLS"; exit 1')
     result = subprocess.run(
-        ["bash", str(payload / "provision.sh"), *args],
-        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls), **(env or {})},
+        [BASH, str(payload / "provision.sh"), *args],
+        env={"PATH": {"system": f"{bin_dir}:/usr/bin:/bin", "stubs": str(bin_dir), "empty": ""}[path],
+             "CALLS": str(calls), **(env or {})},
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,
@@ -65,6 +83,30 @@ def test_outside_the_development_vm_it_explains_and_changes_nothing(tmp_path, vm
                     "initramfs", "kernel arguments", "Nothing has been changed", "--dev-vm"):
         assert promise in result.stderr
     assert "Provisioning FAILED" not in result.stdout + result.stderr
+
+
+def test_a_container_is_not_the_development_vm(tmp_path):
+    result, calls = provision(tmp_path, vm=False, seed=True, virt="container")
+    assert result.returncode == 1
+    assert "systemd-detect-virt --quiet --vm" in calls
+    assert changes(calls) == []
+    assert "Nothing has been changed" in result.stderr
+
+
+def test_without_systemd_detect_virt_it_explains_and_changes_nothing(tmp_path):
+    result, calls = provision(tmp_path, vm=True, seed=True, virt="missing", path="stubs")
+    assert result.returncode == 1
+    assert calls == ["id -u"]
+    for promise in ("SELinux to permissive", "kernel arguments", "Nothing has been changed", "--dev-vm"):
+        assert promise in result.stderr
+
+
+@pytest.mark.parametrize("args", [(), ("--dev-vm",)], ids=["looking", "--dev-vm"])
+def test_with_an_empty_path_it_changes_nothing(tmp_path, args):
+    result, calls = provision(tmp_path, *args, vm=True, seed=True, path="empty")
+    assert result.returncode == 1
+    assert calls == []
+    assert "Nothing has been changed" in result.stderr
 
 
 def test_the_explanation_names_the_account_it_would_log_in(tmp_path):
