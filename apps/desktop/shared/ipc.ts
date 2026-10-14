@@ -451,6 +451,19 @@ export interface SetupResult {
   error?: string
 }
 
+/** A macOS permission Herald OS needs to type into another app (it pastes through System Events). */
+export type TypingPermission = 'accessibility' | 'automation'
+
+/** What became of text sent to the focused app. */
+export interface TypeResult {
+  /** Typed (or pasted) into the focused app. */
+  typed: boolean
+  /** Left on the clipboard instead, for the person to paste. */
+  copied: boolean
+  /** macOS: the permission that kept it from being typed, when that is why. */
+  missing?: TypingPermission
+}
+
 export interface CatalogResult {
   ok: boolean
   /** The last lines of the installer's output. */

@@ -19,6 +19,7 @@ import {
   type CatalogResult,
   type SetupResult,
   type SetupState,
+  type TypeResult,
   type ClipboardEntry,
   type ContextReturn,
   type ContextSnapshot,
@@ -355,8 +356,8 @@ const api = {
     finish: (options: { later?: boolean } = {}): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupFinish, options)
   },
   dictation: {
-    /** Type text into the focused app (any app); `copied` when it could only be left on the clipboard. */
-    type: (text: string, options: { submit?: boolean; delayMs?: number } = {}): Promise<{ typed: boolean; copied: boolean }> => ipcRenderer.invoke(IPC.dictationType, text, options)
+    /** Type text into the focused app (any app); `copied` when it could only be left on the clipboard, `missing` when a macOS permission is why. */
+    type: (text: string, options: { submit?: boolean; delayMs?: number } = {}): Promise<TypeResult> => ipcRenderer.invoke(IPC.dictationType, text, options)
   },
   events: {
     /** Events Herald OS saw lately (login, wake, crash, low battery, …), newest first. */
