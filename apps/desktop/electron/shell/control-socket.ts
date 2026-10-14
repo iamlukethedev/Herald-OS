@@ -4,6 +4,7 @@ import path from 'node:path'
 import { HERALD_EVENT_NAMES, isEventName } from '../../shared/events.ts'
 import type { HeraldOSPrefs, ShellCommand } from '../../shared/ipc.ts'
 import { isHexColor, THEME_COLOR_KEYS, type ThemeColors, type ThemeSpec } from '../../shared/theme.ts'
+import { allowAttachments } from '../attachments.ts'
 import { events } from '../events/bus.ts'
 import { hostPlatform } from '../platform/index.ts'
 import { log } from '../log.ts'
@@ -173,6 +174,12 @@ export class ControlSocket {
 
     if (OVERLAY_MODES.has(cmd)) {
       const focused = this.shell.wm?.focusedWindow() ?? null
+
+      // Files named on the herald-os command line are the person's choice, like the file dialog's.
+      if (request.attachments?.length) {
+        allowAttachments(request.attachments)
+      }
+
       const command: ShellCommand = {
         type: cmd,
         args,

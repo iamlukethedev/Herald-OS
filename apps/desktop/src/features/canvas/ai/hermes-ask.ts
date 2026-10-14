@@ -4,6 +4,7 @@
  * on Linux), where it is sent as a prompt.
  */
 
+import { hermesReadsLocalFiles } from '../../../store/attachments.ts'
 import { isPanels, relayToMain } from '../../../store/shell.ts'
 import { describeLayers } from '../agent-model.ts'
 import type { CanvasDocument } from '../engine/document.ts'
@@ -22,6 +23,11 @@ const rawOf = (raster: Raster) => ({ width: raster.width, height: raster.height,
 
 /** The image as Hermes should find it: saved (so its project on disk is current), or the one in front. */
 async function contextOf(doc: CanvasDocument): Promise<ImageContext> {
+  // Hermes opens the project, and places what it makes with the canvas tool, on this computer.
+  if (!hermesReadsLocalFiles()) {
+    throw new Error('Canvas AI needs Hermes on this computer, and the Hermes Herald OS is attached to runs elsewhere')
+  }
+
   if (!doc.path && isPanels) {
     throw new Error('Save the image first, so Hermes can open it')
   }

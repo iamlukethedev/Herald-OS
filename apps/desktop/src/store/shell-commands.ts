@@ -8,7 +8,7 @@ import { offerCrashHelp } from './crashes.ts'
 import { openEmojiPicker } from './emoji.ts'
 import { $notificationsOpen, notify } from './notifications.ts'
 import { runCommand } from './os-commands.ts'
-import { isMainSurface, onShellCommand, openSurface } from './shell.ts'
+import { isMainSurface, isPanels, onShellCommand, openSurface } from './shell.ts'
 import { openStatusPanel } from './status-panel.ts'
 import { $screensaverUp } from './switches.ts'
 import { $applicationsOpen, openAsk, toggleCommandBar } from './surface.ts'
@@ -40,6 +40,17 @@ async function pickWallpaper(): Promise<void> {
   }
 }
 
+/** The ask panel again, with the question and files it sent: it closed on Send, before they could fail to reach Hermes. */
+function askAgain(command: ShellCommand): void {
+  const draft = { text: command.text ?? '', attachments: command.attachments ?? [] }
+
+  if (isPanels) {
+    openSurface('command', { type: 'ask', ...draft, context: command.context })
+  } else {
+    openAsk(draft)
+  }
+}
+
 export function handleShellCommand(command: ShellCommand): void {
   switch (command.type) {
     case 'show-page': {
@@ -52,9 +63,10 @@ export function handleShellCommand(command: ShellCommand): void {
       return
     }
     case 'send-prompt': {
-      const text = composePrompt(command.text ?? '', command.context, command.attachments)
+      const text = composePrompt(command.text ?? '', command.context)
+      const attachments = command.attachments ?? []
 
-      if (!text) {
+      if (!text && attachments.length === 0) {
         return
       }
 
@@ -62,10 +74,16 @@ export function handleShellCommand(command: ShellCommand): void {
       openSurface('main')
 
       // A bare slash command from the palette runs as one; anything with context or files is a prompt.
-      if (text.startsWith('/') && !command.context && !command.attachments?.length) {
+      if (text.startsWith('/') && !command.context && attachments.length === 0) {
         void runSlash(text)
       } else {
-        void sendPrompt(text)
+        void sendPrompt(text, { attachments }).catch((error: unknown) => {
+          notify({ title: 'Not sent to Hermes', body: error instanceof Error ? error.message : String(error), level: 'error' })
+
+          if (attachments.length > 0) {
+            askAgain(command)
+          }
+        })
       }
 
       return

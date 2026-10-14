@@ -57,6 +57,12 @@ export function NetworkSection() {
             too, start Herald OS with HERALD_OS_BACKEND_URL and HERALD_OS_BACKEND_TOKEN.
           </InlineNote>
         )}
+        {backend.runtime?.kind === 'attached' && backend.localFiles === false && (
+          <InlineNote tone="info">
+            This Hermes did not read a file Herald wrote on this computer, so Herald treats it as running elsewhere (another computer, through a tunnel, say): files you attach are uploaded to it, it works
+            in its own folders, and it knows your other files are out of its reach. Canvas AI needs a Hermes that reads this computer's files. If this one does run here, update it with `hermes update`.
+          </InlineNote>
+        )}
       </SettingsGroup>
 
       <McpServersGroup />

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { clipboard, ClipboardItem, ipcMain, nativeImage, systemPreferences } from 'electron'
 import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, type ScreenshotMode } from '../../shared/ipc.ts'
+import { allowAttachments } from '../attachments.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { pickColourMac, readImageMac } from '../platform/mac-tools.ts'
@@ -260,8 +261,17 @@ function userImagePath(target: string, mustExist: boolean): string {
 export function registerCaptureIpc(onRecording: (state: RecordingState) => void): void {
   const recorder = new Recorder(onRecording)
 
-  ipcMain.handle(IPC.captureRegion, () => captureRegion())
-  ipcMain.handle(IPC.captureScreenshot, (_event, mode: ScreenshotMode) => captureScreenshot(mode === 'window' || mode === 'screen' ? mode : 'region'))
+  // A capture is something the person may then ask Hermes about.
+  const attachable = (file: string | null): string | null => {
+    if (file) {
+      allowAttachments([file])
+    }
+
+    return file
+  }
+
+  ipcMain.handle(IPC.captureRegion, async () => attachable(await captureRegion()))
+  ipcMain.handle(IPC.captureScreenshot, async (_event, mode: ScreenshotMode) => attachable(await captureScreenshot(mode === 'window' || mode === 'screen' ? mode : 'region')))
   ipcMain.handle(IPC.captureRecord, (_event, action: 'start' | 'stop' | 'toggle', options: { region?: boolean; audio?: boolean } = {}) => {
     const start = action === 'start' || (action === 'toggle' && !recorder.state().recording)
 

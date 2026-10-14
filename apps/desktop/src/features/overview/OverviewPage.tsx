@@ -46,9 +46,17 @@ export function OverviewPage() {
   const greeting = `${greetingFor(now)}${firstName ? `, ${firstName}` : ''}.`
   const missions = [...active, ...review].slice(0, MISSIONS_SHOWN)
 
-  const submit = async (text: string) => {
+  const submit = async (text: string, attachments: string[] = []) => {
+    if (attachments.length === 0) {
+      showPage('hermes')
+      await (text.startsWith('/') ? runSlash(text) : sendPrompt(text))
+
+      return
+    }
+
+    // The Overview stays until the files have reached Hermes, so a failure comes back to its composer.
+    await sendPrompt(text, { attachments })
     showPage('hermes')
-    await (text.startsWith('/') ? runSlash(text) : sendPrompt(text))
   }
 
   const startMission = async () => {

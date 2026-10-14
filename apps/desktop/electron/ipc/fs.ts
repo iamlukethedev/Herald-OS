@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { type DirEntry, type FilePreview, IPC, type TreeEntry } from '../../shared/ipc.ts'
+import { allowAttachments, readAttachment } from '../attachments.ts'
 import { run } from '../platform/exec.ts'
 import { type EditorTarget, hostPlatform } from '../platform/index.ts'
 import { WindowWatches } from './watches.ts'
@@ -381,8 +382,17 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
 
     const result = await dialog.showOpenDialog(win, { properties: [options.directory ? 'openDirectory' : 'openFile', ...(options.multiple ? ['multiSelections' as const] : [])] })
 
-    return result.canceled ? [] : result.filePaths
+    if (result.canceled) {
+      return []
+    }
+
+    if (!options.directory) {
+      allowAttachments(result.filePaths)
+    }
+
+    return result.filePaths
   })
+  ipcMain.handle(IPC.fsAttachment, (_event, target: string, maxBytes: number) => readAttachment(target, maxBytes))
   ipcMain.handle(IPC.fsDirSize, (_event, target: string) => dirSize(target))
   ipcMain.handle(IPC.fsReadDir, (_event, target: string) => readDir(target))
   ipcMain.handle(IPC.fsReadFile, (_event, target: string) => readFile(target))

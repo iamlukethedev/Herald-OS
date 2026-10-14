@@ -70,7 +70,8 @@ REST via `src/lib/rest.ts` (`rest.get/post/put/del`, paths under `/api/`). Loade
 
 Stores (nanostores; subscribe with `useStore`):
 
-- `store/chat.ts`: `$chats`, `$activeChat`, `createChat`, `openStoredSession`, `sendPrompt`, `runSlash`, `interruptChat`.
+- `store/chat.ts`: `$chats`, `$activeChat`, `createChat`, `openStoredSession`, `sendPrompt` (with `attachments`), `runSlash`, `interruptChat`.
+- `store/attachments.ts`: `attachFiles` (a prompt's files, uploaded into the session with `file.attach` when `$backend.localFiles` is false: an attached Hermes that did not read back a file Herald wrote, see `electron/backend/local-files.ts`), `$uploading`, `hermesReadsLocalFiles`; main reads only files the person picked or Herald made for a prompt (`electron/attachments.ts`). The composers' chips are `features/hermes/ComposerFiles.tsx`.
 - `store/sessions.ts`: `$sessions` (rows), `$runtimeIds` (stored -> runtime id), `refreshSessions`, `deleteSession`.
 - `store/missions.ts`: `$missions`, `$activeMissions`, `$reviewMissions`, `$completedMissions`, `$todos`, `$artifacts`, `$allArtifacts`, `$activity`, `markReviewed`. A Mission is a derived view of a session (goal, todo steps, progress %, agents, artifacts, status active|review|queued|completed).
 - `store/agents.ts`: `$agents` (live subagents).

@@ -1,7 +1,9 @@
 import type { GatewayEvent, SessionCreateResult, SessionResumeResult } from '@herald-os/client'
 import { atom, computed, map } from 'nanostores'
+import { ELSEWHERE_NOTE } from '../lib/attachments.ts'
 import { appendSystem, appendUser, type ChatState, emptyChat, fromTranscript, reduceChatEvent } from '../lib/chat-model.ts'
 import { currentModelText } from '../lib/model-provider.ts'
+import { attachFiles, hermesReadsLocalFiles } from './attachments.ts'
 import { $env, $prefs } from './backend.ts'
 import { gatewayRequest, onAnyGatewayEvent } from './gateway.ts'
 import { notify } from './notifications.ts'
@@ -85,8 +87,11 @@ export function bindChatEvents(): () => void {
 
 /** A new chat; it becomes the one the Hermes window shows unless `activate` is false, and then its turns end without a notification. */
 export async function createChat(options: { cwd?: string; title?: string; activate?: boolean } = {}): Promise<ChatState> {
-  const cwd = options.cwd ?? $prefs.get().defaultCwd ?? $env.get()?.homeDir ?? null
-  const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null })
+  const local = hermesReadsLocalFiles()
+  // A Hermes that cannot read this computer's files works in its own folders, and knows the person's files are elsewhere.
+  const cwd = options.cwd ?? (local ? ($prefs.get().defaultCwd ?? $env.get()?.homeDir ?? null) : null)
+  const seed = local ? {} : { messages: [{ role: 'user', content: ELSEWHERE_NOTE, display_kind: 'hidden' }] }
+  const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null, ...seed })
   const state = adopt(result)
   $chats.setKey(state.sessionId, state)
 
@@ -130,13 +135,19 @@ export interface SendPromptOptions {
   voiceContext?: string
   /** The user spoke over an in-flight reply; the backend notes the interruption for the model. */
   interrupted?: boolean
+  /** Files on this computer (absolute paths) for Hermes to receive with the prompt; see store/attachments.ts. */
+  attachments?: readonly string[]
 }
 
-/** Send a prompt to the active chat, creating one when none exists. Resolves with the session id used. */
+/**
+ * Send a prompt to the active chat, creating one when none exists. Resolves with the session id
+ * used. Rejects, before anything is sent, when an attachment cannot reach Hermes.
+ */
 export async function sendPrompt(text: string, options: SendPromptOptions = {}): Promise<string | null> {
   const trimmed = text.trim()
+  const files = options.attachments ?? []
 
-  if (!trimmed) {
+  if (!trimmed && files.length === 0) {
     return null
   }
 
@@ -146,16 +157,18 @@ export async function sendPrompt(text: string, options: SendPromptOptions = {}):
     sid = (await createChat({ cwd: options.cwd })).sessionId
   }
 
+  const attached = await attachFiles(sid, files, $chats.get()[sid]?.info.desktop_contract)
+  const message = [trimmed, attached].filter(Boolean).join('\n')
   const before = $chats.get()[sid]
 
   if (before) {
-    $chats.setKey(sid, appendUser(before, trimmed))
+    $chats.setKey(sid, appendUser(before, message))
   }
 
   try {
     await gatewayRequest('prompt.submit', {
       session_id: sid,
-      text: trimmed,
+      text: message,
       surface: options.surface ?? SESSION_SOURCE,
       ...(options.surface && options.voiceContext ? { voice_context: options.voiceContext } : {}),
       ...(options.interrupted ? { interrupted: true } : {})

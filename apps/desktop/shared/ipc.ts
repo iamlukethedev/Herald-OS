@@ -34,6 +34,13 @@ export interface BackendState {
   bridgeError?: string
   /** While waiting on the Herald OS image: how installing Hermes Agent goes (offline, installing, retrying). */
   install?: string
+  /**
+   * Whether Hermes reads this computer's files at their own paths: true for the backend Herald
+   * starts; for an attached one (HERALD_OS_BACKEND_URL, which a tunnel can bring from another
+   * computer), only when it read back a file Herald had just written. When false, attachments
+   * are uploaded to it. Unset until the backend is ready.
+   */
+  localFiles?: boolean
 }
 
 export interface RestRequest {
@@ -363,6 +370,13 @@ export interface FilePreview {
   content?: string
   truncated?: boolean
   mime?: string
+}
+
+/** A file read whole for Hermes to receive (`file.attach`) when it cannot read this computer's files. */
+export interface AttachmentFile {
+  name: string
+  size: number
+  dataUrl: string
 }
 
 export interface TerminalCreateOptions {
@@ -770,6 +784,8 @@ export const IPC = {
   fsTrash: 'herald-os:fs:trash',
   fsExportPdf: 'herald-os:fs:export-pdf',
   fsPickFiles: 'herald-os:fs:pick-files',
+  /** A file to upload to Hermes, read whole: only ones the person picked or Herald made for a prompt. */
+  fsAttachment: 'herald-os:fs:attachment',
   fsDirSize: 'herald-os:fs:dir-size',
   /** A bounded recursive listing of a project folder (build output and dependencies skipped). */
   fsListTree: 'herald-os:fs:list-tree',

@@ -454,6 +454,18 @@ and the backend's token in `HERALD_OS_BACKEND_TOKEN` (or `~/.config/herald-os/ba
 then attaches to it and writes `~/.hermes/herald-os/control.json` (mode 0600) so the bridge plugin
 can still drive Herald's UI.
 
+**A Hermes on another computer.** The address must be a loopback one, but it can be the near end of
+a tunnel (`ssh -L <port>:127.0.0.1:<port> other-computer`) to Hermes elsewhere. When Herald attaches,
+it writes a small file and asks Hermes to read it back. Unless Hermes does (an older Hermes cannot be
+asked; `hermes update` fixes that), Herald takes it that the two do not share files and works around
+it: files attached in the composers, the command bar or with a screenshot are uploaded into the
+session before the prompt goes out (Hermes keeps them in its home's `attachments/` folder, and the
+message names that copy), new chats start in Hermes's own folders rather than at a path on this
+computer, and Hermes is told that paths you mention are on your computer, so it asks you to attach a
+file instead of searching for it. A file over 100 MB (11 MB for an older Hermes) is refused before
+anything is sent, and the draft stays in the composer. Canvas AI needs a Hermes that reads this
+computer's files, so it says so instead.
+
 ## Known limits
 
 - No calendar (`calendar.today` reports `unavailable`); Evolution Data Server integration is later.

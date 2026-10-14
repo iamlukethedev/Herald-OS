@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
+  type AttachmentFile,
   type AudioWsKind,
   type AuditEntry,
   type BackendState,
@@ -147,6 +148,8 @@ const api = {
     trash: (targets: string[]): Promise<void> => ipcRenderer.invoke(IPC.fsTrash, targets),
     exportPdf: (html: string, suggestedName: string): Promise<string | null> => ipcRenderer.invoke(IPC.fsExportPdf, html, suggestedName),
     pickFiles: (options?: { directory?: boolean; multiple?: boolean }): Promise<string[]> => ipcRenderer.invoke(IPC.fsPickFiles, options ?? {}),
+    /** A picked file (or one Herald made for a prompt), read whole up to `maxBytes`, for Hermes to receive. */
+    attachment: (target: string, maxBytes: number): Promise<AttachmentFile> => ipcRenderer.invoke(IPC.fsAttachment, target, maxBytes),
     dirSize: (target: string): Promise<{ bytes: number; files: number; complete: boolean }> => ipcRenderer.invoke(IPC.fsDirSize, target),
     listTree: (root: string, limit = 3000): Promise<{ entries: TreeEntry[]; truncated: boolean }> => ipcRenderer.invoke(IPC.fsListTree, root, limit),
     watchTree: (root: string): Promise<string> => ipcRenderer.invoke(IPC.fsWatchTree, root),
