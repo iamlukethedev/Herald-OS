@@ -155,6 +155,9 @@ else
   flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 fi
 systemctl enable NetworkManager bluetooth greetd || true
+# A text console on Ctrl+Alt+F2 whatever greetd does: on a switched system greetd waits for
+# herald-os-login.service, and when that fails this is where to read why (docs/LINUX.md).
+systemctl enable getty@tty2.service || true
 systemctl enable plocate-updatedb.timer || true
 systemctl set-default graphical.target
 # The firewall: nothing comes in except LocalSend and mDNS (and SSH on the development VM).
