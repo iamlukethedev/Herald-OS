@@ -920,11 +920,38 @@ def test_qr_link_shows_where_it_points(monkeypatch, capsys):
     assert capsys.readouterr().out == "Link copied: example.com\n"
 
 
-def test_qr_older_wl_clipboard_still_copies(monkeypatch):
-    copies, _ = qr_scan(monkeypatch, OTP, sensitive_ok=False)
+@pytest.mark.parametrize("code", ["https://example.com/menu", "Table 4"])
+def test_qr_older_wl_clipboard_still_copies_links_and_text(monkeypatch, capsys, code):
+    copies, notes = qr_scan(monkeypatch, code, sensitive_ok=False)
     assert cli.capture_qr([]) == 0
-    assert [argv for argv, _ in copies] == [["wl-copy", "--sensitive"], ["wl-copy"]]
-    assert copies[-1][1] == OTP.encode()
+    assert copies == [(["wl-copy", "--sensitive"], code.encode()), (["wl-copy"], code.encode())]
+    assert notes == [(cli.describe_qr(code)["caption"], "")]
+
+
+@pytest.mark.parametrize("code", [OTP, "WIFI:S:Home;T:WPA;P:hunter22;;", "https://example.com/reset?token=0000aaaa1111bbbb", "ab12cd34ef56", "https://example.com\nWIFI:S:Home;P:hunter22;;"])
+def test_qr_secret_is_not_copied_plainly_when_it_cannot_be_marked(monkeypatch, capsys, code):
+    copies, notes = qr_scan(monkeypatch, code, sensitive_ok=False)
+    with pytest.raises(SystemExit) as stopped:
+        cli.capture_qr(["--json"])
+    assert stopped.value.code == 1
+    assert copies == [(["wl-copy", "--sensitive"], code.encode())]
+    assert notes == [("Code not copied", "It looks secret, and this clipboard cannot keep it out of clipboard history")]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not copied" in captured.err and "wl-clipboard 2.2" in captured.err
+    assert code not in captured.err and "hunter22" not in captured.err
+
+
+def test_qr_plain_fallback_that_fails_is_reported(monkeypatch, capsys):
+    _, notes = qr_scan(monkeypatch, "Table 4", sensitive_ok=False)
+    real_run = cli.subprocess.run
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1) if argv == ["wl-copy"] else real_run(argv, **kwargs))
+    with pytest.raises(SystemExit) as stopped:
+        cli.capture_qr([])
+    assert stopped.value.code == 1
+    assert notes == [("Code not copied", "The clipboard did not take it")]
+    captured = capsys.readouterr()
+    assert captured.out == "" and "wl-copy failed" in captured.err
 
 
 def test_qr_codes_come_from_zbar_xml_one_by_one():

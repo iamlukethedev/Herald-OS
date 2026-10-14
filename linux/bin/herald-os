@@ -1012,14 +1012,17 @@ def zbar_codes(xml: bytes) -> list[str]:
     return codes
 
 
-def copy_sensitive(text: str) -> None:
-    """On the clipboard, marked as a secret so clipboard history (cliphist) skips it.
+def copy_sensitive(text: str, *, plain_fallback: bool) -> bool:
+    """On the clipboard, marked as a secret so clipboard history (cliphist) skips it; False if not copied.
 
-    wl-clipboard before 2.2 has no --sensitive; there it is copied plainly so pasting still works.
+    wl-clipboard before 2.2 has no --sensitive. There, with plain_fallback (ordinary links and text),
+    it is copied plainly so pasting still works; a secret is not copied at all, since a plain copy
+    would stay in clipboard history.
     """
     quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "check": False}
-    if subprocess.run(["wl-copy", "--sensitive"], input=text.encode(), **quiet).returncode != 0:
-        subprocess.run(["wl-copy"], input=text.encode(), **quiet)
+    if subprocess.run(["wl-copy", "--sensitive"], input=text.encode(), **quiet).returncode == 0:
+        return True
+    return plain_fallback and subprocess.run(["wl-copy"], input=text.encode(), **quiet).returncode == 0
 
 
 QR_USAGE = "capture qr [--json | --print]"
@@ -1030,7 +1033,8 @@ def capture_qr(args: list[str]) -> int:
 
     The notification and the output say what kind of thing it is (a link's host, at most). --json
     prints {kind, caption, description, text?} for the shell; --print prints the contents, for scripts.
-    A selection with several codes is refused: nothing is copied.
+    A selection with several codes is refused: nothing is copied. So is a secret that cannot be
+    marked sensitive (wl-clipboard before 2.2), rather than copied where clipboard history keeps it.
     """
     if len(args) > 1 or (args and args[0] not in ("--json", "--print")):
         die(f"{QR_USAGE} (one option at most)" if set(args) == {"--json", "--print"} else QR_USAGE, 2)
@@ -1048,8 +1052,13 @@ def capture_qr(args: list[str]) -> int:
         notify("Several codes found", "Nothing was copied; select just one code")
         die("several codes in that selection; select just one", 1)
     text = codes[0]
-    copy_sensitive(text)
     reading = describe_qr(text)
+    if not copy_sensitive(text, plain_fallback="text" in reading):
+        if "text" in reading:
+            notify("Code not copied", "The clipboard did not take it")
+            die("not copied: wl-copy failed", 1)
+        notify("Code not copied", "It looks secret, and this clipboard cannot keep it out of clipboard history")
+        die("not copied: the code looks secret and wl-copy --sensitive failed (it needs wl-clipboard 2.2 or later); a plain copy would stay in clipboard history", 1)
     notify(reading["caption"])
     if args == ["--print"]:
         print(text)
