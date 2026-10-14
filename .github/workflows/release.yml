@@ -90,7 +90,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run pack:mac --workspace apps/desktop -- -c.mac.notarize=false
       - name: Check the Apple Silicon and Intel builds
-        # One app, DMG and zip per architecture, each with the node-pty prebuild for its own.
+        # One app, DMG and zip per architecture; every Mach-O in each app is built for its architecture alone.
         run: node apps/desktop/scripts/check-mac-builds.mjs
       - name: Notarize and staple the DMGs
         if: steps.signing.outputs.signed == 'true'

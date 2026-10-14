@@ -204,6 +204,9 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "files": [
+        "!**/node_modules/node-pty/build/**"
+      ],
       "extraResources": [
         {
           "from": "../../plugins/herald-os-bridge",
