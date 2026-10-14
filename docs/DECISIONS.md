@@ -1028,3 +1028,21 @@ handling), and the Sound panel on macOS showed one placeholder output and no inp
   only to order the list, never to decide.
 - **Carried forward, not yet done:** the speaker picker (and `voice.outputDevice` with it), a
   Herald-only output volume, and a "no sound from this device" warning after a warm-up window.
+
+## ADR-025: Intel Macs get their own build, not a universal one
+
+The macOS release ships `HeraldOS-<version>-mac-arm64` and `-mac-x64` DMGs and zips, packed in one
+`electron-builder --mac --arm64 --x64` run on the Apple Silicon runner (#13).
+
+- **Nothing in the app is Apple Silicon-only.** node-pty, the only native module, ships `darwin-x64`
+  prebuilds beside `darwin-arm64`, and `asarUnpack` already carries both; the macOS helpers are
+  JavaScript for Automation run by `osascript`; tool lookup covers both Homebrew prefixes. So the
+  Intel app is the same build for another architecture, and no x64 runner is needed.
+- **`scripts/check-mac-builds.mjs` guards the pairing.** It reads the Mach-O headers, so it runs on
+  any machine, and fails the release job unless each architecture has exactly one app whose main
+  binary and node-pty `pty.node` match it, plus a DMG and a zip.
+- **Rejected for now: one universal DMG.** It doubles every download, and `@electron/universal`
+  stops on the node-pty prebuilds that appear unchanged in both halves unless each is listed in
+  `mac.x64ArchFiles`. The arm64 file names stay as they were, so existing links keep working.
+- **Untested on Intel hardware.** CI checks what the Intel app is built for, not that it runs; the
+  README says so until someone tries it on an Intel Mac.
