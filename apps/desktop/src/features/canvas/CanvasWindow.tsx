@@ -140,7 +140,7 @@ function Tabs({ documents, active }: { documents: CanvasDocument[]; active: Canv
               event.stopPropagation()
               $dialog.set({ kind: 'close', key: doc.key })
             }}
-            className="grid size-5 place-items-center rounded text-fg-3 opacity-0 hover:bg-white/10 hover:text-fg group-hover:opacity-100"
+            className="grid size-5 place-items-center rounded text-fg-3 reveal hover:bg-white/10 hover:text-fg"
           >
             <IconX size={12} />
           </button>

@@ -262,7 +262,7 @@ export function TemplateGallery() {
         <div className="w-full truncate text-center text-[12px] text-fg">{card.name}</div>
       )}
       {card.saved && renaming !== card.saved.id && (
-        <div className={cn('absolute top-3 right-3 flex gap-1', index === selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')} onDoubleClick={(event) => event.stopPropagation()}>
+        <div className={cn('absolute top-3 right-3 flex gap-1', index === selected ? 'opacity-100' : 'reveal')} onDoubleClick={(event) => event.stopPropagation()}>
           <CardAction
             label={`Rename ${card.name}`}
             onClick={() => {

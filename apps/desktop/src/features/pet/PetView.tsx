@@ -189,11 +189,11 @@ export function PetView({ sheet, scale, snapshot, ui, extras, layout, pose, pose
           </span>
         )}
         {note && (
-          <span className="group/note absolute bottom-0 left-0 flex items-center" onPointerDown={stop} onClick={stop}>
+          <span className="group absolute bottom-0 left-0 flex items-center" onPointerDown={stop} onClick={stop}>
             <button type="button" title={note.text} aria-label={note.text} onClick={() => petAct({ type: 'openNote' })} className="flex size-6 items-center justify-center rounded-full bg-bg-elevated text-accent-strong shadow hover:bg-surface-3">
               {note.kind === 'update' ? <IconBox size={14} /> : <IconNote size={14} />}
             </button>
-            <button type="button" aria-label="Not now" title="Not now" onClick={() => petAct({ type: 'dismissNote' })} className="ml-0.5 hidden size-4 items-center justify-center rounded-full bg-bg-elevated text-fg-3 group-hover/note:flex hover:text-fg">
+            <button type="button" aria-label="Not now" title="Not now" onClick={() => petAct({ type: 'dismissNote' })} className="reveal ml-0.5 flex size-4 items-center justify-center rounded-full bg-bg-elevated text-fg-3 hover:text-fg">
               <IconX size={10} />
             </button>
           </span>

@@ -212,7 +212,7 @@ export function FileRow({ item, selected, renaming, onSelect, onOpen, onAction, 
       <span className="w-20 shrink-0 text-right text-[11.5px] tabular-nums text-fg-4">{item.kind === 'directory' ? '' : formatBytes(item.size)}</span>
       <span className="w-20 shrink-0 text-right text-[11.5px] text-fg-4">{formatRelative(item.modifiedAt)}</span>
       <span className="relative shrink-0" onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
-        <MoreButton aria-label={`More actions for ${item.name}`} onClick={() => setMenu(open => !open)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg aria-expanded:opacity-100" aria-expanded={menu} />
+        <MoreButton aria-label={`More actions for ${item.name}`} onClick={() => setMenu(open => !open)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 reveal hover:bg-white/10 hover:text-fg" aria-expanded={menu} />
         {menu && <Menu items={buildMenu(item, onAction)} onClose={() => setMenu(false)} className="top-8" />}
       </span>
     </div>

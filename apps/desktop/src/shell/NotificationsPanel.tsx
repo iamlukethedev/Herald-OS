@@ -83,7 +83,7 @@ export function NotificationsPanel() {
                     type="button"
                     aria-label={t('notifications.dismiss')}
                     onClick={() => dismissNotification(item.id)}
-                    className="-mr-1 flex size-6 shrink-0 items-center justify-center rounded-xs text-fg-4 opacity-0 group-hover:opacity-100 hover:text-fg focus-visible:opacity-100"
+                    className="-mr-1 flex size-6 shrink-0 items-center justify-center rounded-xs text-fg-4 reveal hover:text-fg"
                   >
                     <IconX size={13} />
                   </button>

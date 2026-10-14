@@ -109,7 +109,7 @@ export function SessionList() {
                     forgetChat(runtimeId)
                   }
                 }}
-                className="mr-1 hidden size-6 shrink-0 items-center justify-center rounded-xs text-fg-4 hover:text-danger group-hover:flex"
+                className="reveal mr-1 flex size-6 shrink-0 items-center justify-center rounded-xs text-fg-4 hover:text-danger"
               >
                 <IconTrash size={13} />
               </button>

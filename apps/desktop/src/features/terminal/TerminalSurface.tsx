@@ -166,7 +166,7 @@ export function TerminalSurface() {
             <button type="button" onClick={() => setActive(tab.id)} className="font-mono">
               {tab.title}
             </button>
-            <button type="button" aria-label="Close terminal" onClick={() => close(tab.id)} className="flex size-5 items-center justify-center rounded-xs text-fg-4 opacity-0 group-hover:opacity-100 hover:text-fg">
+            <button type="button" aria-label="Close terminal" onClick={() => close(tab.id)} className="flex size-5 items-center justify-center rounded-xs text-fg-4 reveal hover:text-fg">
               <IconX size={12} />
             </button>
           </div>

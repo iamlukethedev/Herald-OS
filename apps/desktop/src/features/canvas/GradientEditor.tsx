@@ -316,7 +316,7 @@ function GradientEditor({ onClose, at }: { onClose: () => void; at: { left: numb
                 title={`Forget ${preset.name}`}
                 aria-label={`Forget ${preset.name}`}
                 onClick={() => forgetGradient(preset.name)}
-                className="absolute -top-1.5 -right-1.5 hidden size-4 place-items-center rounded-full bg-bg-elevated text-fg-2 ring-1 ring-line group-hover:grid hover:text-fg"
+                className="reveal absolute -top-1.5 -right-1.5 grid size-4 place-items-center rounded-full bg-bg-elevated text-fg-2 ring-1 ring-line hover:text-fg"
               >
                 <IconX size={9} />
               </button>

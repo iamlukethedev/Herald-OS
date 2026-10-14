@@ -150,7 +150,7 @@ export function SystemSurface() {
               <td className="py-1.5 pr-3 text-right tabular-nums text-fg-2">{formatBytes(proc.rssBytes, 0)}</td>
               <td className="truncate py-1.5 text-fg-3">{proc.user}</td>
               <td className="py-1.5 text-right">
-                <button type="button" onClick={() => askHermes(`Tell me about the process "${proc.name}" (pid ${proc.pid}) that is using ${proc.cpuPercent.toFixed(0)}% CPU. Should I stop it? If I confirm, stop it.`)} className="text-[11.5px] text-fg-4 opacity-0 group-hover:opacity-100 hover:text-accent">
+                <button type="button" onClick={() => askHermes(`Tell me about the process "${proc.name}" (pid ${proc.pid}) that is using ${proc.cpuPercent.toFixed(0)}% CPU. Should I stop it? If I confirm, stop it.`)} className="reveal text-[11.5px] text-fg-4 hover:text-accent">
                   Ask Hermes
                 </button>
               </td>

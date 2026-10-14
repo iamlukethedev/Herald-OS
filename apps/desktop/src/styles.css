@@ -712,6 +712,28 @@ textarea {
   opacity: 0.9;
 }
 
+/*
+ * Controls that appear when their row (the nearest `group`) is hovered. Touch screens can't hover,
+ * so they always show there. Keyboard users see them while the row or the control has keyboard
+ * focus, and they stay up while a menu they opened is expanded. Use this instead of
+ * `opacity-0 group-hover:opacity-100` or `hidden group-hover:flex`.
+ */
+@utility reveal {
+  opacity: 0;
+
+  &:is(:where(.group):is(:hover, :focus-visible, :has(:focus-visible)) *),
+  &:focus-visible,
+  &:has(:focus-visible),
+  &[aria-expanded='true'],
+  &:has([aria-expanded='true']) {
+    opacity: 1;
+  }
+
+  @media (hover: none), (pointer: coarse) {
+    opacity: 1;
+  }
+}
+
 .shimmer {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.04) 100%);
   background-size: 200% 100%;
