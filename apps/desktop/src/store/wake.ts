@@ -38,25 +38,35 @@ function patch(next: Partial<WakeSnapshot>): void {
 async function startFeeding(frameLength: number): Promise<void> {
   stopFeeding()
   const slicer = new FrameSlicer(frameLength)
-  stopFeed = await subscribeMicrophone(frame => {
-    if (paused || !armed) {
-      return
-    }
-
-    for (const chunk of slicer.push(frame.pcm)) {
-      // Never let a slow backend pile up requests: drop frames when more than a few are in flight.
-      if (feedInFlight > 6) {
-        continue
+  stopFeed = await subscribeMicrophone(
+    frame => {
+      // Frames again after a failed reopen: the detector hears once more.
+      if ($wake.get().error && armed) {
+        patch({ error: null })
       }
 
-      feedInFlight++
-      gatewayRequest('wake.feed', { pcm_b64: int16ToBase64(chunk), sample_rate: TARGET_SAMPLE_RATE }, 5000)
-        .catch(() => undefined)
-        .finally(() => {
-          feedInFlight--
-        })
-    }
-  })
+      if (paused || !armed) {
+        return
+      }
+
+      for (const chunk of slicer.push(frame.pcm)) {
+        // Never let a slow backend pile up requests: drop frames when more than a few are in flight.
+        if (feedInFlight > 6) {
+          continue
+        }
+
+        feedInFlight++
+        gatewayRequest('wake.feed', { pcm_b64: int16ToBase64(chunk), sample_rate: TARGET_SAMPLE_RATE }, 5000)
+          .catch(() => undefined)
+          .finally(() => {
+            feedInFlight--
+          })
+      }
+    },
+    // The feed stays subscribed and resumes on the next device change or pick; until then the
+    // wake word cannot hear, and Settings says why.
+    error => patch({ error: `Wake word cannot hear: ${error.message}` })
+  )
 }
 
 function stopFeeding(): void {

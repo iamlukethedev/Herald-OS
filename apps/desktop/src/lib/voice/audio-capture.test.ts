@@ -127,8 +127,17 @@ class FakeAudioContext {
   }
 }
 
+const nodes: FakeWorkletNode[] = []
+
 class FakeWorkletNode {
-  port = { onmessage: null, close: () => undefined }
+  port: { onmessage: ((event: { data: Float32Array }) => void) | null; close: () => void } = { onmessage: null, close: () => undefined }
+  constructor() {
+    nodes.push(this)
+  }
+  /** One block of audio from the worklet, as the real one posts it. */
+  emit() {
+    this.port.onmessage?.({ data: new Float32Array(128).fill(0.1) })
+  }
   disconnect() {}
 }
 
@@ -179,6 +188,7 @@ beforeEach(() => {
   deviceChange = null
   userMedia.mockClear()
   contexts.length = 0
+  nodes.length = 0
 
   vi.stubGlobal('window', { heraldOS: { voice: { microphoneStatus: async () => 'granted', requestMicrophone: async () => 'granted' } } })
   vi.stubGlobal('document', { baseURI: 'file:///app/' })
@@ -382,6 +392,104 @@ describe('audio-capture reopen failures', () => {
 
     expect(holder.onFailed).toHaveBeenCalledTimes(1)
     expect(holder.onFailed.mock.calls[0][0]).toMatchObject({ reason: 'failed' })
+    warn.mockRestore()
+  })
+})
+
+describe('audio-capture frame subscribers after a failed reopen', () => {
+  async function failedReopen() {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const capture = await loadCapture()
+    const frames = vi.fn()
+    const onFailed = vi.fn()
+    await capture.subscribeMicrophone(frames, onFailed)
+
+    failRequests('NotReadableError', { all: true })
+    tracks[0].end()
+    await settle()
+
+    return { capture, frames, onFailed, warn }
+  }
+
+  async function deviceListChanges() {
+    deviceChange?.()
+    await vi.advanceTimersByTimeAsync(500)
+    await settle()
+  }
+
+  it('tells a subscriber the reopen failed and keeps it subscribed, still watching the device list', async () => {
+    const { capture, onFailed, warn } = await failedReopen()
+
+    expect(onFailed).toHaveBeenCalledTimes(1)
+    expect(onFailed.mock.calls[0][0]).toMatchObject({ name: 'MicrophoneUnavailableError', reason: 'failed' })
+    expect(capture.isMicrophoneOpen()).toBe(false)
+    expect(deviceChange).not.toBeNull()
+    warn.mockRestore()
+  })
+
+  it('reopens on the next device change, and the subscriber gets frames again', async () => {
+    const { capture, frames, warn } = await failedReopen()
+
+    userMedia.mockImplementation(getUserMedia)
+    await deviceListChanges()
+
+    expect(capture.isMicrophoneOpen()).toBe(true)
+    expect(tracks.filter(track => !track.stopped)).toHaveLength(1)
+
+    nodes[nodes.length - 1].emit()
+    expect(frames).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('reopens when the person picks a microphone after the failure', async () => {
+    const { capture, warn } = await failedReopen()
+
+    userMedia.mockImplementation(getUserMedia)
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    await settle()
+
+    expect(capture.isMicrophoneOpen()).toBe(true)
+    expect(capture.$micDevice.get()?.id).toBe(TONOR.deviceId)
+    warn.mockRestore()
+  })
+
+  it('keeps retrying under the guard: three tries, a pause, then again once the window has passed', async () => {
+    const { capture, onFailed, warn } = await failedReopen()
+    onFailed.mockClear()
+    userMedia.mockClear()
+
+    for (let i = 0; i < 4; i++) {
+      await deviceListChanges()
+    }
+
+    // The lost device's own reopen used one of the three; two more retries (one request each, as
+    // nothing is chosen), then the pause.
+    expect(userMedia).toHaveBeenCalledTimes(2)
+    expect(capture.$captureNotice.get()?.key).toBe('voice.input-retry-paused')
+
+    userMedia.mockImplementation(getUserMedia)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await deviceListChanges()
+
+    expect(capture.isMicrophoneOpen()).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('stops watching the device list once the last subscriber leaves', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const capture = await loadCapture()
+    const unsubscribe = await capture.subscribeMicrophone(() => undefined, () => undefined)
+
+    failRequests('NotReadableError', { all: true })
+    tracks[0].end()
+    await settle()
+    unsubscribe()
+
+    expect(deviceChange).toBeNull()
+    userMedia.mockClear()
+    userMedia.mockImplementation(getUserMedia)
+    await deviceListChanges()
+    expect(userMedia).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 })

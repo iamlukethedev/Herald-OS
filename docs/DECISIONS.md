@@ -999,7 +999,10 @@ handling), and the Sound panel on macOS showed one placeholder output and no inp
   device and says so. A person's picks are not counted: choosing four microphones in a row is not a
   device flapping, and the last one picked is the one used. A device that fails to open falls back
   to the system default; when that fails too, a notice is posted and the stream's holders are told
-  (`onFailed`), so Live ends with the reason rather than sending a stopped track.
+  (`onFailed`), so Live ends with the reason rather than sending a stopped track. Frame
+  subscribers are told too and stay subscribed; the device list is watched for as long as anyone
+  wants the microphone, so the next device change (or pick) tries again, under the same guard, and
+  the wake word is not left deaf.
 - **A reopen is invisible to the consumers.** Frame subscribers keep receiving frames; the WebRTC
   sender holds the stream (`holdMicrophoneStream`) and is handed the new track for `replaceTrack`,
   so a Live session survives a change of device; mute is the graph's state, applied to every

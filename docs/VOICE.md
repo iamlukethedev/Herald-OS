@@ -201,7 +201,10 @@ belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Ch
   to the system default and is remembered; when it comes back it is used again. The fallback is
   quiet: the panel names the device in use and no notice is posted. A notice is posted only when
   not even the system default can be opened (a revoked permission, say), and then a GPT-Live
-  session ends with that reason instead of sending a stopped track; or when the system keeps
+  session ends with that reason instead of sending a stopped track. The wake word and a chained
+  conversation are told as well: the wake word says in Settings that it cannot hear and stays
+  subscribed, and the next device change or pick opens the microphone again (under the same
+  guard), after which it hears once more; or when the system keeps
   changing device (three of its reopens in ten seconds). Picks the person makes never count toward
   that guard, however many in a row.
 - A device that disappears mid-conversation reopens the stream immediately, and so does a new

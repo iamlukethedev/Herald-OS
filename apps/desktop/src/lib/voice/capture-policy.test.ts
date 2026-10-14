@@ -138,6 +138,14 @@ describe('reduceCapture', () => {
     expect(reduceCapture(state, { kind: 'devices', target: TONOR }, 10).action).toEqual({ kind: 'none' })
   })
 
+  it('retries from nothing open on a device change, even mid-conversation, and counts it', () => {
+    const failed = { ...reduceCapture(open(initialCaptureState(), 'default', 'g-tonor'), { kind: 'closed' }, 1).state, conversing: true }
+    const { action, state } = reduceCapture(failed, { kind: 'devices', target: SYSTEM }, 10)
+    expect(action).toEqual({ kind: 'reopen', deviceId: 'i-airpods', because: 'devices' })
+    expect(state.attempts).toEqual([10])
+    expect(reduceCapture(failed, { kind: 'devices', target: NOTHING }, 10).action).toEqual({ kind: 'none' })
+  })
+
   it('forgets an attempt made outside the window', () => {
     expect(recentAttempts([0, 9_000], 10_500)).toEqual([9_000])
   })

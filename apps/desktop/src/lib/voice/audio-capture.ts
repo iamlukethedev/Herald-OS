@@ -78,6 +78,9 @@ let deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
 /** Kept here rather than on the tracks, so a reopened stream comes back as muted as the old one. */
 let muted = false
 const listeners = new Set<FrameListener>()
+/** Frame subscribers that want to hear when the microphone could not be reopened. */
+const failureListeners = new Map<FrameListener, (error: MicrophoneUnavailableError) => void>()
+let stopWatchingDeviceList: (() => void) | null = null
 const holders = new Set<MicrophoneHolder>()
 let unsubscribeChoice: (() => void) | null = null
 
@@ -260,27 +263,41 @@ function watchDevices(media: MediaStream, device: AudioDeviceOption | null): voi
 
   track?.addEventListener('ended', onEnded)
 
-  const onDeviceChange = () => {
-    if (deviceChangeTimer) {
-      clearTimeout(deviceChangeTimer)
-    }
-
-    deviceChangeTimer = setTimeout(() => {
-      deviceChangeTimer = null
-      void examine('devices')
-    }, DEVICE_CHANGE_DEBOUNCE_MS)
-  }
-
-  navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
-
   stopWatching = () => {
     track?.removeEventListener('ended', onEnded)
-    navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
+  }
+}
 
-    if (deviceChangeTimer) {
-      clearTimeout(deviceChangeTimer)
-      deviceChangeTimer = null
+/**
+ * Watch the device list for as long as anyone wants the microphone, not only while a stream is
+ * open: after a reopen that failed, the next device change is what tries again (under the same
+ * guard), so a wake word left without a stream is not deaf for good.
+ */
+function syncDeviceListWatch(): void {
+  if (inUse() && !stopWatchingDeviceList && navigator.mediaDevices?.addEventListener) {
+    const onDeviceChange = () => {
+      if (deviceChangeTimer) {
+        clearTimeout(deviceChangeTimer)
+      }
+
+      deviceChangeTimer = setTimeout(() => {
+        deviceChangeTimer = null
+        void examine('devices')
+      }, DEVICE_CHANGE_DEBOUNCE_MS)
     }
+
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
+    stopWatchingDeviceList = () => {
+      navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
+
+      if (deviceChangeTimer) {
+        clearTimeout(deviceChangeTimer)
+        deviceChangeTimer = null
+      }
+    }
+  } else if (!inUse() && stopWatchingDeviceList) {
+    stopWatchingDeviceList()
+    stopWatchingDeviceList = null
   }
 }
 
@@ -294,7 +311,7 @@ function watchChoice(): void {
   }
 
   unsubscribeChoice = $prefs.listen((prefs, previous) => {
-    if (prefs.voice.inputDevice !== previous.voice.inputDevice && (stream || opening || reopening)) {
+    if (prefs.voice.inputDevice !== previous.voice.inputDevice && inUse()) {
       void examine('chosen')
     }
   })
@@ -314,7 +331,13 @@ async function examineNow(trigger: 'lost' | 'chosen' | 'devices'): Promise<void>
   await opening?.catch(() => undefined)
 
   // Queued behind an earlier examine, the mic may have been closed since; never reopen an idle one.
-  if (!stream || !inUse()) {
+  if (!inUse()) {
+    return
+  }
+
+  // No stream while someone still wants one means the last reopen failed. A device change or a new
+  // pick tries again; a lost track cannot happen without a stream.
+  if (!stream && (trigger === 'lost' || opening || reopening)) {
     return
   }
 
@@ -333,7 +356,11 @@ async function apply(action: CaptureAction): Promise<void> {
   }
 
   if (action.kind === 'giveUp') {
-    $captureNotice.set({ key: 'voice.input-flapping', message: 'The microphone keeps changing device, so the current one is kept. Choose a microphone in Settings > Voice.' })
+    $captureNotice.set(
+      stream
+        ? { key: 'voice.input-flapping', message: 'The microphone keeps changing device, so the current one is kept. Choose a microphone in Settings > Voice.' }
+        : { key: 'voice.input-retry-paused', message: 'The microphone still cannot be opened. Herald OS tries again when a device is connected or chosen.' }
+    )
 
     return
   }
@@ -373,6 +400,11 @@ async function apply(action: CaptureAction): Promise<void> {
 
     for (const holder of [...holders]) {
       holder.onFailed(failure)
+    }
+
+    // Frame subscribers stay subscribed: frames resume by themselves if a later reopen succeeds.
+    for (const onFailed of [...failureListeners.values()]) {
+      onFailed(failure)
     }
   } finally {
     reopening = null
@@ -437,15 +469,24 @@ export function acknowledgeCaptureNotice(): void {
 
 /**
  * Start receiving microphone frames. Resolves once the mic is open; the returned function stops
- * this subscription and closes the mic when nobody else listens.
+ * this subscription and closes the mic when nobody else listens. `onFailed` is called when a later
+ * reopen fails even on the system default: the subscription stays, and frames resume when a device
+ * change or a new pick opens the microphone again.
  */
-export async function subscribeMicrophone(listener: FrameListener): Promise<() => void> {
+export async function subscribeMicrophone(listener: FrameListener, onFailed?: (error: MicrophoneUnavailableError) => void): Promise<() => void> {
   listeners.add(listener)
+
+  if (onFailed) {
+    failureListeners.set(listener, onFailed)
+  }
+
+  syncDeviceListWatch()
 
   try {
     await open()
   } catch (error) {
     listeners.delete(listener)
+    failureListeners.delete(listener)
     closeIfUnused()
 
     throw error
@@ -460,6 +501,7 @@ export async function subscribeMicrophone(listener: FrameListener): Promise<() =
 
     active = false
     listeners.delete(listener)
+    failureListeners.delete(listener)
     closeIfUnused()
   }
 }
@@ -472,6 +514,8 @@ function closeIfUnused(): void {
   if (!inUse()) {
     close()
   }
+
+  syncDeviceListWatch()
 }
 
 /**
@@ -481,6 +525,7 @@ function closeIfUnused(): void {
  */
 export async function holdMicrophoneStream(holder: MicrophoneHolder): Promise<MicrophoneHold> {
   holders.add(holder)
+  syncDeviceListWatch()
 
   try {
     await open()

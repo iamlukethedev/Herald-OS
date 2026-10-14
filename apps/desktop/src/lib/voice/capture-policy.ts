@@ -77,6 +77,11 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent, now: num
         return { action: { kind: 'none' }, state }
       }
 
+      // Nothing is open (the last reopen failed): there is no sentence to protect, so try now.
+      if (!state.binding) {
+        return attemptReopen(state, event.target.deviceId, 'devices', now)
+      }
+
       // The system changed under us: never cut into a sentence that is already being listened to.
       return state.conversing ? { action: { kind: 'defer', deviceId: event.target.deviceId }, state } : attemptReopen(state, event.target.deviceId, 'devices', now)
 
