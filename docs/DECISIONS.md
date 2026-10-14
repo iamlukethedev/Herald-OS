@@ -970,9 +970,9 @@ text, follow the system's language rather than Herald's.
 
 ## ADR-024: The voice's microphone is Herald's own choice where Herald is one app among others
 
-Herald OS opened the system default microphone, and no other could be chosen. A device that went away while the microphone was open left the graph silent
-(no `ended` handling, no `devicechange` handling), and the Sound panel on macOS showed one
-placeholder output and no inputs at all.
+Herald OS opened the system default microphone, and no other could be chosen. A device that went
+away while the microphone was open left the graph silent (no `ended` handling, no `devicechange`
+handling), and the Sound panel on macOS showed one placeholder output and no inputs at all.
 
 - **Per app off Linux, per session on Linux.** On Herald OS Linux the shell *is* the session, so the
   Sound panel keeps setting the machine's PipeWire default (`pactl`) and that is the microphone the
@@ -983,7 +983,8 @@ placeholder output and no inputs at all.
   Wearing a headset and letting the system pick it up therefore still works, and a person who never
   opens the picker sees no change.
 - **A choice outlives its device.** A chosen device that is not connected falls back to the system
-  default and is *kept*: when it comes back it is used again. The fallback is quiet: the panel's
+  default and is *kept*: when it comes back it is used again. A listed device that cannot be opened
+  (`OverconstrainedError`) is treated the same. The fallback is quiet: the panel's
   line names the device in use and the list says the chosen one comes back on its own — a device
   that sleeps is no problem to report. Two states, not one — what was chosen
   and what is in use — because an app that forgets the choice the moment a device sleeps (as Teams
@@ -994,14 +995,21 @@ placeholder output and no inputs at all.
 - **A lost device is reopened, a system change waits.** `track.ended` from an unplugged device
   reopens the stream at once; a change caused by the system is applied when the conversation ends,
   so it never cuts into a sentence being listened to. Three reopen attempts in ten seconds is the
-  guard; after that Herald OS keeps the current device and says so.
+  guard; after that Herald OS keeps the current device and says so. A reopen that fails outright
+  posts a notice too: then there is no device in use to name.
+- **A reopen is invisible to the consumers.** Frame subscribers keep receiving frames; the WebRTC
+  sender holds the stream (`holdMicrophoneStream`) and is handed the new track for `replaceTrack`,
+  so a Live session survives a change of device; mute is the graph's state, applied to every
+  stream it opens. A holder keeps the microphone open like a subscriber, and releasing the last one
+  closes it.
 - **One microphone, one choice.** `audio-capture.ts` is the only owner of the mic (wake feed,
   utterance recorder, barge-in monitor, WebRTC sender), so there is one setting, not one per
   consumer. The decisions themselves are a pure table (`capture-policy.ts`), unit-tested without a
   browser.
 - **Identity is the id, with the name as fallback.** `deviceId` is stable only for one origin, so a
   choice stores `{ id, label }`: the label identifies the device after a cache clear or a switch from
-  a dev build to a packaged one, and the stored id is rewritten to the one found.
+  a dev build to a packaged one, and the stored id is rewritten to the one found. Two devices are
+  the same when their groups match, or their ids when either reports no group.
 - **The microphone is still only opened deliberately.** A conversation or the armed wake word; never
   by opening a panel, and never while voice is off. The level bar in the pickers is live exactly
   while the microphone is open.

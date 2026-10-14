@@ -197,12 +197,18 @@ belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Ch
   the system pick it up is enough.
 - A **chosen device wins while it is connected**, even when another device is plugged in later.
   That is what makes "AirPods for the speakers, a desk microphone for the voice" possible.
-- A chosen device that **goes away** falls back to the system default and is remembered; when it
-  comes back it is used again. The fallback is quiet: the panel names the device in use and no
-  notice is posted. A device that disappears mid-conversation reopens the stream
-  immediately; a change caused by the system waits for the conversation to end.
+- A chosen device that **goes away**, or is listed but cannot be opened, falls back to the system
+  default and is remembered; when it comes back it is used again. The fallback is quiet: the panel
+  names the device in use and no notice is posted. A notice is posted only when the microphone
+  cannot be reopened at all, or keeps changing device (three reopens in ten seconds).
+- A device that disappears mid-conversation reopens the stream immediately, and so does a new
+  choice; a change caused by the system waits for the conversation to end. A GPT-Live session keeps
+  running across a reopen (its WebRTC sender swaps in the new track), and a muted conversation stays
+  muted on the new device.
 - Device ids are stable only for one origin, so the name is the fallback identity: if the id is gone
-  but a device with the same name is there, that device is used (and the stored id is rewritten).
+  but a device with the same name is there, that device is used and the stored id is rewritten to
+  its new one, so both pickers show it as chosen.
+- A device is the same one when its group matches, or, for devices that report no group, its id.
 - The picker shows the devices as Chromium reports them, with its own `(Bluetooth)`, `(Built-in)`
   and `(Virtual)` suffixes; virtual devices are ordered last but never hidden.
 - The microphone is only ever opened by a conversation or by the armed wake word, so the level bar
