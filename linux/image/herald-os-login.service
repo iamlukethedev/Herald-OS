@@ -1,0 +1,22 @@
+[Unit]
+Description=Herald OS: the login screen on a system switched from another bootc system
+# Every boot, after the first-boot setup (whether or not it finished). On a switched system it makes
+# sure greetd shows a login screen when an account can sign in there, that the session user has no
+# empty password behind it, and that the session user is in wheel only with a password; it also puts right a
+# system switched with an image whose first boot signed a passwordless administrator in. Elsewhere it
+# changes nothing. greetd requires it (greetd.service.d/herald-os-login.conf), so if it fails, greetd
+# does not start: no login screen is better than one that signs an administrator in without asking.
+# The accounts it looks for: systemd-homed's, and SSSD's or LDAP's, are only there once their
+# services are up. On a system without them, these name nothing.
+Wants=systemd-homed.service systemd-userdbd.service sssd.service
+After=herald-os-reset.service herald-os-firstboot.service systemd-homed.service systemd-userdbd.service sssd.service
+Before=greetd.service
+
+[Service]
+Type=oneshot
+# Stays active, so greetd's Requires= holds through greetd restarts within the boot.
+RemainAfterExit=yes
+ExecStart=/usr/libexec/herald-os/firstboot.sh login
+
+[Install]
+WantedBy=multi-user.target

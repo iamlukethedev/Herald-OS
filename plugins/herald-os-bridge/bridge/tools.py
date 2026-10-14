@@ -270,7 +270,7 @@ SYSTEM_APPS_SCHEMA = _schema(
         "action": _enum("installed", "running", "quit"),
         "filter": _desc(_STR, "For installed/running: case-insensitive name substring."),
         "name": _desc(_STR, "For quit: the application name."),
-        "force": _desc(_BOOL, "For quit: force-terminate instead of asking politely (loses unsaved work)."),
+        "force": _desc(_BOOL, "For quit: force-terminate instead of asking politely (loses unsaved work). On macOS this needs the app's exact name or bundle id."),
     },
     required=("action",),
 )

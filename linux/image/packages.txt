@@ -65,6 +65,8 @@ libnotify
 iproute
 procps-ng
 util-linux
+# cmp, for firstboot.sh's login screen on a switched system.
+diffutils
 grim
 socat
 curl

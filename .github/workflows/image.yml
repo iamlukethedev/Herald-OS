@@ -81,6 +81,37 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Refuse to ship the signature policy without signing
+        # With linux/image/cosign.pub in the tree, the image only accepts signed updates of itself, so an
+        # unsigned build would stop installed machines from updating (#18).
+        run: |
+          if [[ -f linux/image/cosign.pub && "$SIGNING" != "true" ]]; then
+            echo "::error::linux/image/cosign.pub is committed but COSIGN_PRIVATE_KEY is not set: this image would be unsigned."
+            exit 1
+          fi
+      - uses: sigstore/cosign-installer@v3
+        if: env.SIGNING == 'true'
+      - name: Check the signing key matches cosign.pub
+        # Signing with a key other than the committed one ships signatures that installed machines reject.
+        if: env.SIGNING == 'true'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [[ ! -f linux/image/cosign.pub ]]; then
+            echo "linux/image/cosign.pub is not committed: images are signed but machines do not verify them yet."
+            exit 0
+          fi
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >derived.pub
+          # Compared as DER so PEM formatting (line endings, wrapping, trailing newline) cannot matter.
+          openssl pkey -pubin -in linux/image/cosign.pub -outform DER -out committed.der
+          openssl pkey -pubin -in derived.pub -outform DER -out derived.der
+          if ! cmp -s committed.der derived.der; then
+            echo "::error::COSIGN_PRIVATE_KEY does not match linux/image/cosign.pub: installed machines would reject this image's signature."
+            exit 1
+          fi
+          rm derived.pub committed.der derived.der
+          echo "COSIGN_PRIVATE_KEY matches linux/image/cosign.pub."
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -100,8 +131,6 @@ jobs:
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           sudo podman push --digestfile digest.txt "$IMAGE:$CHANNEL-${{ matrix.arch }}"
-      - uses: sigstore/cosign-installer@v3
-        if: env.SIGNING == 'true'
       - name: Sign it with the project's key
         if: env.SIGNING == 'true'
         env:
