@@ -23,11 +23,14 @@ export function privacyPaneUrl(pane: PrivacyPane): string {
   return `${PRIVACY_SETTINGS_URL}?${PRIVACY_PANES[pane]}`
 }
 
-const PRIVACY_PANE_URL = /^x-apple\.systempreferences:com\.apple\.settings\.PrivacySecurity\.extension(\?Privacy_[A-Za-z]+)?$/
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const PRIVACY_PANE_URL = new RegExp(`^${escapeRegExp(PRIVACY_SETTINGS_URL)}(\\?(${Object.values(PRIVACY_PANES).map(escapeRegExp).join('|')}))?$`)
 
 /**
- * True for Privacy & Security itself, or one of its lists (`?Privacy_…`), and nothing else: no other
- * System Settings pane, and no extra query or fragment that would hand System Settings more to act on.
+ * True for Privacy & Security itself, or one of the lists in `PRIVACY_PANES`, and nothing else: no
+ * other System Settings pane or list, and no extra query or fragment that would hand System Settings
+ * more to act on.
  */
 export function isPrivacyPaneUrl(url: string): boolean {
   return PRIVACY_PANE_URL.test(url)

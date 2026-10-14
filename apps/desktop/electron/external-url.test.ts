@@ -40,6 +40,18 @@ describe('mayOpenExternally', () => {
     }
   })
 
+  it('refuses a Privacy & Security list Herald OS does not ask for', () => {
+    for (const anchor of ['Privacy_AllFiles', 'Privacy_ListenEvent', 'Privacy_Contacts', 'Privacy_CameraX', 'Privacy_', 'Privacy_Camera|Privacy_Microphone']) {
+      expect(mayOpenExternally(`${PRIVACY}?${anchor}`, 'darwin'), anchor).toBe(false)
+    }
+  })
+
+  it('matches the anchor in its exact case', () => {
+    expect(mayOpenExternally(`${PRIVACY}?privacy_camera`, 'darwin')).toBe(false)
+    expect(mayOpenExternally(`${PRIVACY}?PRIVACY_CAMERA`, 'darwin')).toBe(false)
+    expect(mayOpenExternally('x-apple.systempreferences:com.apple.settings.privacysecurity.extension?Privacy_Camera', 'darwin')).toBe(false)
+  })
+
   it('refuses a query parameter after the anchor', () => {
     expect(mayOpenExternally(`${PRIVACY}?Privacy_Camera&x=1`, 'darwin')).toBe(false)
   })
