@@ -293,15 +293,23 @@ not on the computer you work on. What happens on its first start:
   Hermes Agent only for `hermes`, so run `herald-os setup` in a terminal once in your own account
   to install Hermes there too.
 - **A locked `hermes` account.** The first boot also creates `hermes`, an administrator (in `wheel`)
-  that Herald OS sets Hermes Agent up for. It is locked: no one can sign in to it or use its
-  administrator rights until you give it a password from your own account
-  (`sudo passwd hermes`). After that, `hermes` can sign in at the login screen too.
-  `herald-os-login.service` checks this at every start. A system switched with an earlier Herald OS
-  image, which signed `hermes` in with no password, gets the login screen at its next start, and a
-  `hermes` without a password is locked.
+  that Herald OS sets Hermes Agent up for. It is locked and has no shell (`/usr/sbin/nologin`), so
+  no one can sign in to it, with a password or an SSH key, or use its administrator rights. To use
+  it, give it a password from your own account with `sudo passwd hermes`. Herald OS gives it its
+  shell back at the next start, or at once with `sudo usermod -s /bin/bash hermes`. After that,
+  `hermes` can sign in at the login screen too.
+- **Checked at every start.** `herald-os-login.service` runs before greetd at every start, and greetd
+  waits for it to succeed: if it fails, there is no login screen rather than one that signs someone
+  in. Any other greetd config is replaced with the login screen. A system switched with an earlier
+  Herald OS image, which signed `hermes` in with no password, gets the login screen at its next
+  start, and a `hermes` without a password is locked.
+- **What counts as switched.** Accounts from before Herald OS: local ones (UIDs 1000 to 60000),
+  systemd-homed ones (60001 to 60513), and folders in `/home` that belong to someone other than
+  `hermes`, which accounts from SSSD or LDAP have too. When the account list cannot be read, the
+  system counts as switched.
 - **The first start takes a while.** It installs Hermes Agent, which needs the network, before the
-  login screen appears. Without a network the desktop comes up first, and Hermes installs once you are
-  online.
+  login screen appears. Without a network the login screen comes up first, and Hermes installs once
+  you are online.
 - **SELinux becomes permissive** (greetd and the compositors have no policy yet, ADR-012).
 - **The firewall changes.** firewalld's default zone becomes `herald-os`, which refuses every
   incoming connection except LocalSend (port 53317) and mDNS, so SSH and other ports you opened are
