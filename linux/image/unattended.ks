@@ -100,6 +100,9 @@ checked_disk() {
     refuse "DISK=\"$DISK\" is $path, which is read-only, so nothing was erased."
   [[ " $(installer_disks | tr '\n' ' ') " != *" $name "* ]] ||
     refuse "DISK=\"$DISK\" is $path, the disk the installer started from, so nothing was erased."
+  ! in_a_set "$name" ||
+    refuse "DISK=\"$DISK\" is $path, part of a multipath device or RAID set, so nothing was erased." \
+      "Erasing one disk of a set breaks the set; install to such storage by hand."
   echo "$name"
 }
 

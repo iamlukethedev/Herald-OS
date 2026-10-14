@@ -270,19 +270,14 @@ def test_a_disk_set_in_the_pre_is_used_on_a_two_disk_machine(disk, expected, tmp
     assert f"erasing {expected}, and only {expected}" in console.read_text()
 
 
-def test_a_disk_set_in_the_pre_may_be_a_set_member(tmp_path):
-    found, out, _ = run_pre(tmp_path, TWO_DISKS, with_disk("vdb"), trees={"vdb": ["disk isw_raid_member"]})
-    assert found.returncode == 0, found.stderr
-    assert erases_only(out, "vdb")
-
-
-# A machine beyond TWO_DISKS: an internal SATA disk sda, and the installer on a USB stick (sdb)
-# beside a disk with the ISO file on an LVM volume (sdc).
+# A machine beyond TWO_DISKS: an internal SATA disk sda, the installer on a USB stick (sdb) beside
+# a disk with the ISO file on an LVM volume (sdc), sdd and sdg as the two paths of the multipath
+# device mpatha (dm-0), and sde and sdf as whole-disk members of an md and a BIOS RAID set.
 INSTALLER = {
     "devices": [
         "sda disk 0 0 sata", "sda1 part 0 0 sata", "sdb disk 1 0 usb", "sdc disk 0 0 sata",
         "loop0 loop 0 0 ", "sr0 rom 0 0 sata", "sr1 rom 1 1 sata", "vdc disk 0 1 ",
-        "dm-0 mpath 0 0 ",
+        "dm-0 mpath 0 0 ", "sdd disk 0 0 fc", "sdg disk 0 0 fc", "sde disk 0 0 sata", "sdf disk 0 0 sata",
     ],
     "links": [
         "/dev/disk/by-id/usb-stick /dev/sdb",
@@ -290,7 +285,15 @@ INSTALLER = {
         "/dev/disk/by-id/gone /dev/sdz",
         "/dev/mapper/mpatha /dev/dm-0",
         "/dev/disk/by-id/dm-uuid-mpath-3600 /dev/dm-0",
+        "/dev/disk/by-path/fc-0x500-lun-0 /dev/sdd",
+        "/dev/disk/by-id/ata-raid-disk /dev/sde",
     ],
+    "trees": {
+        "sdd": ["disk mpath_member", "mpath "],
+        "sdg": ["disk ", "mpath "],
+        "sde": ["disk linux_raid_member", "raid1 "],
+        "sdf": ["disk isw_raid_member"],
+    },
     "mounts": ["/run/install/repo /dev/sdb1", "/run/install/isodir /dev/mapper/data-isos[/isos]"],
     "below": ["sdb1 sdb1 sdb", "mapper/data-isos data-isos sdc2 sdc"],
 }
@@ -312,6 +315,12 @@ BAD_DISKS = {
     "vdc": "is /dev/vdc, which is read-only",
     "/dev/mapper/mpatha": "is /dev/dm-0, a mpath and not a whole disk",
     "/dev/disk/by-id/dm-uuid-mpath-3600": "is /dev/dm-0, a mpath and not a whole disk",
+    "sdd": "is /dev/sdd, part of a multipath device or RAID set",
+    "sdg": "is /dev/sdg, part of a multipath device or RAID set",
+    "/dev/disk/by-path/fc-0x500-lun-0": "is /dev/sdd, part of a multipath device or RAID set",
+    "sde": "is /dev/sde, part of a multipath device or RAID set",
+    "/dev/disk/by-id/ata-raid-disk": "is /dev/sde, part of a multipath device or RAID set",
+    "sdf": "is /dev/sdf, part of a multipath device or RAID set",
     "sda --foo": NOT_A_NAME,
     "--foo": NOT_A_NAME,
     "-sda": NOT_A_NAME,
