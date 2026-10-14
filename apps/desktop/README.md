@@ -46,6 +46,7 @@ Run them here, or from the repository root (`npm run dev`, `npm run build`, `npm
 | `npm run typecheck` | `tsc` for the renderer and for main and preload |
 | `npm test` | Vitest over `src`, `electron`, `shared` and `scripts` |
 | `npm run dist:mac` | Apple Silicon DMG and zip in `release/` (unsigned) |
+| `npm run pack:mac` | The packaging half of `dist:mac`, on an existing `npm run build`; the release workflow signs here ([MACOS-SIGNING.md](../../docs/MACOS-SIGNING.md)) |
 | `npm run dist:linux` | `herald-os-<version>-linux-<arch>.tar.gz` in `release/` for this machine's architecture (`-- --x64` or `-- --arm64` to pick), with the Linux CLIs, session, themes, catalog and bridge plugin in `resources/` |
 
 ## Common changes
