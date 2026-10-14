@@ -79,7 +79,7 @@ function ThreadCard({ thread, online }: { thread: ContinuityThread; online: bool
   const lead = thread.items.find(item => item.kind === 'project') ?? thread.items[0]
 
   return (
-    <GlassCard className="group flex flex-col gap-3 p-4" data-os-target={`thread:${thread.id}`}>
+    <GlassCard className="group/reveal-row flex flex-col gap-3 p-4" data-os-target={`thread:${thread.id}`}>
       <div className="flex gap-3.5">
         <IconTile size={40}>{lead ? GLYPH[lead.kind] : <IconBrain />}</IconTile>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -92,7 +92,7 @@ function ThreadCard({ thread, online }: { thread: ContinuityThread; online: bool
               aria-label={t('overview.pickUp.dismissNamed', { title: thread.title })}
               title={t('overview.pickUp.dismiss')}
               onClick={() => void dismissThread(thread.id)}
-              className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-4 opacity-0 transition-opacity duration-120 group-hover:opacity-100 hover:bg-white/8 hover:text-fg focus-visible:opacity-100"
+              className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-4 reveal transition-opacity duration-120 hover:bg-white/8 hover:text-fg"
             >
               <IconX size={14} />
             </button>

@@ -348,6 +348,18 @@ export interface CrashHelpPrefs {
   muted: string[]
 }
 
+/** The Alerts switches in Settings > Notifications (all on by default). The bell keeps everything either way. */
+export interface NotifyPrefs {
+  /** "Finished turns": toast when Hermes finishes a turn in a session the person is not looking at. */
+  toolCompletions: boolean
+  /** Toast and system notification when Hermes waits for an approval or an answer. */
+  approvals: boolean
+  /** Toast for scheduled tasks that ran, failed or changed. */
+  taskUpdates: boolean
+  /** System notifications while Herald OS is in the background. */
+  nativeWhenUnfocused: boolean
+}
+
 export interface ImageInfo {
   width: number
   height: number
@@ -582,7 +594,11 @@ export interface HeraldOSPrefs {
   voice: VoicePrefs
   continuity: ContinuityPrefs
   crashHelp: CrashHelpPrefs
+  notify: NotifyPrefs
 }
+
+/** A prefs write: top-level fields replace what is saved; `notify` is merged switch by switch in main. */
+export type PrefsPatch = Partial<Omit<HeraldOSPrefs, 'notify'>> & { notify?: Partial<NotifyPrefs> }
 
 export type ScreenshotMode = 'region' | 'window' | 'screen'
 
@@ -940,6 +956,7 @@ export const IPC = {
   prefsGet: 'herald-os:prefs:get',
   prefsSet: 'herald-os:prefs:set',
   prefsChanged: 'herald-os:prefs:changed',
+  prefsAdoptLegacyNotify: 'herald-os:prefs:adopt-legacy-notify',
 
   bridgePolicyRead: 'herald-os:bridge:policy-read',
   bridgePolicyWrite: 'herald-os:bridge:policy-write',

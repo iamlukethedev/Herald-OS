@@ -1,10 +1,11 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
 import os from 'node:os'
 import path from 'node:path'
-import { type EnvInfo, type HeraldOSPrefs, IPC, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
+import { type EnvInfo, type HeraldOSPrefs, IPC, type PrefsPatch, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
 import { BackendManager } from './backend/manager.ts'
 import { forgetInheritedSession } from './backend/session-env.ts'
 import { CrashWatcher } from './crash/watch.ts'
+import { mayOpenExternally } from './external-url.ts'
 import { fireEventAutomations } from './events/automations.ts'
 import { events } from './events/bus.ts'
 import { runHooks } from './events/hooks.ts'
@@ -39,6 +40,7 @@ import { PetWindow } from './pet/window.ts'
 import { SwitchService } from './switches.ts'
 import { hermesHome, heraldOsDataDir, isDev } from './paths.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
+import { handleAdoptLegacyNotify, sendPrefsToOthers } from './prefs-ipc.ts'
 import { forwardRendererConsole } from './renderer-console.ts'
 import { isOmarchy, readOmarchyTheme } from './theme/omarchy.ts'
 import { prefsForTheme } from './theme/themes.ts'
@@ -233,16 +235,16 @@ function registerCoreIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, () => app.quit())
 
-  ipcMain.handle(IPC.shellOpenExternal, (_event, url: string) => {
-    if (/^https?:\/\//i.test(url)) {
+  ipcMain.handle(IPC.shellOpenExternal, (_event, url: unknown) => {
+    if (mayOpenExternally(url)) {
       return shell.openExternal(url)
     }
 
-    throw new Error('only http(s) URLs may be opened externally')
+    throw new Error(process.platform === 'darwin' ? 'only http(s) URLs and Privacy & Security settings may be opened externally' : 'only http(s) URLs may be opened externally')
   })
 
   ipcMain.handle(IPC.prefsGet, () => readPrefs())
-  ipcMain.handle(IPC.prefsSet, (_event, patch: Partial<HeraldOSPrefs>) => {
+  ipcMain.handle(IPC.prefsSet, (_event, patch: PrefsPatch) => {
     const next = writePrefs(patch)
 
     if ('wallpaper' in patch) {
@@ -267,14 +269,11 @@ function registerCoreIpc(): void {
     }
 
     // Every surface window sees the same preferences.
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.webContents !== _event.sender) {
-        win.webContents.send(IPC.prefsChanged, next)
-      }
-    }
+    sendPrefsToOthers(BrowserWindow.getAllWindows(), _event.sender, next)
 
     return next
   })
+  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (event, flags: unknown) => handleAdoptLegacyNotify(BrowserWindow.getAllWindows(), event.sender, flags))
 
   ipcMain.handle(
     IPC.envInfo,

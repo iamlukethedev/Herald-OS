@@ -162,11 +162,11 @@ export function TerminalSurface() {
     <div className="flex h-full flex-col">
       <div className="flex h-10 shrink-0 items-center gap-1 px-3">
         {tabs.map(tab => (
-          <div key={tab.id} className={cn('group flex h-7 items-center gap-1 rounded-sm pr-1 pl-2.5 text-[12px]', tab.id === active ? 'bg-white/8 text-fg' : 'text-fg-3 hover:bg-white/4 hover:text-fg-2')}>
+          <div key={tab.id} className={cn('group/reveal-row flex h-7 items-center gap-1 rounded-sm pr-1 pl-2.5 text-[12px]', tab.id === active ? 'bg-white/8 text-fg' : 'text-fg-3 hover:bg-white/4 hover:text-fg-2')}>
             <button type="button" onClick={() => setActive(tab.id)} className="font-mono">
               {tab.title}
             </button>
-            <button type="button" aria-label="Close terminal" onClick={() => close(tab.id)} className="flex size-5 items-center justify-center rounded-xs text-fg-4 opacity-0 group-hover:opacity-100 hover:text-fg">
+            <button type="button" aria-label="Close terminal" onClick={() => close(tab.id)} className="flex size-5 items-center justify-center rounded-xs text-fg-4 reveal hover:text-fg">
               <IconX size={12} />
             </button>
           </div>

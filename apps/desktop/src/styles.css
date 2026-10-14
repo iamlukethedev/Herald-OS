@@ -638,7 +638,8 @@ textarea {
     opacity 120ms var(--ease-out),
     transform 120ms var(--ease-out);
 }
-.dock-item:hover .dock-label {
+.dock-item:hover .dock-label,
+.dock-item:focus-visible .dock-label {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -710,6 +711,30 @@ textarea {
 }
 .side-handle.is-dragging::after {
   opacity: 0.9;
+}
+
+/*
+ * Controls that appear when their row is hovered. Mark the row `group/reveal-row`: a plain `group`
+ * doesn't count, so a `group` added inside a row later can't reveal another row's controls. Rows
+ * shouldn't nest. The controls always show on screens with any touch input, since a finger can't
+ * hover even when a mouse or trackpad is the main pointer. Keyboard users see them while the row
+ * or the control has keyboard focus, and they stay up while a menu they opened is expanded. Use
+ * this instead of `opacity-0 group-hover:opacity-100` or `hidden group-hover:flex`.
+ */
+@utility reveal {
+  opacity: 0;
+
+  &:is(:where(.group\/reveal-row):is(:hover, :focus-visible, :has(:focus-visible)) *),
+  &:focus-visible,
+  &:has(:focus-visible),
+  &[aria-expanded='true'],
+  &:has([aria-expanded='true']) {
+    opacity: 1;
+  }
+
+  @media (hover: none), (pointer: coarse), (any-pointer: coarse) {
+    opacity: 1;
+  }
 }
 
 .shimmer {

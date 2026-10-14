@@ -2,9 +2,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { NOTIFY_DEFAULTS } from '../shared/notify-prefs.ts'
 import { PET_PREFS_DEFAULTS, type PetPrefs } from '../shared/pet.ts'
 import { heraldOsDataDir } from './paths.ts'
-import { readPrefs, writePrefs } from './prefs.ts'
+import { adoptLegacyNotify, readPrefs, writePrefs } from './prefs.ts'
 
 const saved = process.env.HERMES_HOME
 let root = ''
@@ -119,5 +120,131 @@ describe('the pet in the prefs', () => {
 
     expect(writePrefs({ pet: { hidden: false } as PetPrefs }).pet).toEqual({ ...quiet, hidden: false })
     expect(readPrefs().pet).toEqual({ ...quiet, hidden: false })
+  })
+})
+
+describe('the Alerts switches in the prefs', () => {
+  it('reads every switch on when there is no prefs file, nothing stored, or something malformed', () => {
+    expect(readPrefs().notify).toEqual(NOTIFY_DEFAULTS)
+
+    store({ theme: 'graphite' })
+    expect(readPrefs().notify).toEqual(NOTIFY_DEFAULTS)
+
+    store({ notify: { approvals: 'no', taskUpdates: false } })
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false })
+  })
+
+  it('merges a partial write over what is stored and keeps it through other changes', () => {
+    writePrefs({ notify: { approvals: false } })
+    expect(writePrefs({ notify: { nativeWhenUnfocused: false } }).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, nativeWhenUnfocused: false })
+
+    writePrefs({ theme: 'graphite' })
+    expect(onDisk()).toMatchObject({ theme: 'graphite', notify: { approvals: false, nativeWhenUnfocused: false } })
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, nativeWhenUnfocused: false })
+  })
+
+  it('keeps both switches when two windows each save a different one', () => {
+    writePrefs({ notify: { approvals: false } })
+    writePrefs({ notify: { taskUpdates: false } })
+    writePrefs({ notify: { approvals: true } })
+
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false })
+  })
+})
+
+describe('which Alerts switches prefs.json holds', () => {
+  it('saves only the switches someone set, never the defaults, so other writes leave them unset', () => {
+    writePrefs({ theme: 'graphite' })
+    expect(onDisk().notify).toEqual({})
+
+    writePrefs({ notify: { approvals: false } })
+    writePrefs({ reduceMotion: true })
+    expect(onDisk().notify).toEqual({ approvals: false })
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false })
+  })
+
+  it('drops switch values that are not booleans, and keys that are not switches, from a write', () => {
+    writePrefs({ notify: { approvals: 'false', taskUpdates: 0, toolCompletions: null, sound: false, nativeWhenUnfocused: false } as never })
+
+    expect(onDisk().notify).toEqual({ nativeWhenUnfocused: false })
+  })
+})
+
+describe('adopting Alerts switches from localStorage', () => {
+  it('never lets an old localStorage value replace a switch prefs.json already has', () => {
+    store({ notify: { approvals: false, taskUpdates: true } })
+
+    const next = adoptLegacyNotify({ approvals: true, taskUpdates: false, nativeWhenUnfocused: false })
+
+    expect(next.notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, taskUpdates: true, nativeWhenUnfocused: false })
+    expect(onDisk().notify).toEqual({ approvals: false, taskUpdates: true, nativeWhenUnfocused: false })
+  })
+
+  it('fills every switch when prefs.json has none, or only malformed ones', () => {
+    store({ theme: 'graphite', notify: { approvals: 'off' } })
+
+    expect(adoptLegacyNotify({ toolCompletions: false, approvals: false }).notify).toEqual({ ...NOTIFY_DEFAULTS, toolCompletions: false, approvals: false })
+    expect(onDisk()).toMatchObject({ theme: 'graphite' })
+  })
+
+  it('writes nothing when every switch offered is already saved, and ignores unknown keys', () => {
+    store({ notify: { approvals: true } })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    expect(adoptLegacyNotify({ approvals: false, sound: false }).notify).toEqual(NOTIFY_DEFAULTS)
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+  })
+
+  it('ignores flags that are null, not an object, or an array, and writes nothing', () => {
+    store({ notify: { approvals: false } })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    for (const flags of [null, undefined, 'approvals', 42, true, [false, false]]) {
+      expect(adoptLegacyNotify(flags).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false })
+    }
+
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+  })
+
+  it('takes only keys that are switches of its own, not ones inherited from Object', () => {
+    store({ notify: { approvals: true } })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    expect(adoptLegacyNotify({ toString: false, constructor: false, hasOwnProperty: false }).notify).toEqual(NOTIFY_DEFAULTS)
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+
+    expect(adoptLegacyNotify(JSON.parse('{"__proto__": {"approvals": false}, "taskUpdates": false}')).notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false })
+  })
+
+  it('still adopts a switch after an earlier prefs write, such as the theme at start-up', () => {
+    writePrefs({ theme: 'graphite' })
+
+    expect(adoptLegacyNotify({ approvals: false }).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false })
+    expect(onDisk()).toMatchObject({ theme: 'graphite', notify: { approvals: false } })
+  })
+
+  it('keeps what two windows with their own localStorage each bring, and the first value for a switch both had', () => {
+    adoptLegacyNotify({ approvals: false })
+    adoptLegacyNotify({ approvals: true, toolCompletions: false })
+
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, toolCompletions: false })
+  })
+
+  it('rejects switch values that are not booleans', () => {
+    writePrefs({ theme: 'graphite' })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    expect(adoptLegacyNotify({ approvals: 'false', taskUpdates: 0, toolCompletions: null, nativeWhenUnfocused: {} }).notify).toEqual(NOTIFY_DEFAULTS)
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+  })
+
+  it('does not count a corrupt prefs.json, or one holding null, as having every switch saved', () => {
+    fs.mkdirSync(path.dirname(file()), { recursive: true })
+    fs.writeFileSync(file(), '{"notify": {"approvals": fal')
+    expect(adoptLegacyNotify({ approvals: false, taskUpdates: false }).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, taskUpdates: false })
+
+    fs.writeFileSync(file(), 'null')
+    expect(adoptLegacyNotify({ toolCompletions: false }).notify).toEqual({ ...NOTIFY_DEFAULTS, toolCompletions: false })
+    expect(onDisk().notify).toEqual({ toolCompletions: false })
   })
 })

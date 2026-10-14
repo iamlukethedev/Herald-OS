@@ -81,7 +81,7 @@ export function bindChatEvents(): () => void {
     }
 
     if (event.type === 'message.complete' && $activeChatId.get() !== sid && !quietChats.has(sid)) {
-      notify({ title: next.title || 'Hermes', body: 'Finished a turn in another session', level: 'info', surface: 'chat' })
+      notify({ title: next.title || 'Hermes', body: 'Finished a turn in another session', level: 'info', surface: 'chat', category: 'toolCompletion' })
     }
 
     if (event.type === 'session.title') {

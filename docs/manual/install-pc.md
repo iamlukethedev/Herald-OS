@@ -7,7 +7,8 @@ much real hardware, so try it on a computer you can spare and keep backups.
 ## What you need
 
 - A 64-bit Intel or AMD PC. ARM PCs have no installer yet; Apple Silicon Macs use the
-  [virtual machine](virtual-machine.md).
+  [virtual machine](virtual-machine.md#on-an-apple-silicon-mac-with-utm). To try it on a Windows PC
+  first, there is a [Hyper-V virtual machine](virtual-machine.md#on-windows-with-hyper-v).
 - A USB stick of 8 GB or more (it is erased).
 - A wired network for the first start helps: it installs Hermes Agent from the internet. Without one,
   the desktop comes up first and Hermes installs once you join Wi-Fi.
@@ -26,11 +27,25 @@ cat "herald-os-$VERSION-x86_64.iso.part"* > "herald-os-$VERSION-x86_64.iso"
 shasum -a 256 -c "herald-os-$VERSION-x86_64.iso.sha256"    # sha256sum -c on Linux
 ```
 
-On Windows, in a Command Prompt:
+Releases built after 0.1.0-alpha.4 also have a `.sha256sums` with a line per part. Download it too
+and check the parts before joining them, so a bad download shows which part to fetch again:
+
+```bash
+shasum -a 256 -c "herald-os-$VERSION-x86_64.iso.sha256sums"    # sha256sum -c on Linux
+```
+
+On Windows, in a Command Prompt, join the parts, then compare the hash `certutil` prints with the one
+in the `.sha256`:
 
 ```bat
-copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso
+rem replace with the version you downloaded
+set "VERSION=0.1.0-alpha.4"
+copy /b herald-os-%VERSION%-x86_64.iso.part0 + herald-os-%VERSION%-x86_64.iso.part1 herald-os-%VERSION%-x86_64.iso
+certutil -hashfile herald-os-%VERSION%-x86_64.iso SHA256
 ```
+
+If there are more parts, add `+ herald-os-%VERSION%-x86_64.iso.part2` (and so on) in order. To list them, run
+`dir herald-os-%VERSION%-x86_64.iso.part*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
 
 ## 2. Write the USB stick
 

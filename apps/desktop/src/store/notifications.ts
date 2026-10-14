@@ -1,8 +1,8 @@
 import { atom } from 'nanostores'
-import type { IncomingNotification } from '../../shared/ipc.ts'
+import type { IncomingNotification, NotifyPrefs } from '../../shared/ipc.ts'
 import { logFailure } from '../lib/report.ts'
 import type { SurfaceId } from './surface.ts'
-import { $prefs, $windowState } from './backend.ts'
+import { $prefs, $prefsLoaded, $windowState, updatePrefs } from './backend.ts'
 import { onGatewayEvent } from './gateway.ts'
 
 export type NotificationLevel = 'info' | 'success' | 'warn' | 'error'
@@ -37,6 +37,8 @@ export interface HermesNotification {
   /** Set when this came from another app; clicks and dismissals are reported back to it. */
   desktop?: DesktopNotificationRef
   actions?: NotificationAction[]
+  /** The Alerts switch this one follows, when it has one. */
+  category?: NotifyCategory
 }
 
 export const $notifications = atom<HermesNotification[]>([])
@@ -46,6 +48,21 @@ export const $toasts = atom<HermesNotification[]>([])
 
 const MAX = 200
 let counter = 0
+
+/** Kinds of notification an Alerts switch in Settings > Notifications can silence. */
+export type NotifyCategory = 'toolCompletion' | 'approval' | 'taskUpdate'
+
+const CATEGORY_SWITCH: Record<NotifyCategory, keyof NotifyPrefs> = {
+  toolCompletion: 'toolCompletions',
+  approval: 'approvals',
+  taskUpdate: 'taskUpdates'
+}
+
+/** Turn one Alerts switch on or off; saved in prefs.json, so every window follows it. */
+export async function setNotifySwitch(key: keyof NotifyPrefs, enabled: boolean): Promise<void> {
+  // Only this switch: main merges it into what is saved, so another window's change is kept.
+  await updatePrefs({ notify: { [key]: enabled } })
+}
 
 export interface NotifyInput {
   title: string
@@ -59,7 +76,12 @@ export interface NotifyInput {
   toast?: boolean
   desktop?: DesktopNotificationRef
   actions?: NotificationAction[]
+  /** The Alerts switch that governs this one; untagged notifications always alert. */
+  category?: NotifyCategory
 }
+
+/** Categorized alerts raised before the prefs loaded, by notification id. */
+const held = new Map<string, { toast: boolean; native: boolean }>()
 
 export function notify(input: NotifyInput): HermesNotification {
   const existing = input.key ? $notifications.get().find(n => n.key === input.key) : undefined
@@ -74,24 +96,61 @@ export function notify(input: NotifyInput): HermesNotification {
     surface: input.surface,
     key: input.key,
     desktop: input.desktop,
-    actions: input.actions?.length ? input.actions : undefined
+    actions: input.actions?.length ? input.actions : undefined,
+    category: input.category
   }
   const rest = $notifications.get().filter(n => n.id !== item.id)
   $notifications.set([item, ...rest].slice(0, MAX))
-  // Do not disturb: the bell still collects everything, nothing pops up or makes a sound.
-  const quiet = Boolean($prefs.get().doNotDisturb)
+  const how = { toast: input.toast !== false, native: Boolean(input.native) }
 
-  if (input.toast !== false && !quiet) {
-    $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
-    setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
-  }
-
-  if (input.native && !quiet && !$windowState.get().focused) {
-    void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
+  // A switch may be off, but which ones is not known until the prefs are in: hold the alert until then.
+  if (item.category && !$prefsLoaded.get()) {
+    held.set(item.id, how)
+  } else {
+    held.delete(item.id)
+    raiseAlert(item, how)
   }
 
   return item
 }
+
+/** Toast and native notification for an item already in the bell, as do not disturb and the Alerts switches allow. */
+function raiseAlert(item: HermesNotification, how: { toast: boolean; native: boolean }): void {
+  const prefs = $prefs.get()
+  // Do not disturb, or this kind's Alerts switch off: the bell keeps it, nothing pops up or makes a sound.
+  const quiet = Boolean(prefs.doNotDisturb) || (item.category !== undefined && !prefs.notify[CATEGORY_SWITCH[item.category]])
+
+  if (quiet) {
+    return
+  }
+
+  if (how.toast) {
+    $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
+    setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
+  }
+
+  if (how.native && prefs.notify.nativeWhenUnfocused && !$windowState.get().focused) {
+    void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
+  }
+}
+
+// Replay what was held once the prefs are in, skipping anything already read or dismissed meanwhile.
+$prefsLoaded.listen(loaded => {
+  if (!loaded) {
+    return
+  }
+
+  const pending = [...held]
+  held.clear()
+
+  for (const [id, how] of pending) {
+    const item = $notifications.get().find(n => n.id === id)
+
+    if (item && !item.read) {
+      raiseAlert(item, how)
+    }
+  }
+})
 
 let historyBound = false
 
@@ -242,7 +301,7 @@ export function bindNotificationEvents(): () => void {
     }
   })
   const offCron = onGatewayEvent('cron.changed', () => {
-    notify({ title: 'Tasks updated', body: 'A scheduled task changed', level: 'info', surface: 'tasks', key: 'cron.changed', toast: false })
+    notify({ title: 'Tasks updated', body: 'A scheduled task changed', level: 'info', surface: 'tasks', key: 'cron.changed', toast: false, category: 'taskUpdate' })
   })
 
   return () => {

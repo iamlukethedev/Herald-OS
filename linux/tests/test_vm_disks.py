@@ -360,19 +360,57 @@ def test_the_install_table_lists_the_mac_and_windows_virtual_machines():
     assert "#on-windows-with-hyper-v" in windows
 
 
-@pytest.mark.parametrize("doc", [README, ROOT / "docs" / "LINUX.md"])
+MANUAL_JOIN_PAGES = [ROOT / "docs" / "manual" / "install-pc.md", ROOT / "docs" / "manual" / "virtual-machine.md"]
+# A file name in a join, written either `herald-os-<version>-…` or quoted around `$VERSION`, with any
+# glob after the closing quote: "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9].
+JOIN = re.compile(r'^\s*cat ("?herald-os-(?:<version>|\$VERSION)-[^\s>]+) > ("?herald-os-(?:<version>|\$VERSION)-[^\s"]+"?)$', re.M)
+
+
+def concrete(name: str) -> str:
+    return name.replace('"', "").replace("<version>", "9.9.9").replace("$VERSION", "9.9.9")
+
+
+def blocks(page: Path, language: str) -> list[str]:
+    return re.findall(rf"^```{language}\n(.*?)^```$", page.read_text(), re.M | re.S)
+
+
+@pytest.mark.parametrize("doc", [README, ROOT / "docs" / "LINUX.md", *MANUAL_JOIN_PAGES])
 def test_the_documented_joins_take_every_part_and_never_the_checksums(doc):
     text = doc.read_text()
-    joins = re.findall(r"^\s*cat (herald-os-<version>-\S+) > (herald-os-<version>-\S+)$", text, re.M)
+    joins = JOIN.findall(text)
     assert joins
     for glob, whole in joins:
-        glob, whole = glob.replace("<version>", "9.9.9"), whole.replace("<version>", "9.9.9")
+        glob, whole = concrete(glob), concrete(whole)
         parts = [f"{whole}.part0", f"{whole}.part1"] if ".part" in glob else [f"{whole}.001", f"{whole}.002"]
         assert all(fnmatch.fnmatchcase(p, glob) for p in parts)
         for checksum in (f"{whole}.sha256", f"{whole}.sha256sums"):
             assert not fnmatch.fnmatchcase(checksum, glob)
-        assert f"{whole.replace('9.9.9', '<version>')}.sha256sums" in text
-        assert f"{whole.replace('9.9.9', '<version>')}.sha256" in text
+        assert whole + ".sha256" in concrete(text)
+        if doc.name != "install-pc.md" or ".part" not in glob:
+            assert whole + ".sha256sums" in concrete(text)
+
+
+@pytest.mark.parametrize("page", MANUAL_JOIN_PAGES, ids=lambda page: page.name)
+def test_the_manuals_command_blocks_paste_as_they_are(page):
+    bash, bat = blocks(page, "bash"), blocks(page, "bat")
+    assert bash and bat
+    version_set = False
+    for block in bash:
+        assert "<version>" not in block and "%VERSION%" not in block
+        if "herald-os-" not in block:
+            continue
+        version_set = version_set or re.search(r"^VERSION=\S+ +# replace with the version you downloaded\b.*$", block, re.M)
+        assert version_set, f"$VERSION used before it is set:\n{block}"
+        assert not re.search(r"(?<![\"/])herald-os-\$VERSION", block), f"$VERSION outside quotes:\n{block}"
+        assert subprocess.run(["bash", "-n"], input=block, text=True, check=False).returncode == 0
+    for block in bat:
+        assert "<version>" not in block and "$VERSION" not in block
+        lines = block.splitlines()
+        assert lines[:2] == ["rem replace with the version you downloaded", lines[1]]
+        assert re.fullmatch(r"set (?:\"VERSION=\S+\"|VERSION=\S+)", lines[1])
+        for line in lines[2:]:
+            names = re.findall(r"herald-os-\S*", line)
+            assert names and all(n.startswith("herald-os-%VERSION%-") for n in names), line
 
 
 def test_the_readme_names_the_files_the_release_carries():

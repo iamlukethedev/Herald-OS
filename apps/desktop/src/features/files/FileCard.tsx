@@ -197,7 +197,7 @@ export function FileRow({ item, selected, renaming, onSelect, onOpen, onAction, 
         onSelect()
         setMenu(true)
       }}
-      className={cn('group relative flex h-9 cursor-pointer items-center gap-3 rounded-lg px-2.5 text-[12.5px] transition-colors duration-120', selected ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/5', item.hidden && 'opacity-70', menu && 'z-30')}
+      className={cn('group/reveal-row relative flex h-9 cursor-pointer items-center gap-3 rounded-lg px-2.5 text-[12.5px] transition-colors duration-120', selected ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/5', item.hidden && 'opacity-70', menu && 'z-30')}
     >
       <span className="flex w-5 shrink-0 items-center justify-center">
         {item.kind === 'directory' ? (
@@ -212,7 +212,7 @@ export function FileRow({ item, selected, renaming, onSelect, onOpen, onAction, 
       <span className="w-20 shrink-0 text-right text-[11.5px] tabular-nums text-fg-4">{item.kind === 'directory' ? '' : formatBytes(item.size)}</span>
       <span className="w-20 shrink-0 text-right text-[11.5px] text-fg-4">{formatRelative(item.modifiedAt)}</span>
       <span className="relative shrink-0" onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
-        <MoreButton aria-label={`More actions for ${item.name}`} onClick={() => setMenu(open => !open)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-fg aria-expanded:opacity-100" aria-expanded={menu} />
+        <MoreButton aria-label={`More actions for ${item.name}`} onClick={() => setMenu(open => !open)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 reveal hover:bg-white/10 hover:text-fg" aria-expanded={menu} />
         {menu && <Menu items={buildMenu(item, onAction)} onClose={() => setMenu(false)} className="top-8" />}
       </span>
     </div>

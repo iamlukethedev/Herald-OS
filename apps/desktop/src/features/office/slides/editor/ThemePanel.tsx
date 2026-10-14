@@ -56,7 +56,7 @@ function ThemeCard({ theme, size, current, label, onPick, children }: { theme: T
   const slide = useMemo(() => titleSample(theme, size), [theme, size])
 
   return (
-    <div className="group relative">
+    <div className="group/reveal-row relative">
       <button
         type="button"
         aria-pressed={current}
@@ -152,7 +152,7 @@ export function ThemePanel({ doc, onDone }: { doc: SlidesDocument; onDone: () =>
               card(
                 theme,
                 theme.name,
-                <div className="absolute top-2.5 right-2.5 flex gap-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+                <div className="absolute top-2.5 right-2.5 flex gap-1 reveal">
                   <button type="button" aria-label={`Edit the ${theme.name} theme`} title="Edit Theme…" onClick={() => edit(theme, false)} className={CORNER_BUTTON}>
                     <IconPencil size={13} />
                   </button>

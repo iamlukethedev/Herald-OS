@@ -236,7 +236,7 @@ export function TemplateGallery() {
       title={card.description}
       onClick={() => setSelected(index)}
       onDoubleClick={() => create(card)}
-      className={cn('group relative flex cursor-default flex-col items-center gap-2 rounded-xl border p-2 outline-none transition-colors duration-120', index === selected ? 'border-accent-strong/70 bg-accent-soft' : 'border-transparent hover:bg-white/6')}
+      className={cn('group/reveal-row relative flex cursor-default flex-col items-center gap-2 rounded-xl border p-2 outline-none transition-colors duration-120', index === selected ? 'border-accent-strong/70 bg-accent-soft' : 'border-transparent hover:bg-white/6')}
     >
       <Thumbnail doc={card.doc} scope={card.key} />
       {card.saved && renaming === card.saved.id ? (
@@ -262,7 +262,7 @@ export function TemplateGallery() {
         <div className="w-full truncate text-center text-[12px] text-fg">{card.name}</div>
       )}
       {card.saved && renaming !== card.saved.id && (
-        <div className={cn('absolute top-3 right-3 flex gap-1', index === selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')} onDoubleClick={(event) => event.stopPropagation()}>
+        <div className={cn('absolute top-3 right-3 flex gap-1', index === selected ? 'opacity-100' : 'reveal')} onDoubleClick={(event) => event.stopPropagation()}>
           <CardAction
             label={`Rename ${card.name}`}
             onClick={() => {

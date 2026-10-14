@@ -6,6 +6,8 @@ import { cn } from '../../lib/cn.ts'
 import { formatDate, formatSpan } from '../../lib/format.ts'
 import { type CronJob, rest } from '../../lib/rest.ts'
 import { deviceNoun } from '../../lib/platform-labels.ts'
+import { canOpenPrivacyPanes, openPrivacyPane } from '../../lib/privacy-pane.ts'
+import { logFailure } from '../../lib/report.ts'
 import { useBackendData, useLocalData } from '../../lib/use-async.ts'
 import { $language, useT } from '../../store/i18n.ts'
 import { formatHourMinute, isToday, Quiet, Shimmer, toMs } from './shared.tsx'
@@ -121,9 +123,16 @@ export function YourDay({ now }: { now: Date }) {
             <div className="text-[13px] font-medium text-fg">{t('overview.day.calendarNeeded')}</div>
           </div>
           <div className="text-[12px] text-fg-3">{status === 'not-determined' ? t('overview.day.calendarAsk') : t('overview.day.calendarDenied')}</div>
-          <GlassButton size="sm" variant="primary" className="self-start" onClick={() => calendar.reload()}>
-            {t('overview.day.grantAccess')}
-          </GlassButton>
+          <div className="flex flex-wrap gap-2">
+            <GlassButton size="sm" variant="primary" onClick={() => calendar.reload()}>
+              {t('overview.day.grantAccess')}
+            </GlassButton>
+            {status !== 'not-determined' && canOpenPrivacyPanes() && (
+              <GlassButton size="sm" onClick={() => void openPrivacyPane('calendars').catch(logFailure('shell.openExternal'))}>
+                {t('permission.openSettings')}
+              </GlassButton>
+            )}
+          </div>
         </GlassCard>
       ) : status === 'unavailable' && entries.length === 0 ? (
         <Quiet>{calendar.data?.error || t('overview.day.calendarUnavailable', { device: deviceNoun() })}</Quiet>

@@ -42,8 +42,9 @@ npm run test:bridge          # when plugins/ changed
 bash scripts/check-secrets.sh
 ```
 
-`npm run test:bridge` uses the Hermes runtime's Python when it has pytest, otherwise
-[uv](https://docs.astral.sh/uv/). The secret scan needs [gitleaks](https://github.com/gitleaks/gitleaks)
+`npm run test:bridge` uses the Hermes runtime's Python when it has pytest and PyYAML, otherwise
+[uv](https://docs.astral.sh/uv/) with `linux/tests/requirements.txt`. To use another Python, install
+that file into it and set `HERALD_OS_PYTHON` to it. The secret scan needs [gitleaks](https://github.com/gitleaks/gitleaks)
 (`brew install gitleaks`) or Docker.
 
 CI runs the same checks on Ubuntu and macOS, parses every script, and scans the full history for
