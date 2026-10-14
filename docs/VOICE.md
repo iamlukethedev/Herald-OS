@@ -206,8 +206,9 @@ belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Ch
   running across a reopen (its WebRTC sender swaps in the new track), and a muted conversation stays
   muted on the new device.
 - Device ids are stable only for one origin, so the name is the fallback identity: if the id is gone
-  but a device with the same name is there, that device is used and the stored id is rewritten to
-  its new one, so both pickers show it as chosen.
+  but exactly one device with the same name is there, that device is used and the stored id is
+  rewritten to its new one, so both pickers show it as chosen. With two devices of that name the
+  choice counts as not connected rather than being guessed.
 - A device is the same one when its group matches, or, for devices that report no group, its id.
 - The picker shows the devices as Chromium reports them, with its own `(Bluetooth)`, `(Built-in)`
   and `(Virtual)` suffixes; virtual devices are ordered last but never hidden.
