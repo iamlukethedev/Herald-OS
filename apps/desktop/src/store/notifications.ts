@@ -1,8 +1,8 @@
 import { atom } from 'nanostores'
-import type { IncomingNotification } from '../../shared/ipc.ts'
+import type { IncomingNotification, NotifyPrefs } from '../../shared/ipc.ts'
 import { logFailure } from '../lib/report.ts'
 import type { SurfaceId } from './surface.ts'
-import { $prefs, $windowState } from './backend.ts'
+import { $prefs, $windowState, updatePrefs } from './backend.ts'
 import { onGatewayEvent } from './gateway.ts'
 
 export type NotificationLevel = 'info' | 'success' | 'warn' | 'error'
@@ -47,6 +47,20 @@ export const $toasts = atom<HermesNotification[]>([])
 const MAX = 200
 let counter = 0
 
+/** Kinds of notification an Alerts switch in Settings > Notifications can silence. */
+export type NotifyCategory = 'toolCompletion' | 'approval' | 'taskUpdate'
+
+const CATEGORY_SWITCH: Record<NotifyCategory, keyof NotifyPrefs> = {
+  toolCompletion: 'toolCompletions',
+  approval: 'approvals',
+  taskUpdate: 'taskUpdates'
+}
+
+/** Turn one Alerts switch on or off; saved in prefs.json, so every window follows it. */
+export async function setNotifySwitch(key: keyof NotifyPrefs, enabled: boolean): Promise<void> {
+  await updatePrefs({ notify: { ...$prefs.get().notify, [key]: enabled } })
+}
+
 export interface NotifyInput {
   title: string
   body?: string
@@ -59,6 +73,8 @@ export interface NotifyInput {
   toast?: boolean
   desktop?: DesktopNotificationRef
   actions?: NotificationAction[]
+  /** The Alerts switch that governs this one; untagged notifications always alert. */
+  category?: NotifyCategory
 }
 
 export function notify(input: NotifyInput): HermesNotification {
@@ -78,15 +94,16 @@ export function notify(input: NotifyInput): HermesNotification {
   }
   const rest = $notifications.get().filter(n => n.id !== item.id)
   $notifications.set([item, ...rest].slice(0, MAX))
-  // Do not disturb: the bell still collects everything, nothing pops up or makes a sound.
-  const quiet = Boolean($prefs.get().doNotDisturb)
+  // Do not disturb, or this kind's Alerts switch off: the bell still collects everything, nothing pops up or makes a sound.
+  const prefs = $prefs.get()
+  const quiet = Boolean(prefs.doNotDisturb) || (input.category !== undefined && !prefs.notify[CATEGORY_SWITCH[input.category]])
 
   if (input.toast !== false && !quiet) {
     $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
     setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
   }
 
-  if (input.native && !quiet && !$windowState.get().focused) {
+  if (input.native && !quiet && prefs.notify.nativeWhenUnfocused && !$windowState.get().focused) {
     void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
   }
 
@@ -242,7 +259,7 @@ export function bindNotificationEvents(): () => void {
     }
   })
   const offCron = onGatewayEvent('cron.changed', () => {
-    notify({ title: 'Tasks updated', body: 'A scheduled task changed', level: 'info', surface: 'tasks', key: 'cron.changed', toast: false })
+    notify({ title: 'Tasks updated', body: 'A scheduled task changed', level: 'info', surface: 'tasks', key: 'cron.changed', toast: false, category: 'taskUpdate' })
   })
 
   return () => {

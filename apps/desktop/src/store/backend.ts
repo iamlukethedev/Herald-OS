@@ -1,6 +1,6 @@
 import { atom } from 'nanostores'
 import type { BackendState, EnvInfo, HeraldOSPrefs, WindowState } from '../../shared/ipc.ts'
-import { NOTIFY_DEFAULTS } from '../../shared/notify-prefs.ts'
+import { LEGACY_NOTIFY_KEYS, NOTIFY_DEFAULTS, readLegacyNotifyFlags } from '../../shared/notify-prefs.ts'
 import { PALETTE_PROPERTIES, paletteVars, schemeOf } from '../../shared/theme.ts'
 import { VOICE_DEFAULTS } from '../../shared/voice-prefs.ts'
 import { logFailure } from '../lib/report.ts'
@@ -66,6 +66,22 @@ export async function updatePrefs(patch: Partial<HeraldOSPrefs>): Promise<void> 
   applyPrefsToDocument(next)
 }
 
+/** Alerts switches the Settings page saved in this window's localStorage before they moved to prefs.json. */
+export async function migrateLegacyNotifyFlags(storage: Pick<Storage, 'getItem' | 'removeItem'>): Promise<void> {
+  const legacy = readLegacyNotifyFlags(storage)
+
+  if (!legacy) {
+    return
+  }
+
+  await updatePrefs({ notify: { ...$prefs.get().notify, ...legacy } })
+
+  // Only once they are saved, so a failed write tries again at the next start.
+  for (const key of Object.values(LEGACY_NOTIFY_KEYS)) {
+    storage.removeItem(key)
+  }
+}
+
 export function bindBackendStores(): () => void {
   const offBackend = window.heraldOS.backend.onState(state => $backend.set(state))
   const offWindow = window.heraldOS.window.onState(state => $windowState.set(state))
@@ -77,6 +93,10 @@ export function bindBackendStores(): () => void {
     .then(prefs => {
       $prefs.set(prefs)
       applyPrefsToDocument(prefs)
+
+      if (typeof localStorage !== 'undefined') {
+        void migrateLegacyNotifyFlags(localStorage).catch(logFailure('prefs.notify.migrate'))
+      }
     })
     .catch(logFailure('prefs.get'))
   // Preferences changed by another surface window or by the `herald-os` CLI (theme, wallpaper).

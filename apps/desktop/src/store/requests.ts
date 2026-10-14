@@ -31,9 +31,9 @@ function enqueue(request: ServerRequest): void {
 
   if (kind === 'approval') {
     const params = request.params as ApprovalRequestParams
-    notify({ title: 'Approval needed', body: params.description || params.command || params.tool_name || 'Hermes is asking for permission', level: 'warn', surface: 'chat', native: true })
+    notify({ title: 'Approval needed', body: params.description || params.command || params.tool_name || 'Hermes is asking for permission', level: 'warn', surface: 'chat', native: true, category: 'approval' })
   } else if (kind === 'clarify') {
-    notify({ title: 'Hermes has a question', body: (request.params as ClarifyRequestParams).question ?? 'Hermes needs clarification', level: 'info', surface: 'chat', native: true })
+    notify({ title: 'Hermes has a question', body: (request.params as ClarifyRequestParams).question ?? 'Hermes needs clarification', level: 'info', surface: 'chat', native: true, category: 'approval' })
   }
 }
 

@@ -2,24 +2,14 @@ import { useStore } from '@nanostores/react'
 import { IconBellRinging, IconBug, IconChecklist, IconDeviceDesktop, IconShieldCheck, IconVolumeOff, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Toggle } from '../../../components/ui/glass.tsx'
+import type { NotifyPrefs } from '../../../../shared/ipc.ts'
 import { $prefs } from '../../../store/backend.ts'
 import { setCrashHelpEnabled, setCrashMuted } from '../../../store/crashes.ts'
 import { useT } from '../../../store/i18n.ts'
-import { errorText, InlineNote, markSaved, readLocalFlag, SectionTitle, SettingsGroup, SettingsRow, writeLocal } from './shared.tsx'
+import { setNotifySwitch } from '../../../store/notifications.ts'
+import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
-/*
- * Notification preferences are shell-side flags in localStorage (`herald-os.notify.*`). The
- * notification store does not read them yet; see the page report for the proposed wiring.
- */
-
-export const NOTIFY_KEYS = {
-  toolCompletions: 'herald-os.notify.tool-completions',
-  approvals: 'herald-os.notify.approvals',
-  taskUpdates: 'herald-os.notify.task-updates',
-  nativeWhenUnfocused: 'herald-os.notify.native-unfocused'
-} as const
-
-type NotifyKey = keyof typeof NOTIFY_KEYS
+type NotifyKey = keyof NotifyPrefs
 
 const ROWS: { key: NotifyKey; label: string; description: string; icon: React.ReactNode; keywords?: string }[] = [
   { key: 'toolCompletions', label: 'Tool completions', description: 'A toast when a long-running tool finishes in a session you are not looking at.', icon: <IconChecklist />, keywords: 'toast finished' },
@@ -30,33 +20,46 @@ const ROWS: { key: NotifyKey; label: string; description: string; icon: React.Re
 
 export function NotificationsSection() {
   const t = useT()
-  const [flags, setFlags] = useState<Record<NotifyKey, boolean>>(() => ({
-    toolCompletions: readLocalFlag(NOTIFY_KEYS.toolCompletions, true),
-    approvals: readLocalFlag(NOTIFY_KEYS.approvals, true),
-    taskUpdates: readLocalFlag(NOTIFY_KEYS.taskUpdates, true),
-    nativeWhenUnfocused: readLocalFlag(NOTIFY_KEYS.nativeWhenUnfocused, true)
-  }))
-
-  const set = (key: NotifyKey, value: boolean) => {
-    setFlags(prev => ({ ...prev, [key]: value }))
-    writeLocal(NOTIFY_KEYS[key], String(value))
-    markSaved()
-  }
 
   return (
     <>
       <SectionTitle title={t('settings.section.notifications')} subtitle={t('settings.notifications.subtitle')} />
 
-      <SettingsGroup title="Alerts">
-        {ROWS.map(row => (
-          <SettingsRow key={row.key} icon={row.icon} label={row.label} description={row.description} keywords={row.keywords}>
-            <Toggle checked={flags[row.key]} onChange={next => set(row.key, next)} label={row.label} />
-          </SettingsRow>
-        ))}
-      </SettingsGroup>
+      <AlertsGroup />
 
       <CrashHelpGroup />
     </>
+  )
+}
+
+function AlertsGroup() {
+  const flags = useStore($prefs).notify
+  const [error, setError] = useState<{ key: NotifyKey; text: string } | null>(null)
+
+  const set = (key: NotifyKey, value: boolean) =>
+    setNotifySwitch(key, value).then(
+      () => {
+        setError(null)
+        markSaved()
+      },
+      reason => setError({ key, text: errorText(reason) })
+    )
+
+  return (
+    <SettingsGroup title="Alerts">
+      {ROWS.map(row => (
+        <SettingsRow
+          key={row.key}
+          icon={row.icon}
+          label={row.label}
+          description={row.description}
+          keywords={row.keywords}
+          below={error?.key === row.key ? <InlineNote tone="danger">{error.text}</InlineNote> : undefined}
+        >
+          <Toggle checked={flags[row.key]} onChange={next => void set(row.key, next)} label={row.label} />
+        </SettingsRow>
+      ))}
+    </SettingsGroup>
   )
 }
 
