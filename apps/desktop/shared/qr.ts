@@ -1,9 +1,12 @@
 /*
  * What a QR code says, described without giving it away. QR codes routinely carry secrets (the
- * otpauth:// URI behind a 2FA setup code, a Wi-Fi password), so captions, notifications, the voice
- * and Hermes get the kind of thing it is; the contents only go on the clipboard. Ordinary links and
- * text are passed on in full. linux/bin/herald-os has the same rules in Python; both are checked
- * against shared/qr-cases.json.
+ * otpauth:// URI behind a 2FA setup code, a Wi-Fi password, a sign-in link), so captions,
+ * notifications, the voice and Hermes get the kind of thing it is; the contents only go on the
+ * clipboard. Ordinary links and text are passed on in full. When in doubt it hides: a harmless code
+ * described vaguely costs little, a leaked secret a lot.
+ *
+ * linux/bin/herald-os has the same rules in Python, written to match line for line (no URL parser,
+ * no locale-dependent decoding); both are checked against shared/qr-cases.json.
  */
 
 export type QrKind = 'otp' | 'wifi' | 'link' | 'secret' | 'text'
@@ -20,11 +23,31 @@ export interface QrReading {
 
 const KINDS: readonly QrKind[] = ['otp', 'wifi', 'link', 'secret', 'text']
 
-const COPIED = 'QR code copied'
-const SENSITIVE_PARAM = /token|key|secret|pass|pwd|auth|code|sig|session|otp|credential/i
-const LABELLED_SECRET = /\b(pass(word|wd|code|phrase)?|pwd|pin|secret|token|api[ _-]?key|private[ _-]?key|seed)\b\s*[:=]/i
+export const QR_COPIED = 'QR code copied'
+const SECRET_DESCRIPTION = 'something that looks like a password, key or recovery phrase'
+
+/** Words that mark the text around them as a secret wherever they appear. */
+const SECRET_WORDS = /\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b/i
+/** Shorter words that only count as a label: "pin: 4821", "key=…". */
+const SECRET_LABELS = /\b(pass|pin|key|seed|code|otp)\b\s*[:=]/i
+/** Query and fragment parameter names that carry secrets. */
+const SECRET_PARAM = /token|key|secret|pass|pwd|auth|code|sig|session|otp|credential/i
+/** Path segments that make a link personal (an invitation, a reset, a sign-in). */
+const SECRET_PATH = /invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem/i
+/** scheme://user:password@… for any scheme. */
+const CREDENTIALS = /^[a-z][a-z0-9+.-]*:\/\/[^/?#\s@]*:[^/?#\s@]*@/i
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i
-const RECOVERY_LENGTHS = new Set([12, 15, 18, 21, 24])
+const JWT = /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/
+const SEED_WORD = /^[a-z]{3,8}$/
+
+/** A word in plain text this long (or longer) that mixes letters and digits is a token. */
+export const TEXT_TOKEN_MIN = 12
+/** The same for a path segment or a parameter value, where tokens are shorter. */
+export const URL_TOKEN_MIN = 8
+/** Base32 (letters only, too) and hex with no digits are tokens from this length. */
+export const ENCODED_TOKEN_MIN = 16
+/** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
+export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
 /** A name to show (an issuer, a network): trimmed, without control characters, and short. */
 function label(value: string): string {
@@ -33,7 +56,24 @@ function label(value: string): string {
   return clean.length > 40 ? `${clean.slice(0, 39)}…` : clean
 }
 
-function decode(value: string): string {
+/** %xx as single bytes (Latin-1), the same in both implementations whatever the input. */
+function percentBytes(value: string): string {
+  return value.replace(/%([0-9a-fA-F]{2})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+/** Undo up to three rounds of URL encoding, enough to see otpauth%253A… for what it is. */
+function decodeDeep(value: string): string {
+  let out = value
+
+  for (let round = 0; round < 3; round++) {
+    out = percentBytes(out)
+  }
+
+  return out
+}
+
+/** For names shown to the person (an issuer): UTF-8 when it decodes, else as it was. */
+function decodeLabel(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, ' '))
   } catch {
@@ -41,20 +81,129 @@ function decode(value: string): string {
   }
 }
 
-/** The query string's names and values, without relying on a URL parser's idea of the scheme. */
-function params(query: string): Map<string, string> {
-  const out = new Map<string, string>()
+function params(query: string, decode: (value: string) => string): [string, string][] {
+  return query
+    .split('&')
+    .filter(Boolean)
+    .map(pair => {
+      const [name, ...rest] = pair.split('=')
 
-  for (const pair of query.split('&')) {
-    if (!pair) {
-      continue
+      return [decode(name), decode(rest.join('='))]
+    })
+}
+
+const detect = (value: string) => percentBytes(value.replace(/\+/g, ' '))
+
+/** How often a string switches between letters and digits, ignoring everything else. */
+export function letterDigitSwitches(value: string): number {
+  let last = ''
+  let switches = 0
+
+  for (const char of value) {
+    const kind = /[A-Za-z]/.test(char) ? 'letter' : /[0-9]/.test(char) ? 'digit' : ''
+
+    if (kind) {
+      switches += last && kind !== last ? 1 : 0
+      last = kind
     }
-
-    const [name, ...rest] = pair.split('=')
-    out.set(decode(name).toLowerCase(), decode(rest.join('=')))
   }
 
-  return out
+  return switches
+}
+
+/**
+ * A random-looking token: a JWT, base32, hex, or letters and digits switching back and forth
+ * ("4eC39HqL…", "abc123SECRET"). Words and numbers joined up ("ORDER-2026-000123456",
+ * "correct-horse-battery-staple-99") switch at most once and are left alone.
+ */
+export function looksLikeToken(value: string, min: number): boolean {
+  if (value.length < min) {
+    return false
+  }
+
+  if (JWT.test(value)) {
+    return true
+  }
+
+  if (value.length >= ENCODED_TOKEN_MIN && (/^[A-Z2-7]+=*$/.test(value) || (/^[0-9a-f]+$/i.test(value) && /[a-f]/i.test(value)))) {
+    return true
+  }
+
+  return letterDigitSwitches(value) >= 2
+}
+
+interface UriParts {
+  authority: string | null
+  path: string
+  query: string
+  fragment: string
+}
+
+function uriParts(uri: string): UriParts {
+  let rest = uri.replace(SCHEME, '')
+  let authority: string | null = null
+
+  if (rest.startsWith('//')) {
+    const end = rest.slice(2).search(/[/?#]/)
+    authority = end < 0 ? rest.slice(2) : rest.slice(2, end + 2)
+    rest = end < 0 ? '' : rest.slice(end + 2)
+  }
+
+  const hashAt = rest.indexOf('#')
+  const fragment = hashAt < 0 ? '' : rest.slice(hashAt + 1)
+  const beforeHash = hashAt < 0 ? rest : rest.slice(0, hashAt)
+  const queryAt = beforeHash.indexOf('?')
+
+  return {
+    authority,
+    path: queryAt < 0 ? beforeHash : beforeHash.slice(0, queryAt),
+    query: queryAt < 0 ? '' : beforeHash.slice(queryAt + 1),
+    fragment
+  }
+}
+
+/** The host of scheme://[user@]host[:port]/…, lower case; '' when it is not a plain host name. */
+function uriHost(uri: string): string {
+  const { authority } = uriParts(uri)
+  const host = (authority ?? '').split('@').pop()!.replace(/:\d*$/, '').toLowerCase()
+
+  return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) ? host : ''
+}
+
+/** Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code. */
+export function uriLooksSecret(uri: string, depth = 0): boolean {
+  if (CREDENTIALS.test(uri) || /otpauth/i.test(decodeDeep(uri))) {
+    return true
+  }
+
+  const { path, query, fragment } = uriParts(uri)
+  const segments = [...path.split('/'), ...(fragment.includes('=') ? [] : fragment.split('/'))].map(detect).filter(Boolean)
+
+  if (segments.some(segment => SECRET_PATH.test(segment) || looksLikeToken(segment, URL_TOKEN_MIN))) {
+    return true
+  }
+
+  const pairs = [...params(query, detect), ...(fragment.includes('=') ? params(fragment, detect) : [])]
+
+  return pairs.some(([name, value]) => SECRET_PARAM.test(name) || looksLikeToken(value, URL_TOKEN_MIN) || (depth < 3 && SCHEME.test(value) && uriLooksSecret(value, depth + 1)))
+}
+
+/** A password, key, recovery phrase or credentialled link, as far as one can tell from the text. */
+export function looksSecret(text: string): boolean {
+  if (/private key/i.test(text) || SECRET_WORDS.test(text) || SECRET_LABELS.test(text) || /otpauth/i.test(decodeDeep(text))) {
+    return true
+  }
+
+  const words = text.split(/[\s,]+/).filter(Boolean)
+
+  if (words.length >= RECOVERY_WORDS.min && words.length <= RECOVERY_WORDS.max && words.every(word => SEED_WORD.test(word.toLowerCase()))) {
+    return true
+  }
+
+  return text
+    .split(/\s+/)
+    .filter(Boolean)
+    .some(word => (SCHEME.test(word) ? uriLooksSecret(word) : !word.includes('@') && looksLikeToken(word, TEXT_TOKEN_MIN)))
 }
 
 function describeOtp(text: string): QrReading {
@@ -63,9 +212,11 @@ function describeOtp(text: string): QrReading {
   }
 
   const rest = text.replace(/^otpauth:\/\/[^/?#]*\/?/i, '')
-  const [path, query = ''] = rest.split('?', 2)
-  const fromLabel = decode(path).includes(':') ? decode(path).split(':')[0] : ''
-  const issuer = label(params(query.split('#')[0]).get('issuer') ?? fromLabel)
+  const queryAt = rest.indexOf('?')
+  const name = decodeLabel(queryAt < 0 ? rest : rest.slice(0, queryAt))
+  const query = queryAt < 0 ? '' : rest.slice(queryAt + 1).split('#')[0]
+  const issuerParam = params(query, decodeLabel).find(([key]) => key.toLowerCase() === 'issuer')
+  const issuer = label(issuerParam ? issuerParam[1] : name.includes(':') ? name.split(':')[0] : '')
 
   return { kind: 'otp', caption: '2FA setup code copied', description: issuer ? `a 2FA setup code for ${issuer}` : 'a 2FA setup code' }
 }
@@ -112,45 +263,41 @@ function describeWifi(text: string): QrReading {
 }
 
 function describeLink(text: string): QrReading | null {
-  let url: URL
-
-  try {
-    url = new URL(text)
-  } catch {
-    return null
-  }
-
-  const host = url.hostname
+  const host = /^https?:\/\/\S+$/i.test(text) ? uriHost(text) : ''
 
   if (!host) {
     return null
   }
 
-  const named = [...params(url.search.slice(1)).keys(), ...params(url.hash.slice(1)).keys()]
-  const carriesSecret = Boolean(url.username || url.password) || named.some(name => SENSITIVE_PARAM.test(name))
-
-  return carriesSecret
+  return uriLooksSecret(text)
     ? { kind: 'link', caption: `Link copied: ${host}`, description: `a link to ${host} that carries what looks like a password, key or sign-in token` }
     : { kind: 'link', caption: `Link copied: ${host}`, description: `a link to ${host}`, text }
 }
 
-/** A password, key or recovery phrase, as far as one can tell from the text alone. */
-export function looksSecret(text: string): boolean {
-  if (/PRIVATE KEY/.test(text) || LABELLED_SECRET.test(text)) {
-    return true
+/** A code with several lines is hidden whole when any line, or the whole, would be. */
+function describeLines(text: string): QrReading {
+  if (looksSecret(text)) {
+    return { kind: 'secret', caption: QR_COPIED, description: SECRET_DESCRIPTION }
   }
 
-  const words = text.trim().split(/\s+/)
+  for (const line of text.split(/\r?\n/).map(part => part.trim()).filter(Boolean)) {
+    const reading = describeQr(line)
 
-  if (RECOVERY_LENGTHS.has(words.length) && words.every(word => /^[a-z]{3,8}$/.test(word))) {
-    return true
+    if (reading.text === undefined) {
+      return { kind: reading.kind, caption: QR_COPIED, description: `text that includes ${reading.description}` }
+    }
   }
 
-  return /^\S{16,}$/.test(text) && !SCHEME.test(text) && !text.includes('@') && /[A-Za-z]/.test(text) && /\d/.test(text)
+  return { kind: 'text', caption: QR_COPIED, description: 'text', text }
 }
 
+/** One code's contents, described. Several codes are refused before this (see the readers). */
 export function describeQr(raw: string): QrReading {
   const text = raw.trim()
+
+  if (/[\r\n]/.test(text)) {
+    return describeLines(text)
+  }
 
   if (/^otpauth(-migration)?:/i.test(text)) {
     return describeOtp(text)
@@ -160,19 +307,17 @@ export function describeQr(raw: string): QrReading {
     return describeWifi(text)
   }
 
-  if (/^https?:\/\//i.test(text)) {
-    const link = describeLink(text)
+  const link = describeLink(text)
 
-    if (link) {
-      return link
-    }
+  if (link) {
+    return link
   }
 
   if (looksSecret(text)) {
-    return { kind: 'secret', caption: COPIED, description: 'something that looks like a password, key or recovery phrase' }
+    return { kind: 'secret', caption: QR_COPIED, description: SECRET_DESCRIPTION }
   }
 
-  return { kind: 'text', caption: COPIED, description: 'text', text }
+  return { kind: 'text', caption: QR_COPIED, description: 'text', text }
 }
 
 /** The CLI's `capture qr --json` line, checked; null when it is anything else (an older CLI printed the contents). */

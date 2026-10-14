@@ -170,5 +170,505 @@
     "caption": "QR code copied",
     "description": "text",
     "full": true
+  },
+  {
+    "note": "otpauth in a value with an ordinary name",
+    "text": "https://example.com/start?next=otpauth://totp/GitHub?secret=JBSWY3DPEHPK3PXP",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "JBSWY3DPEHPK3PXP",
+      "otpauth"
+    ]
+  },
+  {
+    "note": "URL-encoded otpauth",
+    "text": "https://example.com/start?next=otpauth%3A%2F%2Ftotp%2FX%3Fsecret%3DJBSWY3DPEHPK3PXP",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "JBSWY3DPEHPK3PXP"
+    ]
+  },
+  {
+    "note": "doubly encoded otpauth",
+    "text": "https://example.com/start?next=otpauth%253A%252F%252Ftotp",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "otpauth"
+    ]
+  },
+  {
+    "note": "token value under an unknown name",
+    "text": "https://example.com/go?t=abc123SECRET",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "abc123SECRET"
+    ]
+  },
+  {
+    "note": "JWT in the path",
+    "text": "https://example.com/s/eyJhbGciOi.eyJzdWIiOi.c2ln",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "eyJhbGciOi"
+    ]
+  },
+  {
+    "note": "invitation path",
+    "text": "https://example.com/invite/ABCD1234EFGH",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "ABCD1234EFGH"
+    ]
+  },
+  {
+    "note": "token path segment under a plain name",
+    "text": "https://example.com/x/ABCD1234EFGH",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "ABCD1234EFGH"
+    ]
+  },
+  {
+    "note": "a nested link with a signature",
+    "text": "https://example.com/?next=https%3A%2F%2Fother.example%2Fdone%3Fsig%3D1",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "other.example"
+    ]
+  },
+  {
+    "note": "parameter names match in any case",
+    "text": "https://example.com/?TOKEN=x",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "TOKEN=x"
+    ]
+  },
+  {
+    "note": "sig",
+    "text": "https://example.com/?sig=1",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "sig=1"
+    ]
+  },
+  {
+    "note": "URL token: 7 characters is below the minimum",
+    "text": "https://example.com/x/ab12cd3",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "URL token: 8 characters is the minimum",
+    "text": "https://example.com/x/ab12cd34",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "ab12cd34"
+    ]
+  },
+  {
+    "note": "a link and a Wi-Fi password in one code",
+    "text": "https://example.com\nWIFI:S:Home;T:WPA;P:hunter22;;",
+    "kind": "wifi",
+    "caption": "QR code copied",
+    "description": "text that includes a Wi-Fi network called \"Home\"",
+    "hidden": [
+      "hunter22",
+      "https://example.com\n"
+    ]
+  },
+  {
+    "note": "a sign-in link on a later line",
+    "text": "See you there\nhttps://example.com/reset?token=0000aaaa1111bbbb",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "0000aaaa1111bbbb"
+    ]
+  },
+  {
+    "note": "ordinary lines stay whole",
+    "text": "Menu\nhttps://example.com/menu",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "credentials in an ftp link",
+    "text": "ftp://user:pw@ftp.example.com/files",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "user:pw"
+    ]
+  },
+  {
+    "note": "an SMS carrying a password",
+    "text": "SMSTO:+15551234567:Your password is 4821",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4821"
+    ]
+  },
+  {
+    "note": "a lower-case private key",
+    "text": "-----begin private key-----\nabc\n-----end private key-----",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "-----begin"
+    ]
+  },
+  {
+    "note": "letters-only base32 at 16 characters",
+    "text": "JBSWYDPEHPKPXPQQ",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "JBSWYDPEHPKPXPQQ"
+    ]
+  },
+  {
+    "note": "letters-only base32 below 16 characters",
+    "text": "JBSWYDPEHPKPXPQ",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "hex with no digits at 16 characters",
+    "text": "deadbeefcafebabe",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "deadbeefcafebabe"
+    ]
+  },
+  {
+    "note": "hex with no digits below 16 characters",
+    "text": "deadbeefcafebab",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a capitalised recovery phrase",
+    "text": "Abandon Ability Able About Above Absent Absorb Abstract Absurd Abuse Access Accident",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abandon"
+    ]
+  },
+  {
+    "note": "a comma-separated recovery phrase",
+    "text": "abandon,ability,able,about,above,absent,absorb,abstract,absurd,abuse,access,accident",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abandon"
+    ]
+  },
+  {
+    "note": "11 words: a phrase missing a word",
+    "text": "abandon ability able about above absent absorb abstract absurd abuse access",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abandon"
+    ]
+  },
+  {
+    "note": "10 words is not a recovery phrase",
+    "text": "abandon ability able about above absent absorb abstract absurd abuse",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "24 words",
+    "text": "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abandon"
+    ]
+  },
+  {
+    "note": "25 words is not a recovery phrase",
+    "text": "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual adapt",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "seed words of 3 and 8 letters",
+    "text": "act abandon ability able about above absent absorb abstract absurd abuse access",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abandon"
+    ]
+  },
+  {
+    "note": "a 2-letter word is not a seed word",
+    "text": "ab abandon ability able about above absent absorb abstract absurd abuse access",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a 9-letter word is not a seed word",
+    "text": "abandoned abandon ability able about above absent absorb abstract absurd abuse access",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an order number",
+    "text": "ORDER-2026-000123456",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "words and a number joined up",
+    "text": "correct-horse-battery-staple-99",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "text token: 11 characters is below the minimum",
+    "text": "ab12cd34ef5",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "text token: 12 characters is the minimum",
+    "text": "ab12cd34ef56",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ab12cd34ef56"
+    ]
+  },
+  {
+    "note": "one switch between letters and digits is not a token",
+    "text": "abcdefgh12345678",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "two switches are",
+    "text": "abcdefgh1234ijkl",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abcdefgh1234ijkl"
+    ]
+  },
+  {
+    "note": "no digits, not base32 or hex",
+    "text": "abcdefghijklmnopqrstu",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an e-mail address is not a token",
+    "text": "x7k2m9p4q8zz@example.com",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "the same characters without the @ are",
+    "text": "x7k2m9p4q8zz",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "x7k2m9p4q8zz"
+    ]
+  },
+  {
+    "note": "a geo: link",
+    "text": "geo:37.786971,-122.399677",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "links with other schemes get the link checks",
+    "text": "myapp://x?key=1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "key=1"
+    ]
+  },
+  {
+    "note": "control characters are stripped from names",
+    "text": "WIFI:S:Ho\u0007me;;",
+    "kind": "wifi",
+    "caption": "Wi-Fi details copied",
+    "description": "a Wi-Fi network called \"Home\"",
+    "hidden": [
+      "\u0007"
+    ]
+  },
+  {
+    "note": "a 40-character name is shown whole",
+    "text": "otpauth://totp/x?secret=A&issuer=LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code for LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+    "hidden": [
+      "secret=A"
+    ]
+  },
+  {
+    "note": "a 41-character name is shortened",
+    "text": "otpauth://totp/x?secret=A&issuer=LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code for LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…",
+    "hidden": [
+      "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+    ]
+  },
+  {
+    "note": "a JWT with no digits",
+    "text": "https://example.com/s/eyJabcdef.eyJghijkl",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "eyJabcdef"
+    ]
+  },
+  {
+    "note": "a personal path word on its own",
+    "text": "https://example.com/invite/abc",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "invite/abc"
+    ]
+  },
+  {
+    "note": "otpauth in a path",
+    "text": "https://example.com/otpauth",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "/otpauth"
+    ]
+  },
+  {
+    "note": "otpauth mentioned in text",
+    "text": "Use the otpauth link",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Use the"
+    ]
+  },
+  {
+    "note": "long numbers are not tokens",
+    "text": "00012345678905123456",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "the issuer parameter in any case",
+    "text": "otpauth://totp/x?secret=A&ISSUER=Acme",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code for Acme",
+    "hidden": [
+      "secret=A"
+    ]
+  },
+  {
+    "note": "doubly encoded otpauth that passes the token rule",
+    "text": "https://example.com/?q=%256Ftpauth",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "%256Ftpauth"
+    ]
+  },
+  {
+    "note": "doubly encoded otpauth in text",
+    "text": "Scan %256Ftpauth",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "%256Ftpauth"
+    ]
   }
 ]

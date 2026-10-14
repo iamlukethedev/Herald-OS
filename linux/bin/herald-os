@@ -792,12 +792,22 @@ def capture_color() -> int:
 
 
 # What a QR code says, described without giving it away: the same rules as
-# apps/desktop/shared/qr.ts, and both are checked against apps/desktop/shared/qr-cases.json.
+# apps/desktop/shared/qr.ts, written to match it line for line, and both are checked against
+# apps/desktop/shared/qr-cases.json. When in doubt it hides.
 QR_COPIED = "QR code copied"
-QR_SENSITIVE_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
-QR_LABELLED_SECRET = re.compile(r"\b(pass(word|wd|code|phrase)?|pwd|pin|secret|token|api[ _-]?key|private[ _-]?key|seed)\b\s*[:=]", re.I)
+QR_SECRET_DESCRIPTION = "something that looks like a password, key or recovery phrase"
+QR_SECRET_WORDS = re.compile(r"\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b", re.I | re.A)
+QR_SECRET_LABELS = re.compile(r"\b(pass|pin|key|seed|code|otp)\b\s*[:=]", re.I | re.A)
+QR_SECRET_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
+QR_SECRET_PATH = re.compile(r"invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem", re.I)
+QR_CREDENTIALS = re.compile(r"^[a-z][a-z0-9+.-]*://[^/?#\s@]*:[^/?#\s@]*@", re.I)
 QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
-QR_RECOVERY_LENGTHS = {12, 15, 18, 21, 24}
+QR_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
+QR_SEED_WORD = re.compile(r"[a-z]{3,8}")
+QR_TEXT_TOKEN_MIN = 12
+QR_URL_TOKEN_MIN = 8
+QR_ENCODED_TOKEN_MIN = 16
+QR_RECOVERY_WORDS = (11, 24)
 
 
 def qr_label(value: str) -> str:
@@ -805,13 +815,103 @@ def qr_label(value: str) -> str:
     return f"{clean[:39]}…" if len(clean) > 40 else clean
 
 
-def qr_params(query: str) -> dict[str, str]:
-    out: dict[str, str] = {}
+def qr_percent_bytes(value: str) -> str:
+    """%xx as single bytes (Latin-1), the same in both implementations whatever the input."""
+    return re.sub(r"%([0-9a-fA-F]{2})", lambda match: chr(int(match.group(1), 16)), value)
+
+
+def qr_decode_deep(value: str) -> str:
+    for _ in range(3):
+        value = qr_percent_bytes(value)
+    return value
+
+
+def qr_decode_label(value: str) -> str:
+    try:
+        return urllib.parse.unquote(value.replace("+", " "), errors="strict")
+    except UnicodeDecodeError:
+        return value
+
+
+def qr_detect(value: str) -> str:
+    return qr_percent_bytes(value.replace("+", " "))
+
+
+def qr_params(query: str, decode) -> list[tuple[str, str]]:
+    out = []
     for pair in query.split("&"):
         if pair:
             name, _, value = pair.partition("=")
-            out[urllib.parse.unquote_plus(name).lower()] = urllib.parse.unquote_plus(value)
+            out.append((decode(name), decode(value)))
     return out
+
+
+def qr_switches(value: str) -> int:
+    """How often a string switches between letters and digits, ignoring everything else."""
+    last, switches = "", 0
+    for char in value:
+        kind = "letter" if re.fullmatch(r"[A-Za-z]", char) else "digit" if re.fullmatch(r"[0-9]", char) else ""
+        if kind:
+            switches += 1 if last and kind != last else 0
+            last = kind
+    return switches
+
+
+def qr_looks_like_token(value: str, minimum: int) -> bool:
+    """A JWT, base32, hex, or letters and digits switching back and forth."""
+    if len(value) < minimum:
+        return False
+    if QR_JWT.match(value):
+        return True
+    if len(value) >= QR_ENCODED_TOKEN_MIN and (re.fullmatch(r"[A-Z2-7]+=*", value) or (re.fullmatch(r"[0-9a-fA-F]+", value) and re.search(r"[a-fA-F]", value))):
+        return True
+    return qr_switches(value) >= 2
+
+
+def qr_uri_parts(uri: str) -> tuple[str | None, str, str, str]:
+    """(authority, path, query, fragment), split by hand to match qr.ts."""
+    rest, authority = QR_SCHEME.sub("", uri, count=1), None
+    if rest.startswith("//"):
+        end = re.search(r"[/?#]", rest[2:])
+        authority = rest[2:] if not end else rest[2:end.start() + 2]
+        rest = "" if not end else rest[end.start() + 2:]
+    before_hash, _, fragment = rest.partition("#")
+    path, _, query = before_hash.partition("?")
+    return authority, path, query, fragment
+
+
+def qr_uri_host(uri: str) -> str:
+    authority = qr_uri_parts(uri)[0] or ""
+    host = re.sub(r":\d*$", "", authority.split("@")[-1]).lower()
+    return host if re.fullmatch(r"[a-z0-9.-]+", host) and re.search(r"[a-z0-9]", host) else ""
+
+
+def qr_uri_looks_secret(uri: str, depth: int = 0) -> bool:
+    """Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code."""
+    if QR_CREDENTIALS.match(uri) or re.search(r"otpauth", qr_decode_deep(uri), re.I):
+        return True
+    _, path, query, fragment = qr_uri_parts(uri)
+    segments = [qr_detect(part) for part in [*path.split("/"), *([] if "=" in fragment else fragment.split("/"))]]
+    if any(QR_SECRET_PATH.search(segment) or qr_looks_like_token(segment, QR_URL_TOKEN_MIN) for segment in segments if segment):
+        return True
+    pairs = [*qr_params(query, qr_detect), *(qr_params(fragment, qr_detect) if "=" in fragment else [])]
+    return any(
+        QR_SECRET_PARAM.search(name) or qr_looks_like_token(value, QR_URL_TOKEN_MIN) or (depth < 3 and QR_SCHEME.match(value) and qr_uri_looks_secret(value, depth + 1))
+        for name, value in pairs
+    )
+
+
+def qr_looks_secret(text: str) -> bool:
+    """A password, key, recovery phrase or credentialled link, as far as one can tell from the text."""
+    if re.search(r"private key", text, re.I) or QR_SECRET_WORDS.search(text) or QR_SECRET_LABELS.search(text) or re.search(r"otpauth", qr_decode_deep(text), re.I):
+        return True
+    words = [word for word in re.split(r"[\s,]+", text) if word]
+    if QR_RECOVERY_WORDS[0] <= len(words) <= QR_RECOVERY_WORDS[1] and all(QR_SEED_WORD.fullmatch(word.lower()) for word in words):
+        return True
+    return any(
+        qr_uri_looks_secret(word) if QR_SCHEME.match(word) else "@" not in word and qr_looks_like_token(word, QR_TEXT_TOKEN_MIN)
+        for word in text.split()
+    )
 
 
 def wifi_fields(text: str) -> dict[str, str]:
@@ -838,50 +938,53 @@ def wifi_fields(text: str) -> dict[str, str]:
     return fields
 
 
-def qr_looks_secret(text: str) -> bool:
-    """A password, key or recovery phrase, as far as one can tell from the text alone."""
-    if "PRIVATE KEY" in text or QR_LABELLED_SECRET.search(text):
-        return True
-    words = text.split()
-    if len(words) in QR_RECOVERY_LENGTHS and all(re.fullmatch(r"[a-z]{3,8}", word) for word in words):
-        return True
-    return bool(re.fullmatch(r"\S{16,}", text)) and not QR_SCHEME.match(text) and "@" not in text and bool(re.search(r"[A-Za-z]", text)) and bool(re.search(r"\d", text))
+def qr_describe_otp(text: str) -> dict:
+    if re.match(r"^otpauth-migration:", text, re.I):
+        return {"kind": "otp", "caption": "2FA codes copied", "description": "a 2FA export from an authenticator app"}
+    rest = re.sub(r"^otpauth://[^/?#]*/?", "", text, flags=re.I)
+    path, _, query = rest.partition("?")
+    name = qr_decode_label(path)
+    issuer_param = next((value for key, value in qr_params(query.split("#")[0], qr_decode_label) if key.lower() == "issuer"), None)
+    issuer = qr_label(issuer_param if issuer_param is not None else name.split(":")[0] if ":" in name else "")
+    return {"kind": "otp", "caption": "2FA setup code copied", "description": f"a 2FA setup code for {issuer}" if issuer else "a 2FA setup code"}
 
 
 def qr_link(text: str) -> dict | None:
-    try:
-        url = urllib.parse.urlsplit(text)
-        host = (url.hostname or "").encode("idna").decode()
-        has_userinfo = bool(url.username or url.password)
-    except (ValueError, UnicodeError):
+    host = qr_uri_host(text) if re.fullmatch(r"https?://\S+", text, re.I) else ""
+    if not host:
         return None
-    if not re.fullmatch(r"[a-z0-9.-]+", host):
-        return None
-    names = [*qr_params(url.query), *qr_params(url.fragment)]
-    if has_userinfo or any(QR_SENSITIVE_PARAM.search(name) for name in names):
+    if qr_uri_looks_secret(text):
         return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host} that carries what looks like a password, key or sign-in token"}
     return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host}", "text": text}
 
 
+def qr_describe_lines(text: str) -> dict:
+    """A code with several lines is hidden whole when any line, or the whole, would be."""
+    if qr_looks_secret(text):
+        return {"kind": "secret", "caption": QR_COPIED, "description": QR_SECRET_DESCRIPTION}
+    for line in (part.strip() for part in re.split(r"\r?\n", text)):
+        if line:
+            reading = describe_qr(line)
+            if "text" not in reading:
+                return {"kind": reading["kind"], "caption": QR_COPIED, "description": f"text that includes {reading['description']}"}
+    return {"kind": "text", "caption": QR_COPIED, "description": "text", "text": text}
+
+
 def describe_qr(raw: str) -> dict:
-    """{kind, caption, description, text?}: text only for ordinary links and text."""
+    """One code's contents as {kind, caption, description, text?}: text only for ordinary links and text."""
     text = raw.strip()
-    if re.match(r"^otpauth-migration:", text, re.I):
-        return {"kind": "otp", "caption": "2FA codes copied", "description": "a 2FA export from an authenticator app"}
-    if re.match(r"^otpauth:", text, re.I):
-        path, _, query = re.sub(r"^otpauth://[^/?#]*/?", "", text, flags=re.I).partition("?")
-        name = urllib.parse.unquote_plus(path)
-        issuer = qr_label(qr_params(query.split("#")[0]).get("issuer", name.split(":")[0] if ":" in name else ""))
-        return {"kind": "otp", "caption": "2FA setup code copied", "description": f"a 2FA setup code for {issuer}" if issuer else "a 2FA setup code"}
+    if re.search(r"[\r\n]", text):
+        return qr_describe_lines(text)
+    if re.match(r"^otpauth(-migration)?:", text, re.I):
+        return qr_describe_otp(text)
     if re.match(r"^WIFI:", text, re.I):
         network = qr_label(wifi_fields(text).get("S", ""))
         return {"kind": "wifi", "caption": "Wi-Fi details copied", "description": f'a Wi-Fi network called "{network}"' if network else "Wi-Fi details"}
-    if re.match(r"^https?://", text, re.I):
-        link = qr_link(text)
-        if link:
-            return link
+    link = qr_link(text)
+    if link:
+        return link
     if qr_looks_secret(text):
-        return {"kind": "secret", "caption": QR_COPIED, "description": "something that looks like a password, key or recovery phrase"}
+        return {"kind": "secret", "caption": QR_COPIED, "description": QR_SECRET_DESCRIPTION}
     return {"kind": "text", "caption": QR_COPIED, "description": "text", "text": text}
 
 
