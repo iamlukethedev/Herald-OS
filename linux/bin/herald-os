@@ -2781,10 +2781,12 @@ def main(argv: list[str]) -> int:
         if args:
             if args[0] not in ("stable", "edge"):
                 die("channel stable|edge", 2)
+            # The marker changes only once the switch worked, so a failed switch keeps the old channel.
+            if is_image() and image_switch(args[0]) != 0:
+                die(f"could not switch the image's channel (bootc switch); is the {args[0]} tag published? "
+                    "You are still on the previous channel.", 1)
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             marker.write_text(args[0] + "\n")
-            if is_image() and image_switch(args[0]) != 0:
-                die("could not switch the image's channel (bootc switch)", 1)
         print(marker.read_text().strip() if marker.exists() else "stable")
         return 0
     if cmd == "rollback":

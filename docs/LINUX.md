@@ -248,7 +248,7 @@ On the image, apps install through Flatpak or into `~/.local` (the catalog picks
 there); the system itself changes only by a whole new image.
 
 **Updates you can undo.** `herald-os update` runs `bootc upgrade` (the image tag of the channel:
-`stable` for releases, `edge` for main once it is published; `herald-os channel edge` switches with
+`stable` for releases, `edge` for every push to main that changes the image; `herald-os channel edge` switches with
 `bootc switch`), then
 Flatpaks and `hermes update`. The new image starts on the next restart and the previous one stays in
 the boot menu; `herald-os rollback` (or Update > Go back to the previous version) makes it the
@@ -297,8 +297,8 @@ not on the computer you work on. What happens on its first start:
   closed.
 - **Nothing checks the image's signature yet.** `linux/image/cosign.pub` is not in the repository, so
   neither the switch nor later updates verify it; you trust GHCR and the connection to it.
-- **Only the `stable` tag is published.** `edge` does not exist yet, so `herald-os channel edge`
-  fails.
+- **`edge` follows `main`.** The image workflow publishes it on pushes to `main`; `stable` follows
+  releases.
 
 bootc keeps the changes you made to `/etc` yourself, so where you changed one of these settings,
 yours stays. Note the image you run now, so you can come back to it, then switch and restart:
