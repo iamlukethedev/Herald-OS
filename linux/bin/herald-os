@@ -821,7 +821,13 @@ QR_ACRONYM_RUNS_MIN = 2
 QR_CASE_SWITCHES_MIN = 4
 QR_MIXED_CASE_MIN = 16
 QR_WORD_RUN_MIN = 4
-QR_CAMEL_SWITCHES_MIN = 4
+QR_NAME_SWITCHES_MAX = 4
+QR_NAME_PART_MIN = 2
+QR_MANY_SWITCHES_MIN = 4
+QR_WORD_PART_MIN = 3
+QR_AWS_SINGLE_RUNS_MIN = 4
+QR_VOWEL = re.compile(r"[aeiouy]", re.I)
+QR_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+")
 QR_RANDOM_WORD_MIN = 6
 QR_WORD_CASE_SWITCHES_MIN = 2
 QR_CAMEL_WORD_MIN = 10
@@ -926,25 +932,37 @@ def qr_short_lower_runs(chunk: str) -> bool:
     return sum(lower) < QR_WORD_RUN_MIN * len(lower)
 
 
+def qr_name_like(value: str) -> bool:
+    """Letters and digits that read as a name ("Mp3Player": Mp, 3, Player); see NAME_SWITCHES_MAX in qr.ts."""
+    parts = QR_PARTS.findall(value)
+    letters = [part for part in parts if not part[0].isdigit()]
+    named = sum(len(part) for part in letters if len(part) >= QR_NAME_PART_MIN and QR_VOWEL.search(part))
+    return len(letters) < len(parts) and qr_switches(value) <= QR_NAME_SWITCHES_MAX and 2 * named >= sum(len(part) for part in letters)
+
+
 def qr_random_chunk(chunk: str) -> bool:
     if len(chunk) >= QR_RANDOM_CHUNK_MIN:
-        switches = qr_switches(chunk)
-        if switches >= QR_CAMEL_SWITCHES_MIN or (switches >= QR_LETTER_DIGIT_SWITCHES_MIN and not QR_CAMEL_WORD.search(chunk)):
+        if qr_switches(chunk) >= QR_LETTER_DIGIT_SWITCHES_MIN and not (QR_CAMEL_WORD.search(chunk) and qr_name_like(chunk)):
             return True
-        if qr_irregular_switches(chunk) >= QR_IRREGULAR_SWITCHES_MIN:
+        if qr_irregular_switches(chunk) >= QR_IRREGULAR_SWITCHES_MIN and not qr_name_like(chunk):
             return True
     return len(chunk) >= QR_MIXED_CASE_MIN and qr_case_switches(chunk) >= QR_CASE_SWITCHES_MIN and qr_acronym_runs(chunk) >= QR_ACRONYM_RUNS_MIN and qr_short_lower_runs(chunk)
 
 
 def qr_random_word(value: str) -> bool:
-    """The letters and digits of a whole word switching both ways ("aB3-xY9"); CamelCase only excuses longer words."""
+    """A whole word, its letters and digits taken together, that looks random; see RANDOM_WORD_MIN in qr.ts."""
     word = re.sub(r"[^A-Za-z0-9]", "", value)
-    return (
-        len(word) >= QR_RANDOM_WORD_MIN
-        and qr_switches(word) >= QR_LETTER_DIGIT_SWITCHES_MIN
+    if len(word) < QR_RANDOM_WORD_MIN:
+        return False
+    switches = qr_switches(word)
+    mixed = (
+        switches >= QR_LETTER_DIGIT_SWITCHES_MIN
         and qr_case_switches(word) >= QR_WORD_CASE_SWITCHES_MIN
-        and (len(word) < QR_CAMEL_WORD_MIN or not QR_CAMEL_WORD.search(word))
+        and not qr_name_like(value)
+        and not (len(word) >= QR_CAMEL_WORD_MIN and QR_CAMEL_WORD.search(word))
     )
+    words = any(len(part) >= QR_WORD_PART_MIN and QR_VOWEL.search(part) for part in QR_PARTS.findall(value))
+    return mixed or (switches >= QR_MANY_SWITCHES_MIN and not words)
 
 
 def qr_aws_key(word: str) -> bool:
@@ -952,9 +970,19 @@ def qr_aws_key(word: str) -> bool:
     return bool(QR_AWS_SECRET_KEY.fullmatch(word) and re.search(r"[A-Z]", word) and re.search(r"[a-z]", word) and re.search(r"[0-9]", word))
 
 
+def qr_single_runs(chunk: str) -> int:
+    """One-character runs that don't start a CamelCase word: a lone lower-case letter, or a capital not followed by 2+ lower case."""
+    parts = qr_runs(chunk)
+    return sum(
+        1
+        for i, (kind, length) in enumerate(parts)
+        if length == 1 and (kind == "lower" or (kind == "upper" and not (i + 1 < len(parts) and parts[i + 1][0] == "lower" and parts[i + 1][1] >= 2)))
+    )
+
+
 def qr_looks_like_token(value: str, minimum: int) -> bool:
     """A known key format, an AWS secret key, a grouped key, a random word, a JWT, base32, hex, or a random chunk (qr_random_chunk)."""
-    if QR_KNOWN_TOKEN.match(value) or (qr_aws_key(value) and re.search(r"[/+]", value)):
+    if QR_KNOWN_TOKEN.match(value) or (qr_aws_key(value) and (re.search(r"[/+]", value) or qr_single_runs(value) >= QR_AWS_SINGLE_RUNS_MIN)):
         return True
     chunks = [chunk for chunk in re.split(r"[^A-Za-z0-9]+", value) if chunk]
     key_groups = len(chunks) >= QR_KEY_GROUPS_MIN and all(len(chunk) >= QR_KEY_GROUP_MIN and re.search(r"[A-Za-z]", chunk) and re.search(r"[0-9]", chunk) for chunk in chunks)

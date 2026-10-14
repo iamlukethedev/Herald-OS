@@ -60,11 +60,12 @@ export const ENCODED_TOKEN_MIN = 16
  * counts as random from this length.
  */
 export const RANDOM_CHUNK_MIN = 8
-/** Letters and digits switching this often, with no CamelCase word in the chunk, are random ("abc123SECRET"). */
+/**
+ * Letters and digits switching this often are random ("abc123SECRET"), unless the chunk has a
+ * CamelCase word and reads as a name (see nameLike).
+ */
 export const LETTER_DIGIT_SWITCHES_MIN = 2
-/** This often, they are random even with a CamelCase word ("Hunter2Hunter2Hunter2"); names switch twice at most. */
-export const CAMEL_SWITCHES_MIN = 4
-/** This many irregular switches in a row are random ("aZbYcX", "4eC39H"). */
+/** This many irregular switches in a row are random ("aZbYcX", "4eC39H"), unless the chunk reads as a name ("ThinkPadX1C9"). */
 export const IRREGULAR_SWITCHES_MIN = 3
 /**
  * Acronym-like runs glued to lowercase ("DEFghi") this often in one chunk, with CASE_SWITCHES_MIN
@@ -80,14 +81,32 @@ export const MIXED_CASE_MIN = 16
  */
 export const WORD_RUN_MIN = 4
 /**
+ * Letters and digits read as a name when they hold a digit, switch between letters and digits at
+ * most NAME_SWITCHES_MAX times, and at least half the letters are in parts of NAME_PART_MIN or more
+ * with a vowel. Parts split at case and letter-digit changes: "Mp3Player" is Mp, 3, Player;
+ * "WiFi6E" is Wi, Fi, 6, E. "Hunter2Hunter2Hunter2" switches 5 times; "q7Wz2Lp9" has no such part.
+ */
+export const NAME_SWITCHES_MAX = 4
+export const NAME_PART_MIN = 2
+/**
  * A whole word, its letters and digits taken together whatever separates them, is random from
- * RANDOM_WORD_MIN of them when they switch between letters and digits LETTER_DIGIT_SWITCHES_MIN
- * times and between cases WORD_CASE_SWITCHES_MIN times ("aB3-xY9", "q7Wz2Lp9"). A CamelCase word
- * only excuses words of CAMEL_WORD_MIN or more ("iPhone15ProMax", not "Win10Pro").
+ * RANDOM_WORD_MIN of them when either
+ * - they switch between letters and digits LETTER_DIGIT_SWITCHES_MIN times and between cases
+ *   WORD_CASE_SWITCHES_MIN times ("aB3-xY9", "q7Wz2Lp9"), unless the word reads as a name
+ *   ("Win10Pro") or has CAMEL_WORD_MIN or more with a CamelCase word ("Vodafone-A1B2C3"), or
+ * - they switch between letters and digits MANY_SWITCHES_MIN times with no part of WORD_PART_MIN
+ *   letters or more with a vowel, whatever the case ("k3j9x2m8", "Q7WZ2LP9"; not "ASUS_RT-AX88U_5G").
  */
 export const RANDOM_WORD_MIN = 6
 export const WORD_CASE_SWITCHES_MIN = 2
 export const CAMEL_WORD_MIN = 10
+export const MANY_SWITCHES_MIN = 4
+export const WORD_PART_MIN = 3
+/** An AWS key shape without / or + counts with this many one-character runs (see singleRuns); names have almost none. */
+export const AWS_SINGLE_RUNS_MIN = 4
+const VOWEL = /[aeiouy]/i
+/** A word's parts: acronyms, CamelCase words, lower-case runs and digit runs ("XMLHttp" is XML, Http). */
+const PARTS = /[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+/g
 /** Groups of letters and digits ("A1B2-C3D4"), each at least KEY_GROUP_MIN long, make a key. */
 export const KEY_GROUPS_MIN = 2
 export const KEY_GROUP_MIN = 3
@@ -265,15 +284,22 @@ export function shortLowerRuns(chunk: string): boolean {
 /** A CamelCase word: a capital and two or more lower-case letters ("Phone", "Pro"). */
 const CAMEL_WORD = /[A-Z][a-z]{2,}/
 
+/** Letters and digits that read as a name (see NAME_SWITCHES_MAX). */
+export function nameLike(value: string): boolean {
+  const parts = value.match(PARTS) ?? []
+  const letters = parts.filter(part => !/^[0-9]/.test(part))
+  const named = letters.filter(part => part.length >= NAME_PART_MIN && VOWEL.test(part)).reduce((sum, part) => sum + part.length, 0)
+
+  return letters.length < parts.length && letterDigitSwitches(value) <= NAME_SWITCHES_MAX && 2 * named >= letters.reduce((sum, part) => sum + part.length, 0)
+}
+
 function randomChunk(chunk: string): boolean {
   if (chunk.length >= RANDOM_CHUNK_MIN) {
-    const switches = letterDigitSwitches(chunk)
-
-    if (switches >= CAMEL_SWITCHES_MIN || (switches >= LETTER_DIGIT_SWITCHES_MIN && !CAMEL_WORD.test(chunk))) {
+    if (letterDigitSwitches(chunk) >= LETTER_DIGIT_SWITCHES_MIN && !(CAMEL_WORD.test(chunk) && nameLike(chunk))) {
       return true
     }
 
-    if (irregularSwitches(chunk) >= IRREGULAR_SWITCHES_MIN) {
+    if (irregularSwitches(chunk) >= IRREGULAR_SWITCHES_MIN && !nameLike(chunk)) {
       return true
     }
   }
@@ -285,12 +311,19 @@ function randomChunk(chunk: string): boolean {
 export function randomWord(value: string): boolean {
   const word = value.replace(/[^A-Za-z0-9]/g, '')
 
-  return (
-    word.length >= RANDOM_WORD_MIN &&
-    letterDigitSwitches(word) >= LETTER_DIGIT_SWITCHES_MIN &&
+  if (word.length < RANDOM_WORD_MIN) {
+    return false
+  }
+
+  const switches = letterDigitSwitches(word)
+  const mixed =
+    switches >= LETTER_DIGIT_SWITCHES_MIN &&
     caseSwitches(word) >= WORD_CASE_SWITCHES_MIN &&
-    (word.length < CAMEL_WORD_MIN || !CAMEL_WORD.test(word))
-  )
+    !nameLike(value) &&
+    !(word.length >= CAMEL_WORD_MIN && CAMEL_WORD.test(word))
+  const words = (value.match(PARTS) ?? []).some(part => part.length >= WORD_PART_MIN && VOWEL.test(part))
+
+  return mixed || (switches >= MANY_SWITCHES_MIN && !words)
 }
 
 /** Shaped like an AWS secret access key: about 40 characters of base64, mixing upper case, lower case and digits. */
@@ -298,14 +331,23 @@ export function awsKey(word: string): boolean {
   return AWS_SECRET_KEY.test(word) && /[A-Z]/.test(word) && /[a-z]/.test(word) && /[0-9]/.test(word)
 }
 
+/** One-character runs that don't start a CamelCase word: a lone lower-case letter, or a capital not followed by 2+ lower case. */
+export function singleRuns(chunk: string): number {
+  const parts = runs(chunk)
+
+  return parts.filter(
+    (part, i) => part.length === 1 && (part.kind === 'lower' || (part.kind === 'upper' && !(parts[i + 1]?.kind === 'lower' && parts[i + 1].length >= 2)))
+  ).length
+}
+
 /**
- * A random-looking token: a known key format, an AWS secret key with / or +, a grouped key, a
+ * A random-looking token: a known key format, an AWS secret key (with / or +, or random enough), a grouped key, a
  * random word (these at any length), or from `min` characters a JWT, base32, hex, or a chunk that
  * looks random (see randomChunk). Names stay text: "iPhone15ProMax", "NETGEAR-5G-Guest",
  * "TheQuickBrownFoxJumps", "ORDER-2026-000123456", "correct-horse-battery-staple-99".
  */
 export function looksLikeToken(value: string, min: number): boolean {
-  if (KNOWN_TOKEN.test(value) || (awsKey(value) && /[/+]/.test(value))) {
+  if (KNOWN_TOKEN.test(value) || (awsKey(value) && (/[/+]/.test(value) || singleRuns(value) >= AWS_SINGLE_RUNS_MIN))) {
     return true
   }
 
