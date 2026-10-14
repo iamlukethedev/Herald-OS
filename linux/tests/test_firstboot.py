@@ -677,13 +677,62 @@ def test_the_image_has_intel_wi_fi_firmware_and_exfat():
     assert "exfatprogs" in packages
 
 
+DOWNLOAD = r"\b(?:curl|wget)\b"
+SHELL = r"(?:/\S*/)?(?:ba|z|da|k)?sh\b"
+SUDO = r"(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\b(?:\s+\S+=\S*)*\s+)?"
+# A download piped into a shell: curl ... | sh, wget -qO- ... | sudo -E bash.
+PIPED_TO_SHELL = re.compile(rf"{DOWNLOAD}[^\n]*\|\s*{SUDO}{SHELL}")
+# A shell, eval or source reading a download: bash <(curl ...), sh -c "$(wget ...)", . <(curl ...).
+SHELL_READS_DOWNLOAD = re.compile(rf"(?:\b{SHELL}|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s)[^\n]*?(?:<\(|\$\(|`)\s*{SUDO}{DOWNLOAD}", re.M)
+
+
+def runs_a_download(script: str) -> bool:
+    return bool(PIPED_TO_SHELL.search(script) or SHELL_READS_DOWNLOAD.search(script))
+
+
+@pytest.mark.parametrize("line", [
+    "curl -fsSL https://bun.sh/install | bash",
+    "curl -fsSL https://example.com/x.sh | sh",
+    "curl -s https://example.com/x.sh | sudo bash",
+    "curl -s https://example.com/x.sh | sudo -E bash",
+    "curl -s https://example.com/x.sh | sudo -E env FOO=1 bash -s -- --yes",
+    "curl -s https://example.com/x.sh | /bin/bash",
+    "curl -s https://example.com/x.sh | tee /tmp/x.sh | zsh",
+    "wget -qO- https://example.com/x.sh | sh",
+    "wget -O - https://example.com/x.sh | sudo -E bash",
+    "bash <(curl -fsSL https://example.com/x.sh)",
+    "sudo -E bash <(wget -qO- https://example.com/x.sh)",
+    'sh -c "$(curl -fsSL https://example.com/x.sh)"',
+    'bash -c "$(wget -qO- https://example.com/x.sh)"',
+    "sh -c \"`curl -fsSL https://example.com/x.sh`\"",
+    'eval "$(curl -fsSL https://example.com/env)"',
+    "source <(curl -fsSL https://example.com/env)",
+    ". <(wget -qO- https://example.com/env)",
+    "  as_user bash -c 'bash <(curl -fsSL https://example.com/x.sh)'",
+])
+def test_a_download_run_by_a_shell_is_caught(line):
+    assert runs_a_download(line)
+
+
+@pytest.mark.parametrize("line", [
+    "curl -fsI --connect-timeout 10 -o /dev/null https://github.com/NousResearch/hermes-agent",
+    "curl -fsSL -o /tmp/x.tar.gz https://example.com/x.tar.gz && sha256sum -c sums",
+    "printf 'n\\nn\\n' | bash ./setup-hermes.sh",
+    "bash ./setup.sh",
+    'version="$(curl -fsS https://example.com/version)"',
+    "wget -q https://example.com/x.tar.gz",
+])
+def test_a_download_that_no_shell_runs_is_not_caught(line):
+    assert not runs_a_download(line)
+
+
 def test_first_boot_fetches_hermes_agent_and_nothing_else():
     # Third-party code is never fetched and run by default at first boot: no other sources, and no
-    # installer piped from the network into a shell.
+    # installer from the network handed to a shell.
     script = FIRSTBOOT.read_text()
     urls = set(re.findall(r"https?://[^\s'\";)]+", script))
     assert urls == {"https://github.com/NousResearch/hermes-agent"}
-    assert not re.search(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z)?sh\b", script)
+    assert not runs_a_download(script)
 
 
 def test_a_switched_system_where_no_one_can_sign_in_never_has_a_passwordless_hermes_in_wheel(tmp_path):
