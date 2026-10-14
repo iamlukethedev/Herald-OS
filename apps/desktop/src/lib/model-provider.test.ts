@@ -1,6 +1,6 @@
 import type { ModelOptionsResult } from '@herald-os/client'
 import { describe, expect, it } from 'vitest'
-import { type KeyCatalog, matchProvider, pickModel, providerChoices, type SignInProvider } from './model-provider.ts'
+import { endpointKeys, type KeyCatalog, matchProvider, pickModel, providerChoices, type SignInProvider } from './model-provider.ts'
 
 // Rows as hermes_cli/inventory.py builds them for `model.options` with the unconfigured ones: a
 // provider that is set up carries no auth hints, a skeleton carries its auth type and key variable.
@@ -76,6 +76,76 @@ describe('providerChoices', () => {
 
   it('has nothing to offer before the inventory is read', () => {
     expect(providerChoices(null, SIGN_INS, KEYS)).toEqual([])
+  })
+})
+
+// Custom endpoints as config.yaml sets them up: Hermes Desktop writes `providers:` entries whose key
+// is in .env under `key_env`; `hermes model` wrote the older `custom_providers:` list.
+const CONFIG = {
+  model: 'qwen3-30b-a3b',
+  providers: {
+    'qwen-flash': { name: 'qwen-flash', base_url: 'http://192.168.1.20:8000/v1', model: 'qwen3-30b-a3b', key_env: 'HERMES_CUSTOM_QWEN_FLASH_API_KEY' },
+    vllm: { base_url: 'http://192.168.1.21:8000/v1', api_key_env: 'VLLM_KEY' },
+    gateway: { base_url: 'https://llm.example.com/v1', api_key: '${GATEWAY_KEY}' },
+    inline: { base_url: 'https://other.example.com/v1', api_key: 'sk-written-into-config' },
+    ollama: { base_url: 'http://127.0.0.1:11434/v1' }
+  },
+  custom_providers: [
+    { name: 'Lab GPU — llama3', base_url: 'http://10.0.0.5:8080/v1', model: 'llama3', key_env: 'HERMES_CUSTOM_10_0_0_5_8080_API_KEY' },
+    { name: 'qwen-flash', base_url: 'http://192.168.1.99:8000/v1', key_env: 'SHADOWED' }
+  ]
+}
+
+const ENDPOINT_ROWS: ModelOptionsResult = {
+  model: 'qwen3-30b-a3b',
+  provider: 'custom:qwen-flash',
+  providers: [
+    { slug: 'qwen-flash', name: 'qwen-flash', is_current: true, is_user_defined: true, authenticated: true, models: ['qwen3-30b-a3b'], source: 'user-config', api_url: 'http://192.168.1.20:8000/v1', aliases: ['custom:qwen-flash', 'qwen-flash'] },
+    { slug: 'vllm', name: 'vllm', is_current: false, is_user_defined: true, authenticated: true, models: ['mistral-small'], source: 'user-config' },
+    { slug: 'custom:lab-gpu', name: 'Lab GPU', is_current: false, is_user_defined: true, authenticated: true, models: ['llama3'], source: 'user-config' },
+    { slug: 'ollama', name: 'ollama', is_current: false, is_user_defined: true, authenticated: true, models: ['gemma3'], source: 'user-config' }
+  ]
+}
+
+describe('endpointKeys', () => {
+  it('reads the variable each endpoint keeps its key in, the way Hermes does', () => {
+    // The older list's qwen-flash loses to the `providers:` one, as it does in Hermes.
+    expect(endpointKeys(CONFIG)).toEqual({
+      'qwen-flash': 'HERMES_CUSTOM_QWEN_FLASH_API_KEY',
+      vllm: 'VLLM_KEY',
+      gateway: 'GATEWAY_KEY',
+      'lab-gpu': 'HERMES_CUSTOM_10_0_0_5_8080_API_KEY'
+    })
+  })
+
+  it('never keeps a key written into config.yaml', () => {
+    expect(JSON.stringify(endpointKeys(CONFIG))).not.toContain('sk-written-into-config')
+  })
+
+  it('has nothing for a config without endpoints', () => {
+    expect(endpointKeys(null)).toEqual({})
+    expect(endpointKeys({ providers: 'broken', custom_providers: {} })).toEqual({})
+  })
+})
+
+describe('providerChoices for custom endpoints', () => {
+  const keys: KeyCatalog = { HERMES_CUSTOM_QWEN_FLASH_API_KEY: { is_password: true, is_set: true }, OPENROUTER_API_KEY: { provider: 'openrouter', is_password: true, is_set: false } }
+  const endpoints = endpointKeys(CONFIG)
+  const custom = (slug: string, catalog = keys) => providerChoices(ENDPOINT_ROWS, [], catalog, endpoints).find(item => item.slug === slug)
+
+  it('takes and replaces the key in the variable the endpoint names', () => {
+    expect(custom('qwen-flash')).toMatchObject({ current: true, ready: true, setup: 'key', keyEnv: 'HERMES_CUSTOM_QWEN_FLASH_API_KEY', helpUrl: null, command: null })
+    expect(custom('custom:lab-gpu')).toMatchObject({ setup: 'key', keyEnv: 'HERMES_CUSTOM_10_0_0_5_8080_API_KEY' })
+  })
+
+  it("is not ready while that variable is not in Hermes's .env", () => {
+    expect(custom('vllm')).toMatchObject({ ready: false, setup: 'key', keyEnv: 'VLLM_KEY' })
+    // Before the key catalog is read, Hermes's own word stands.
+    expect(custom('vllm', {})).toMatchObject({ ready: true, setup: 'key' })
+  })
+
+  it('leaves an endpoint that names no key as Hermes has it', () => {
+    expect(custom('ollama')).toMatchObject({ ready: true, setup: 'endpoint', keyEnv: null, command: null })
   })
 })
 

@@ -50,7 +50,8 @@ Pick the way that matches your machine:
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
 account, or an API key for a provider Hermes supports (OpenRouter, OpenAI, Anthropic, a local model,
 and others). Herald OS shows a sign-in card the first time Hermes needs one, and Settings > Hermes &
-agents > Model provider switches to another provider or takes its API key.
+agents > Model provider switches to another provider or takes its API key, a custom endpoint's
+included.
 
 ### macOS
 

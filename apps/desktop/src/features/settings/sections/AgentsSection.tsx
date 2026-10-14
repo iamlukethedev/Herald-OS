@@ -177,7 +177,9 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
 
   const current = options.data?.model ?? chat?.info.model
   const provider = options.data?.provider ?? chat?.info.provider
-  const providerLabel = options.data?.providers.find(p => p.slug === provider)?.name ?? provider
+  // Hermes names a custom endpoint `custom:<name>` where its row has the bare name.
+  const nameOf = (slug: string) => options.data?.providers.find(p => p.slug === slug || p.aliases?.includes(slug))?.name ?? slug
+  const providerLabel = provider && nameOf(provider)
   const providers = useMemo(() => {
     const q = filter.trim().toLowerCase()
 
@@ -202,7 +204,7 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
       }
 
       markSaved()
-      const name = options.data?.providers.find(p => p.slug === change.provider)?.name ?? change.provider
+      const name = nameOf(change.provider)
       notify({ title: 'Model changed', body: `${name} · ${change.model}, ${chat ? 'in this chat and new ones' : 'for new conversations'}.`, level: 'success' })
     } catch (error) {
       notify({ title: 'Could not change model', body: errorText(error), level: 'error' })

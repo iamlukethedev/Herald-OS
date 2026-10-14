@@ -7,10 +7,10 @@ export function isAuthErrorText(text: string | undefined | null): boolean {
   return Boolean(text && AUTH_ERROR.test(text))
 }
 
-/** `model.provider` from the raw YAML; the schema view flattens `model` to a string. */
+/** `model.provider` from the raw YAML (`custom:<name>` for a custom endpoint); the schema view flattens `model` to a string. */
 export function parseActiveProvider(yaml: string): string | null {
   const block = /^model:\s*\n((?:[ \t]+.*\n?)*)/m.exec(yaml)
-  const match = block ? /^[ \t]+provider:\s*['"]?([\w.-]+)['"]?/m.exec(block[1]) : null
+  const match = block ? /^[ \t]+provider:\s*['"]?([\w.:-]+)['"]?/m.exec(block[1]) : null
 
   return match?.[1] ?? null
 }

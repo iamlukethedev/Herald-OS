@@ -9,7 +9,10 @@ dates (file names, project branches, chat titles), never contents, and only afte
 Whatever your Hermes is set up with: a Nous Portal subscription, or an API key for OpenRouter,
 OpenAI, Anthropic, a local model and others. Change it in Settings > Hermes & agents: Model provider
 signs you in to another account or takes an API key, and Preferred model picks the model.
-`hermes model` does the same in a terminal.
+`hermes model` does the same in a terminal. A custom endpoint you set up in Hermes, with
+`hermes model` or in Hermes Desktop, is in the list too. When its entry in Hermes's config.yaml
+names a key variable (`key_env`), Model provider takes and replaces its key, and Hermes keeps it in
+`~/.hermes/.env`, which Herald OS, Hermes Desktop and the `hermes` CLI share.
 
 **What does it cost?**
 Herald OS is free and open source. The model is billed by its provider; Settings > Usage shows how

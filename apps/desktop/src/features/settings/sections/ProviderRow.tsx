@@ -7,7 +7,7 @@ import { type ProviderChoice, type ProviderSetup, providerChoices } from '../../
 import { useBackendData } from '../../../lib/use-async.ts'
 import { $connection } from '../../../store/gateway.ts'
 import { $hermesAuth, refreshHermesAuth, requestHermesLogin } from '../../../store/hermes-auth.ts'
-import { $providerChanges, $providerFocus, loadKeyCatalog, loadModelOptions, type ModelChange, saveProviderKey, setHermesModel, switchToProvider } from '../../../store/model-provider.ts'
+import { $providerChanges, $providerFocus, loadEndpointKeys, loadKeyCatalog, loadModelOptions, type ModelChange, providerSlug, saveProviderKey, setHermesModel, switchToProvider } from '../../../store/model-provider.ts'
 import { notify } from '../../../store/notifications.ts'
 import { openWebWindow } from '../../../store/web-windows.ts'
 import { openApp, showPage } from '../../../store/windows.ts'
@@ -17,21 +17,24 @@ import { errorText, focusSettings, InlineNote, markSaved, SettingsRow, useDismis
  * Model provider: the provider Hermes thinks with, and switching it, in Settings > Hermes & agents
  * and in first-run setup. Every provider Hermes knows is offered. One that is set up is used at
  * once, on Hermes's recommended model for it; one that signs in on an account opens the sign-in
- * card; one that takes an API key asks for it here; the rest say what to run.
+ * card; one that takes an API key asks for it here, a custom endpoint whose entry names a key
+ * variable included; the rest say what to run.
  */
 
-const SETUP_HINT: Record<ProviderSetup, string> = { key: 'API key', 'sign-in': 'Sign in', terminal: 'Terminal', local: 'This computer' }
+const SETUP_HINT: Record<ProviderSetup, string> = { key: 'API key', 'sign-in': 'Sign in', terminal: 'Terminal', local: 'This computer', endpoint: 'Your endpoint' }
 const READY: Record<ProviderSetup, { pill: string; text: string }> = {
   key: { pill: 'Key saved', text: 'Uses your API key.' },
   'sign-in': { pill: 'Signed in', text: 'Signed in.' },
   terminal: { pill: 'Signed in', text: 'Signed in through its own tool.' },
-  local: { pill: 'Ready', text: 'Runs on this computer.' }
+  local: { pill: 'Ready', text: 'Runs on this computer.' },
+  endpoint: { pill: 'Ready', text: 'Uses your own endpoint, as Hermes has it set up.' }
 }
 const NOT_READY: Record<ProviderSetup, { pill: string; text: string }> = {
   key: { pill: 'No key', text: 'Its API key is missing. Hermes cannot answer until you add one or choose another provider.' },
   'sign-in': { pill: 'Signed out', text: 'Signed out. Hermes cannot answer until you sign in or choose another provider.' },
   terminal: { pill: 'Not signed in', text: 'Not signed in. Hermes cannot answer until it is, or until you choose another provider.' },
-  local: { pill: 'Not running', text: 'Not running. Hermes cannot answer until it is, or until you choose another provider.' }
+  local: { pill: 'Not running', text: 'Not running. Hermes cannot answer until it is, or until you choose another provider.' },
+  endpoint: { pill: 'Not set up', text: 'Not set up. Hermes cannot answer until it is, or until you choose another provider.' }
 }
 
 /** The last chooser request acted on, so a row that mounts later leaves an old one alone. */
@@ -44,7 +47,8 @@ export function ModelProviderRow() {
   const focus = useStore($providerFocus)
   const options = useBackendData(loadModelOptions, [changes], { enabled: online })
   const keys = useBackendData(loadKeyCatalog, [changes])
-  const choices = useMemo(() => providerChoices(options.data, auth.providers, keys.data ?? {}), [options.data, auth.providers, keys.data])
+  const endpoints = useBackendData(loadEndpointKeys, [changes])
+  const choices = useMemo(() => providerChoices(options.data, auth.providers, keys.data ?? {}, endpoints.data ?? {}), [options.data, auth.providers, keys.data, endpoints.data])
   const current = choices.find(choice => choice.current) ?? null
   const [setup, setSetup] = useState<ProviderChoice | null>(null)
   const [confirm, setConfirm] = useState<Extract<ModelChange, { ok: false }> | null>(null)
@@ -64,7 +68,8 @@ export function ModelProviderRow() {
     }
 
     handledFocus = focus.ts
-    const choice = focus.slug ? choices.find(item => item.slug === focus.slug) : undefined
+    const slug = focus.slug && providerSlug(focus.slug)
+    const choice = slug ? choices.find(item => item.slug === slug) : undefined
 
     if (choice && choice.setup !== 'sign-in') {
       openSetup(choice)
@@ -73,7 +78,7 @@ export function ModelProviderRow() {
     }
   }, [focus, choices])
 
-  const nameOf = (slug: string) => choices.find(choice => choice.slug === slug)?.name ?? slug
+  const nameOf = (slug: string) => choices.find(choice => choice.slug === providerSlug(slug))?.name ?? slug
 
   const settle = (change: ModelChange) => {
     if (change.ok) {
@@ -115,6 +120,7 @@ export function ModelProviderRow() {
     void refreshHermesAuth()
     options.reload()
     keys.reload()
+    endpoints.reload()
   }
 
   const others = auth.providers.filter(provider => provider.loggedIn && provider.id !== current?.slug).map(provider => provider.name)
@@ -135,7 +141,7 @@ export function ModelProviderRow() {
       icon={<IconKey />}
       label="Model provider"
       description={description}
-      keywords="provider account sign in login oauth api key nous portal openrouter openai anthropic chatgpt codex gemini switch change llm credentials"
+      keywords="provider account sign in login oauth api key nous portal openrouter openai anthropic chatgpt codex gemini switch change llm credentials custom endpoint server key_env"
       below={
         confirm ? (
           <ModelConfirm
@@ -319,7 +325,7 @@ function KeyForm({ choice, onCancel, onDone }: { choice: ProviderChoice; onCance
   )
 }
 
-/** A provider that signs in through its own tool, or runs on this computer: what to do, then use it. */
+/** A provider that signs in through its own tool, runs on this computer, or is the person's own endpoint: what to do, then use it. */
 function OtherSetup({ choice, onCancel, onDone }: { choice: ProviderChoice; onCancel: () => void; onDone: (change: ModelChange) => void }) {
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -342,6 +348,10 @@ function OtherSetup({ choice, onCancel, onDone }: { choice: ProviderChoice; onCa
     <div className="animate-rise flex flex-col gap-2 rounded-lg border border-line bg-black/20 p-3 text-[12px] leading-snug text-fg-2">
       {local ? (
         <p>{choice.name} runs on this computer. Start it and load a model, or pick a local model in Settings &gt; Software.</p>
+      ) : choice.setup === 'endpoint' ? (
+        <p>
+          {choice.name} is an endpoint of your own, and its entry in Hermes's config.yaml names no API key. If it takes one, add <span className="font-mono">key_env</span> to the entry with the variable for its key (<span className="font-mono">hermes config edit</span> opens the file), then refresh the providers and paste the key here.
+        </p>
       ) : (
         <>
           <p>{choice.name} signs in through its own tool. Run this in the Terminal, then use it here:</p>

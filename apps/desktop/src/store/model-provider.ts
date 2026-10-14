@@ -1,6 +1,6 @@
 import type { ModelOptionsResult } from '@herald-os/client'
 import { atom } from 'nanostores'
-import { type KeyCatalog, pickModel, type ProviderChoice, providerChoices } from '../lib/model-provider.ts'
+import { type EndpointKeys, endpointKeys, type KeyCatalog, pickModel, type ProviderChoice, providerChoices } from '../lib/model-provider.ts'
 import { rest } from '../lib/rest.ts'
 import { $activeChat } from './chat.ts'
 import { gatewayRequest } from './gateway.ts'
@@ -29,39 +29,62 @@ export function focusProvider(slug?: string): void {
 }
 
 const names = new Map<string, string>()
+const rowSlugs = new Map<string, string>()
 
 /** A provider's display name, once a list of providers has been read. */
 export function providerName(slug: string | null | undefined): string | null {
   return slug ? (names.get(slug) ?? null) : null
 }
 
+/** The slug of the row a provider id names, once a list has been read: config.yaml calls a custom endpoint `custom:<name>`, its row has the bare name. */
+export function providerSlug(id: string): string {
+  return rowSlugs.get(id) ?? id
+}
+
 /** Every provider Hermes knows, set up or not: what `hermes model` offers. */
 export async function loadModelOptions(): Promise<ModelOptionsResult> {
   const options = await gatewayRequest('model.options', { include_unconfigured: true })
+  const rows = options.providers ?? []
+  const own = new Set(rows.map(row => row.slug))
 
-  for (const row of options.providers ?? []) {
+  for (const row of rows) {
     names.set(row.slug, row.name)
+
+    // An endpoint named after a provider does not take that provider's id.
+    for (const alias of (row.aliases ?? []).filter(alias => !own.has(alias))) {
+      names.set(alias, row.name)
+      rowSlugs.set(alias, row.slug)
+    }
   }
 
   return options
 }
 
 /**
- * Hermes's key catalog: which variable each provider's API key goes in, and where to get one.
- * Empty when the runtime has none. The route also previews the saved keys; those are dropped here.
+ * Hermes's key catalog: which variable each provider's API key goes in, where to get one, and
+ * whether one is saved. Empty when the runtime has none. The route also previews the saved keys;
+ * those are dropped here.
  */
 export function loadKeyCatalog(): Promise<KeyCatalog> {
   return rest
     .get<KeyCatalog | null>('/api/env')
-    .then(keys => Object.fromEntries(Object.entries(keys ?? {}).map(([name, { provider, is_password, url }]) => [name, { provider, is_password, url }])))
+    .then(keys => Object.fromEntries(Object.entries(keys ?? {}).map(([name, { provider, is_password, is_set, url }]) => [name, { provider, is_password, is_set, url }])))
+    .catch(() => ({}))
+}
+
+/** The variable each custom endpoint's API key goes in, as its entry in config.yaml names it. */
+export function loadEndpointKeys(): Promise<EndpointKeys> {
+  return rest
+    .get<Parameters<typeof endpointKeys>[0]>('/api/config', { include_defaults: false })
+    .then(endpointKeys)
     .catch(() => ({}))
 }
 
 /** The providers as Settings lists them, read now. */
 export async function readProviderChoices(): Promise<ProviderChoice[]> {
-  const [options, keys, auth] = await Promise.all([loadModelOptions(), loadKeyCatalog(), $hermesAuth.get().checked ? $hermesAuth.get() : refreshHermesAuth()])
+  const [options, keys, endpoints, auth] = await Promise.all([loadModelOptions(), loadKeyCatalog(), loadEndpointKeys(), $hermesAuth.get().checked ? $hermesAuth.get() : refreshHermesAuth()])
 
-  return providerChoices(options, auth.providers, keys)
+  return providerChoices(options, auth.providers, keys, endpoints)
 }
 
 interface ModelSetResponse {

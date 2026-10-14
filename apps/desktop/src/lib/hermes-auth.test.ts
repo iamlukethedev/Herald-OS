@@ -5,6 +5,7 @@ describe('parseActiveProvider', () => {
   it('reads model.provider from the raw config', () => {
     expect(parseActiveProvider("model:\n  provider: nous\n  default: z-ai/glm-5.2\n  base_url: ''\nagent:\n  reasoning_effort: high\n")).toBe('nous')
     expect(parseActiveProvider('model:\n  default: gpt-5\n  provider: "openai-codex"\n')).toBe('openai-codex')
+    expect(parseActiveProvider('model:\n  provider: custom:qwen-flash\n  key_env: HERMES_CUSTOM_QWEN_FLASH_API_KEY\n')).toBe('custom:qwen-flash')
   })
 
   it('returns null when absent', () => {
