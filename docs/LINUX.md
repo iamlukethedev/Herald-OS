@@ -244,8 +244,19 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
 
 `linux/vm/package-disk.sh` names, compresses and checksums them. Files over the 2 GiB GitHub takes
 for one release file go up in parts: the ISO and the `qcow2.zst` as `.part0`, `.part1` that `cat`
-joins again, the zips as `.001`, `.002` that 7-Zip and Keka open as one archive; the `.sha256` is the
-joined file's. `try.sh` joins its parts itself.
+joins again, the zips as `.001`, `.002` that 7-Zip and Keka open as one archive. The `.sha256` is the
+joined file's, and a split file's `.sha256sums` has one line per part. `try.sh` joins its parts
+itself; by hand:
+
+```bash
+sha256sum -c herald-os-<version>-aarch64.qcow2.zst.sha256sums    # each part
+cat herald-os-<version>-aarch64.qcow2.zst.part* > herald-os-<version>-aarch64.qcow2.zst
+sha256sum -c herald-os-<version>-aarch64.qcow2.zst.sha256          # the joined file
+```
+
+The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] > <file>.zip`).
+`package-disk.sh` deletes the builder's `disk.qcow2` and the VHDX once they are converted, and the
+workflow removes the images after the builder, so the runner has room for every output.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
 unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start.
 

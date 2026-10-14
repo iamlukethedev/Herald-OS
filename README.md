@@ -123,8 +123,9 @@ Herald.
    them. On macOS or Linux:
 
    ```bash
+   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256sums   # each part; sha256sum -c on Linux
    cat herald-os-<version>-x86_64.iso.part* > herald-os-<version>-x86_64.iso
-   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256    # sha256sum -c on Linux
+   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256         # the joined file
    ```
 
    On Windows: `copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso`.
@@ -210,7 +211,25 @@ after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.
 GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The zips are split as
 `.001`, `.002` and so on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or
 [Keka](https://www.keka.io) on a Mac, which read the parts as one archive. Every file has a
-`.sha256` beside it, for the whole file.
+`.sha256` beside it for the whole file, and a split one also has a `.sha256sums` with a line per
+part. From a terminal, check the parts, join them and check the result (the `.vhdx.zip` here; the
+`.utm.zip` is the same, and the `qcow2.zst` parts are `.part0`, `.part1`):
+
+```bash
+shasum -a 256 -c herald-os-<version>-x86_64.vhdx.zip.sha256sums   # sha256sum -c on Linux
+cat herald-os-<version>-x86_64.vhdx.zip.[0-9][0-9][0-9] > herald-os-<version>-x86_64.vhdx.zip
+shasum -a 256 -c herald-os-<version>-x86_64.vhdx.zip.sha256
+```
+
+In Windows' Command Prompt:
+
+```bat
+copy /b herald-os-<version>-x86_64.vhdx.zip.001 + herald-os-<version>-x86_64.vhdx.zip.002 herald-os-<version>-x86_64.vhdx.zip
+certutil -hashfile herald-os-<version>-x86_64.vhdx.zip SHA256
+```
+
+Then compare the hash with the one in the `.sha256`. With more parts, add a `+` and the next part
+for each.
 
 #### On a Mac with UTM
 
