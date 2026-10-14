@@ -360,7 +360,7 @@ def test_the_install_table_lists_the_mac_and_windows_virtual_machines():
     assert "#on-windows-with-hyper-v" in windows
 
 
-@pytest.mark.parametrize("doc", [README, ROOT / "docs" / "LINUX.md"])
+@pytest.mark.parametrize("doc", [README, ROOT / "docs" / "LINUX.md", ROOT / "docs" / "manual" / "virtual-machine.md"])
 def test_the_documented_joins_take_every_part_and_never_the_checksums(doc):
     text = doc.read_text()
     joins = re.findall(r"^\s*cat (herald-os-<version>-\S+) > (herald-os-<version>-\S+)$", text, re.M)
