@@ -24,8 +24,9 @@ export class EmojiPanel {
     // The emoji surface closes itself after a pick or on Escape; nothing else in desktop mode does.
     ipcMain.handle(IPC.shellClose, () => this.hide())
     // After a pick the panel is gone, so a pick left on the clipboard is reported in the Hermes window.
-    ipcMain.handle(IPC.shellRelay, (_event, target: ShellSurface, command: ShellCommand) => {
-      if (target === 'main') {
+    // Only the panel itself may relay, and only a notice.
+    ipcMain.handle(IPC.shellRelay, (event, target: ShellSurface, command: ShellCommand) => {
+      if (this.win && event.sender === this.win.webContents && target === 'main' && command?.type === 'notify') {
         this.mainWindow()?.webContents.send(IPC.shellCommand, command)
       }
     })
