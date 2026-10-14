@@ -20,7 +20,9 @@ reboot
 
 %pre --interpreter=/usr/bin/bash --erroronfail --log=/tmp/herald-os-disk.log
 # The disk to erase: a name from lsblk (nvme0n1, sda, vda) or /dev/disk/by-id/<id> for an exact
-# device. It must be a whole disk that is writable and not the one the installer started from.
+# device. It must be a whole disk that is writable and not the one the installer started from;
+# /dev/mapper multipath devices are not supported. If the install stops, the reason is in
+# /tmp/herald-os-disk.log (Ctrl+Alt+F2 for a shell): the text installer can hide the console line.
 # Empty uses the internal disk (not USB, removable, read-only, a multipath or BIOS RAID member, or
 # the installer's) when there is exactly one; with none or several, it erases nothing.
 DISK=""

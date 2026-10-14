@@ -282,11 +282,14 @@ INSTALLER = {
     "devices": [
         "sda disk 0 0 sata", "sda1 part 0 0 sata", "sdb disk 1 0 usb", "sdc disk 0 0 sata",
         "loop0 loop 0 0 ", "sr0 rom 0 0 sata", "sr1 rom 1 1 sata", "vdc disk 0 1 ",
+        "dm-0 mpath 0 0 ",
     ],
     "links": [
         "/dev/disk/by-id/usb-stick /dev/sdb",
         "/dev/disk/by-id/ata-data-part1 /dev/sda1",
         "/dev/disk/by-id/gone /dev/sdz",
+        "/dev/mapper/mpatha /dev/dm-0",
+        "/dev/disk/by-id/dm-uuid-mpath-3600 /dev/dm-0",
     ],
     "mounts": ["/run/install/repo /dev/sdb1", "/run/install/isodir /dev/mapper/data-isos[/isos]"],
     "below": ["sdb1 sdb1 sdb", "mapper/data-isos data-isos sdc2 sdc"],
@@ -307,6 +310,8 @@ BAD_DISKS = {
     "sr0": "is /dev/sr0, a rom and not a whole disk",
     "sr1": "is /dev/sr1, a rom and not a whole disk",
     "vdc": "is /dev/vdc, which is read-only",
+    "/dev/mapper/mpatha": "is /dev/dm-0, a mpath and not a whole disk",
+    "/dev/disk/by-id/dm-uuid-mpath-3600": "is /dev/dm-0, a mpath and not a whole disk",
     "sda --foo": NOT_A_NAME,
     "--foo": NOT_A_NAME,
     "-sda": NOT_A_NAME,
