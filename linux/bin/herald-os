@@ -804,7 +804,7 @@ QR_SECRET_NAME_WORDS = {"token", "key", "apikey", "secret", "pass", "passcode", 
 QR_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])")
 QR_LONG_DIGITS_MIN = 16
 QR_LUHN_DIGITS_MIN = 13
-QR_CARD_LEAD = re.compile(r"[2-6]")
+QR_CARD_LEAD = re.compile(r"4|5[1-5]|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720|3[47]|30[0-5]|3[68]|352[89]|35[3-8][0-9]|6011|64[4-9]|65|62")
 QR_KNOWN_TOKEN = re.compile(r"^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}")
 QR_AWS_SECRET_KEY = re.compile(r"[A-Za-z0-9/+]{38,42}")
 QR_AWS = re.compile(r"(?<![a-z])aws(?![a-z])", re.I)
@@ -1029,7 +1029,7 @@ def qr_ean13(digits: str) -> bool:
 
 
 def qr_digits_look_secret(text: str) -> bool:
-    """16+ digits in a row or grouped, or 13 to 15 that start like a card (2 to 6) and pass Luhn; an unbroken valid EAN-13 is a barcode."""
+    """16+ digits in a row or grouped, or 13 to 15 that start like a card (QR_CARD_LEAD: issuer ranges) and pass Luhn; an unbroken valid EAN-13 is a barcode."""
     for run in QR_DIGIT_RUN.findall(text):
         digits = re.sub(r"[ -]", "", run)
         if len(digits) >= QR_LONG_DIGITS_MIN:

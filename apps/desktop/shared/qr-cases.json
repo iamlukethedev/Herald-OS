@@ -1428,13 +1428,13 @@
     "full": true
   },
   {
-    "note": "the same digits grouped are not a scanned barcode",
-    "text": "5 901234 123457",
+    "note": "the same digits as an EAN-13 grouped are not a scanned barcode",
+    "text": "4 006381 333924",
     "kind": "secret",
     "caption": "QR code copied",
     "description": "something that looks like a password, key or recovery phrase",
     "hidden": [
-      "901234"
+      "4 006381 333924"
     ]
   },
   {
@@ -2259,14 +2259,12 @@
     ]
   },
   {
-    "note": "13 digits that start with 6 and pass Luhn",
+    "note": "13 digits that pass Luhn but start with 63, outside every card issuer's range",
     "text": "6345678901235",
-    "kind": "secret",
+    "kind": "text",
     "caption": "QR code copied",
-    "description": "something that looks like a password, key or recovery phrase",
-    "hidden": [
-      "6345678901235"
-    ]
+    "description": "text",
+    "full": true
   },
   {
     "note": "13 digits that pass Luhn but start with 7, as no card does",
@@ -2946,6 +2944,298 @@
   {
     "note": "a CamelCase name in the AWS key shape",
     "text": "TheQuickBrownFoxJumpsOverTheLazyDog2026",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "2220555555558",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "2221123456782",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "2221123456782"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "2720123456783",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "2720123456783"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "2721123456781",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "5012345678908",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "5112345678906",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "5112345678906"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "5512345678907",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "5512345678907"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "5612345678905",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "3312345678904",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3412345678902",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3412345678902"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3712345678905",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3712345678905"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "2995555555555",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3001234567894",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3001234567894"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3051234567899",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3051234567899"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "3061234567898",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3612345678907",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3612345678907"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3812345678903",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3812345678903"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "3527123456781",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3528123456789",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3528123456789"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "3589555555555",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "3589555555555"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "3590123456789",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "6011123456783",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6011123456783"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "6012555555555",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "6431234567890",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "6441234567899",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6441234567899"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "6491234567894",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6491234567894"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "6512345678906",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6512345678906"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "6255555555550",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6255555555550"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn outside every card issuer's range",
+    "text": "6112345678905",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn in a card issuer's range",
+    "text": "4123456789011",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4123456789011"
+    ]
+  },
+  {
+    "note": "a date-time that passes Luhn (QA round 7)",
+    "text": "20261015123456",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a date-time that passes Luhn",
+    "text": "19991231235959",
     "kind": "text",
     "caption": "QR code copied",
     "description": "text",

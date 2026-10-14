@@ -112,9 +112,14 @@ export const KEY_GROUPS_MIN = 2
 export const KEY_GROUP_MIN = 3
 /** Digits from this many in a run (or grouped) are secret, whatever they are: card numbers, account numbers. */
 export const LONG_DIGITS_MIN = 16
-/** Shorter runs from this many digits are secret when they start like a card (2 to 6) and pass the Luhn check. */
+/**
+ * Shorter runs from this many digits are secret when they start like a card and pass the Luhn
+ * check. Issuer ranges: Visa 4, Mastercard 51-55 and 2221-2720, Amex 34 and 37, Diners 300-305, 36
+ * and 38, JCB 3528-3589, Discover 6011, 644-649 and 65, UnionPay 62. Date-times
+ * (YYYYMMDDhhmmss) fall outside them for any year up to 2220.
+ */
 export const LUHN_DIGITS_MIN = 13
-const CARD_LEAD = /^[2-6]/
+const CARD_LEAD = /^(4|5[1-5]|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720|3[47]|30[0-5]|3[68]|352[89]|35[3-8][0-9]|6011|64[4-9]|65|62)/
 /**
  * Captions show this many characters of a link at most, cut with … but never inside scheme://host;
  * a host this long or longer is not treated as one.
@@ -408,9 +413,9 @@ export function ean13(digits: string): boolean {
 
 /**
  * A card or account number: 16 or more digits, in a row or grouped (1234-5678-9012-3456-7890), or
- * 13 to 15 that start with 2 to 6, as cards do, and pass Luhn. An unbroken valid EAN-13 is a
- * product barcode and stays text. Phone numbers (15 digits at most) and short order numbers only
- * count when they happen to start that way and pass Luhn.
+ * 13 to 15 that start in a card issuer's range (see LUHN_DIGITS_MIN) and pass Luhn. An unbroken
+ * valid EAN-13 is a product barcode and stays text. Phone numbers (15 digits at most) and short
+ * order numbers only count when they happen to start that way and pass Luhn.
  */
 export function digitsLookSecret(text: string): boolean {
   for (const run of text.match(DIGIT_RUN) ?? []) {
