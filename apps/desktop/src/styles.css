@@ -715,10 +715,10 @@ textarea {
 /*
  * Controls that appear when their row is hovered. Mark the row `group/reveal-row`: a plain `group`
  * doesn't count, so a `group` added inside a row later can't reveal another row's controls. Rows
- * shouldn't nest. Touch screens can't hover, so the controls always show there. Keyboard users
- * see them while the row or the control has keyboard focus, and they stay up while a menu they
- * opened is expanded. Use this instead of `opacity-0 group-hover:opacity-100` or
- * `hidden group-hover:flex`.
+ * shouldn't nest. The controls always show on screens with any touch input, since a finger can't
+ * hover even when a mouse or trackpad is the main pointer. Keyboard users see them while the row
+ * or the control has keyboard focus, and they stay up while a menu they opened is expanded. Use
+ * this instead of `opacity-0 group-hover:opacity-100` or `hidden group-hover:flex`.
  */
 @utility reveal {
   opacity: 0;
@@ -731,7 +731,7 @@ textarea {
     opacity: 1;
   }
 
-  @media (hover: none), (pointer: coarse) {
+  @media (hover: none), (pointer: coarse), (any-pointer: coarse) {
     opacity: 1;
   }
 }

@@ -46,7 +46,7 @@ describe('reveal', () => {
   it('is always visible on screens that cannot hover', async () => {
     const css = await revealCss()
 
-    expect(css).toMatch(/@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\)\s*\{\s*\.reveal\s*\{\s*opacity:\s*1;?\s*\}/)
+    expect(css).toMatch(/@media\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\),\s*\(any-pointer:\s*coarse\)\s*\{\s*\.reveal\s*\{\s*opacity:\s*1;?\s*\}/)
   })
 
   it('replaces every hover-only control in the app', () => {
