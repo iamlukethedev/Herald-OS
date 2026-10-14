@@ -15,11 +15,15 @@ quick panels](manual/menu-bar.md), [installing software](manual/installing-softw
 [the `herald-os` command line](manual/command-line.md).
 
 ```
-kernel + systemd  ->  greetd (autologin: hermes)  ->  niri  ->  Herald OS shell  ->  hermes serve
+kernel + systemd  ->  greetd (autologin/login*)   ->  niri  ->  Herald OS shell  ->  hermes serve
                                                                       |                    |
                                                           HostPlatform (linux.ts)   herald-os-bridge (LinuxHost)
                                                                       \__________  ps ss nmcli wpctl gio journalctl plocate
 ```
+
+\* greetd signs `hermes` in by itself on an image install and in the development VM. On a system
+switched from another bootc system it shows a login screen (agreety) instead, and the session starts
+for whoever signs in ([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
 ## Quick start (QEMU, all from the terminal)
 
