@@ -50,7 +50,9 @@ folder, and opens LocalSend, when it is installed, to send it to another device 
   history leaves it out, and Hermes only learns the contents of ordinary links and text. A link
   that looks personal (a sign-in, reset or invitation link, or one carrying a token) only shows
   where it points, even to Hermes. Pasting works as usual. Select one code at a time: when the
-  selection holds several, nothing is copied. In scripts, `herald-os capture qr --print` prints the
-  contents.
+  selection holds several, nothing is copied. If the clipboard cannot keep a secret out of its
+  history (on Linux, wl-clipboard before 2.2), that code is not copied either and the notification
+  says so; ordinary links and text are still copied. In scripts, `herald-os capture qr --print`
+  prints the contents.
 
 On a Mac these use macOS's own eyedropper and text recognition.
