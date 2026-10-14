@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { IconBrandSlack, IconPlugConnected, IconServer, IconTerminal2, IconWifi } from '@tabler/icons-react'
 import { useState } from 'react'
 import { GlassButton, Pill, type PillTone, Toggle } from '../../../components/ui/glass.tsx'
+import { logFailure } from '../../../lib/report.ts'
 import { type HermesStatusPayload, rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
 import { $backend } from '../../../store/backend.ts'
@@ -33,7 +34,7 @@ export function NetworkSection() {
           <Pill tone={phaseTone(backend.phase)} dot>
             {backend.phase}
           </Pill>
-          <GlassButton size="sm" variant="ghost" onClick={() => void window.heraldOS.backend.restart()} aria-label="Restart Hermes">
+          <GlassButton size="sm" variant="ghost" onClick={() => void window.heraldOS.backend.restart().catch(logFailure('backend.restart'))} aria-label="Restart Hermes">
             Restart
           </GlassButton>
         </SettingsRow>

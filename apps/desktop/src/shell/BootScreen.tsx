@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { BackendState } from '../../shared/ipc.ts'
 import { HeraldLogo } from '../components/herald-logo.tsx'
 import { cn } from '../lib/cn.ts'
+import { logFailure } from '../lib/report.ts'
 import { Button } from '../components/ui/button.tsx'
 import { Spinner } from '../components/ui/primitives.tsx'
 import { StatusPanel } from '../features/status/StatusPanel.tsx'
@@ -43,13 +44,13 @@ export function BootScreen({ state, leaving = false }: { state: BackendState; le
           <div className="flex w-full flex-col gap-3">
             <div className="selectable rounded-md bg-danger/10 px-3 py-2 text-left text-[12px] text-danger">{state.error}</div>
             <div className="flex justify-center gap-2">
-              <Button variant="primary" onClick={() => void window.heraldOS.backend.restart()}>
+              <Button variant="primary" onClick={() => void window.heraldOS.backend.restart().catch(logFailure('backend.restart'))}>
                 Try again
               </Button>
               <Button variant="ghost" onClick={() => setShowLog(v => !v)}>
                 {showLog ? 'Hide log' : 'Show log'}
               </Button>
-              <Button variant="ghost" onClick={() => void window.heraldOS.window.quit()}>
+              <Button variant="ghost" onClick={() => void window.heraldOS.window.quit().catch(logFailure('window.quit'))}>
                 Quit
               </Button>
             </div>
@@ -69,7 +70,7 @@ export function BootScreen({ state, leaving = false }: { state: BackendState; le
               <Button variant="ghost" onClick={() => setShowLog(v => !v)}>
                 {showLog ? 'Hide log' : 'Show log'}
               </Button>
-              <Button variant="ghost" onClick={() => void window.heraldOS.window.quit()}>
+              <Button variant="ghost" onClick={() => void window.heraldOS.window.quit().catch(logFailure('window.quit'))}>
                 Quit
               </Button>
             </div>

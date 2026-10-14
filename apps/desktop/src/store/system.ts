@@ -2,9 +2,12 @@ import { useStore } from '@nanostores/react'
 import { atom } from 'nanostores'
 import { useEffect } from 'react'
 import type { NetworkStatus, SystemInfo, SystemStats } from '../../shared/ipc.ts'
+import { logFailure } from '../lib/report.ts'
 
 export const $systemStats = atom<SystemStats | null>(null)
 export const $systemInfo = atom<SystemInfo | null>(null)
+/** The last attempt to read `$systemInfo` failed; the System window says so and offers to try again. */
+export const $systemInfoFailed = atom(false)
 
 let subscribers = 0
 let unsubscribe: (() => void) | null = null
@@ -59,12 +62,33 @@ export function useNetworkStatus(): NetworkStatus | null {
   return useStore($network)
 }
 
+let infoRequest: Promise<void> | null = null
+
+/** Read the machine's name, system and processor, one request at a time. */
+export function loadSystemInfo(): Promise<void> {
+  infoRequest ??= window.heraldOS.system
+    .info()
+    .then(value => {
+      $systemInfo.set(value)
+      $systemInfoFailed.set(false)
+    })
+    .catch((error: unknown) => {
+      $systemInfoFailed.set(true)
+      logFailure('system.info')(error)
+    })
+    .finally(() => {
+      infoRequest = null
+    })
+
+  return infoRequest
+}
+
 export function useSystemInfo(): SystemInfo | null {
   const info = useStore($systemInfo)
 
   useEffect(() => {
     if (!$systemInfo.get()) {
-      void window.heraldOS.system.info().then(value => $systemInfo.set(value))
+      void loadSystemInfo()
     }
   }, [])
 

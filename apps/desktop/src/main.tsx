@@ -1,3 +1,4 @@
+import './lib/report.ts'
 import './lib/legacy-storage.ts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

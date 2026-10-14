@@ -4,6 +4,7 @@ import { formatRelative } from '../../lib/format.ts'
 import { useLocalData } from '../../lib/use-async.ts'
 import type { Artifact } from '../../store/missions.ts'
 import { Markdown } from '../chat/Markdown.tsx'
+import { openInDefaultApp } from '../files/files-store.ts'
 import { previewKind } from './mission-helpers.ts'
 
 const TEXT_LINES = 40
@@ -61,7 +62,7 @@ export function MissionPreview({ artifact }: { artifact: Artifact | undefined })
         <>
           <PreviewCard artifact={artifact} data={preview.data} loading={preview.loading} error={preview.error} />
           <div className="flex justify-center">
-            <GlassButton size="sm" onClick={() => void window.heraldOS.fs.openPath(artifact.path)} aria-label={`Open ${artifact.name}`}>
+            <GlassButton size="sm" onClick={() => openInDefaultApp(artifact.path, artifact.name)} aria-label={`Open ${artifact.name}`}>
               <IconExternalLink />
               Open preview
             </GlassButton>

@@ -112,6 +112,15 @@ Code layout (details in [`apps/desktop/README.md`](../apps/desktop/README.md), c
 `src/features/<app>` holds one folder per app, `src/store` the nanostores state and actions,
 `src/lib` pure helpers with their tests, `src/commands` the OS command catalogue.
 
+Renderer faults land in the same log as main's own, `~/.hermes/logs/herald-os.log`.
+`src/lib/report.ts` writes each one on the window's console as one `[herald-os]` line with its stack:
+a call nothing waits on names itself when it fails (`logFailure`), and a net that `main.tsx` installs
+before anything else loads reports uncaught errors and unhandled rejections in place of Chromium's
+own line. Electron main copies each shell window's warnings and errors into the log as
+`[renderer] <surface>` lines (`electron/renderer-console.ts`), cut at 4,000 characters and at most 30
+a minute per window. Pages that are not Herald's are left out: web windows, Studio previews, file
+viewers and plugin frames.
+
 ## OS control
 
 Everything a user can do in the shell is also a registered command (`src/store/os-commands.ts`,

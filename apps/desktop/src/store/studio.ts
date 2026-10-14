@@ -1,4 +1,5 @@
 import { atom, map } from 'nanostores'
+import { logFailure } from '../lib/report.ts'
 import { emptyStudio, noteDiskChange, reduceStudioEvent, setStudioPreview, type StudioState } from '../lib/studio-model.ts'
 import { $env } from './backend.ts'
 import { $chats } from './chat.ts'
@@ -107,7 +108,7 @@ export function bindStudioEvents(): () => void {
 
 const release = (watchId: string | null): void => {
   if (watchId) {
-    void window.heraldOS.fs.unwatchTree(watchId)
+    void window.heraldOS.fs.unwatchTree(watchId).catch(logFailure('fs.unwatchTree'))
   }
 }
 

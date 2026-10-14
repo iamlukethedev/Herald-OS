@@ -43,6 +43,13 @@ Herald OS is running but something misbehaves.
 - **An event automation did not run.** Hermes must be running when the event happens, and the
   automation must be on. The log has a `[events]` line for every event and every automation fired.
 
+## The shell
+
+- **A window stays blank, or part of a page never fills in.** The window's errors are in
+  `~/.hermes/logs/herald-os.log`, on lines starting with `[renderer]` and the window's name:
+  `desktop` when the shell is one window, as on a Mac, and on Herald OS Linux the part it draws
+  (`main`, `menubar`, `dock` and so on).
+
 ## Collecting details for a bug report
 
 On Herald OS Linux, `herald-os debug` prints the versions and the last lines of the logs. On a Mac,

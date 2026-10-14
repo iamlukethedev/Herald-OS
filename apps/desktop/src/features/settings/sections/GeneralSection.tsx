@@ -6,6 +6,7 @@ import { COMMENT_NAME_MAX, normalizeCommentName } from '../../../../shared/offic
 import { GlassButton, Toggle } from '../../../components/ui/glass.tsx'
 import { Kbd } from '../../../components/ui/primitives.tsx'
 import { hostPlatform } from '../../../lib/platform-labels.ts'
+import { logFailure } from '../../../lib/report.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../../store/catalog.ts'
 import { openEmojiPicker } from '../../../store/emoji.ts'
@@ -92,13 +93,13 @@ export function GeneralSection() {
       <SettingsGroup title="Session">
         {hostPlatform() === 'linux' ? (
           <SettingsRow icon={<IconPower />} label="Restart Herald OS" description="Stops the Hermes backend this shell started and starts a fresh session." keywords="exit close quit">
-            <GlassButton size="sm" variant="danger" onClick={() => void window.heraldOS.window.quit()} aria-label="Restart Herald OS">
+            <GlassButton size="sm" variant="danger" onClick={() => void window.heraldOS.window.quit().catch(logFailure('window.quit'))} aria-label="Restart Herald OS">
               Restart
             </GlassButton>
           </SettingsRow>
         ) : (
           <SettingsRow icon={<IconPower />} label="Quit Herald OS" description="Stops the Hermes backend this shell started and returns to macOS." keywords="exit close">
-            <GlassButton size="sm" variant="danger" onClick={() => void window.heraldOS.window.quit()} aria-label="Quit Herald OS">
+            <GlassButton size="sm" variant="danger" onClick={() => void window.heraldOS.window.quit().catch(logFailure('window.quit'))} aria-label="Quit Herald OS">
               Quit
             </GlassButton>
           </SettingsRow>

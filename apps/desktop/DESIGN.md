@@ -73,7 +73,7 @@ Stores (nanostores; subscribe with `useStore`):
 - `store/notifications.ts`: `notify()`, `$notifications`.
 - `store/spaces.ts`: `$spaces`, `$activeSpace`, `setActiveSpace`, `addSpace`.
 - `store/backend.ts`: `$backend`, `$prefs`, `updatePrefs`, `$env`.
-- `store/system.ts`: `useSystemStats()`, `useSystemInfo()`, `useNetworkStatus()`.
+- `store/system.ts`: `useSystemStats()`, `useSystemInfo()` (`$systemInfoFailed` when it could not be read, `loadSystemInfo()` to try again), `useNetworkStatus()`.
 - `store/native-apps.ts`: `useNativeApps()` -> `{ apps, iconFor(path) }`, `findNativeApp(names)`.
 - `store/os-commands.ts`: the OS command registry (`defineCommands`, `runCommand`, `listCommands`, `$commandLog`); catalogue in `src/commands/`; `store/os-control.ts` answers main's control-socket requests; `store/follow.ts` shows Hermes's own tool results; `lib/voice/intents.ts` is the voice fast path.
 - `store/hermes-auth.ts`: `$hermesAuth` (active model provider, sign-in state), `requestHermesLogin` (optionally for a provider the person picked), `refreshHermesAuth`, device-code helpers; the OS sign-in card is `src/features/auth/HermesLoginCard.tsx` and opens on boot, on any turn that fails for lack of credentials, or for a picked provider. The provider's portal opens in a web window beside the card and closes itself on approval.
@@ -97,6 +97,12 @@ memories in `$HERMES_HOME/memories/MEMORY.md` and `USER.md`, entries separated b
 ## Rules
 
 - Backend truth is cached, not owned: merge refreshes, be optimistic then honest, guard stale responses.
+- No failure is silent. A bridge call nothing waits on ends in `.catch(logFailure('system.info'))`
+  (`src/lib/report.ts`), which names the call; a person's own action that fails tells them, through
+  `notify()` or an `ErrorNote` (`openInDefaultApp` and `revealItem` in `features/files/files-store.ts`
+  already do). What nothing catches is reported by the net `main.tsx` installs first. Main copies each
+  shell window's warnings and errors into `~/.hermes/logs/herald-os.log` as `[renderer]` lines, so
+  report on the console rather than around it.
 - No background event may steal focus or navigate. Offer; don't hijack.
 - Every user-facing mutation of the machine goes through either a user-initiated `fs.*` call
   (inside the home folder) or Hermes's audited bridge tools; never spawn shell commands from the renderer.

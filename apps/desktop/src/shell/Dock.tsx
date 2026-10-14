@@ -8,6 +8,7 @@ import { OfficeChooser } from '../features/office/OfficeChooser.tsx'
 import { openInOffice } from '../features/office/open.ts'
 import { cn } from '../lib/cn.ts'
 import { reducedMotion } from '../lib/motion.ts'
+import { logFailure } from '../lib/report.ts'
 import { $env, $prefs } from '../store/backend.ts'
 import { notify } from '../store/notifications.ts'
 import { $applicationsOpen } from '../store/surface.ts'
@@ -164,7 +165,7 @@ export function Dock() {
       running: officeKey !== ''
     })
     list.push({ id: 'applications', label: 'Applications', render: () => <span className="icon-tile size-11 rounded-[11px]"><AppGlyph id="grid" size={22} /></span>, onClick: () => $applicationsOpen.set(true) })
-    list.push({ id: 'trash', label: 'Trash', render: () => <span className="flex size-11 items-center justify-center rounded-[11px] bg-white/6 text-fg-2"><AppGlyph id="trash" size={22} /></span>, onClick: () => void window.heraldOS.fs.openPath(trashPath) })
+    list.push({ id: 'trash', label: 'Trash', render: () => <span className="flex size-11 items-center justify-center rounded-[11px] bg-white/6 text-fg-2"><AppGlyph id="trash" size={22} /></span>, onClick: () => void window.heraldOS.fs.openPath(trashPath).catch(logFailure('fs.openPath')) })
 
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps

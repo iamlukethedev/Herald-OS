@@ -794,7 +794,12 @@ export function openItem(item: FileItem): void {
     return
   }
 
-  window.heraldOS.fs.openPath(item.path).catch(error => notify({ title: `Could not open "${item.name}"`, body: messageOf(error), level: 'error' }))
+  openInDefaultApp(item.path, item.name)
+}
+
+/** Open a file or folder in the app the system gives it, saying so when that fails. */
+export function openInDefaultApp(path: string, name = basename(path)): void {
+  window.heraldOS.fs.openPath(path).catch(error => notify({ title: `Could not open "${name}"`, body: messageOf(error), level: 'error' }))
 }
 
 export function revealItem(path: string): void {

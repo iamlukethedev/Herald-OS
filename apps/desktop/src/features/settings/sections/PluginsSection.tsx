@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { describePermissions, type PluginView } from '../../../../shared/plugins.ts'
 import { GlassButton, Pill, Toggle } from '../../../components/ui/glass.tsx'
 import { Spinner } from '../../../components/ui/primitives.tsx'
+import { openInDefaultApp } from '../../files/files-store.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $plugins } from '../../../store/plugins.ts'
 import { openAsk } from '../../../store/surface.ts'
@@ -68,7 +69,7 @@ export function PluginsSection() {
           </GlassButton>
         </SettingsRow>
         <SettingsRow icon={<IconFolder />} label="Plugins folder" description={<span className="font-mono text-[11.5px]">~/.config/herald-os/plugins</span>} keywords="plugin folder files">
-          <GlassButton size="sm" variant="ghost" onClick={() => void window.heraldOS.fs.openPath('~/.config/herald-os/plugins')}>
+          <GlassButton size="sm" variant="ghost" onClick={() => openInDefaultApp('~/.config/herald-os/plugins')}>
             Open
           </GlassButton>
         </SettingsRow>

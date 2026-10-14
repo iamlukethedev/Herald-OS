@@ -10,6 +10,7 @@
 import { atom } from 'nanostores'
 import { baseName, extensionOf, OFFICE_APP_NAMES, OFFICE_NOUNS, type OfficeApp, saveFormats } from '../../../shared/office/files.ts'
 import type { OfficeChangedEvent, OfficeDocSummary } from '../../../shared/ipc.ts'
+import { logFailure } from '../../lib/report.ts'
 import { messageOf } from '../canvas/errors.ts'
 import { summaryOf } from './agent-model.ts'
 import { officeAbilities } from './open.ts'
@@ -66,7 +67,7 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
     }
 
     if (entry.watchId) {
-      void window.heraldOS.office.unwatch(entry.watchId)
+      void window.heraldOS.office.unwatch(entry.watchId).catch(logFailure('office.unwatch'))
       entry.watchId = null
     }
 
@@ -396,7 +397,7 @@ export function createSession<Model>(adapter: OfficeAdapter<Model>) {
 
     if (entry) {
       if (entry.watchId) {
-        void window.heraldOS.office.unwatch(entry.watchId)
+        void window.heraldOS.office.unwatch(entry.watchId).catch(logFailure('office.unwatch'))
       }
 
       if (entry.timer) {

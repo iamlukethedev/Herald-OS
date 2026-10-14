@@ -8,6 +8,7 @@ import { terminalColors } from '../../../shared/theme.ts'
 import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
+import { logFailure } from '../../lib/report.ts'
 import { useShellCommands } from '../../shell/surfaces/shell-utils.ts'
 import { $prefs } from '../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../store/catalog.ts'
@@ -67,7 +68,7 @@ export function TerminalSurface() {
       const handle = await window.heraldOS.terminal.create({ cols: 120, rows: 30, program: program?.id })
 
       if (!mounted.current) {
-        void window.heraldOS.terminal.dispose(handle.id)
+        void window.heraldOS.terminal.dispose(handle.id).catch(logFailure('terminal.dispose'))
 
         return
       }
@@ -125,7 +126,7 @@ export function TerminalSurface() {
       mounted.current = false
 
       for (const id of ids) {
-        void window.heraldOS.terminal.dispose(id)
+        void window.heraldOS.terminal.dispose(id).catch(logFailure('terminal.dispose'))
       }
 
       ids.clear()
@@ -148,7 +149,7 @@ export function TerminalSurface() {
 
   const close = (id: string) => {
     live.current.delete(id)
-    void window.heraldOS.terminal.dispose(id)
+    void window.heraldOS.terminal.dispose(id).catch(logFailure('terminal.dispose'))
     setTabs(current => {
       const next = current.filter(tab => tab.id !== id)
       setActive(prev => (prev === id ? (next[next.length - 1]?.id ?? null) : prev))

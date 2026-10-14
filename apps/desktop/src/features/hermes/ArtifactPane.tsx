@@ -27,10 +27,12 @@ import { Dropdown, EmptyGlass, GlassButton, Tabs, type TabDef } from '../../comp
 import { cn } from '../../lib/cn.ts'
 import type { ChatState } from '../../lib/chat-model.ts'
 import { formatBytes } from '../../lib/format.ts'
+import { logFailure } from '../../lib/report.ts'
 import { useLocalData } from '../../lib/use-async.ts'
 import type { Artifact } from '../../store/missions.ts'
 import { notify } from '../../store/notifications.ts'
 import { Markdown } from '../chat/Markdown.tsx'
+import { openInDefaultApp, revealItem } from '../files/files-store.ts'
 import { $editing, $paneTab, $selectedArtifact, $zoom, artifactKind, collectSources, extensionOf, isEditable, type PaneTab, type SourceRow } from './artifact-store.ts'
 import { MenuDivider, MenuItem, PopMenu } from './Menu.tsx'
 import { revealLabel } from '../../lib/platform-labels.ts'
@@ -216,7 +218,7 @@ export function ArtifactPane({ chat }: { chat: ChatState | null }) {
               setExportOpen(false)
 
               if (artifact) {
-                void window.heraldOS.fs.reveal(artifact.path)
+                revealItem(artifact.path)
               }
             }}
           >
@@ -239,7 +241,7 @@ export function ArtifactPane({ chat }: { chat: ChatState | null }) {
               setExportOpen(false)
 
               if (artifact) {
-                void window.heraldOS.fs.openPath(artifact.path)
+                openInDefaultApp(artifact.path, artifact.name)
               }
             }}
           >
@@ -251,7 +253,7 @@ export function ArtifactPane({ chat }: { chat: ChatState | null }) {
               setExportOpen(false)
 
               if (artifact) {
-                void window.heraldOS.fs.reveal(artifact.path)
+                revealItem(artifact.path)
               }
             }}
           >
@@ -358,7 +360,7 @@ function Document({ artifact, file, loading, error, zoom }: { artifact: Artifact
   if (error || !file) {
     const missing = !error || /ENOENT/.test(error)
 
-    return <EmptyGlass className="h-full" icon={<IconFileText />} title="Can't open this file" description={missing ? 'The file is not on disk any more.' : error} action={<GlassButton size="sm" onClick={() => void window.heraldOS.fs.reveal(artifact.path)}>{revealLabel()}</GlassButton>} />
+    return <EmptyGlass className="h-full" icon={<IconFileText />} title="Can't open this file" description={missing ? 'The file is not on disk any more.' : error} action={<GlassButton size="sm" onClick={() => revealItem(artifact.path)}>{revealLabel()}</GlassButton>} />
   }
 
   if (file.kind === 'image' && file.content) {
@@ -402,7 +404,7 @@ function BinaryPreview({ artifact, file, zoom }: { artifact: Artifact; file: Fil
           {extensionOf(artifact.name).toUpperCase() || 'File'} · {formatBytes(file.size)}
         </div>
       </div>
-      <GlassButton size="sm" variant="primary" onClick={() => void window.heraldOS.fs.openPath(artifact.path)}>
+      <GlassButton size="sm" variant="primary" onClick={() => openInDefaultApp(artifact.path, artifact.name)}>
         <IconExternalLink />
         Open in default app
       </GlassButton>
@@ -433,7 +435,7 @@ function Sources({ chat }: { chat: ChatState | null }) {
             </div>
           </div>
           {row.kind === 'file' && (
-            <button type="button" aria-label={revealLabel()} title={revealLabel()} onClick={() => void window.heraldOS.fs.reveal(row.target)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 hover:bg-white/8 hover:text-fg">
+            <button type="button" aria-label={revealLabel()} title={revealLabel()} onClick={() => revealItem(row.target)} className="flex size-7 items-center justify-center rounded-lg text-fg-3 hover:bg-white/8 hover:text-fg">
               <IconFolder size={15} />
             </button>
           )}
@@ -441,7 +443,7 @@ function Sources({ chat }: { chat: ChatState | null }) {
             type="button"
             aria-label={row.kind === 'url' ? 'Open in browser' : 'Open'}
             title={row.kind === 'url' ? 'Open in browser' : 'Open'}
-            onClick={() => void (row.kind === 'url' ? window.heraldOS.shell.openExternal(row.target) : window.heraldOS.fs.openPath(row.target))}
+            onClick={() => void (row.kind === 'url' ? window.heraldOS.shell.openExternal(row.target).catch(logFailure('shell.openExternal')) : openInDefaultApp(row.target))}
             className="flex size-7 items-center justify-center rounded-lg text-fg-3 hover:bg-white/8 hover:text-fg"
           >
             <IconExternalLink size={15} />

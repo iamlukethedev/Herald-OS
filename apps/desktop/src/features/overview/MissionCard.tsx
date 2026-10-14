@@ -5,6 +5,7 @@ import { cn } from '../../lib/cn.ts'
 import { openStoredSession } from '../../store/chat.ts'
 import type { Mission, MissionStep } from '../../store/missions.ts'
 import { showPage } from '../../store/windows.ts'
+import { openInDefaultApp } from '../files/files-store.ts'
 import { AvatarStack, FileThumb, IconTile } from './shared.tsx'
 
 const STATUS: Record<Mission['status'], { label: string; tone: PillTone; dot: boolean }> = {
@@ -95,7 +96,7 @@ export function MissionCard({ mission }: { mission: Mission }) {
               <div className="truncate text-[11px] text-fg-4">{artifact.kind === 'folder' ? 'Folder' : 'Draft'}</div>
             </div>
           </div>
-          <GlassButton size="sm" aria-label={`Open ${artifact.name}`} onClick={() => void window.heraldOS.fs.openPath(artifact.path)}>
+          <GlassButton size="sm" aria-label={`Open ${artifact.name}`} onClick={() => openInDefaultApp(artifact.path, artifact.name)}>
             Open draft
             <IconExternalLink />
           </GlassButton>

@@ -60,6 +60,7 @@ import { GlassButton } from '../../components/ui/glass.tsx'
 import { Kbd, Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
 import { CLI_UNAVAILABLE_MESSAGE, type CliOutcome, parseThemeList, runHeraldOs, runHeraldOsWithToast } from '../../lib/herald-os-cli.ts'
+import { logFailure } from '../../lib/report.ts'
 import { $env } from '../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../store/catalog.ts'
 import { openSurface, relayToMain } from '../../store/shell.ts'
@@ -390,7 +391,7 @@ function extensionItem(entry: MenuExtension, close: () => void): MenuItem {
         leaf: {
           kind: 'local',
           run: () => {
-            void window.heraldOS.shell.openExternal(action.url)
+            void window.heraldOS.shell.openExternal(action.url).catch(logFailure('shell.openExternal'))
             close()
           }
         }

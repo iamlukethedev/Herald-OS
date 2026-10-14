@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
 import type { IncomingNotification } from '../../shared/ipc.ts'
+import { logFailure } from '../lib/report.ts'
 import type { SurfaceId } from './surface.ts'
 import { $prefs, $windowState } from './backend.ts'
 import { onGatewayEvent } from './gateway.ts'
@@ -86,7 +87,7 @@ export function notify(input: NotifyInput): HermesNotification {
   }
 
   if (input.native && !quiet && !$windowState.get().focused) {
-    void window.heraldOS.notifications.native(item.title, item.body ?? '')
+    void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
   }
 
   return item

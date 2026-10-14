@@ -2,6 +2,7 @@ import { atom } from 'nanostores'
 import type { BackendState, EnvInfo, HeraldOSPrefs, WindowState } from '../../shared/ipc.ts'
 import { PALETTE_PROPERTIES, paletteVars, schemeOf } from '../../shared/theme.ts'
 import { VOICE_DEFAULTS } from '../../shared/voice-prefs.ts'
+import { logFailure } from '../lib/report.ts'
 
 /** Cache of Electron's backend truth; Electron is authoritative. */
 export const $backend = atom<BackendState>({ phase: 'idle', attempt: 0, logTail: [] })
@@ -66,13 +67,16 @@ export async function updatePrefs(patch: Partial<HeraldOSPrefs>): Promise<void> 
 export function bindBackendStores(): () => void {
   const offBackend = window.heraldOS.backend.onState(state => $backend.set(state))
   const offWindow = window.heraldOS.window.onState(state => $windowState.set(state))
-  void window.heraldOS.backend.getState().then(state => $backend.set(state))
-  void window.heraldOS.window.getState().then(state => $windowState.set(state))
-  void window.heraldOS.env().then(info => $env.set(info))
-  void window.heraldOS.prefs.get().then(prefs => {
-    $prefs.set(prefs)
-    applyPrefsToDocument(prefs)
-  })
+  void window.heraldOS.backend.getState().then(state => $backend.set(state)).catch(logFailure('backend.getState'))
+  void window.heraldOS.window.getState().then(state => $windowState.set(state)).catch(logFailure('window.getState'))
+  void window.heraldOS.env().then(info => $env.set(info)).catch(logFailure('env'))
+  void window.heraldOS.prefs
+    .get()
+    .then(prefs => {
+      $prefs.set(prefs)
+      applyPrefsToDocument(prefs)
+    })
+    .catch(logFailure('prefs.get'))
   // Preferences changed by another surface window or by the `herald-os` CLI (theme, wallpaper).
   const offPrefs = window.heraldOS.prefs.onChanged?.(prefs => {
     $prefs.set(prefs)

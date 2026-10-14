@@ -38,6 +38,7 @@ import { PetWindow } from './pet/window.ts'
 import { SwitchService } from './switches.ts'
 import { hermesHome, heraldOsDataDir, isDev } from './paths.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
+import { forwardRendererConsole } from './renderer-console.ts'
 import { isOmarchy, readOmarchyTheme } from './theme/omarchy.ts'
 import { prefsForTheme } from './theme/themes.ts'
 import { ControlSocket } from './shell/control-socket.ts'
@@ -71,6 +72,8 @@ protocol.registerSchemesAsPrivileged([
 // Electron shows a modal dialog for an uncaught main-process error and waits on it: the whole
 // shell, the Linux session included, would freeze behind a box nobody may see. Log it and go on.
 process.on('uncaughtException', error => log('main', `uncaught exception: ${error.stack ?? error.message}`))
+// Renderer faults go to each window's console (src/lib/report.ts), which only DevTools shows.
+forwardRendererConsole()
 
 // Started by a command a Hermes session ran, Herald OS inherits that session; the terminals, apps,
 // hooks and backend it starts must not pass for it (backend/session-env.ts).

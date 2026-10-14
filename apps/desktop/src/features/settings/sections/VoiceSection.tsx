@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import type { MicPermission, VoiceEngine, VoicePrefs } from '../../../../shared/ipc.ts'
 import { GlassButton, Pill, Toggle } from '../../../components/ui/glass.tsx'
 import { deviceNoun } from '../../../lib/platform-labels.ts'
+import { logFailure } from '../../../lib/report.ts'
 import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
 import { LOCAL_STT_MODELS } from '../../../lib/voice/stt-tuning.ts'
@@ -62,7 +63,7 @@ export function VoiceSection() {
 
   useEffect(() => {
     void fetchLiveStatus().then(setLiveStatus)
-    void window.heraldOS.voice.microphoneStatus().then(setMic)
+    void window.heraldOS.voice.microphoneStatus().then(setMic).catch(logFailure('voice.microphoneStatus'))
   }, [])
 
   useEffect(() => setHotkeyDraft(voice.hotkey), [voice.hotkey])

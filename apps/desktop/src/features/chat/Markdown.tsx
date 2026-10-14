@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { logFailure } from '../../lib/report.ts'
 
 const plugins = [remarkGfm]
 
@@ -18,7 +19,7 @@ export const Markdown = memo(function Markdown({ text, className }: { text: stri
                 event.preventDefault()
 
                 if (href) {
-                  void window.heraldOS.shell.openExternal(href)
+                  void window.heraldOS.shell.openExternal(href).catch(logFailure('shell.openExternal'))
                 }
               }}
             >
