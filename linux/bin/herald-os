@@ -800,8 +800,7 @@ QR_COPIED = "QR code copied"
 QR_SECRET_DESCRIPTION = "something that looks like a password, key or recovery phrase"
 QR_SECRET_WORDS = re.compile(r"\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b", re.I | re.A)
 QR_SECRET_LABELS = re.compile(r"\b(pass|pin|key|seed|code|otp)\b\s*[:=]", re.I | re.A)
-QR_SECRET_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
-QR_SECRET_PATH = re.compile(r"invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem", re.I)
+QR_SECRET_NAME_WORDS = {"token", "key", "apikey", "secret", "pass", "passcode", "password", "passwd", "pwd", "sig", "signature", "auth", "session", "sessionid", "otp", "code", "credential", "credentials", "jwt", "bearer"}
 QR_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])")
 QR_LONG_DIGITS_MIN = 16
 QR_LUHN_DIGITS_MIN = 13
@@ -977,27 +976,83 @@ def qr_digits_look_secret(text: str) -> bool:
     return False
 
 
-def qr_uri_host(uri: str) -> str:
-    authority = qr_uri_parts(uri)[0] or ""
-    host = re.sub(r":\d*$", "", authority.split("@")[-1]).lower()
+def qr_name_words(name: str) -> list[str]:
+    """A parameter name's words, lower case: "AWSAccessKeyId" is aws, access, key, id."""
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name))
+    return [word.lower() for word in re.split(r"[^A-Za-z0-9]+", spaced) if word]
+
+
+def qr_secret_name(name: str) -> bool:
+    return any(word in QR_SECRET_NAME_WORDS for word in qr_name_words(name))
+
+
+# Sites whose links carry public ids that look like tokens (see PUBLIC_IDS in qr.ts).
+QR_PUBLIC_IDS = [
+    {"host": re.compile(r"(^|\.)youtube\.com$"), "after": ["shorts", "embed", "live"], "params": ["v", "list", "si"]},
+    {"host": re.compile(r"^youtu\.be$"), "first": True, "params": ["si"]},
+    {"host": re.compile(r"^(www\.)?github\.com$"), "after": ["commit", "commits", "blob", "tree"], "segment": re.compile(r"^[0-9a-f]{7,40}$")},
+    {"host": re.compile(r"(^|\.)amazon(\.[a-z]{2,3}){1,2}$"), "after": ["dp", "product"]},
+    {"host": re.compile(r"(^|\.)instagram\.com$"), "after": ["p", "reel"], "params": ["igsh"]},
+    {"host": re.compile(r"^open\.spotify\.com$"), "after": ["track", "album", "playlist", "artist", "episode", "show"], "params": ["si"]},
+    {"host": re.compile(r"^(drive|docs)\.google\.com$"), "after": ["d", "folders"], "params": ["id"]},
+]
+
+
+def qr_public_segment(rule: dict | None, segments: list[str], index: int) -> bool:
+    if not rule:
+        return False
+    placed = (rule.get("first") is True and index == 0) or (index > 0 and segments[index - 1] in rule.get("after", []))
+    return placed and ("segment" not in rule or bool(rule["segment"].search(segments[index])))
+
+
+def qr_strong_secret(value: str) -> bool:
+    """Signs of a secret that count even in a site's public ids."""
+    return bool(QR_KNOWN_TOKEN.match(value) or QR_JWT.match(value) or qr_digits_look_secret(value) or re.search(r"otpauth", qr_decode_deep(value), re.I))
+
+
+def qr_host_of(authority: str | None) -> str:
+    host = re.sub(r":\d*$", "", (authority or "").split("@")[-1]).lower()
     return host if re.fullmatch(r"[a-z0-9.-]+", host) and re.search(r"[a-z0-9]", host) else ""
 
 
-def qr_uri_looks_secret(uri: str, depth: int = 0) -> bool:
-    """Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code."""
+def qr_check_link(uri: str, depth: int = 0) -> dict:
+    """{host_only, removed, link}: credentials and secret parameters are cut out; a secret path segment leaves only the host."""
     authority, path, query, fragment = qr_uri_parts(uri)
-    userinfo, at, _ = (authority or "").rpartition("@")
+    host = qr_host_of(authority)
+    rule = next((entry for entry in QR_PUBLIC_IDS if entry["host"].search(host)), None)
+    userinfo, at, hostport = (authority or "").rpartition("@")
     # user:password@, with the colon written out or URL-encoded.
-    if (at and ":" in qr_decode_deep(userinfo)) or re.search(r"otpauth", qr_decode_deep(uri), re.I):
-        return True
-    segments = [qr_detect(part) for part in [*path.split("/"), *([] if "=" in fragment else fragment.split("/"))]]
-    if any(QR_SECRET_PATH.search(segment) or qr_looks_like_token(segment, QR_URL_TOKEN_MIN) for segment in segments if segment):
-        return True
-    pairs = [*qr_params(query, qr_detect), *(qr_params(fragment, qr_detect) if "=" in fragment else [])]
-    return any(
-        QR_SECRET_PARAM.search(name) or qr_looks_like_token(value, QR_URL_TOKEN_MIN) or (depth < 3 and QR_SCHEME.match(value) and qr_uri_looks_secret(value, depth + 1))
-        for name, value in pairs
-    )
+    credentials = bool(at) and ":" in qr_decode_deep(userinfo)
+
+    def secret_part(value: str, is_public: bool) -> bool:
+        return qr_strong_secret(value) or (not is_public and bool(qr_looks_like_token(value, QR_URL_TOKEN_MIN) or (depth < 3 and QR_SCHEME.match(value) and qr_uri_looks_secret(value, depth + 1))))
+
+    def keep_pair(pair: str) -> bool:
+        name, _, value = pair.partition("=")
+        is_public = qr_detect(name) in (rule or {}).get("params", [])
+        return not qr_secret_name(qr_detect(name)) and not secret_part(qr_detect(value), is_public)
+
+    segments = [segment for segment in path.split("/") if segment]
+    pairs = [pair for pair in query.split("&") if pair]
+    kept = [pair for pair in pairs if keep_pair(pair)]
+    if "=" in fragment:
+        kept_fragment = "&".join(pair for pair in fragment.split("&") if pair and keep_pair(pair))
+    else:
+        kept_fragment = "" if any(part and secret_part(qr_detect(part), False) for part in fragment.split("/")) else fragment
+    removed = credentials or len(kept) != len(pairs) or kept_fragment != fragment
+    if removed:
+        scheme = QR_SCHEME.match(uri).group(0) if QR_SCHEME.match(uri) else ""
+        link = f"{scheme}{'' if authority is None else '//' + hostport}{path}{'?' + '&'.join(kept) if kept else ''}{'#' + kept_fragment if kept_fragment else ''}"
+    else:
+        link = uri
+    host_only = any(secret_part(qr_detect(segment), qr_public_segment(rule, segments, index)) for index, segment in enumerate(segments)) or bool(re.search(r"otpauth", qr_decode_deep(link), re.I))
+    return {"host_only": host_only, "removed": removed, "link": link}
+
+
+def qr_uri_looks_secret(uri: str, depth: int = 0) -> bool:
+    """Whether a link (any scheme) carries something secret: credentials, a token, a 2FA code."""
+    check = qr_check_link(uri, depth)
+    return check["host_only"] or check["removed"]
 
 
 def qr_looks_secret(text: str) -> bool:
@@ -1049,12 +1104,16 @@ def qr_describe_otp(text: str) -> dict:
 
 
 def qr_link(text: str) -> dict | None:
-    host = qr_uri_host(text) if re.fullmatch(r"https?://\S+", text, re.I) else ""
+    """Ordinary links in full; a secret cut out when it can be, else the host alone."""
+    host = qr_host_of(qr_uri_parts(text)[0]) if re.fullmatch(r"https?://\S+", text, re.I) else ""
     if not host:
         return None
-    if qr_uri_looks_secret(text):
+    check = qr_check_link(text)
+    if check["host_only"]:
         return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host} that carries what looks like a password, key or sign-in token"}
-    return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host}", "text": text}
+    if check["removed"]:
+        return {"kind": "link", "caption": f"Link copied: {check['link']}", "description": f"a link to {host}, with the parts that looked secret removed", "link": check["link"]}
+    return {"kind": "link", "caption": f"Link copied: {text}", "description": f"a link to {host}", "text": text}
 
 
 def qr_describe_lines(text: str) -> dict:

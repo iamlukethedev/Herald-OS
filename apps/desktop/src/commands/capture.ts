@@ -48,11 +48,19 @@ async function screenTool(tool: Exclude<CaptureTool, 'qr'>, linuxArgv: string[],
  * is, and Hermes gets the contents only when they are an ordinary link or text.
  */
 function qrResult(reading: QrReading) {
-  const { kind, caption, description, text } = reading
+  const { kind, caption, description, text, link } = reading
+  const hidden = {
+    kind,
+    description,
+    ...(link === undefined ? {} : { link }),
+    onClipboard: true,
+    note:
+      link === undefined
+        ? 'The contents are on the clipboard for the person to paste and are kept out of this conversation; do not ask for them.'
+        : 'This is the link without the parts that looked secret; the whole link is on the clipboard for the person to paste. Do not ask for the missing parts.'
+  }
 
-  return ok(caption, {
-    data: text === undefined ? { kind, description, onClipboard: true, note: 'The contents are on the clipboard for the person to paste and are kept out of this conversation; do not ask for them.' } : { kind, description, text }
-  })
+  return ok(caption, { data: text === undefined ? hidden : { kind, description, text } })
 }
 
 const SEVERAL_CODES = 'Several codes in that part of the screen, so nothing was copied; select just one.'
@@ -185,7 +193,7 @@ export const captureCommands: readonly OsCommand[] = [
   {
     id: 'capture.qr',
     title: 'Read a QR code',
-    description: 'Select a QR code or barcode on screen and copy what it says. You get the contents of ordinary links and text; for a 2FA setup code, Wi-Fi details or anything that looks like a password you only get what kind of thing it is, and the contents stay on the clipboard.',
+    description: 'Select a QR code or barcode on screen and copy what it says. You get ordinary links and text in full, and a link that carries a secret without it (or as its host alone); for a 2FA setup code, Wi-Fi details, a card number or anything that looks like a password you only get what kind of thing it is, and the contents stay on the clipboard.',
     tier: 'act',
     args: [],
     phrases: ['read this qr code', 'scan the qr code'],

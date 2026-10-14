@@ -46,10 +46,19 @@ describe('capture.qr on a Mac', () => {
     expect(JSON.stringify(result)).not.toContain('JBSWY3DPEHPK3PXP')
   })
 
+  it('hands Hermes a link without its secret, and keeps the secret out of the caption', async () => {
+    bridge.tool.mockResolvedValue(scanned('https://us02web.zoom.us/j/85512345678?pwd=dGhpc2lzZmFrZTEyMw.1'))
+    const result = await readQr()
+
+    expect(result).toMatchObject({ ok: true, summary: 'Link copied: https://us02web.zoom.us/j/85512345678', data: { kind: 'link', link: 'https://us02web.zoom.us/j/85512345678', onClipboard: true } })
+    expect(result.data).not.toHaveProperty('text')
+    expect(JSON.stringify(result)).not.toContain('dGhpc2lzZmFrZTEyMw')
+  })
+
   it('says where a link points, and hands Hermes the link', async () => {
     bridge.tool.mockResolvedValue(scanned('https://example.com/menu'))
 
-    expect(await readQr()).toMatchObject({ ok: true, summary: 'Link copied: example.com', data: { kind: 'link', text: 'https://example.com/menu' } })
+    expect(await readQr()).toMatchObject({ ok: true, summary: 'Link copied: https://example.com/menu', data: { kind: 'link', text: 'https://example.com/menu' } })
   })
 
   it('hands Hermes ordinary text without showing it in the caption', async () => {

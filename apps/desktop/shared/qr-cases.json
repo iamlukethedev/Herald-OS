@@ -67,45 +67,47 @@
   {
     "text": "https://Example.com/menu?table=4",
     "kind": "link",
-    "caption": "Link copied: example.com",
+    "caption": "Link copied: https://Example.com/menu?table=4",
     "description": "a link to example.com",
     "full": true
   },
   {
     "text": "http://www.example.org:8080/a/b#top",
     "kind": "link",
-    "caption": "Link copied: www.example.org",
+    "caption": "Link copied: http://www.example.org:8080/a/b#top",
     "description": "a link to www.example.org",
     "full": true
   },
   {
     "text": "https://example.com/reset?token=0000aaaa1111bbbb",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/reset",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
-      "0000aaaa1111bbbb",
-      "reset"
-    ]
+      "0000aaaa1111bbbb"
+    ],
+    "link": "https://example.com/reset"
   },
   {
     "text": "https://alice:s3cret@files.example.com/share",
     "kind": "link",
-    "caption": "Link copied: files.example.com",
-    "description": "a link to files.example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://files.example.com/share",
+    "description": "a link to files.example.com, with the parts that looked secret removed",
     "hidden": [
       "s3cret",
       "alice"
-    ]
+    ],
+    "link": "https://files.example.com/share"
   },
   {
     "text": "https://app.example.com/callback#access_token=abc123&state=x",
     "kind": "link",
-    "caption": "Link copied: app.example.com",
-    "description": "a link to app.example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://app.example.com/callback#state=x",
+    "description": "a link to app.example.com, with the parts that looked secret removed",
     "hidden": [
       "abc123"
-    ]
+    ],
+    "link": "https://app.example.com/callback#state=x"
   },
   {
     "text": "sk-live-4eC39HqLyjWDarjtT1zdp7dc",
@@ -175,42 +177,46 @@
     "note": "otpauth in a value with an ordinary name",
     "text": "https://example.com/start?next=otpauth://totp/GitHub?secret=JBSWY3DPEHPK3PXP",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/start",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "JBSWY3DPEHPK3PXP",
       "otpauth"
-    ]
+    ],
+    "link": "https://example.com/start"
   },
   {
     "note": "URL-encoded otpauth",
     "text": "https://example.com/start?next=otpauth%3A%2F%2Ftotp%2FX%3Fsecret%3DJBSWY3DPEHPK3PXP",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/start",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "JBSWY3DPEHPK3PXP"
-    ]
+    ],
+    "link": "https://example.com/start"
   },
   {
     "note": "doubly encoded otpauth",
     "text": "https://example.com/start?next=otpauth%253A%252F%252Ftotp",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/start",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "otpauth"
-    ]
+    ],
+    "link": "https://example.com/start"
   },
   {
     "note": "token value under an unknown name",
     "text": "https://example.com/go?t=abc123SECRET",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/go",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "abc123SECRET"
-    ]
+    ],
+    "link": "https://example.com/go"
   },
   {
     "note": "JWT in the path",
@@ -246,37 +252,40 @@
     "note": "a nested link with a signature",
     "text": "https://example.com/?next=https%3A%2F%2Fother.example%2Fdone%3Fsig%3D1",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "other.example"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "parameter names match in any case",
     "text": "https://example.com/?TOKEN=x",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "TOKEN=x"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "sig",
     "text": "https://example.com/?sig=1",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "sig=1"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "URL token: 7 characters is below the minimum",
     "text": "https://example.com/x/ab12cd3",
     "kind": "link",
-    "caption": "Link copied: example.com",
+    "caption": "Link copied: https://example.com/x/ab12cd3",
     "description": "a link to example.com",
     "full": true
   },
@@ -604,14 +613,12 @@
     ]
   },
   {
-    "note": "a personal path word on its own",
+    "note": "an invitation path with nothing secret in it is shown in full",
     "text": "https://example.com/invite/abc",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
-    "hidden": [
-      "invite/abc"
-    ]
+    "caption": "Link copied: https://example.com/invite/abc",
+    "description": "a link to example.com",
+    "full": true
   },
   {
     "note": "otpauth in a path",
@@ -657,11 +664,12 @@
     "note": "doubly encoded otpauth that passes the token rule",
     "text": "https://example.com/?q=%256Ftpauth",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "%256Ftpauth"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "doubly encoded otpauth in text",
@@ -821,11 +829,12 @@
     "note": "a known token in a link value",
     "text": "https://example.com/?x=sk-abcdefghi",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "sk-abcdefghi"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "mixed case: 16 characters switching case 5 times",
@@ -867,21 +876,23 @@
     "note": "credentials with a URL-encoded colon",
     "text": "https://user%3Apw@example.com/",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "user%3Apw"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "credentials with a doubly encoded colon",
     "text": "https://user%253Apw@example.com/",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "user%253Apw"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "encoded credentials in an ftp link",
@@ -897,7 +908,7 @@
     "note": "a user name alone is not a credential",
     "text": "https://user@example.com/",
     "kind": "link",
-    "caption": "Link copied: example.com",
+    "caption": "Link copied: https://user@example.com/",
     "description": "a link to example.com",
     "full": true
   },
@@ -933,11 +944,12 @@
     "note": "otpauth that needs three decodes",
     "text": "https://example.com/?q=%25256Ftpauth",
     "kind": "link",
-    "caption": "Link copied: example.com",
-    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "caption": "Link copied: https://example.com/",
+    "description": "a link to example.com, with the parts that looked secret removed",
     "hidden": [
       "%25256Ftpauth"
-    ]
+    ],
+    "link": "https://example.com/"
   },
   {
     "note": "otpauth in text that needs three decodes",
@@ -1454,11 +1466,364 @@
     "full": true
   },
   {
+    "note": "a YouTube watch link",
+    "text": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "description": "a link to www.youtube.com",
+    "full": true
+  },
+  {
+    "note": "a YouTube playlist link",
+    "text": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG&index=2",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG&index=2",
+    "description": "a link to www.youtube.com",
+    "full": true
+  },
+  {
+    "note": "a YouTube Short",
+    "text": "https://www.youtube.com/shorts/aBcD3fGh1jK",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/shorts/aBcD3fGh1jK",
+    "description": "a link to www.youtube.com",
+    "full": true
+  },
+  {
+    "note": "a youtu.be share link",
+    "text": "https://youtu.be/dQw4w9WgXcQ?si=AbCdEfGhIjKlMnOp",
+    "kind": "link",
+    "caption": "Link copied: https://youtu.be/dQw4w9WgXcQ?si=AbCdEfGhIjKlMnOp",
+    "description": "a link to youtu.be",
+    "full": true
+  },
+  {
+    "note": "a secret parameter is still cut from a YouTube link",
+    "text": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&token=x",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "description": "a link to www.youtube.com, with the parts that looked secret removed",
+    "link": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "hidden": [
+      "token=x"
+    ]
+  },
+  {
+    "note": "a JWT counts even where the id is public",
+    "text": "https://www.youtube.com/watch?v=eyJabcde.fghij",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/watch",
+    "description": "a link to www.youtube.com, with the parts that looked secret removed",
+    "link": "https://www.youtube.com/watch",
+    "hidden": [
+      "eyJabcde"
+    ]
+  },
+  {
+    "note": "the same id elsewhere is a token",
+    "text": "https://example.com/watch?v=dQw4w9WgXcQ",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/watch",
+    "description": "a link to example.com, with the parts that looked secret removed",
+    "link": "https://example.com/watch",
+    "hidden": [
+      "dQw4w9WgXcQ"
+    ]
+  },
+  {
+    "note": "a GitHub commit",
+    "text": "https://github.com/iamlukethedev/Herald-OS/commit/8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe",
+    "kind": "link",
+    "caption": "Link copied: https://github.com/iamlukethedev/Herald-OS/commit/8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe",
+    "description": "a link to github.com",
+    "full": true
+  },
+  {
+    "note": "a file at a GitHub commit",
+    "text": "https://github.com/iamlukethedev/Herald-OS/blob/8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe/README.md",
+    "kind": "link",
+    "caption": "Link copied: https://github.com/iamlukethedev/Herald-OS/blob/8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe/README.md",
+    "description": "a link to github.com",
+    "full": true
+  },
+  {
+    "note": "a commit hash elsewhere is a token",
+    "text": "https://example.com/commit/8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "8de81cb0c3bebbf3696bbcd7196198eedcf3cdbe"
+    ]
+  },
+  {
+    "note": "a known token counts even where the id is public",
+    "text": "https://github.com/x/y/commit/ghp_abcdefghi",
+    "kind": "link",
+    "caption": "Link copied: github.com",
+    "description": "a link to github.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "ghp_abcdefghi"
+    ]
+  },
+  {
+    "note": "an Amazon product",
+    "text": "https://www.amazon.com/dp/B08N5WRWNW",
+    "kind": "link",
+    "caption": "Link copied: https://www.amazon.com/dp/B08N5WRWNW",
+    "description": "a link to www.amazon.com",
+    "full": true
+  },
+  {
+    "note": "an Amazon product under /gp/product",
+    "text": "https://www.amazon.co.uk/gp/product/B07XJ8C8F5",
+    "kind": "link",
+    "caption": "Link copied: https://www.amazon.co.uk/gp/product/B07XJ8C8F5",
+    "description": "a link to www.amazon.co.uk",
+    "full": true
+  },
+  {
+    "note": "an Amazon search result",
+    "text": "https://www.amazon.com/Echo-Dot/dp/B08N5WRWNW/ref=sr_1_1?keywords=echo+dot&qid=1697040000",
+    "kind": "link",
+    "caption": "Link copied: https://www.amazon.com/Echo-Dot/dp/B08N5WRWNW/ref=sr_1_1?keywords=echo+dot&qid=1697040000",
+    "description": "a link to www.amazon.com",
+    "full": true
+  },
+  {
+    "note": "the same product id elsewhere is a token",
+    "text": "https://example.com/dp/B08N5WRWNW",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "B08N5WRWNW"
+    ]
+  },
+  {
+    "note": "an Instagram post",
+    "text": "https://www.instagram.com/p/CxYz1AbC2dE/",
+    "kind": "link",
+    "caption": "Link copied: https://www.instagram.com/p/CxYz1AbC2dE/",
+    "description": "a link to www.instagram.com",
+    "full": true
+  },
+  {
+    "note": "an Instagram reel shared from the app",
+    "text": "https://www.instagram.com/reel/CxYz1AbC2dE/?igsh=MTc4MmM1YmI2Ng==",
+    "kind": "link",
+    "caption": "Link copied: https://www.instagram.com/reel/CxYz1AbC2dE/?igsh=MTc4MmM1YmI2Ng==",
+    "description": "a link to www.instagram.com",
+    "full": true
+  },
+  {
+    "note": "a Spotify track with ?si=",
+    "text": "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=1a2b3c4d5e6f7a8b",
+    "kind": "link",
+    "caption": "Link copied: https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=1a2b3c4d5e6f7a8b",
+    "description": "a link to open.spotify.com",
+    "full": true
+  },
+  {
+    "note": "a card number counts even where the id is public",
+    "text": "https://open.spotify.com/track/4111111111111111",
+    "kind": "link",
+    "caption": "Link copied: open.spotify.com",
+    "description": "a link to open.spotify.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "4111111111111111"
+    ]
+  },
+  {
+    "note": "a Zoom meeting",
+    "text": "https://us02web.zoom.us/j/85512345678",
+    "kind": "link",
+    "caption": "Link copied: https://us02web.zoom.us/j/85512345678",
+    "description": "a link to us02web.zoom.us",
+    "full": true
+  },
+  {
+    "note": "a Zoom meeting password is cut out",
+    "text": "https://us02web.zoom.us/j/85512345678?pwd=dGhpc2lzZmFrZTEyMw.1",
+    "kind": "link",
+    "caption": "Link copied: https://us02web.zoom.us/j/85512345678",
+    "description": "a link to us02web.zoom.us, with the parts that looked secret removed",
+    "link": "https://us02web.zoom.us/j/85512345678",
+    "hidden": [
+      "dGhpc2lzZmFrZTEyMw"
+    ]
+  },
+  {
+    "note": "a shared Drive file",
+    "text": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view?usp=sharing",
+    "kind": "link",
+    "caption": "Link copied: https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view?usp=sharing",
+    "description": "a link to drive.google.com",
+    "full": true
+  },
+  {
+    "note": "a Google Doc",
+    "text": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+    "kind": "link",
+    "caption": "Link copied: https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+    "description": "a link to docs.google.com",
+    "full": true
+  },
+  {
+    "note": "a Drive link by id",
+    "text": "https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "kind": "link",
+    "caption": "Link copied: https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "description": "a link to drive.google.com",
+    "full": true
+  },
+  {
+    "note": "a Drive resource key is cut out",
+    "text": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view?resourcekey=0-aZbYcXdW",
+    "kind": "link",
+    "caption": "Link copied: https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view",
+    "description": "a link to drive.google.com, with the parts that looked secret removed",
+    "link": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view",
+    "hidden": [
+      "aZbYcXdW"
+    ]
+  },
+  {
+    "note": "a card number in a value is cut out",
+    "text": "https://example.com/pay?card=4111111111111111",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/pay",
+    "description": "a link to example.com, with the parts that looked secret removed",
+    "link": "https://example.com/pay",
+    "hidden": [
+      "4111111111111111"
+    ]
+  },
+  {
+    "note": "a card number in the path leaves only the host",
+    "text": "https://example.com/pay/4111111111111111",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "4111111111111111"
+    ]
+  },
+  {
+    "note": "names that only contain key, auth or code are not secret names",
+    "text": "https://example.com/search?keywords=abc&author=me&zipcode=12345",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/search?keywords=abc&author=me&zipcode=12345",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "AWSAccessKeyId is split into words",
+    "text": "https://bucket.example.com/f?AWSAccessKeyId=x&Expires=1",
+    "kind": "link",
+    "caption": "Link copied: https://bucket.example.com/f?Expires=1",
+    "description": "a link to bucket.example.com, with the parts that looked secret removed",
+    "link": "https://bucket.example.com/f?Expires=1",
+    "hidden": [
+      "AWSAccessKeyId"
+    ]
+  },
+  {
+    "note": "X-Amz-Signature",
+    "text": "https://bucket.example.com/f?X-Amz-Signature=abc&X-Amz-Date=1",
+    "kind": "link",
+    "caption": "Link copied: https://bucket.example.com/f?X-Amz-Date=1",
+    "description": "a link to bucket.example.com, with the parts that looked secret removed",
+    "link": "https://bucket.example.com/f?X-Amz-Date=1",
+    "hidden": [
+      "Signature=abc"
+    ]
+  },
+  {
+    "note": "a sign-in page",
+    "text": "https://example.com/login",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/login",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "an ordinary link in a sentence",
+    "text": "Menu: https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an acronym glued to a secret word (SAS Token)",
+    "text": "https://blob.example.com/f?SASToken=x&v=1",
+    "kind": "link",
+    "caption": "Link copied: https://blob.example.com/f?v=1",
+    "description": "a link to blob.example.com, with the parts that looked secret removed",
+    "link": "https://blob.example.com/f?v=1",
+    "hidden": [
+      "SASToken"
+    ]
+  },
+  {
     "note": "an order number whose digits happen to pass Luhn: digits glued to a word are not a card number",
     "text": "ORDER-2026-000123458",
     "kind": "text",
     "caption": "QR code copied",
     "description": "text",
     "full": true
+  },
+  {
+    "note": "a known token counts even in a public parameter",
+    "text": "https://www.youtube.com/watch?v=sk-abcdefghi",
+    "kind": "link",
+    "caption": "Link copied: https://www.youtube.com/watch",
+    "description": "a link to www.youtube.com, with the parts that looked secret removed",
+    "link": "https://www.youtube.com/watch",
+    "hidden": [
+      "sk-abcdefghi"
+    ]
+  },
+  {
+    "note": "only a hex hash after /commit/ is public",
+    "text": "https://github.com/x/y/commit/ab12cd34ef56gh",
+    "kind": "link",
+    "caption": "Link copied: github.com",
+    "description": "a link to github.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "ab12cd34ef56gh"
+    ]
+  },
+  {
+    "note": "a token-like fragment is cut out",
+    "text": "https://example.com/page#ab12cd34ef",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/page",
+    "description": "a link to example.com, with the parts that looked secret removed",
+    "link": "https://example.com/page",
+    "hidden": [
+      "ab12cd34ef"
+    ]
+  },
+  {
+    "note": "otpauth left anywhere in a link leaves only the host",
+    "text": "https://example.com/?otpauth://totp/GitHub",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "otpauth"
+    ]
+  },
+  {
+    "note": "a JWT on its own",
+    "text": "eyJabcde.fghij",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "eyJabcde"
+    ]
   }
 ]

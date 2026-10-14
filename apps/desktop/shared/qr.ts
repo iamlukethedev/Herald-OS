@@ -19,6 +19,8 @@ export interface QrReading {
   description: string
   /** The full contents, only for ordinary links and text. */
   text?: string
+  /** A link with the parts that looked secret taken out (the clipboard has the whole link). */
+  link?: string
 }
 
 const KINDS: readonly QrKind[] = ['otp', 'wifi', 'link', 'secret', 'text']
@@ -30,10 +32,11 @@ const SECRET_DESCRIPTION = 'something that looks like a password, key or recover
 const SECRET_WORDS = /\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b/i
 /** Shorter words that only count as a label: "pin: 4821", "key=…". */
 const SECRET_LABELS = /\b(pass|pin|key|seed|code|otp)\b\s*[:=]/i
-/** Query and fragment parameter names that carry secrets. */
-const SECRET_PARAM = /token|key|secret|pass|pwd|auth|code|sig|session|otp|credential/i
-/** Path segments that make a link personal (an invitation, a reset, a sign-in). */
-const SECRET_PATH = /invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem/i
+/**
+ * Parameter names that carry secrets, matched word by word, so access_token, X-Amz-Signature and
+ * AWSAccessKeyId count and keywords, author or zipcode do not.
+ */
+const SECRET_NAME_WORDS = new Set(['token', 'key', 'apikey', 'secret', 'pass', 'passcode', 'password', 'passwd', 'pwd', 'sig', 'signature', 'auth', 'session', 'sessionid', 'otp', 'code', 'credential', 'credentials', 'jwt', 'bearer'])
 /** Runs of digits, single spaces or dashes allowed between them, that are not part of a longer word. */
 const DIGIT_RUN = /(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])/g
 /** Token formats that are secret however they look: Slack, GitLab, Stripe, GitHub, OpenAI-style and AWS keys. */
@@ -302,6 +305,56 @@ export function digitsLookSecret(text: string): boolean {
   return false
 }
 
+/** A parameter name's words, lower case: "AWSAccessKeyId" is aws, access, key, id. */
+export function nameWords(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map(word => word.toLowerCase())
+}
+
+const secretName = (name: string) => nameWords(name).some(word => SECRET_NAME_WORDS.has(word))
+
+/**
+ * Sites whose links carry public ids that look like tokens: a video, a commit, a product, a post, a
+ * track, a shared file. Those ids are only checked for strong signs of a secret (see strongSecret).
+ * A path segment is public when it follows one of `after` (or is the first, with `first`).
+ */
+interface PublicIds {
+  host: RegExp
+  after?: string[]
+  first?: boolean
+  segment?: RegExp
+  params?: string[]
+}
+
+const PUBLIC_IDS: readonly PublicIds[] = [
+  { host: /(^|\.)youtube\.com$/, after: ['shorts', 'embed', 'live'], params: ['v', 'list', 'si'] },
+  { host: /^youtu\.be$/, first: true, params: ['si'] },
+  { host: /^(www\.)?github\.com$/, after: ['commit', 'commits', 'blob', 'tree'], segment: /^[0-9a-f]{7,40}$/ },
+  { host: /(^|\.)amazon(\.[a-z]{2,3}){1,2}$/, after: ['dp', 'product'] },
+  { host: /(^|\.)instagram\.com$/, after: ['p', 'reel'], params: ['igsh'] },
+  { host: /^open\.spotify\.com$/, after: ['track', 'album', 'playlist', 'artist', 'episode', 'show'], params: ['si'] },
+  { host: /^(drive|docs)\.google\.com$/, after: ['d', 'folders'], params: ['id'] }
+]
+
+function publicSegment(rule: PublicIds | undefined, segments: string[], index: number): boolean {
+  if (!rule) {
+    return false
+  }
+
+  const placed = (rule.first === true && index === 0) || (index > 0 && (rule.after ?? []).includes(segments[index - 1]))
+
+  return placed && (!rule.segment || rule.segment.test(segments[index]))
+}
+
+/** Signs of a secret that count even in a site's public ids. */
+function strongSecret(value: string): boolean {
+  return KNOWN_TOKEN.test(value) || JWT.test(value) || digitsLookSecret(value) || /otpauth/i.test(decodeDeep(value))
+}
+
 interface UriParts {
   authority: string | null
   path: string
@@ -333,31 +386,64 @@ function uriParts(uri: string): UriParts {
 }
 
 /** The host of scheme://[user@]host[:port]/…, lower case; '' when it is not a plain host name. */
-function uriHost(uri: string): string {
-  const { authority } = uriParts(uri)
+function hostOf(authority: string | null): string {
   const host = (authority ?? '').split('@').pop()!.replace(/:\d*$/, '').toLowerCase()
 
   return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) ? host : ''
 }
 
-/** Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code. */
-export function uriLooksSecret(uri: string, depth = 0): boolean {
+export interface LinkCheck {
+  /** A secret in the path, or one that cannot be cut out: only the host may be shown. */
+  hostOnly: boolean
+  /** Credentials, parameters or a fragment were cut out of `link`. */
+  removed: boolean
+  /** The link without the parts that looked secret; the link itself when nothing was. */
+  link: string
+}
+
+/**
+ * What in a link (any scheme) looks secret. Credentials and secret query or fragment parameters
+ * can be cut out; a secret path segment cannot, so then only the host may be shown.
+ */
+export function checkLink(uri: string, depth = 0): LinkCheck {
   const { authority, path, query, fragment } = uriParts(uri)
+  const rule = PUBLIC_IDS.find(entry => entry.host.test(hostOf(authority)))
   const at = authority === null ? -1 : authority.lastIndexOf('@')
-
   // user:password@, with the colon written out or URL-encoded.
-  if ((at >= 0 && decodeDeep(authority!.slice(0, at)).includes(':')) || /otpauth/i.test(decodeDeep(uri))) {
-    return true
+  const credentials = at >= 0 && decodeDeep(authority!.slice(0, at)).includes(':')
+
+  const secretPart = (value: string, isPublic: boolean) =>
+    strongSecret(value) || (!isPublic && (looksLikeToken(value, URL_TOKEN_MIN) || (depth < 3 && SCHEME.test(value) && uriLooksSecret(value, depth + 1))))
+  const keepPair = (pair: string) => {
+    const [name, ...rest] = pair.split('=')
+    const isPublic = (rule?.params ?? []).includes(detect(name))
+
+    return !secretName(detect(name)) && !secretPart(detect(rest.join('=')), isPublic)
   }
-  const segments = [...path.split('/'), ...(fragment.includes('=') ? [] : fragment.split('/'))].map(detect).filter(Boolean)
 
-  if (segments.some(segment => SECRET_PATH.test(segment) || looksLikeToken(segment, URL_TOKEN_MIN))) {
-    return true
-  }
+  const segments = path.split('/').filter(Boolean)
+  const pairs = query.split('&').filter(Boolean)
+  const kept = pairs.filter(keepPair)
+  const fragmentPairs = fragment.includes('=') ? fragment.split('&').filter(Boolean) : []
+  const keptFragment = fragment.includes('=')
+    ? fragmentPairs.filter(keepPair).join('&')
+    : fragment.split('/').some(part => part && secretPart(detect(part), false)) ? '' : fragment
+  const removed = credentials || kept.length !== pairs.length || keptFragment !== fragment
 
-  const pairs = [...params(query, detect), ...(fragment.includes('=') ? params(fragment, detect) : [])]
+  const scheme = (uri.match(SCHEME) ?? [''])[0]
+  const link = removed
+    ? `${scheme}${authority === null ? '' : `//${authority.slice(at + 1)}`}${path}${kept.length > 0 ? `?${kept.join('&')}` : ''}${keptFragment ? `#${keptFragment}` : ''}`
+    : uri
+  const hostOnly = segments.some((segment, index) => secretPart(detect(segment), publicSegment(rule, segments, index))) || /otpauth/i.test(decodeDeep(link))
 
-  return pairs.some(([name, value]) => SECRET_PARAM.test(name) || looksLikeToken(value, URL_TOKEN_MIN) || (depth < 3 && SCHEME.test(value) && uriLooksSecret(value, depth + 1)))
+  return { hostOnly, removed, link }
+}
+
+/** Whether a link (any scheme) carries something secret: credentials, a token, a 2FA code. */
+export function uriLooksSecret(uri: string, depth = 0): boolean {
+  const { hostOnly, removed } = checkLink(uri, depth)
+
+  return hostOnly || removed
 }
 
 /** A password, key, recovery phrase or credentialled link, as far as one can tell from the text. */
@@ -434,16 +520,26 @@ function describeWifi(text: string): QrReading {
   return { kind: 'wifi', caption: 'Wi-Fi details copied', description: name ? `a Wi-Fi network called "${name}"` : 'Wi-Fi details' }
 }
 
+/**
+ * Ordinary links are shown in full. A link that carries a secret is shown without it when it can be
+ * cut out (credentials, a parameter, the fragment), and as its host alone when it cannot.
+ */
 function describeLink(text: string): QrReading | null {
-  const host = /^https?:\/\/\S+$/i.test(text) ? uriHost(text) : ''
+  const host = /^https?:\/\/\S+$/i.test(text) ? hostOf(uriParts(text).authority) : ''
 
   if (!host) {
     return null
   }
 
-  return uriLooksSecret(text)
-    ? { kind: 'link', caption: `Link copied: ${host}`, description: `a link to ${host} that carries what looks like a password, key or sign-in token` }
-    : { kind: 'link', caption: `Link copied: ${host}`, description: `a link to ${host}`, text }
+  const { hostOnly, removed, link } = checkLink(text)
+
+  if (hostOnly) {
+    return { kind: 'link', caption: `Link copied: ${host}`, description: `a link to ${host} that carries what looks like a password, key or sign-in token` }
+  }
+
+  return removed
+    ? { kind: 'link', caption: `Link copied: ${link}`, description: `a link to ${host}, with the parts that looked secret removed`, link }
+    : { kind: 'link', caption: `Link copied: ${text}`, description: `a link to ${host}`, text }
 }
 
 /** A code with several lines is hidden whole when any line, or the whole, would be. */
@@ -503,7 +599,13 @@ export function parseQrReading(output: string): QrReading | null {
       return null
     }
 
-    return { kind: value.kind as QrKind, caption: value.caption, description: value.description, ...(typeof value.text === 'string' ? { text: value.text } : {}) }
+    return {
+      kind: value.kind as QrKind,
+      caption: value.caption,
+      description: value.description,
+      ...(typeof value.text === 'string' ? { text: value.text } : {}),
+      ...(typeof value.link === 'string' ? { link: value.link } : {})
+    }
   } catch {
     return null
   }

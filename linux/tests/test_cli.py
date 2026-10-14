@@ -844,6 +844,7 @@ def test_qr_contents_are_described_the_way_the_shell_describes_them(case):
     assert reading["kind"] == case["kind"]
     assert reading["caption"] == case["caption"]
     assert reading["description"] == case["description"]
+    assert reading.get("link") == case.get("link")
     if case.get("full"):
         assert reading["text"] == case["text"].strip()
     else:
@@ -913,11 +914,28 @@ def test_qr_json_is_for_the_shell_and_print_is_for_scripts(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["text"] == "https://example.com/menu"
 
 
-def test_qr_link_shows_where_it_points(monkeypatch, capsys):
+def test_qr_link_is_shown_in_full(monkeypatch, capsys):
     _, notes = qr_scan(monkeypatch, "https://example.com/menu?table=4")
     assert cli.capture_qr([]) == 0
-    assert notes == [("Link copied: example.com", "")]
-    assert capsys.readouterr().out == "Link copied: example.com\n"
+    assert notes == [("Link copied: https://example.com/menu?table=4", "")]
+    assert capsys.readouterr().out == "Link copied: https://example.com/menu?table=4\n"
+
+
+def test_qr_link_with_a_secret_is_shown_without_it_and_never_copied_plainly(monkeypatch, capsys):
+    link = "https://us02web.zoom.us/j/85512345678?pwd=dGhpc2lzZmFrZTEyMw.1"
+    copies, notes = qr_scan(monkeypatch, link)
+    assert cli.capture_qr(["--json"]) == 0
+    assert copies == [(["wl-copy", "--sensitive"], link.encode())]
+    assert notes == [("Link copied: https://us02web.zoom.us/j/85512345678", "")]
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"kind": "link", "caption": "Link copied: https://us02web.zoom.us/j/85512345678", "description": "a link to us02web.zoom.us, with the parts that looked secret removed", "link": "https://us02web.zoom.us/j/85512345678"}
+    assert "dGhpc2lzZmFrZTEyMw" not in out
+
+    copies, notes = qr_scan(monkeypatch, link, sensitive_ok=False)
+    with pytest.raises(SystemExit) as stopped:
+        cli.capture_qr([])
+    assert stopped.value.code == 1
+    assert copies == [(["wl-copy", "--sensitive"], link.encode())]
 
 
 @pytest.mark.parametrize("code", ["https://example.com/menu", "Table 4"])

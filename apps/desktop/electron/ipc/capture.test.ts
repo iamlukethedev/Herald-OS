@@ -245,7 +245,7 @@ describe('the QR and text readers on macOS', () => {
     expect(copyConcealedMac).not.toHaveBeenCalled()
   })
 
-  it.each([OTP, 'WIFI:S:Home;T:WPA;P:hunter22;;', 'https://example.com/reset?token=0000aaaa1111bbbb', 'ab12cd34ef56'])('refuses a secret it cannot copy concealed, rather than copy it plainly: %s', async code => {
+  it.each([OTP, 'WIFI:S:Home;T:WPA;P:hunter22;;', 'https://example.com/reset?token=0000aaaa1111bbbb', 'ab12cd34ef56', '4111 1111 1111 1111', 'https://us02web.zoom.us/j/85512345678?pwd=dGhpc2lzZmFrZTEyMw.1'])('refuses a secret it cannot copy concealed, rather than copy it plainly: %s', async code => {
     readImageMac.mockResolvedValueOnce([code])
     copyConcealedMac.mockRejectedValueOnce(new Error('osascript failed'))
 
