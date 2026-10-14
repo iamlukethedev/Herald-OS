@@ -5,21 +5,83 @@ works across the whole machine: it opens apps, finds and organises files, keeps 
 running, remembers what matters to you, runs routines, and builds software while you watch. Anything
 that changes something asks first.
 
-This manual is for using Herald OS day to day. The [README](../../README.md) covers installing it;
-[docs/ARCHITECTURE.md](../ARCHITECTURE.md) covers how it is built.
+This manual is for installing and using Herald OS day to day.
+[docs/ARCHITECTURE.md](../ARCHITECTURE.md) covers how it is built, and [docs/LINUX.md](../LINUX.md)
+how Herald OS Linux is put together.
+
+## Chapters
+
+### Getting started
+
+- [Installing on a PC](install-pc.md): the installer, the USB stick, Secure Boot, encryption, dual
+  boot, and the disk password.
+- [Installing on a Mac](install-mac.md): the app, Hermes Agent and macOS's permissions.
+- [Trying it in a virtual machine](virtual-machine.md): on a Mac, on Windows or on Linux.
+- [Setting it up for someone else, and reset](setup-and-reset.md): the first-start setup, handing a
+  computer over, and starting again.
+- [Unattended installs](unattended-installs.md): installing several PCs from a kickstart.
+
+### Moving over
 
 - [Coming from macOS](coming-from-macos.md): where your habits go.
+- [Coming from Windows](coming-from-windows.md): the same, for Windows.
+- [Windows and Spaces](windows-and-spaces.md): niri's columns, floating windows and the overview.
+
+### The desktop
+
+- [The menu bar and quick panels](menu-bar.md): the status icons, Wi-Fi, Bluetooth, sound and
+  display panels, the Herald OS menu and the Dock.
+- [Notifications and do not disturb](notifications.md).
+- [Clipboard history](clipboard.md).
+- [Screenshots, recording, text and QR codes](capture.md).
+- [Dictation and emoji](dictation-and-emoji.md): typing by voice, and emoji, in any app.
+- [Reminders, notices and weather](reminders.md).
+- [Lock screen, idle and the screensaver](lock-and-idle.md): locking, stay awake, night light.
 - [Hotkeys](hotkeys.md): every shortcut on macOS and on Herald OS Linux.
 - [Make it yours](make-it-yours.md): themes, fonts, the language, widgets, the menu bar, your own
   menu entries, branding, keyboard shortcuts, and hooks and automations that run when something
   happens.
+
+### Hermes
+
+- [Talking to Hermes](talking-to-hermes.md): the command bar, conversations, approvals and voice.
+- [Missions](missions.md): bigger jobs Hermes plans and works through.
+- [Memory](memory.md): what Hermes knows about you, and why.
+- [Automations](automations.md): on a schedule, or when something happens.
+- [Connections](connections.md): MCP servers, messaging platforms and accounts.
+- [Studio](studio.md): watching Hermes build software.
+- [Usage](usage.md): what your model plan has used.
+- [Privacy and the audit log](privacy.md): permission tiers, protected folders and the log.
+- [Crash help](crash-help.md): Hermes explains crashes.
+- [The desktop pet](pet.md): Hermes's pet on the desktop, what it shows, approvals, chat and
+  dropped files, and keeping it out of the way.
+
+### Apps
+
+- [Installing software](installing-software.md): the catalog, any Flatpak app, and what comes
+  installed.
+- [Web apps](web-apps.md): websites in windows of their own.
+- [Games](games.md): Steam, Lutris, Heroic and the rest.
+- [The Windows VM](windows-vm.md): Windows 11 in a window.
+- [Coding agents and local models](coding-agents.md): Claude Code, Codex and others, Ollama and LM
+  Studio.
 - [Herald Canvas](canvas.md): the image editor, its tools and AI features, Photoshop files, and
   working on pictures with Hermes.
 - [Herald Office](office.md): Herald Docs, Sheets and Slides, the files they open and save,
   printing, and working on documents with Hermes and your voice.
-- [The desktop pet](pet.md): Hermes's pet on the desktop, what it shows, approvals, chat and
-  dropped files, and keeping it out of the way.
-- [Troubleshooting](troubleshooting.md): when something does not work.
+
+### The system
+
+- [Updates, channels and rollback](updates.md).
+- [Security](security.md): the firewall, SSH, fingerprints and security keys, encryption.
+- [The `herald-os` command line](command-line.md): every hotkey and menu item as a command.
+- [Running inside Omarchy](omarchy.md).
+- [Arch and other Linux](other-linux.md): the Arch package and the tarball.
+
+### Help
+
+- [Troubleshooting](troubleshooting.md): when something does not work, a bad update, a locked-out
+  account, Wi-Fi, Bluetooth, sound, and the size of things.
 - [FAQ](faq.md): short answers to common questions.
 
 ## The first five minutes
@@ -63,17 +125,11 @@ have more than one, you choose who a conversation is with.
 ## Installing software
 
 Settings > Software (or Install in the `Super+M` menu on Linux, or just "install Steam") lists what
-Herald OS can install in one step: coding agents for the terminal (Claude Code, Codex, OpenCode,
-Gemini CLI, Copilot CLI), local models with Ollama and LM Studio, languages (Node, Python, Go, Rust,
-Ruby and Rails, PHP and Laravel, and more), editors, terminals, games, a Windows 11 virtual machine,
-media apps, password managers and web apps. Each one installs the right way for your machine, and
-says why when it cannot (Steam needs an x86_64 PC, Windows needs virtualization). On a Mac the list
-is the coding agents and local model apps.
-
-- **Coding agents** open from the Terminal's new-tab menu (the arrow next to `+`).
-- **Local models:** once Ollama or LM Studio has a model, "Use with Hermes" makes Hermes use it.
-- **Windows** asks how much memory, how many cores and how much disk to give it, installs itself in
-  10 to 20 minutes, and shares `~/Windows` with your files. Open it from Applications.
+Herald OS can install in one step: coding agents, local models, languages, editors, terminals,
+games, a Windows 11 virtual machine, media apps, password managers and web apps. Each one installs
+the right way for your machine, and says why when it cannot. [Installing software](installing-software.md)
+has the whole catalog; [Coding agents and local models](coding-agents.md),
+[Games](games.md) and [The Windows VM](windows-vm.md) have more on each.
 
 ## Finding and filing documents
 

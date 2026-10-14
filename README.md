@@ -321,8 +321,8 @@ abilities as a regular Hermes plugin, `herald-os-bridge`.
   `herald-os update`, that updates Herald OS, Hermes and Fedora, with `herald-os rollback` to undo
   it.
 
-The [manual](docs/manual/README.md) covers using all of it, with every hotkey and a page for
-people coming from macOS.
+The [manual](docs/manual/README.md) covers installing and using all of it, with every hotkey,
+pages for people coming from macOS and Windows, and help for when something goes wrong.
 
 ## Building from source
 

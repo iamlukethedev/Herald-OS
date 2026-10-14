@@ -7,6 +7,13 @@ virtual machine in CI, not yet on real PC hardware), runs as an app inside Omarc
 Silicon Mac (aarch64) runs in a virtual machine for trying it and for development; nothing on the
 Mac changes.
 
+This page is about how Herald OS Linux is built and how to develop it. For using it, see
+[the manual](manual/README.md): [installing on a PC](manual/install-pc.md), [trying it in a virtual
+machine](manual/virtual-machine.md), [setup and reset](manual/setup-and-reset.md), [the menu bar and
+quick panels](manual/menu-bar.md), [installing software](manual/installing-software.md),
+[updates and rollback](manual/updates.md), [security](manual/security.md) and
+[the `herald-os` command line](manual/command-line.md).
+
 ```
 kernel + systemd  ->  greetd (autologin: hermes)  ->  niri  ->  Herald OS shell  ->  hermes serve
                                                                       |                    |
@@ -132,35 +139,43 @@ inside the VM by `scripts/bootstrap.sh`.
 
 ## Services (niri session)
 
-`herald-os-session` starts, as transient user units: `wl-paste --watch cliphist store` (text and
-images; `Mod+Ctrl+V` opens the picker), and `herald-os-idle`, which runs `swayidle` with the timings
-from Settings > General (`~/.config/herald-os/idle.conf`: screensaver, lock after 10 min only when
-the account has a password, screens off after 15, no sleep by default; "stay awake" stops the
-unit). Night light is `wlsunset` as the `herald-os-nightlight` unit. Notifications from other apps
-arrive through the shell's own `org.freedesktop.Notifications` daemon. The `hermes` VM user has no password by default, so
-`herald-os lock` refuses until you run `herald-os password` in a terminal; a lock nobody can undo
-would leave the compositor's session lock engaged.
+How these look to someone using them is in the manual: [the menu bar and quick
+panels](manual/menu-bar.md), [clipboard history](manual/clipboard.md), [lock screen, idle and the
+screensaver](manual/lock-and-idle.md), [dictation and emoji](manual/dictation-and-emoji.md) and
+[hotkeys](manual/hotkeys.md). Underneath:
 
-`Mod+M` or `Mod+Alt+Space` opens the control menu (Install / Remove / Update / Style / Trigger /
-System / Hermes); every item is a `herald-os` command, so the agent (`system_os` tool) and scripts
-can do the same. `Mod` is `Super` on real hardware and `Alt` when niri runs nested (the QEMU VM),
-where `Mod+Alt+Space` is only `Alt+Space` and `Mod+M` is the way in. `Mod+K` lists every hotkey.
-Web apps (`herald-os install webapp <name> <url>`) open as their own frameless windows.
-
-The menu bar's status items open quick panels (`herald-os panel wifi|bluetooth|audio|display|power|clock`,
-backed by `nmcli`, `bluetoothctl`, `pactl`, `niri msg output`, `powerprofilesctl` and `upower`).
-Right-clicking a running app in the Dock lists its windows, with Close and Close all, in a small
-window of its own above the Dock ("Herald OS · Dock Menu"), as the Dock's window is only 84 pixels
-tall: the shell moves it over the icon through niri before drawing it, and the keys stay with the
-Dock. Escape, a click elsewhere or the keys going to another window close it.
-Dictation (`Mod+Ctrl+X`, `herald-os dictate`) records until a pause, transcribes through Hermes's
-speech-to-text and types the words into the focused app with `wtype`; the emoji picker
-(`Mod+Ctrl+E`) types its pick the same way. `herald-os keymap omarchy` renders
-`~/.config/niri/herald-os.kdl` from the installed template (`linux/niri/config.kdl`) with Omarchy's
-`Super+C/X/V` copy, cut and paste; `herald-os keymap herald` restores Herald's keys. Every session
-start renders it again, so an update's new template takes effect at the next login.
+- **Transient user units** started by `herald-os-session`: `wl-paste --watch cliphist store` (text
+  and images) and `herald-os-idle`, which runs `swayidle` with the timings Settings > General writes
+  to `~/.config/herald-os/idle.conf` (the idle lock is armed only when the account has a password;
+  "stay awake" stops the unit). Night light is `wlsunset` as the `herald-os-nightlight` unit.
+- **Notifications** from other apps arrive through the shell's own
+  `org.freedesktop.Notifications` daemon.
+- **The lock.** The `hermes` VM user has no password by default, so `herald-os lock` refuses until
+  you run `herald-os password` in a terminal; a lock nobody can undo would leave the compositor's
+  session lock engaged.
+- **The control menu** (`Mod+M` or `Mod+Alt+Space`): every item is a `herald-os` command, so the
+  agent (`system_os` tool) and scripts can do the same. `Mod` is `Super` on real hardware and `Alt`
+  when niri runs nested (the QEMU VM), where `Mod+Alt+Space` is only `Alt+Space` and `Mod+M` is the
+  way in.
+- **Web apps** (`herald-os install webapp <name> <url>`) open as their own frameless windows.
+- **Quick panels** (`herald-os panel wifi|bluetooth|audio|display|power|clock`) are backed by
+  `nmcli`, `bluetoothctl`, `pactl`, `niri msg output`, `powerprofilesctl` and `upower`.
+- **The Dock menu.** Right-clicking a running app lists its windows in a small window of its own
+  above the Dock ("Herald OS · Dock Menu"), as the Dock's window is only 84 pixels tall: the shell
+  moves it over the icon through niri before drawing it, and the keys stay with the Dock. Escape, a
+  click elsewhere or the keys going to another window close it.
+- **Dictation and emoji** (`herald-os dictate`, `herald-os emoji`) type into the focused app with
+  `wtype`; dictation transcribes through Hermes's speech-to-text.
+- **Keymaps.** `herald-os keymap omarchy` renders `~/.config/niri/herald-os.kdl` from the installed
+  template (`linux/niri/config.kdl`) with Omarchy's `Super+C/X/V` copy, cut and paste;
+  `herald-os keymap herald` restores Herald's keys. Every session start renders it again, so an
+  update's new template takes effect at the next login.
 
 ## Themes, omakase, updates
+
+The manual covers these for people using them: [Make it yours](manual/make-it-yours.md),
+[Installing software](manual/installing-software.md) and
+[Updates, channels and rollback](manual/updates.md).
 
 - **Themes** live in `linux/themes/<name>/theme.json` (twelve ship, two of them light). `herald-os
   theme set <name>` (or Style → Theme in the control menu, or the agent's `system_os theme_set`)
@@ -327,6 +342,7 @@ there, as on the image.
 
 ## Arch Linux (and Omarchy)
 
+[Arch and other Linux](manual/other-linux.md) in the manual is the short version for installing.
 Fedora stays the base Herald OS builds and tests on (ADR-017); Arch gets a package.
 `packaging/arch/herald-os-bin` packages the release tarball and `packaging/arch/herald-os-git` builds
 from source; both lay out the same files: the app in `/opt/herald-os`, the CLIs and session scripts
@@ -420,7 +436,7 @@ reaches the one window through the same control socket the niri session uses, so
 command works as a key.
 
 On Omarchy, `herald-os omarchy install` sets the rest up, and `herald-os omarchy remove` takes it out
-again. It handles Omarchy 4 (the package in `/usr/share/omarchy`, a Lua Hyprland config, state in
+again ([Running inside Omarchy](manual/omarchy.md) in the manual). It handles Omarchy 4 (the package in `/usr/share/omarchy`, a Lua Hyprland config, state in
 `~/.local/state/omarchy`) and Omarchy 3 (the checkout in `~/.local/share/omarchy`, `hyprland.conf`):
 
 - **Theme:** a hook in `~/.config/omarchy/hooks/theme-set.d/` runs `herald-os theme omarchy` when the
