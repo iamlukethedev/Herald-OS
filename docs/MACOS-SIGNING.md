@@ -131,13 +131,14 @@ gh secret set APPLE_TEAM_ID --env macos-release
 
 ## What gets notarized
 
-There are two notarization submissions per signed build, and the zip has no ticket of its own:
+Each build packs two apps, one for Apple Silicon (`arm64`) and one for Intel (`x64`). Each app has
+two notarization submissions, and its zip has no ticket of its own:
 
-| Artifact | Signed | Notarized | Ticket stapled |
+| Artifact, per architecture | Signed | Notarized | Ticket stapled |
 | --- | --- | --- | --- |
-| `Herald OS.app` | Developer ID, hardened runtime, `build/entitlements.mac.plist` | Yes: electron-builder submits it through `@electron/notarize` | Yes, to the app, before the DMG and zip are made |
-| `HeraldOS-<version>-mac-arm64.dmg` | Developer ID (`-c.dmg.sign=true`) | Yes: a second `xcrun notarytool submit` of the DMG itself | Yes, to the DMG (`xcrun stapler staple`) |
-| `HeraldOS-<version>-mac-arm64.zip` | No (a zip cannot be signed) | Not on its own; it holds the notarized app | No (a zip cannot carry a ticket); the app inside carries its own |
+| `Herald OS.app` (`release/mac-arm64/`, `release/mac/`) | Developer ID, hardened runtime, `build/entitlements.mac.plist` | Yes: electron-builder submits it through `@electron/notarize` | Yes, to the app, before the DMG and zip are made |
+| `HeraldOS-<version>-mac-<arch>.dmg` | Developer ID (`-c.dmg.sign=true`) | Yes: a second `xcrun notarytool submit` of the DMG itself | Yes, to the DMG (`xcrun stapler staple`) |
+| `HeraldOS-<version>-mac-<arch>.zip` | No (a zip cannot be signed) | Not on its own; it holds the notarized app | No (a zip cannot carry a ticket); the app inside carries its own |
 
 So Gatekeeper accepts the DMG when it is opened, even offline, and accepts the app from either
 download. Stapling changes the DMG's bytes after electron-builder has written it. That is fine
@@ -155,19 +156,27 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
    - turns signing off (`identity: null`) or notarization off (`notarize: false`).
 
    Then `plutil -lint` checks the entitlements file.
-3. **Package.** Runs `npm run pack:mac` on the bundles built earlier.
+3. **Package.** Runs `npm run pack:mac` on the bundles built earlier, which packs the app for
+   `--arm64` and `--x64`.
    - Signed: electron-builder imports the certificate into a temporary keychain, signs the app with
      the hardened runtime and the entitlements, notarizes and staples it, then builds and signs the
      DMG and the zip.
    - Unsigned: the step gets no secrets at all. `CSC_IDENTITY_AUTO_DISCOVERY=false` stops
      electron-builder from picking up any identity on the runner, and `-c.mac.notarize=false` turns
      notarization off. The app keeps the linker's ad-hoc signature.
-4. **Notarize and staple the DMG** (signed builds only). The step submits the DMG with
+4. **Check the Apple Silicon and Intel builds.** Runs on unsigned builds too.
+   `apps/desktop/scripts/check-mac-builds.mjs` reads the Mach-O headers and fails the job unless
+   `release/` has exactly one app per architecture, and every Mach-O in each app (frameworks,
+   helper apps, every `.node` and `spawn-helper`) is thin and built for that architecture. Files in
+   node-pty's `prebuilds/darwin-<arch>/` must match `<arch>`. Each architecture also needs
+   `HeraldOS-<version>-mac-<arch>.dmg` and `.zip` with `package.json`'s version, and no other DMG
+   or zip may be there.
+5. **Notarize and staple the DMGs** (signed builds only). The step submits each DMG with
    `xcrun notarytool submit --wait`, then staples the ticket. If Apple returns any status other
    than `Accepted`, the step prints the notarization log and fails.
-5. **Verify the signatures and the notarization tickets** (signed builds only). The job fails if any
+6. **Verify the signatures and the notarization tickets** (signed builds only). The job fails if any
    of these fail:
-   - on the app:
+   - on each app:
      - `codesign --verify --deep --strict`;
      - `codesign --display` shows a Developer ID Application authority, the team `APPLE_TEAM_ID`,
        and the hardened runtime flag;
@@ -177,7 +186,7 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
      `spctl --assess --type open --context context:primary-signature -vv`;
    - on each zip: unpacks it, then runs `xcrun stapler validate` and `spctl --assess` on the app
      inside.
-6. **Attach to the draft release** (tags only). This separate job downloads the artifacts and is the
+7. **Attach to the draft release** (tags only). This separate job downloads the artifacts and is the
    only job that can write to releases (`contents: write`).
 
 ## Checking a build on your Mac
@@ -185,7 +194,7 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
 After downloading a release:
 
 ```bash
-dmg=~/Downloads/HeraldOS-<version>-mac-arm64.dmg
+dmg=~/Downloads/HeraldOS-<version>-mac-arm64.dmg  # or -mac-x64.dmg on an Intel Mac
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature -vv "$dmg"
 

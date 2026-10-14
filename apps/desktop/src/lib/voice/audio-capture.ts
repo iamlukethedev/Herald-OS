@@ -63,6 +63,11 @@ export class MicrophoneUnavailableError extends Error {
   }
 }
 
+/** True when the microphone stayed closed because Herald OS is not allowed to use it. */
+export function microphoneDenied(error: unknown): boolean {
+  return error instanceof MicrophoneUnavailableError && error.reason === 'denied'
+}
+
 /** Quiet period after a device list change, so a burst of Bluetooth events is examined once. */
 const DEVICE_CHANGE_DEBOUNCE_MS = 400
 

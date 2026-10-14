@@ -1,6 +1,7 @@
 import type { VoiceEngine, VoicePrefs } from '../../shared/ipc.ts'
 import { atom, computed } from 'nanostores'
-import { acknowledgeCaptureNotice, $captureNotice, $micLevel, $micOpen, setCaptureConversing, setMicrophoneMuted } from '../lib/voice/audio-capture.ts'
+import { acknowledgeCaptureNotice, $captureNotice, $micLevel, $micOpen, microphoneDenied, setCaptureConversing, setMicrophoneMuted } from '../lib/voice/audio-capture.ts'
+import { privacyPaneActions } from '../lib/privacy-pane.ts'
 import { earcons } from '../lib/voice/earcons.ts'
 import type { ConversationEndReason, ConversationEngine, TurnHandlers, VoiceCaptions, VoiceHost, VoiceState } from '../lib/voice/engine.ts'
 import { matchIntent } from '../lib/voice/intents.ts'
@@ -456,7 +457,7 @@ export async function startVoice(reason: VoiceStartReason = 'button'): Promise<v
     engine = null
     patch({ state: idleState(), engine: null, error: message })
     earcons.error()
-    notify({ title: 'Voice could not start', body: message, level: 'error' })
+    notify({ title: 'Voice could not start', body: message, level: 'error', actions: microphoneDenied(error) ? privacyPaneActions('microphone') : undefined })
     void resumeWake()
   } finally {
     starting = false

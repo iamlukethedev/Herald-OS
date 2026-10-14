@@ -37,8 +37,9 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
       - name: Run the install scripts the Mac build needs
-        # node-pty's install checks for its darwin-arm64 prebuild and compiles one if it is missing;
-        # esbuild's checks its native binary. Nothing else in the tree needs one for this build.
+        # node-pty's install checks for the runner's darwin-arm64 prebuild and compiles one if it is
+        # missing; the Intel build packs the darwin-x64 prebuild from the same npm tarball. esbuild's
+        # install checks its native binary. Nothing else in the tree needs one for this build.
         run: npm rebuild node-pty esbuild
       - name: Build the renderer and the Electron bundles
         run: npm run build --workspace apps/desktop
@@ -88,7 +89,10 @@ jobs:
           # Never pick up a stray identity from the runner's keychain for an unsigned build.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run pack:mac --workspace apps/desktop -- -c.mac.notarize=false
-      - name: Notarize and staple the DMG
+      - name: Check the Apple Silicon and Intel builds
+        # One app, DMG and zip per architecture; every Mach-O in each app is built for its architecture alone.
+        run: node apps/desktop/scripts/check-mac-builds.mjs
+      - name: Notarize and staple the DMGs
         if: steps.signing.outputs.signed == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -118,15 +122,17 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           shopt -s nullglob
-          app="$(find apps/desktop/release -maxdepth 3 -name 'Herald OS.app' -print -quit)"
-          [[ -n "$app" ]] || { echo "::error::No Herald OS.app under apps/desktop/release"; exit 1; }
-          codesign --verify --deep --strict --verbose=2 "$app"
-          details="$(codesign --display --verbose=4 "$app" 2>&1)"
-          grep -q '^Authority=Developer ID Application:' <<<"$details" || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
-          grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" <<<"$details" || { echo "::error::$app is not signed by the team in APPLE_TEAM_ID"; exit 1; }
-          grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime' <<<"$details" || { echo "::error::$app is not signed with the hardened runtime"; exit 1; }
-          xcrun stapler validate "$app"
-          spctl --assess --type execute -vv "$app"
+          apps=(apps/desktop/release/*/"Herald OS.app")
+          (( ${#apps[@]} )) || { echo "::error::No Herald OS.app under apps/desktop/release"; exit 1; }
+          for app in "${apps[@]}"; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            details="$(codesign --display --verbose=4 "$app" 2>&1)"
+            grep -q '^Authority=Developer ID Application:' <<<"$details" || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
+            grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" <<<"$details" || { echo "::error::$app is not signed by the team in APPLE_TEAM_ID"; exit 1; }
+            grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime' <<<"$details" || { echo "::error::$app is not signed with the hardened runtime"; exit 1; }
+            xcrun stapler validate "$app"
+            spctl --assess --type execute -vv "$app"
+          done
           for dmg in apps/desktop/release/*.dmg; do
             codesign --verify --strict --verbose=2 "$dmg"
             xcrun stapler validate "$dmg"

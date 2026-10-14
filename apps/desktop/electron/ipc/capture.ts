@@ -6,6 +6,7 @@ import { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, sys
 import { translate } from '../../shared/i18n.ts'
 import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, type ScreenshotMode } from '../../shared/ipc.ts'
 import { describeQr } from '../../shared/qr.ts'
+import { privacyPaneUrl } from '../../shared/privacy-panes.ts'
 import { allowAttachments } from '../attachments.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
@@ -63,7 +64,7 @@ function recordingsDir(): string {
   return process.platform === 'darwin' ? path.join(os.homedir(), 'Movies') : path.join(os.homedir(), 'Videos', 'Recordings')
 }
 
-const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture'
+const SCREEN_RECORDING_PANE = privacyPaneUrl('screen')
 
 let probedThisLaunch = false
 let explaining = false

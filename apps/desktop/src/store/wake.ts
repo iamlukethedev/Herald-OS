@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
-import { MicrophoneUnavailableError, subscribeMicrophone } from '../lib/voice/audio-capture.ts'
+import { microphoneDenied, MicrophoneUnavailableError, subscribeMicrophone } from '../lib/voice/audio-capture.ts'
+import { privacyPaneActions } from '../lib/privacy-pane.ts'
 import { earcons } from '../lib/voice/earcons.ts'
 import { FrameSlicer, int16ToBase64, TARGET_SAMPLE_RATE } from '../lib/voice/pcm.ts'
 import { $prefs, updatePrefs } from './backend.ts'
@@ -130,7 +131,7 @@ async function arm(): Promise<void> {
       await gatewayRequest('wake.stop', {}).catch(() => undefined)
       const message = error instanceof MicrophoneUnavailableError ? error.message : `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}`
       patch({ listening: false, error: message })
-      notify({ title: 'Wake word', body: message, level: 'warn' })
+      notify({ title: 'Wake word', body: message, level: 'warn', actions: microphoneDenied(error) ? privacyPaneActions('microphone') : undefined })
     }
   })().finally(() => {
     arming = null

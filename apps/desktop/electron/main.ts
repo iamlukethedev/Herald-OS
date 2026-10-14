@@ -5,6 +5,7 @@ import { type EnvInfo, type HeraldOSPrefs, IPC, type PrefsPatch, type RestReques
 import { BackendManager } from './backend/manager.ts'
 import { forgetInheritedSession } from './backend/session-env.ts'
 import { CrashWatcher } from './crash/watch.ts'
+import { mayOpenExternally } from './external-url.ts'
 import { fireEventAutomations } from './events/automations.ts'
 import { events } from './events/bus.ts'
 import { runHooks } from './events/hooks.ts'
@@ -234,12 +235,12 @@ function registerCoreIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, () => app.quit())
 
-  ipcMain.handle(IPC.shellOpenExternal, (_event, url: string) => {
-    if (/^https?:\/\//i.test(url)) {
+  ipcMain.handle(IPC.shellOpenExternal, (_event, url: unknown) => {
+    if (mayOpenExternally(url)) {
       return shell.openExternal(url)
     }
 
-    throw new Error('only http(s) URLs may be opened externally')
+    throw new Error(process.platform === 'darwin' ? 'only http(s) URLs and Privacy & Security settings may be opened externally' : 'only http(s) URLs may be opened externally')
   })
 
   ipcMain.handle(IPC.prefsGet, () => readPrefs())

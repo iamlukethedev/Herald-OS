@@ -6,6 +6,7 @@ import { GlassButton, Pill, Toggle } from '../../../components/ui/glass.tsx'
 import { Meter } from '../../../components/ui/primitives.tsx'
 import { describeDeviceChoice } from '../../../lib/audio-devices.ts'
 import { audioScope, deviceNoun } from '../../../lib/platform-labels.ts'
+import { canOpenPrivacyPanes, openPrivacyPane } from '../../../lib/privacy-pane.ts'
 import { logFailure } from '../../../lib/report.ts'
 import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
@@ -181,6 +182,11 @@ export function VoiceSection() {
           description={mic === 'granted' ? 'Granted.' : mic === 'denied' || mic === 'restricted' ? 'Denied. Allow Herald OS under System Settings > Privacy & Security > Microphone.' : 'Not asked yet; the first conversation asks.'}
           keywords="permission privacy"
         >
+          {(mic === 'denied' || mic === 'restricted') && canOpenPrivacyPanes() && (
+            <GlassButton size="sm" onClick={() => void openPrivacyPane('microphone').catch(logFailure('shell.openExternal'))} aria-label="Open the Microphone pane in System Settings">
+              Open System Settings
+            </GlassButton>
+          )}
           {mic !== 'granted' && (
             <GlassButton size="sm" onClick={() => void requestMic()} aria-label="Request microphone access">
               Request access

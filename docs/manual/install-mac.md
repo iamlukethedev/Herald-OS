@@ -5,9 +5,10 @@ underneath for the hardware and your Mac apps. Nothing on the Mac is replaced, a
 
 ## What you need
 
-- A Mac with Apple Silicon (M1 or later) and macOS 13 (Ventura) or later. There is no Intel build of
-  the Mac app yet; on an Intel Mac, run [Herald OS Linux in a virtual machine](virtual-machine.md#on-linux-or-an-intel-mac), or
-  the app from source as in the [README](../../README.md#herald-os-on-macos-from-source).
+- A Mac with macOS 13 (Ventura) or later, with Apple Silicon (M1 or later) or an Intel processor.
+  The Intel build is new and has not been tried on an Intel Mac yet; if it gives you trouble,
+  [open an issue](https://github.com/iamlukethedev/Herald-OS/issues), or run
+  [Herald OS Linux in a virtual machine](virtual-machine.md#on-linux-or-an-intel-mac) instead.
 - Hermes Agent with a model provider: a [Nous Portal](https://portal.nousresearch.com) account, or
   an API key for OpenRouter, OpenAI, Anthropic, a local model and others.
 
@@ -25,9 +26,10 @@ hermes setup
 
 ## 2. Install Herald OS
 
-Download `HeraldOS-<version>-mac-arm64.dmg` from the
-[releases page](https://github.com/iamlukethedev/Herald-OS/releases), open it and drag Herald OS to
-Applications.
+Download `HeraldOS-<version>-mac-arm64.dmg` on Apple Silicon or `HeraldOS-<version>-mac-x64.dmg` on
+an Intel Mac from the [releases page](https://github.com/iamlukethedev/Herald-OS/releases), open it
+and drag Herald OS to Applications. Apple menu > About This Mac says which you have: "Chip: Apple M…"
+is Apple Silicon, "Processor: … Intel …" is Intel.
 
 ## 3. Let it open
 

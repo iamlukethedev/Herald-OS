@@ -16,6 +16,7 @@ export const zhCN: Translation = {
   'menu.paste': '粘贴',
   'menu.selectAll': '全选',
 
+  'permission.openSettings': '打开系统设置',
   'permission.screen.title': 'Herald OS 需要“屏幕录制”权限',
   'permission.screen.detail': '请在“系统设置”>“隐私与安全性”>“屏幕与系统录音”（较早的 macOS 中为“屏幕录制”）中打开 Herald OS，然后退出并重新打开 Herald OS。',
   'permission.screen.open': '打开系统设置',
