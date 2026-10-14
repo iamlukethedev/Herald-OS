@@ -77,8 +77,8 @@ jobs:
       - name: cosign.pub and SIGNING_ENABLED agree
         run: |
           if [[ "$SIGNING_ENABLED" == "true" && ! -f linux/image/cosign.pub ]]; then
-            echo "::error::SIGNING_ENABLED is true but linux/image/cosign.pub is missing: commit the public key (cosign generate-key-pair) so machines verify the signed images."
-            exit 1
+            # Expected while signing is being turned on (docs/LINUX.md): images are signed, not yet verified.
+            echo "::warning::SIGNING_ENABLED is true but linux/image/cosign.pub is not committed yet: images are signed but machines do not verify them. Verify a signed image, then commit the public key."
           fi
           if [[ "$SIGNING_ENABLED" != "true" && -f linux/image/cosign.pub ]]; then
             echo "::error::linux/image/cosign.pub is committed but SIGNING_ENABLED is not true: set COSIGN_PRIVATE_KEY and SIGNING_ENABLED=true first, or the image build would ship an unsigned image that refuses its own updates."
