@@ -189,13 +189,19 @@ jobs:
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b \
             --type ${{ matrix.type }} --rootfs btrfs --local "$IMAGE:$CHANNEL-${{ matrix.arch }}"
+          # The disk is built; the images only take the room packaging needs.
+          sudo podman rmi --ignore "$IMAGE:$CHANNEL-${{ matrix.arch }}" \
+            quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b
+          df -h .
       - name: Name, compress and split it
         run: |
           version="${GITHUB_REF_NAME#v}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] || version="${CHANNEL%%-*}-$(git rev-parse --short HEAD)"
           sudo chown -R "$(id -u)" output
-          # Over 2 GiB, a file goes up in parts that join again; the .sha256 is the whole file's.
+          # Over 2 GiB, a file goes up in parts that join again; the .sha256 is the whole file's and
+          # the .sha256sums has each part's.
           bash linux/vm/package-disk.sh output "${{ matrix.arch }}" "$version" dist
+          df -h .
       - uses: actions/upload-artifact@v4
         with:
           name: herald-os-${{ matrix.type }}-${{ matrix.arch }}

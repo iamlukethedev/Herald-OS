@@ -8,7 +8,9 @@
 #
 # Each gets a .sha256 of the whole file. GitHub refuses release files of 2 GiB or more, so a bigger
 # one goes up in parts: the ISO and the qcow2.zst as .part0, .part1, … (what try.sh joins with cat),
-# the zips as .001, .002, … which 7-Zip on Windows and Keka on macOS open as one archive.
+# the zips as .001, .002, … which 7-Zip on Windows and Keka on macOS open as one archive. A split
+# file also gets a .sha256sums with one line per part, so `sha256sum -c` checks the parts before
+# they are joined. The builder's disk.qcow2 is deleted once converted, to leave the runner room.
 # Runs on the image workflow's Linux runners (GNU coreutils, zip, zstd, qemu-img).
 #
 #   bash linux/vm/package-disk.sh output amd64 0.1.0 dist
@@ -25,6 +27,11 @@ case "$arch" in
   arm64) name=aarch64 ;;
   *) echo "package-disk: unknown architecture $arch" >&2; exit 2 ;;
 esac
+# The version goes into file names, globs and checksum lines, so it stays one plain word.
+if [[ ! "$version" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "package-disk: version '$version' may only use letters, digits, '.', '_' and '-'" >&2
+  exit 2
+fi
 mkdir -p "$4"
 dist="$(cd "$4" && pwd)"
 base="herald-os-$version-$name"
@@ -42,6 +49,10 @@ finish() {
       split -b "$PART_SIZE" -d -a 3 --numeric-suffixes=1 "$file" "$file."
     fi
     rm "$file"
+    local parts=()
+    mapfile -t parts < <(cd "$dist" && find . -maxdepth 1 -name "$(basename "$file").*" \
+      ! -name '*.sha256' ! -name '*.sha256sums' -printf '%f\n' | LC_ALL=C sort)
+    (cd "$dist" && sha256sum "${parts[@]}" >"$(basename "$file").sha256sums")
   fi
 }
 
@@ -59,13 +70,17 @@ elif [[ -f "$out/qcow2/disk.qcow2" ]]; then
   if [[ "$name" == x86_64 ]]; then
     # Hyper-V's generation 2 machines (UEFI) take VHDX only; dynamic keeps the unused space out.
     qemu-img convert -O vhdx -o subformat=dynamic "$disk" "$work/$base.vhdx"
+    rm "$disk"
     zip -q -j "$dist/$base.vhdx.zip" "$work/$base.vhdx"
+    rm "$work/$base.vhdx"
     finish "$dist/$base.vhdx.zip" numbered
   else
     # qcow2's own compression keeps the bundle small, so the zip only stores it.
     qemu-img convert -c -O qcow2 "$disk" "$work/herald-os.qcow2"
+    rm "$disk"
     python3 "$HERE/make-utm.py" --version "$version" --move "$work/herald-os.qcow2" "$work" >/dev/null
     (cd "$work" && zip -q -0 -r "$dist/$base.utm.zip" "Herald OS.utm")
+    rm -r "$work/Herald OS.utm"
     finish "$dist/$base.utm.zip" numbered
   fi
 else
