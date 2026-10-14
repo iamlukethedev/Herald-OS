@@ -236,7 +236,8 @@ export async function runCommand(id: string, rawArgs: Record<string, unknown> | 
   try {
     result = await command.run(validated.args, context)
   } catch (error) {
-    result = fail(error instanceof Error ? error.message : String(error))
+    // ipcRenderer.invoke prefixes "Error invoking remote method '<channel>': Error: ".
+    result = fail((error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, ''))
   }
 
   if (!context.nested) {

@@ -97,7 +97,7 @@ hermes config set model.default <model>  # a Portal model id, as in the Mac's co
 
 | Piece | Role |
 | --- | --- |
-| `/etc/greetd/config.toml` | Logs `hermes` in on VT1 and runs `herald-os-compositor`. Respawns when it exits. |
+| `/etc/greetd/config.toml` | Logs `hermes` in on VT1 and runs `herald-os-compositor`. Respawns when it exits. On a system switched from another bootc system it is `greetd-login.toml` instead: a login screen (agreety) that starts `herald-os-compositor` for whoever signs in. |
 | `herald-os-compositor` | Sets `XDG_*`, picks `WLR_RENDERER=pixman` when there is no GPU render node, sources `~/.config/herald-os/session.env`, renders Herald's niri config (`~/.config/niri/herald-os.kdl`, from the installed template and your keymap) and starts niri with it. A `~/.config/niri/config.kdl` of your own is never read or changed, so the session also starts on a fresh account; Herald's other files beside it are `theme.kdl`, `outputs.kdl` and `local.kdl` (yours to edit). Without hardware GL (QEMU and Apple Virtualization without virgl) niri runs windowed inside `cage` (`herald-os-niri-nested`). `HERALD_OS_COMPOSITOR=cage` runs the Stage 1 kiosk instead. |
 | `herald-os-session` | Publishes `WAYLAND_DISPLAY` to systemd/D-Bus, starts PipeWire + portals and the session services below, runs Electron on Wayland (Ozone) as panels: the menu bar, dock and Hermes window are separate windows niri places. Restarts the shell on a crash (5 per minute), exits on a clean quit. |
 | `herald-os.desktop` | `wayland-sessions` entry so a normal greeter can also start Herald OS. |
@@ -248,17 +248,18 @@ On the image, apps install through Flatpak or into `~/.local` (the catalog picks
 there); the system itself changes only by a whole new image.
 
 **Updates you can undo.** `herald-os update` runs `bootc upgrade` (the image tag of the channel:
-`stable` for releases, `edge` for main once it is published; `herald-os channel edge` switches with
-`bootc switch`), then
-Flatpaks and `hermes update`. The new image starts on the next restart and the previous one stays in
-the boot menu; `herald-os rollback` (or Update > Go back to the previous version) makes it the
-default again.
+`stable` follows releases, `edge` follows main (rebuilt when image files change);
+`herald-os channel edge` switches with `bootc switch`), then Flatpaks and `hermes update`. The new
+image starts on the next restart and the previous one stays in the boot menu; `herald-os rollback`
+(or Update > Go back to the previous version) makes it the default again.
 
 **Setup and reset.** The first boot makes the account and installs Hermes; then the shell's setup
 asks who the computer is for. For yourself: a name, a password (set with `passwd` as you, so the
 setup never needs root), Wi-Fi and Hermes's sign-in. For someone else: just Wi-Fi, and setup waits
 for them at the next start. `herald-os reset` (type ERASE, then your password) erases the account,
-its apps and saved networks on the next restart and runs setup again; the system stays.
+its apps and saved networks on the next restart and runs setup again; the system stays. A system
+switched from another bootc system is different: it gets a login screen and a locked account instead
+([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
 **Security.**
 
@@ -274,7 +275,19 @@ its apps and saved networks on the next restart and runs setup again; the system
 - **Image signatures:** the image workflow signs each image with the project's cosign key, never
   keyless (which would publish to a transparency log) and without a log upload. Once
   `linux/image/cosign.pub` is in the repository, the image only accepts signed updates of itself
-  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os`).
+  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os`). Turning signing on is a
+  maintainer step, in this order, so no image ever carries the policy without a matching signature:
+  1. Generate the key pair: `cosign generate-key-pair` (keep `cosign.key` and its password offline).
+  2. Set the repository secrets `COSIGN_PRIVATE_KEY` (the contents of `cosign.key`) and
+     `COSIGN_PASSWORD`.
+  3. Set the repository variable `SIGNING_ENABLED` to `true`. CI's Signing policy check warns until
+     `cosign.pub` is committed.
+  4. Verify: run the Herald OS image workflow from `main`, then
+     `cosign verify --key cosign.pub --insecure-ignore-tlog=true ghcr.io/iamlukethedev/herald-os:edge`
+     (no transparency log, as above).
+  5. Only then commit `cosign.pub` as `linux/image/cosign.pub`. From then on the image workflow fails
+     if `COSIGN_PRIVATE_KEY` is missing or does not match it, and CI fails if `SIGNING_ENABLED` is
+     not `true`.
 - **SELinux** stays permissive for now (ADR-012).
 
 ### Switching a bootc system to Herald OS
@@ -283,22 +296,67 @@ Fedora Silverblue, Kinoite, Bazzite, Bluefin and other bootc systems can switch 
 image in place. It replaces the system you run, so try it on a spare machine or in a virtual machine,
 not on the computer you work on. What happens on its first start:
 
-- **A new account signs in by itself.** The first boot creates `hermes`, an administrator (in
-  `wheel`) with no password, and greetd signs it in with no login screen, so you cannot pick your own
-  account there. Until you set a password in Herald OS's first-start setup (or with
-  `herald-os password`), anyone at the keyboard has administrator rights. Your own account and its
-  files stay.
+- **A login screen, and your account stays.** The first boot sees the accounts your system already
+  has, so greetd does not sign anyone in by itself. It shows a text login screen on the first
+  console (agreety) instead, as long as one of those accounts can sign in there: a local account
+  with a shell and a password, a systemd-homed account (including one stored as a LUKS image,
+  `/home/<name>.home`), or an SSSD or LDAP account with a folder in `/home`. First boot and the
+  check at every start wait for `systemd-homed`, `systemd-userdbd` and `sssd`, so those accounts
+  are there to be seen. Sign in with your own account and its password, and you get the
+  Herald OS desktop. Herald OS's first-start setup then asks only for your name, Wi-Fi and Hermes's
+  sign-in. Your password stays as it is (`herald-os password` changes it). The first boot installs
+  Hermes Agent only for `hermes`, so run `herald-os setup` in a terminal once in your own account
+  to install Hermes there too.
+- **A locked `hermes` account, not yet an administrator.** The first boot also creates `hermes`, the
+  account Herald OS sets Hermes Agent up for. On a switched system it is never an administrator
+  without a password: it starts outside `wheel` and joins at the first start after it has one. It is
+  locked and has no shell (`/usr/sbin/nologin`), so no one can sign in to it, with a password or an
+  SSH key. Its
+  user manager (PipeWire, portals, the update timer) does not run either (`loginctl
+  disable-linger`). To use it, give it a password from your own account with `sudo passwd hermes`.
+  At the next start Herald OS gives back the shell it had before it was locked
+  (`/var/lib/herald-os/hermes-shell`), adds it to `wheel` and turns its user manager back on (it
+  stays on whenever `hermes` has a password, whatever its shell). To do it at once, run
+  `sudo usermod -s /bin/bash -aG wheel hermes`. After that, `hermes` can sign in at the login screen
+  too. If you take `hermes` out of `wheel` yourself later, Herald OS leaves it out.
+- **Checked at every start.** `herald-os-login.service` runs before greetd at every start, and greetd
+  waits for it to succeed: if it fails, there is no login screen rather than one that signs someone
+  in. Any other greetd config is replaced with the login screen. A system switched with an earlier
+  Herald OS image, which signed `hermes` in with no password, gets the login screen at its next
+  start, and a `hermes` without a password is locked and taken out of `wheel`.
+- **What counts as switched.** Accounts from before Herald OS: local ones (UIDs 1000 to 60000),
+  systemd-homed ones (60001 to 60513), and folders in `/home` that belong to someone other than
+  `hermes`, which accounts from SSSD or LDAP have too, and systemd-homed's LUKS images
+  (`/home/<name>.home`). Folders that root or another system account owns are not counted, nor are
+  folders of accounts newer than `hermes`. When the account list cannot be read, the system counts as switched. The
+  first boot decides this once and records the answer (`/var/lib/herald-os/switched` or
+  `/var/lib/herald-os/image-install`). Accounts added later, and `herald-os reset`, do not change it.
+  The check at every start records nothing until first-boot setup has finished, so a run before the
+  accounts are there cannot turn a switched system into an image install for good.
+- **When no account can sign in.** If none of those accounts has a shell and a password (and none is
+  a systemd-homed, SSSD or LDAP account), a login screen would have no one to let in. Accounts that
+  sign in only with a fingerprint, a smartcard or an SSH key (a password starting with `!` or `*`)
+  are among them. Herald OS then keeps greetd signing `hermes` in, with no password, and the
+  first-start setup asks for one at once. But `hermes` stays out of `wheel`, so it cannot use `sudo`
+  or approve system changes, until it has a password. It joins `wheel` at the next start after that,
+  and a `hermes` an earlier image left in `wheel` without a password is taken out. In doubt, Herald
+  OS assumes someone can sign in and shows the login screen. That covers a folder in `/home` whose
+  owner cannot be looked up (SSSD or LDAP offline at first boot), and an account list that neither
+  `getent` nor `/etc/passwd` gives (when only `getent` fails, `/etc/passwd` is read instead). `journalctl -u herald-os-login`
+  and `journalctl -u herald-os-firstboot` say so with a warning. If one of your accounts gets a
+  password later, the next start switches to the login screen and locks `hermes`. A login screen
+  is never switched back to signing `hermes` in, even when its last account goes.
 - **The first start takes a while.** It installs Hermes Agent, which needs the network, before the
-  desktop appears. Without a network the desktop comes up first, and Hermes installs once you are
-  online.
+  login screen appears. Without a network the login screen comes up first, and Hermes installs once
+  you are online.
 - **SELinux becomes permissive** (greetd and the compositors have no policy yet, ADR-012).
 - **The firewall changes.** firewalld's default zone becomes `herald-os`, which refuses every
   incoming connection except LocalSend (port 53317) and mDNS, so SSH and other ports you opened are
   closed.
 - **Nothing checks the image's signature yet.** `linux/image/cosign.pub` is not in the repository, so
   neither the switch nor later updates verify it; you trust GHCR and the connection to it.
-- **Only the `stable` tag is published.** `edge` does not exist yet, so `herald-os channel edge`
-  fails.
+- **`edge` follows `main`.** The image workflow publishes it on pushes to `main`; `stable` follows
+  releases.
 
 bootc keeps the changes you made to `/etc` yourself, so where you changed one of these settings,
 yours stays. Note the image you run now, so you can come back to it, then switch and restart:
@@ -312,6 +370,29 @@ systemctl reboot
 If `bootc` is missing or refuses, `sudo rpm-ostree rebase
 ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable` switches through rpm-ostree instead
 (`unverified`: without a signature check, as above).
+
+**When there is no login screen.** greetd waits for `herald-os-login.service`, so if that fails, the
+first console stays empty. Press Ctrl+Alt+F2 for a text console (Herald OS keeps `getty@tty2` on),
+sign in with your own account and see why:
+
+```bash
+sudo journalctl -b -u herald-os-login     # what went wrong
+sudo systemctl restart herald-os-login    # once it is fixed
+sudo systemctl start greetd
+```
+
+**When no account can sign in at all** (for example, the account you used was removed or its
+password was locked after the login screen took over), start the rescue shell. In the boot menu,
+press `e`, add `systemd.unit=rescue.target systemd.setenv=SYSTEMD_SULOGIN_FORCE=1` to the line that
+starts with `linux`, and press Ctrl+X. The second setting gives a root shell even though Herald OS
+installs lock the root account. There, give an account a password and a shell, then carry on
+booting:
+
+```bash
+passwd hermes                          # or your own account
+usermod -s /bin/bash hermes
+systemctl default
+```
 
 **Going back.** The system you switched from stays in the boot menu: `sudo bootc rollback` (on Herald
 OS, `herald-os rollback`) makes it the default again, and the next restart starts it as it was. Once

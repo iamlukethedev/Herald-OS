@@ -2321,11 +2321,22 @@ def is_image() -> bool:
 def image_switch(channel: str) -> int:
     """Follow the image tag for a channel (stable for releases, edge for main)."""
     status = sh(["sudo", "bootc", "status", "--format", "json"], timeout=60)
+    if status.returncode != 0:
+        detail = (status.stderr or "").strip().splitlines()
+        die("could not read the current image (bootc status failed"
+            + (f": {detail[-1]}" if detail else "") + "); the channel is unchanged.", 1)
     try:
         current = json.loads(status.stdout)["spec"]["image"]["image"]
     except (ValueError, KeyError, TypeError):
-        current = "ghcr.io/iamlukethedev/herald-os:stable"
-    target = current.rsplit(":", 1)[0] + f":{channel}"
+        current = None
+    if not isinstance(current, str) or not current:
+        die("could not tell which image this system follows (unexpected `bootc status` output); "
+            "the channel is unchanged.", 1)
+    # A reference is repo[:tag][@digest]; a ':' before the last '/' is a registry port, not a tag.
+    repo = current.split("@", 1)[0]
+    if ":" in repo.rsplit("/", 1)[-1]:
+        repo = repo.rsplit(":", 1)[0]
+    target = f"{repo}:{channel}"
     if target == current:
         return 0
     print(f"==> following {target}")
@@ -2781,10 +2792,12 @@ def main(argv: list[str]) -> int:
         if args:
             if args[0] not in ("stable", "edge"):
                 die("channel stable|edge", 2)
+            # The marker changes only once the switch worked, so a failed switch keeps the old channel.
+            if is_image() and image_switch(args[0]) != 0:
+                die(f"could not switch the image's channel (bootc switch); is the {args[0]} tag published? "
+                    "You are still on the previous channel.", 1)
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             marker.write_text(args[0] + "\n")
-            if is_image() and image_switch(args[0]) != 0:
-                die("could not switch the image's channel (bootc switch)", 1)
         print(marker.read_text().strip() if marker.exists() else "stable")
         return 0
     if cmd == "rollback":

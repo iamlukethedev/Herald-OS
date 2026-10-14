@@ -8,6 +8,18 @@ name: Herald OS image
 on:
   push:
     tags: ['v*']
+    # main publishes the edge channel (`herald-os channel edge`); only changes that reach the image.
+    branches: [main]
+    paths:
+      - 'linux/**'
+      - 'apps/**'
+      - 'packages/**'
+      - 'plugins/**'
+      - 'upstream/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/image.yml'
   workflow_dispatch:
     inputs:
       disks:
@@ -15,9 +27,7 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: write
-  packages: write
+permissions: {}
 
 concurrency:
   group: image-${{ github.ref }}
@@ -25,14 +35,37 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/herald-os
-  # Tags are releases (stable); manual runs are edge.
-  CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || 'edge' }}
   # Signing waits for the key (cosign generate-key-pair; the public half goes in linux/image/cosign.pub).
   SIGNING: ${{ secrets.COSIGN_PRIVATE_KEY != '' && 'true' || 'false' }}
 
 jobs:
+  channel:
+    name: Channel
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.pick.outputs.channel }}
+    steps:
+      - name: Pick the image tag
+        id: pick
+        # Tags are releases (stable) and main is edge; a manual run from any other ref gets its own
+        # dev-<commit> tag, so it never replaces a channel that installed machines follow.
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) channel=stable ;;
+            refs/heads/main) channel=edge ;;
+            *) channel="dev-${GITHUB_SHA::7}" ;;
+          esac
+          echo "channel=$channel" >>"$GITHUB_OUTPUT"
+          echo "Image tag: $channel"
+
   image:
     name: Image (${{ matrix.arch }})
+    needs: channel
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CHANNEL: ${{ needs.channel.outputs.channel }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +79,39 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Refuse to ship the signature policy without signing
+        # With linux/image/cosign.pub in the tree, the image only accepts signed updates of itself, so an
+        # unsigned build would stop installed machines from updating (#18).
+        run: |
+          if [[ -f linux/image/cosign.pub && "$SIGNING" != "true" ]]; then
+            echo "::error::linux/image/cosign.pub is committed but COSIGN_PRIVATE_KEY is not set: this image would be unsigned."
+            exit 1
+          fi
+      - uses: sigstore/cosign-installer@v3
+        if: env.SIGNING == 'true'
+      - name: Check the signing key matches cosign.pub
+        # Signing with a key other than the committed one ships signatures that installed machines reject.
+        if: env.SIGNING == 'true'
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [[ ! -f linux/image/cosign.pub ]]; then
+            echo "linux/image/cosign.pub is not committed: images are signed but machines do not verify them yet."
+            exit 0
+          fi
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >derived.pub
+          # Compared as DER so PEM formatting (line endings, wrapping, trailing newline) cannot matter.
+          openssl pkey -pubin -in linux/image/cosign.pub -outform DER -out committed.der
+          openssl pkey -pubin -in derived.pub -outform DER -out derived.der
+          if ! cmp -s committed.der derived.der; then
+            echo "::error::COSIGN_PRIVATE_KEY does not match linux/image/cosign.pub: installed machines would reject this image's signature."
+            exit 1
+          fi
+          rm derived.pub committed.der derived.der
+          echo "COSIGN_PRIVATE_KEY matches linux/image/cosign.pub."
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -65,8 +131,6 @@ jobs:
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           sudo podman push --digestfile digest.txt "$IMAGE:$CHANNEL-${{ matrix.arch }}"
-      - uses: sigstore/cosign-installer@v3
-        if: env.SIGNING == 'true'
       - name: Sign it with the project's key
         if: env.SIGNING == 'true'
         env:
@@ -79,7 +143,11 @@ jobs:
 
   manifest:
     name: Multi-arch tag
-    needs: image
+    needs: [channel, image]
+    permissions:
+      packages: write
+    env:
+      CHANNEL: ${{ needs.channel.outputs.channel }}
     runs-on: ubuntu-24.04
     steps:
       - name: Join both architectures under one tag
@@ -103,8 +171,13 @@ jobs:
 
   disks:
     name: ${{ matrix.type }} (${{ matrix.arch }})
-    needs: manifest
+    needs: [channel, manifest]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.disks
+    permissions:
+      contents: read
+      packages: read
+    env:
+      CHANNEL: ${{ needs.channel.outputs.channel }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +193,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build the disk with bootc-image-builder
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -134,7 +209,7 @@ jobs:
       - name: Name, compress and split it
         run: |
           version="${GITHUB_REF_NAME#v}"
-          [[ "$GITHUB_REF" == refs/tags/v* ]] || version="edge-$(git rev-parse --short HEAD)"
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || version="${CHANNEL%%-*}-$(git rev-parse --short HEAD)"
           sudo chown -R "$(id -u)" output
           if [[ "${{ matrix.type }}" == "anaconda-iso" ]]; then
             file="herald-os-$version-x86_64.iso"
@@ -159,10 +234,26 @@ jobs:
           name: herald-os-${{ matrix.type }}-${{ matrix.arch }}
           path: ${{ env.DISK }}*
           if-no-files-found: error
-      - name: Attach to the draft release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+  release:
+    name: Attach to the draft release
+    needs: disks
+    if: startsWith(github.ref, 'refs/tags/v')
+    # The only job that writes to the repository: it creates the draft release and uploads the disks.
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herald-os-*
+          path: disks
+          merge-multiple: true
+      - name: Upload the disks
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          ls -l disks
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
-          gh release upload "$GITHUB_REF_NAME" "$DISK"* --clobber
+          gh release upload "$GITHUB_REF_NAME" disks/* --clobber

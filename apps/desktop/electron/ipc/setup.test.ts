@@ -1,8 +1,25 @@
-import { describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
-const { passwdReply } = await import('./setup.ts')
+const { passwdReply, setupState } = await import('./setup.ts')
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('setupState', () => {
+  it('knows the account signed in at a login screen on a switched system', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done' || file === '/var/lib/herald-os/login-screen')
+    expect(setupState().signedIn).toBe(true)
+  })
+
+  it('leaves the password to setup on an install from the image', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done')
+    expect(setupState().signedIn).toBe(false)
+  })
+})
 
 describe('passwdReply', () => {
   it('answers the current password (empty on a new account) and the new one twice', () => {

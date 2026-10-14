@@ -2,9 +2,11 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { clipboard, ClipboardItem, ipcMain, nativeImage, systemPreferences } from 'electron'
+import { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, systemPreferences } from 'electron'
+import { translate } from '../../shared/i18n.ts'
 import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, type ScreenshotMode } from '../../shared/ipc.ts'
 import { allowAttachments } from '../attachments.ts'
+import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { pickColourMac, readImageMac } from '../platform/mac-tools.ts'
@@ -30,6 +32,98 @@ function recordingsDir(): string {
   return process.platform === 'darwin' ? path.join(os.homedir(), 'Movies') : path.join(os.homedir(), 'Videos', 'Recordings')
 }
 
+const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture'
+
+let probedThisLaunch = false
+let explaining = false
+
+/** Tests start each case as a fresh launch. */
+export function resetScreenRecordingCheck(): void {
+  probedThisLaunch = false
+  explaining = false
+}
+
+/**
+ * Throws, after telling the person how to turn it on, unless macOS lets Herald OS read the screen.
+ * Without the permission `screencapture` still succeeds but sees only the wallpaper, the menu bar
+ * and Herald's own windows, so nothing it captures may reach Hermes or text recognition. The status
+ * reads `denied` until macOS has asked, and it asks only when a capture is attempted, so the first
+ * refusal in a launch takes one silent capture (then deletes it) to bring up macOS's prompt and put
+ * Herald OS in the pane's list. A change to the switch applies only after Herald OS reopens.
+ * `restricted` means something other than the person decides (a device-management profile, Screen
+ * Time or parental controls): macOS will not ask, so the person is told that instead.
+ */
+export async function ensureScreenRecording(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const status = systemPreferences.getMediaAccessStatus('screen')
+
+  if (status === 'granted') {
+    return
+  }
+
+  const restricted = status === 'restricted'
+
+  if (!restricted && !probedThisLaunch) {
+    probedThisLaunch = true
+    await probeScreenCapture()
+  }
+
+  const language = menuLanguage()
+  const title = translate(language, restricted ? 'permission.screen.restrictedTitle' : 'permission.screen.title')
+  const detail = translate(language, restricted ? 'permission.screen.restrictedDetail' : 'permission.screen.detail')
+  const buttons = restricted ? [translate(language, 'permission.screen.ok')] : [translate(language, 'permission.screen.open'), translate(language, 'permission.screen.reopen'), translate(language, 'permission.screen.notNow')]
+
+  // Not awaited: the capture fails now (Hermes gets the reason) while the explanation stays up.
+  if (!explaining) {
+    explaining = true
+    void dialog
+      .showMessageBox({ type: 'warning', message: title, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 })
+      .then(({ response }) => {
+        if (restricted) {
+          return
+        }
+
+        if (response === 0) {
+          return shell.openExternal(SCREEN_RECORDING_PANE)
+        }
+
+        if (response === 1) {
+          app.relaunch()
+          app.quit()
+        }
+      })
+      .catch(error => log('capture', `screen recording explanation: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        explaining = false
+      })
+  }
+
+  throw new Error(`${title}. ${detail}`)
+}
+
+/** One silent capture, discarded, so macOS asks; its own folder, and nothing it does can fail the check. */
+async function probeScreenCapture(): Promise<void> {
+  let dir: string | null = null
+
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herald-os-permission-'))
+    await run('screencapture', ['-x', '-t', 'png', path.join(dir, 'probe.png')], 15_000)
+  } catch (error) {
+    log('capture', `screen recording probe: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (dir) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true })
+      } catch (error) {
+        log('capture', `screen recording probe cleanup: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+}
+
 async function slurp(): Promise<string | null> {
   const region = await run('slurp', [], 300_000)
 
@@ -45,6 +139,7 @@ async function slurp(): Promise<string | null> {
  * slurp and grim on Wayland. Resolves with the file, or null when they pressed Escape.
  */
 export async function captureRegion(): Promise<string | null> {
+  await ensureScreenRecording()
   fs.mkdirSync(capturesDir(), { recursive: true })
   const file = path.join(capturesDir(), `region-${new Date().toISOString().replace(/[:.]/g, '-')}.png`)
 
@@ -91,6 +186,7 @@ function newestSince(dir: string, since: number): string | null {
 
 /** A screenshot saved where screenshots go; null when the person cancelled the selection. */
 export async function captureScreenshot(mode: ScreenshotMode): Promise<string | null> {
+  await ensureScreenRecording()
   const dir = screenshotsDir()
   fs.mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `Screenshot ${stamp()}.png`)
@@ -162,6 +258,7 @@ class Recorder {
       return this.state()
     }
 
+    await ensureScreenRecording()
     const dir = recordingsDir()
     fs.mkdirSync(dir, { recursive: true })
     let command: string

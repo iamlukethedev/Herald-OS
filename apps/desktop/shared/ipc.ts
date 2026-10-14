@@ -427,6 +427,11 @@ export interface SetupState {
   user: string
   /** The name Herald greets with (blank until setup asks). */
   name: string
+  /**
+   * Herald OS starts at a login screen (a system switched from another bootc system), so this
+   * account signed in with a password of its own and setup does not ask for one.
+   */
+  signedIn: boolean
 }
 
 export interface SetupResult {
