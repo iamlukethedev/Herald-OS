@@ -55,8 +55,11 @@ OS image in place, which replaces the system you run, so try it on a spare machi
 machine. Afterwards a login screen asks who signs in, and your own account and its password keep
 working; run `herald-os setup` once in your own account to install Hermes Agent there. Herald OS
 also adds a `hermes` account, which stays locked until you give it a password
-(`sudo passwd hermes`), and becomes an administrator only at the next restart after that. If no
-login screen appears, press `Ctrl+Alt+F2` for a text console and sign in there; see
+(`sudo passwd hermes`), and becomes an administrator only at the next restart after that. The
+exception is a system where no existing account can sign in with a password: there `hermes` signs
+in by itself, without a password but outside the administrators, and the first-start setup asks
+for one; it becomes an administrator at the next restart after it has one (see
+[docs/LINUX.md](../LINUX.md#switching-a-bootc-system-to-herald-os)). If no login screen appears, press `Ctrl+Alt+F2` for a text console and sign in there; see
 [Locked out of your account](troubleshooting.md#locked-out-of-your-account).
 [docs/LINUX.md](../LINUX.md#switching-a-bootc-system-to-herald-os) has the steps, what changes and
 how to go back.
