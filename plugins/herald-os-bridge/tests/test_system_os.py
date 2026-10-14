@@ -66,6 +66,8 @@ CASES = {
     "ocr": ({}, ["ocr"], "act"),
     "lock": ({}, ["lock"], "act"),
     "suspend": ({}, ["suspend"], "destructive"),
+    "restart": ({"device": "sound"}, ["restart", "sound"], "act"),
+    "restart_touchpad": ({"action": "restart", "device": "Touchpad"}, ["restart", "touchpad"], "act"),
     "theme_list": ({}, ["theme", "list"], "read"),
     "theme_set": ({"name": "midnight"}, ["theme", "set", "midnight"], "act"),
     "theme_current": ({}, ["theme", "current"], "read"),
@@ -164,7 +166,7 @@ def test_plugins_cannot_be_turned_on_by_hermes(plugin):
 
 def test_install_and_update_get_the_long_timeout(plugin, linux):
     tools = _mod(plugin, "tools")
-    for action, extra in (("install_app", {"name": "x"}), ("install_webapp", {"name": "x", "url": "https://x"}), ("remove_app", {"name": "x"}), ("update", {})):
+    for action, extra in (("install_app", {"name": "x"}), ("install_webapp", {"name": "x", "url": "https://x"}), ("remove_app", {"name": "x"}), ("update", {}), ("restart", {"device": "touchpad"})):
         tools.system_os_handler({"action": action, **extra})
         assert linux.timeout == 1200.0, action
     tools.system_os_handler({"action": "theme_list"})
@@ -196,6 +198,9 @@ def test_plain_minutes_become_a_duration(plugin, linux):
     ({"action": "notify", "body": "no title"}, "title"),
     ({"action": "notice", "kind": "moon"}, "kind"),
     ({"action": "open_window", "window": "browser"}, "window"),
+    ({"action": "restart"}, "device"),
+    ({"action": "restart", "device": "printer"}, "device"),
+    ({"action": "restart", "device": "--help"}, "device"),
     ({"action": "format_disk"}, "unknown action"),
     ({}, "unknown action"),
 ])

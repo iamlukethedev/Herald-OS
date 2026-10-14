@@ -1046,6 +1046,8 @@ def handle_system_logs(args: dict[str, Any], **_: Any) -> str:
 # system_os
 # ---------------------------------------------------------------------------------------------
 
+RESTART_DEVICES = ("wifi", "bluetooth", "sound", "touchpad")
+
 SYSTEM_OS_SCHEMA = _schema(
     "system_os",
     "Herald OS Linux's control surface: the same `herald-os` commands the user's hotkeys and menu run. "
@@ -1056,7 +1058,8 @@ SYSTEM_OS_SCHEMA = _schema(
     "Turning a plugin on is the user's call after reading what it asks for: point them to Settings > Plugins. "
     "Reminders: reminder (duration like 20m or 1h30m, message), reminders_list, reminders_clear. "
     "notice (kind=time|battery|weather) shows a status notice. screenshot captures the screen and hands it to Hermes; ocr reads the text on screen. "
-    "lock locks the session; suspend puts the computer to sleep. Themes: theme_list, theme_set (name), theme_current. update updates Herald OS. "
+    "lock locks the session; suspend puts the computer to sleep. "
+    "restart (device=wifi|bluetooth|sound|touchpad) restarts one that stopped working, before suggesting a reboot: Wi-Fi that will not connect, a Bluetooth headset that will not reconnect, sound that vanished, a touchpad dead after waking; the touchpad asks the user for their password. Themes: theme_list, theme_set (name), theme_current. update updates Herald OS. "
     "Hermes shell: show_page (page: overview, hermes, missions, memory, files, automations, connections, settings), open_window (window=terminal|system|chat-popout), launch (name: an installed app), notify (title, body?). "
     "Spaces: focus_workspace (name), close_focused_window. install/remove/update and suspend ask the user to confirm. "
     "Only available on Herald OS Linux; on macOS this tool is unavailable (use system_open / system_control instead).",
@@ -1066,7 +1069,7 @@ SYSTEM_OS_SCHEMA = _schema(
             "catalog_list", "catalog_install", "catalog_remove",
             "plugin_list", "plugin_add", "plugin_update", "plugin_disable", "plugin_remove",
             "reminder", "reminders_list", "reminders_clear", "notice",
-            "screenshot", "ocr", "lock", "suspend",
+            "screenshot", "ocr", "lock", "suspend", "restart",
             "theme_list", "theme_set", "theme_current", "update",
             "show_page", "open_window", "launch", "notify",
             "focus_workspace", "close_focused_window",
@@ -1079,6 +1082,7 @@ SYSTEM_OS_SCHEMA = _schema(
         "duration": _desc(_STR, "For reminder: how long from now, e.g. 90s, 20m, 1h, 1h30m, or a plain number of minutes."),
         "message": _desc(_STR, "For reminder: what to remind the user about."),
         "kind": _enum("time", "battery", "weather", description="For notice."),
+        "device": _enum(*RESTART_DEVICES, description="For restart: what stopped working."),
         "page": _desc(_STR, "For show_page: the Hermes page id (overview, hermes, missions, memory, files, automations, connections, settings)."),
         "window": _enum("terminal", "system", "chat-popout", description="For open_window."),
         "title": _desc(_STR, "For notify."),
@@ -1088,7 +1092,8 @@ SYSTEM_OS_SCHEMA = _schema(
 )
 
 HERALD_OS_BIN = "herald-os"
-_LONG_RUNNING_OS_ACTIONS = frozenset({"install_app", "install_webapp", "remove_app", "update", "catalog_install", "catalog_remove", "plugin_add", "plugin_update"})
+# restart waits on stuck sound services or on the user typing a password for the touchpad.
+_LONG_RUNNING_OS_ACTIONS = frozenset({"install_app", "install_webapp", "remove_app", "update", "catalog_install", "catalog_remove", "plugin_add", "plugin_update", "restart"})
 _CATALOG_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _PLUGIN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,47}$")
 _PLUGIN_URL = re.compile(r"^(https://|ssh://|git@)[^\s]+$")
@@ -1103,7 +1108,7 @@ SYSTEM_OS_TIERS: dict[str, Tier] = {
     "plugin_list": Tier.READ, "plugin_disable": Tier.ACT, "plugin_add": Tier.MUTATE, "plugin_update": Tier.MUTATE, "plugin_remove": Tier.DESTRUCTIVE,
     "show_page": Tier.READ, "open_window": Tier.READ, "focus_workspace": Tier.READ,
     "launch": Tier.ACT, "notify": Tier.ACT, "screenshot": Tier.ACT, "ocr": Tier.ACT, "lock": Tier.ACT,
-    "reminder": Tier.ACT, "theme_set": Tier.ACT, "close_focused_window": Tier.ACT,
+    "reminder": Tier.ACT, "theme_set": Tier.ACT, "close_focused_window": Tier.ACT, "restart": Tier.ACT,
     "install_app": Tier.MUTATE, "install_webapp": Tier.MUTATE, "remove_webapp": Tier.MUTATE, "reminders_clear": Tier.MUTATE, "update": Tier.MUTATE,
     "remove_app": Tier.DESTRUCTIVE, "suspend": Tier.DESTRUCTIVE,
 }
@@ -1221,6 +1226,11 @@ def plan_system_os(args: dict[str, Any]) -> tuple[list[str], str]:
         return ["lock"], "lock the session"
     if action == "suspend":
         return ["suspend"], "suspend the computer"
+    if action == "restart":
+        device = str(args.get("device") or "").strip().lower()
+        if device not in RESTART_DEVICES:
+            raise ValueError(f"device must be one of {', '.join(RESTART_DEVICES)}")
+        return ["restart", device], f"restart {device}"
     if action == "theme_list":
         return ["theme", "list"], "list themes"
     if action == "theme_set":

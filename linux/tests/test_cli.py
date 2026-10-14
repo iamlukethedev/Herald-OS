@@ -1014,3 +1014,10 @@ def test_restart_is_dispatched_and_listed(monkeypatch, capsys):
     assert cli.main(["restart", "wifi"]) == 0 and seen == [["wifi"]]
     assert cli.main(["commands"]) == 0
     assert "restart wifi|bluetooth|sound|touchpad" in capsys.readouterr().out
+
+
+def test_hermes_restarts_the_same_devices_the_cli_does():
+    import ast
+    tools = (ROOT / "plugins" / "herald-os-bridge" / "bridge" / "tools.py").read_text()
+    assignment = next(node for node in ast.parse(tools).body if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "RESTART_DEVICES")
+    assert tuple(ast.literal_eval(assignment.value)) == cli.RESTART_TARGETS

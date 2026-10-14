@@ -210,6 +210,7 @@ the tool is tiered, audited, and returns the CLI's output. It is unavailable on 
 | "What time is it?" / "Battery?" / "Weather?" | `system_os` action=notice kind=time / battery / weather |
 | "Take a screenshot" / "Read the text on my screen" | `system_os` action=screenshot / ocr |
 | "Lock the screen" / "Put the computer to sleep" | `system_os` action=lock / suspend |
+| "My sound stopped working" / "The Wi-Fi keeps dropping" / "My headset won't reconnect" / "The touchpad is dead" | Offer to restart it first, then `system_os` action=restart device=sound / wifi / bluetooth / touchpad |
 | "Which themes are there?" / "Switch to the X theme" | `system_os` action=theme_list / theme_set name=X / theme_current |
 | "Update Herald OS" | `system_os` action=update |
 | "Show my missions" / "Open memory" | `system_os` action=show_page page=missions (overview, hermes, missions, memory, files, automations, connections, settings) |
@@ -222,4 +223,8 @@ the tool is tiered, audited, and returns the CLI's output. It is unavailable on 
   `suspend` ask the user for confirmation before running; tell the user that is expected and do not
   try to route around a denial.
 - Installs and updates can take minutes; report the CLI output (what was installed, or the error).
+- When Wi-Fi, Bluetooth, sound or the touchpad "just stopped working", restarting that one part
+  (action=restart) comes before suggesting a reboot. The touchpad needs administrator rights: if
+  the result says nothing could ask for the password, tell the user to run
+  `herald-os restart touchpad` in a terminal.
 - `duration` accepts `90s`, `20m`, `1h`, `1h30m` or a plain number of minutes.
