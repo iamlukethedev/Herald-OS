@@ -964,6 +964,32 @@ def test_qr_codes_come_from_zbar_xml_one_by_one():
     assert cli.zbar_codes(zbar_xml("<data format='base64'><![CDATA[%%%]]></data>")) == []
 
 
+def test_qr_nested_data_is_not_read_as_a_code():
+    assert cli.zbar_codes(zbar_xml("<data>outer<data>otpauth://totp/X?secret=JBSWY3DPEHPK3PXP</data></data>")) == []
+    assert cli.zbar_codes(zbar_xml("<data><![CDATA[one]]></data><data><![CDATA[two]]></data>")) == []
+    deeper = (
+        b"<barcodes xmlns='http://zbar.sourceforge.net/2008/barcode'><source href='-'><index num='0'>"
+        b"<symbol type='QR-Code'><data><![CDATA[real]]></data></symbol>"
+        b"<symbol type='QR-Code'><extra><data><![CDATA[hidden]]></data></extra></symbol>"
+        b"</index></source></barcodes>"
+    )
+    assert cli.zbar_codes(deeper) == ["real"]
+    stray = b"<barcodes xmlns='http://zbar.sourceforge.net/2008/barcode'><data>loose</data><source href='-'><data>also loose</data></source></barcodes>"
+    assert cli.zbar_codes(stray) == []
+    assert cli.zbar_codes(b"<other><source><index><symbol><data>x</data></symbol></index></source></other>") == []
+
+
+def test_qr_internal_xml_entities_are_not_expanded():
+    doctype = b"<!DOCTYPE barcodes [<!ENTITY otp 'otpauth://totp/X?secret=JBSWY3DPEHPK3PXP'>]>\n"
+    assert cli.zbar_codes(doctype + zbar_xml("<data>&otp;</data>")) == []
+    assert cli.zbar_codes(b"<?xml version='1.0'?>" + doctype + zbar_xml("plain")) == []
+    # An entity with no declaration is a parse error, and a declaration inside a code is just text.
+    assert cli.zbar_codes(zbar_xml("<data>&otp;</data>")) == []
+    assert cli.zbar_codes(zbar_xml("<!DOCTYPE x [<!ENTITY a 'b'>]>&a;")) == ["<!DOCTYPE x [<!ENTITY a 'b'>]>&a;"]
+    assert cli.zbar_codes(b"<?xml version='1.0'?>\n" + zbar_xml("plain")) == ["plain"]
+    assert cli.zbar_codes(zbar_xml("<data>fish &amp; chips</data>")) == ["fish & chips"]
+
+
 def test_qr_several_codes_are_refused_and_nothing_is_copied(monkeypatch, capsys):
     copies, notes = qr_scan(monkeypatch, "https://example.com", "WIFI:S:Home;T:WPA;P:hunter22;;")
     with pytest.raises(SystemExit) as stopped:

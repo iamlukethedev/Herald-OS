@@ -1009,16 +1009,34 @@ def describe_qr(raw: str) -> dict:
     return {"kind": "text", "caption": QR_COPIED, "description": "text", "text": text}
 
 
+def xml_children(element, name: str) -> list:
+    return [child for child in element if child.tag.rsplit("}", 1)[-1] == name]
+
+
 def zbar_codes(xml: bytes) -> list[str]:
-    """Each code zbarimg --xml found, once, in order. --raw would run several codes into one text."""
+    """Each code zbarimg --xml found, once, in order. --raw would run several codes into one text.
+
+    Only barcodes > source > index > symbol > data counts, and only a symbol with exactly one
+    <data> holding text alone, so anything nested inside a code is not read as another. zbarimg never writes a DTD, and ElementTree would expand
+    the entities one declares, so output with markup declarations before the root is refused.
+    """
+    prolog, root_tag, _ = xml.partition(b"<barcodes")
+    if not root_tag or b"<!" in prolog:
+        return []
     try:
         root = ElementTree.fromstring(xml)
     except ElementTree.ParseError:
         return []
+    if root.tag.rsplit("}", 1)[-1] != "barcodes":
+        return []
     codes: list[str] = []
-    for element in root.iter():
-        if element.tag.rsplit("}", 1)[-1] != "data":
+    symbols = [symbol for source in xml_children(root, "source") for index in xml_children(source, "index") for symbol in xml_children(index, "symbol")]
+    for symbol in symbols:
+        found = xml_children(symbol, "data")
+        # zbarimg writes one <data> of text per symbol; anything else is not trusted as a code.
+        if len(found) != 1 or len(found[0]):
             continue
+        element = found[0]
         data = element.text or ""
         if element.get("format") == "base64":
             try:
