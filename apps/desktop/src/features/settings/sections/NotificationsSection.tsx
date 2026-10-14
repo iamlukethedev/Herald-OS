@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { IconBellRinging, IconBug, IconChecklist, IconDeviceDesktop, IconShieldCheck, IconVolumeOff, IconX } from '@tabler/icons-react'
+import { IconBug, IconChecklist, IconDeviceDesktop, IconShieldCheck, IconVolumeOff, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Toggle } from '../../../components/ui/glass.tsx'
 import type { NotifyPrefs } from '../../../../shared/ipc.ts'
@@ -11,10 +11,11 @@ import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, Settings
 
 type NotifyKey = keyof NotifyPrefs
 
+// No row for taskUpdates yet: nothing raises a task-result alert for it to silence. The pref and the
+// taskUpdate category stay, so the row can come back with that alert.
 const ROWS: { key: NotifyKey; label: string; description: string; icon: React.ReactNode; keywords?: string }[] = [
   { key: 'toolCompletions', label: 'Finished turns', description: 'A toast when Hermes finishes a turn in a session you are not looking at.', icon: <IconChecklist />, keywords: 'toast finished turn tool completions' },
   { key: 'approvals', label: 'Approvals', description: 'Tell me when Hermes is waiting for a decision.', icon: <IconShieldCheck />, keywords: 'permission request waiting' },
-  { key: 'taskUpdates', label: 'Task updates', description: 'Scheduled tasks that ran, failed or changed.', icon: <IconBellRinging />, keywords: 'cron automations' },
   { key: 'nativeWhenUnfocused', label: 'Native notifications when unfocused', description: 'Use system notifications while Herald OS is in the background.', icon: <IconDeviceDesktop />, keywords: 'macos system background' }
 ]
 

@@ -65,12 +65,22 @@ describe('Settings > Notifications > Alerts', () => {
     expect([...toggles].map(([label, toggle]) => [label, toggle.checked])).toEqual([
       ['Finished turns', true],
       ['Approvals', false],
-      ['Task updates', true],
       ['Native notifications when unfocused', false],
       ['Offer to explain crashes', true]
     ])
     expect(html).toContain('A toast when Hermes finishes a turn in a session you are not looking at.')
     expect(html).not.toContain('Tool completions')
+  })
+
+  it('has no Task updates row while nothing raises a task-result alert, and keeps a saved value for it untouched', async () => {
+    const html = render({ taskUpdates: false })
+
+    expect(html).not.toContain('Task updates')
+    expect(html).not.toContain('Scheduled tasks that ran')
+
+    toggles.get('Approvals')!.click()
+    await flush()
+    expect($prefs.get().notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false, approvals: false })
   })
 
   it('saves the new value of only the switch that was clicked', async () => {
