@@ -94,6 +94,12 @@ hermes config set model.default <model>  # a Portal model id, as in the Mac's co
 
 ## What provisioning does (`linux/provision.sh`)
 
+These are system-wide changes meant for the throwaway development VM, so the script refuses to run
+anywhere else: it lists what it would change and exits without touching anything unless it is in a
+virtual machine with the cloud-init seed (the `cidata` disc) attached, or is given `--dev-vm`.
+cloud-init passes `--dev-vm` on the first boot; to re-run it by hand in a VM whose seed disc has been
+removed, use `sudo bash /usr/local/share/herald-os-linux/provision.sh --dev-vm`.
+
 - SELinux permissive (greetd and the compositors have no tailored policy yet; Stage 2 writes one).
 - `dnf install`: niri, cage, greetd, seatd, PipeWire, NetworkManager, BlueZ, UPower, portals,
   Electron runtime libraries, fonts, Node.js + toolchain, and the CLI tools the Linux adapters use
