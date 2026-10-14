@@ -684,3 +684,24 @@ describe('audio-capture device identity', () => {
     warn.mockRestore()
   })
 })
+
+describe('microphoneDenied', () => {
+  it('is true when macOS refuses Herald OS the microphone', async () => {
+    vi.stubGlobal('window', { heraldOS: { voice: { microphoneStatus: async () => 'denied', requestMicrophone: async () => 'denied' } } })
+    const capture = await loadCapture()
+    const error = await capture.subscribeMicrophone(() => undefined).catch((reason: unknown) => reason)
+
+    expect(error).toMatchObject({ name: 'MicrophoneUnavailableError', reason: 'denied' })
+    expect(capture.microphoneDenied(error)).toBe(true)
+    expect(tracks).toHaveLength(0)
+  })
+
+  it('is false for any other reason the microphone did not open', async () => {
+    const capture = await loadCapture()
+
+    expect(capture.microphoneDenied(new capture.MicrophoneUnavailableError('no-device', 'No microphone was found.'))).toBe(false)
+    expect(capture.microphoneDenied(new capture.MicrophoneUnavailableError('failed', 'Audio capture could not start.'))).toBe(false)
+    expect(capture.microphoneDenied(new Error('Microphone access was denied.'))).toBe(false)
+    expect(capture.microphoneDenied('denied')).toBe(false)
+  })
+})

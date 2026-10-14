@@ -1028,3 +1028,29 @@ handling), and the Sound panel on macOS showed one placeholder output and no inp
   only to order the list, never to decide.
 - **Carried forward, not yet done:** the speaker picker (and `voice.outputDevice` with it), a
   Herald-only output volume, and a "no sound from this device" warning after a warm-up window.
+
+## ADR-025: Intel Macs get their own build, not a universal one
+
+The macOS release ships `HeraldOS-<version>-mac-arm64` and `-mac-x64` DMGs and zips, packed in one
+`electron-builder --mac --arm64 --x64` run on the Apple Silicon runner (#13).
+
+- **Nothing in the app is Apple Silicon-only.** node-pty, the only native module, ships `darwin-x64`
+  prebuilds beside `darwin-arm64`, and `asarUnpack` already carries both; the macOS helpers are
+  JavaScript for Automation run by `osascript`; tool lookup covers both Homebrew prefixes. So the
+  Intel app is the same build for another architecture, and no x64 runner is needed.
+- **The Mac build leaves node-pty's `build/` out** (`mac.files`). node-pty loads
+  `build/Release/pty.node` before any prebuild, and a `build/` compiled on the runner is for the
+  runner's architecture, so it would break the other app. Each app gets the prebuilds instead.
+- **`scripts/check-mac-builds.mjs` guards the pairing.** It reads the Mach-O headers, so it runs on
+  any machine. It walks every file in each app and fails the release job unless every Mach-O
+  (the main binary, Electron's frameworks, the helper apps, every `.node` and `spawn-helper`) is
+  thin and built for that app's architecture. Files under node-pty's `prebuilds/darwin-<arch>/`
+  must match `<arch>` instead, since node-pty picks that folder by name, so both apps can carry
+  both prebuilds. A `.node` or `spawn-helper` that is not Mach-O fails too, unless it sits in
+  another platform's prebuild folder. The DMGs and zips must carry `package.json`'s version, and
+  no other DMG or zip may be in `release/`, because the release job uploads all of them.
+- **Rejected for now: one universal DMG.** It carries both copies of Electron in every download, and `@electron/universal`
+  stops on the node-pty prebuilds that appear unchanged in both halves unless each is listed in
+  `mac.x64ArchFiles`. The arm64 file names stay as they were, so existing links keep working.
+- **Untested on Intel hardware.** The release workflow checks what the Intel app is built for, but
+  no CI job ever runs it on an Intel Mac; the README says so until someone tries it on one.
