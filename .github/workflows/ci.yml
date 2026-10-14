@@ -65,6 +65,27 @@ jobs:
           done < <(git ls-files)
           exit "$failed"
 
+  signing:
+    name: Signing policy
+    runs-on: ubuntu-latest
+    # Pull requests cannot read COSIGN_PRIVATE_KEY, so the repository variable SIGNING_ENABLED says
+    # whether the image workflow signs; it and linux/image/cosign.pub must agree (#18).
+    env:
+      SIGNING_ENABLED: ${{ vars.SIGNING_ENABLED }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: cosign.pub and SIGNING_ENABLED agree
+        run: |
+          if [[ "$SIGNING_ENABLED" == "true" && ! -f linux/image/cosign.pub ]]; then
+            echo "::error::SIGNING_ENABLED is true but linux/image/cosign.pub is missing: commit the public key (cosign generate-key-pair) so machines verify the signed images."
+            exit 1
+          fi
+          if [[ "$SIGNING_ENABLED" != "true" && -f linux/image/cosign.pub ]]; then
+            echo "::error::linux/image/cosign.pub is committed but SIGNING_ENABLED is not true: set COSIGN_PRIVATE_KEY and SIGNING_ENABLED=true first, or the image build would ship an unsigned image that refuses its own updates."
+            exit 1
+          fi
+          echo "Signing policy consistent (SIGNING_ENABLED=${SIGNING_ENABLED:-unset}, cosign.pub $([[ -f linux/image/cosign.pub ]] && echo present || echo absent))."
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
