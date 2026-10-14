@@ -403,6 +403,8 @@ function HeraldVoiceRows() {
 
   const automatic = devices.devices.find(device => device.isSystem)
   const chosen = prefs.voice.inputDevice
+  // From the resolved choice, not the stored id: a device found by its name has a new id.
+  const chosenId = choice.reason === 'chosen' ? (choice.device?.id ?? null) : null
 
   return (
     <>
@@ -421,7 +423,7 @@ function HeraldVoiceRows() {
           </div>
           <Row label="Automatic" detail={automatic ? `Follow the system: ${automatic.label}` : 'Follow the system'} active={!chosen} disabled={!chosen} onClick={() => void chooseInputDevice(null)} right={!chosen ? <IconCheck size={14} className="text-accent-strong" /> : undefined} />
           {devices.devices.map(device => {
-            const selected = chosen?.id === device.id || (!chosen && device.isSystem)
+            const selected = device.id === chosenId
 
             return (
               <Row

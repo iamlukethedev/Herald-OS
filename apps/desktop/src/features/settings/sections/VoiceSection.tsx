@@ -152,8 +152,8 @@ export function VoiceSection() {
   useEffect(() => watchAudioDevices(), [])
 
   const automaticMic = micDevices.devices.find(device => device.isSystem)
-  const chosenMic = voice.inputDevice
-  const selectedMic = chosenMic && micDevices.devices.some(device => device.id === chosenMic.id) ? chosenMic.id : AUTOMATIC_DEVICE
+  // From the resolved choice, not the stored id: a device found by its name has a new id.
+  const selectedMic = micChoice.reason === 'chosen' && micChoice.device ? micChoice.device.id : AUTOMATIC_DEVICE
   const micItems: readonly MenuItem[] = [
     { id: AUTOMATIC_DEVICE, label: 'Automatic', description: automaticMic ? `Follow the system: ${automaticMic.label}` : 'Follow the system' },
     ...micDevices.devices.map(device => ({ id: device.id, label: device.label, description: device.isSystem ? 'The system default right now' : undefined }))
