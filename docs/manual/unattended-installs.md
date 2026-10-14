@@ -8,9 +8,12 @@ wipe a disk without asking.
 
 [`linux/image/unattended.ks`](../../linux/image/unattended.ks) is a starting point. As it stands, it:
 
-- erases the disks the installer finds (`clearpart --all`), which on a PC with one disk is all of
-  it, and partitions them with btrfs; add `ignoredisk --only-use=nvme0n1` (with your disk's name)
-  to limit it to one disk;
+- erases one disk and partitions it with btrfs. The `%pre` section at the end of the file picks
+  the first internal disk by name (`nvme0n1` before `nvme1n1`, `sda` before `sdb`), skipping USB
+  and removable disks and the one the installer started from. Every other disk is left alone. To
+  choose the disk, set `DISK=` in that section to a name `lsblk` lists (`DISK="nvme1n1"`), or to
+  `/dev/disk/by-id/<id>` for an exact device. If it finds no disk, the install stops before
+  erasing anything;
 - encrypts it with the passphrase `change-me` (change it, or remove `--passphrase=change-me` to be
   asked for one at install time);
 - sets English, a US keyboard and UTC, which you can change in the `lang`, `keyboard` and
@@ -36,7 +39,9 @@ The installer then runs without stopping, and the PC restarts into Herald OS's f
 ## Before you rely on it
 
 - Test the kickstart in a [virtual machine](virtual-machine.md) first, with a disk you do not need.
-- `clearpart --all` erases every partition on the disks it uses, Windows included. To keep another
-  system, install by hand instead.
+- The disk it picks loses every partition, Windows included. To keep another system on that disk,
+  install by hand instead. On a PC with more than one internal disk, set `DISK=` rather than
+  relying on the name order. While the installer runs, `/tmp/herald-os-disk.log` (from the shell
+  on `Ctrl+Alt+F2`) says which disk it chose.
 - Anaconda's [kickstart reference](https://pykickstart.readthedocs.io/en/latest/kickstart-docs.html)
   lists every command.

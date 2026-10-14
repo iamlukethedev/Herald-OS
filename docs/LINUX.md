@@ -254,7 +254,9 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
 - **an x86_64 installer ISO** (bootc-image-builder `anaconda-iso`, `linux/image/iso.toml`): the
   storage screen stays interactive, so it can install next to another system and encrypt the disk
   (btrfs) if you tick "Encrypt my data". Boot it with `inst.ks=<url>` and a kickstart like
-  `linux/image/unattended.ks` for an unattended install.
+  `linux/image/unattended.ks` for an unattended install: its `%pre` picks one disk (the first
+  internal one by name, or `DISK=` set in it) and writes `ignoredisk --only-use` and
+  `clearpart --drives` for it, so other disks are left alone.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle
