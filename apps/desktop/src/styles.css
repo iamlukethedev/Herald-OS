@@ -638,7 +638,8 @@ textarea {
     opacity 120ms var(--ease-out),
     transform 120ms var(--ease-out);
 }
-.dock-item:hover .dock-label {
+.dock-item:hover .dock-label,
+.dock-item:focus-visible .dock-label {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
