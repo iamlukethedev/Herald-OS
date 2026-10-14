@@ -1041,7 +1041,7 @@ The macOS release ships `HeraldOS-<version>-mac-arm64` and `-mac-x64` DMGs and z
 - **`scripts/check-mac-builds.mjs` guards the pairing.** It reads the Mach-O headers, so it runs on
   any machine, and fails the release job unless each architecture has exactly one app whose main
   binary and node-pty `pty.node` match it, plus a DMG and a zip.
-- **Rejected for now: one universal DMG.** It doubles every download, and `@electron/universal`
+- **Rejected for now: one universal DMG.** It carries both copies of Electron in every download, and `@electron/universal`
   stops on the node-pty prebuilds that appear unchanged in both halves unless each is listed in
   `mac.x64ArchFiles`. The arm64 file names stay as they were, so existing links keep working.
 - **Untested on Intel hardware.** CI checks what the Intel app is built for, not that it runs; the
