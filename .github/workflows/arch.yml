@@ -1,7 +1,8 @@
 name: Arch package
 
-# Builds herald-os-bin from a freshly built tarball in an Arch container, lints both PKGBUILDs and the
-# package with namcap, installs it and runs the CLIs. Nothing is published to the AUR from here.
+# Builds herald-os-bin from a freshly built tarball in an Arch container whose signature is checked
+# first, lints both PKGBUILDs and the package with namcap, installs it and runs the CLIs. Nothing is
+# published to the AUR from here.
 
 on:
   push:
@@ -15,14 +16,37 @@ permissions:
   contents: read
 
 jobs:
+  image:
+    name: Arch image signature
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.verify.outputs.ref }}
+    steps:
+      - uses: sigstore/cosign-installer@v3
+      - name: Check Arch's release pipeline signed today's base-devel
+        id: verify
+        # Arch's official image as Arch publishes it to GHCR (the same build as Docker Hub's archlinux). Docker Hub
+        # rate-limits the shared runners' anonymous pulls, and ECR Public refuses them once its data limit is
+        # reached. quay.io/archlinux/archlinux is Arch's other official registry, signed the same way, if GHCR
+        # ever fails. The tag, not a pinned digest: the image is a rolling release, and an old pin would leave
+        # archlinux-keyring too old to verify newer packages in `pacman -Syu`. The package job runs in the
+        # digest checked here, so the tag cannot move between the check and the job. The identity and issuer
+        # are the ones the archlinux-docker README gives.
+        run: |
+          image=ghcr.io/archlinux/archlinux
+          digest="$(cosign verify "$image:base-devel" \
+            --certificate-identity-regexp='https://gitlab\.archlinux\.org/archlinux/archlinux-docker//\.gitlab-ci\.yml@refs/tags/v[0-9]+\.0\.[0-9]+' \
+            --certificate-oidc-issuer=https://gitlab.archlinux.org |
+            jq -r '[.[].critical.image["docker-manifest-digest"]] | unique | if length == 1 then .[0] else error("signatures name several digests") end')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no verified digest for $image:base-devel"; exit 1; }
+          echo "Verified $image@$digest"
+          echo "ref=$image@$digest" >>"$GITHUB_OUTPUT"
+
   package:
     name: herald-os-bin (x86_64)
+    needs: image
     runs-on: ubuntu-24.04
-    # Arch's official image as Arch publishes it to GHCR (the same build as Docker Hub's archlinux). Docker Hub
-    # rate-limits the shared runners' anonymous pulls, and ECR Public refuses them once its data limit is reached.
-    # A tag, not a digest: the image is a rolling release, and an old pin would leave archlinux-keyring too old
-    # to verify newer packages in `pacman -Syu`.
-    container: ghcr.io/archlinux/archlinux:base-devel
+    container: ${{ needs.image.outputs.ref }}
     steps:
       - name: Tools and the package's dependencies
         run: pacman -Syu --noconfirm --needed git nodejs npm python namcap gtk3 nss alsa-lib libsecret libnotify curl wl-clipboard wtype grim slurp
