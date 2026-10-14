@@ -98,6 +98,8 @@ if [[ "$MODE" == "--image" ]]; then
   install -Dm0644 "$LINUX/image/herald-os-firstboot-apps.service" /usr/lib/systemd/system/herald-os-firstboot-apps.service
   install -Dm0644 "$LINUX/image/herald-os-hermes.service" /usr/lib/systemd/system/herald-os-hermes.service
   install -Dm0644 "$LINUX/image/herald-os-login.service" /usr/lib/systemd/system/herald-os-login.service
+  # The image only: greetd waits for herald-os-login.service (the development VM has no such unit).
+  install -Dm0644 "$LINUX/image/greetd-herald-os-login.conf" /usr/lib/systemd/system/greetd.service.d/herald-os-login.conf
   install -Dm0755 "$LINUX/image/firstboot.sh" /usr/libexec/herald-os/firstboot.sh
   install -Dm0755 "$LINUX/image/reset-helper" /usr/libexec/herald-os/reset-helper
   install -Dm0644 "$LINUX/image/herald-os-reset.service" /usr/lib/systemd/system/herald-os-reset.service

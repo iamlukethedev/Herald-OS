@@ -1,14 +1,17 @@
 [Unit]
 Description=Herald OS: the login screen on a system switched from another bootc system
-# Every boot after the first, which does this itself. It puts right a system switched to Herald OS
-# with an image whose first boot left it signing a passwordless administrator in; elsewhere it
-# changes nothing.
-ConditionPathExists=/var/lib/herald-os/firstboot-done
+# Every boot, after the first-boot setup (whether or not it finished). On a switched system it makes
+# sure greetd shows a login screen and the session user has no empty password; it also puts right a
+# system switched with an image whose first boot signed a passwordless administrator in. Elsewhere it
+# changes nothing. greetd requires it (greetd.service.d/herald-os-login.conf), so if it fails, greetd
+# does not start: no login screen is better than one that signs an administrator in without asking.
 After=herald-os-reset.service herald-os-firstboot.service
 Before=greetd.service
 
 [Service]
 Type=oneshot
+# Stays active, so greetd's Requires= holds through greetd restarts within the boot.
+RemainAfterExit=yes
 ExecStart=/usr/libexec/herald-os/firstboot.sh login
 
 [Install]
