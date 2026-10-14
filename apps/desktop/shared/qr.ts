@@ -34,6 +34,8 @@ const SECRET_LABELS = /\b(pass|pin|key|seed|code|otp)\b\s*[:=]/i
 const SECRET_PARAM = /token|key|secret|pass|pwd|auth|code|sig|session|otp|credential/i
 /** Path segments that make a link personal (an invitation, a reset, a sign-in). */
 const SECRET_PATH = /invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem/i
+/** Runs of digits, single spaces or dashes allowed between them, that are not part of a longer word. */
+const DIGIT_RUN = /(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])/g
 /** Token formats that are secret however they look: Slack, GitLab, Stripe, GitHub, OpenAI-style and AWS keys. */
 const KNOWN_TOKEN = /^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}/
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i
@@ -66,6 +68,10 @@ export const MIXED_CASE_MIN = 16
 /** Groups of letters and digits ("A1B2-C3D4-E5F6"), each at least KEY_GROUP_MIN long, make a key. */
 export const KEY_GROUPS_MIN = 3
 export const KEY_GROUP_MIN = 3
+/** Digits from this many in a run (or grouped) are secret, whatever they are: card numbers, account numbers. */
+export const LONG_DIGITS_MIN = 16
+/** Shorter runs from this many digits are secret when they pass the Luhn check, as card numbers do. */
+export const LUHN_DIGITS_MIN = 13
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -242,6 +248,60 @@ export function looksLikeToken(value: string, min: number): boolean {
   return keyGroups || chunks.some(randomChunk)
 }
 
+/** The Luhn checksum card numbers carry. */
+export function luhn(digits: string): boolean {
+  let sum = 0
+
+  for (let i = 0; i < digits.length; i++) {
+    let digit = Number(digits[digits.length - 1 - i])
+
+    if (i % 2 === 1) {
+      digit *= 2
+      digit -= digit > 9 ? 9 : 0
+    }
+
+    sum += digit
+  }
+
+  return sum % 10 === 0
+}
+
+/** An EAN-13 barcode's own checksum. */
+export function ean13(digits: string): boolean {
+  if (digits.length !== 13) {
+    return false
+  }
+
+  let sum = 0
+
+  for (let i = 0; i < 12; i++) {
+    sum += Number(digits[i]) * (i % 2 === 1 ? 3 : 1)
+  }
+
+  return (sum + Number(digits[12])) % 10 === 0
+}
+
+/**
+ * A card or account number: 16 or more digits, in a row or grouped (1234-5678-9012-3456-7890), or
+ * 13 to 15 that pass Luhn. An unbroken valid EAN-13 is a product barcode and stays text. Phone
+ * numbers (15 digits at most) and short order numbers only count when they happen to pass Luhn.
+ */
+export function digitsLookSecret(text: string): boolean {
+  for (const run of text.match(DIGIT_RUN) ?? []) {
+    const digits = run.replace(/[ -]/g, '')
+
+    if (digits.length >= LONG_DIGITS_MIN) {
+      return true
+    }
+
+    if (digits.length >= LUHN_DIGITS_MIN && luhn(digits) && !(run === digits && ean13(digits))) {
+      return true
+    }
+  }
+
+  return false
+}
+
 interface UriParts {
   authority: string | null
   path: string
@@ -302,7 +362,7 @@ export function uriLooksSecret(uri: string, depth = 0): boolean {
 
 /** A password, key, recovery phrase or credentialled link, as far as one can tell from the text. */
 export function looksSecret(text: string): boolean {
-  if (/private key/i.test(text) || SECRET_WORDS.test(text) || SECRET_LABELS.test(text) || /otpauth/i.test(decodeDeep(text))) {
+  if (/private key/i.test(text) || SECRET_WORDS.test(text) || SECRET_LABELS.test(text) || /otpauth/i.test(decodeDeep(text)) || digitsLookSecret(text)) {
     return true
   }
 

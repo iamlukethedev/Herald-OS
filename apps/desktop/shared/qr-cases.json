@@ -634,12 +634,14 @@
     ]
   },
   {
-    "note": "long numbers are not tokens",
+    "note": "20 digits in a row are secret",
     "text": "00012345678905123456",
-    "kind": "text",
+    "kind": "secret",
     "caption": "QR code copied",
-    "description": "text",
-    "full": true
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "00012345678905123456"
+    ]
   },
   {
     "note": "the issuer parameter in any case",
@@ -1254,6 +1256,206 @@
   {
     "note": "a longer run breaks a stretch of irregular switches",
     "text": "aZbYqwertyuiXcV",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a card number",
+    "text": "4111111111111111",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4111111111111111"
+    ]
+  },
+  {
+    "note": "a card number in groups of four",
+    "text": "4111 1111 1111 1111",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4111 1111"
+    ]
+  },
+  {
+    "note": "a card number with dashes",
+    "text": "4111-1111-1111-1111",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4111-1111"
+    ]
+  },
+  {
+    "note": "20 digits in groups",
+    "text": "1234-5678-9012-3456-7890",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "1234-5678-9012-3456-7890"
+    ]
+  },
+  {
+    "note": "a card number in a sentence",
+    "text": "Card 4111 1111 1111 1111 exp 12/28",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4111 1111"
+    ]
+  },
+  {
+    "note": "16 digits are secret without passing Luhn",
+    "text": "1234567890123456",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "1234567890123456"
+    ]
+  },
+  {
+    "note": "15 digits that fail Luhn",
+    "text": "123456789012345",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "15 digits that pass Luhn",
+    "text": "123456789012347",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "123456789012347"
+    ]
+  },
+  {
+    "note": "an Amex-style number in groups, passing Luhn",
+    "text": "3782 822463 10005",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "822463"
+    ]
+  },
+  {
+    "note": "14 digits that pass Luhn",
+    "text": "30569309025904",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "30569309025904"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn",
+    "text": "4222222222222",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4222222222222"
+    ]
+  },
+  {
+    "note": "13 digits that fail Luhn",
+    "text": "4222222222223",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that pass Luhn and are not an EAN-13",
+    "text": "1234567890136",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "1234567890136"
+    ]
+  },
+  {
+    "note": "12 digits pass Luhn but are below the minimum",
+    "text": "123456789015",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an EAN-13 barcode that also passes Luhn",
+    "text": "5901234123457",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "another EAN-13 that passes Luhn",
+    "text": "4006381333924",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "the same digits grouped are not a scanned barcode",
+    "text": "5 901234 123457",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "901234"
+    ]
+  },
+  {
+    "note": "a phone number",
+    "text": "+44 20 7946 0958",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a phone number with a country code",
+    "text": "+1 555 123 4567",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a short order number",
+    "text": "Order 123-456-789",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a 12-digit tracking number",
+    "text": "FedEx 123456789012",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an order number whose digits happen to pass Luhn: digits glued to a word are not a card number",
+    "text": "ORDER-2026-000123458",
     "kind": "text",
     "caption": "QR code copied",
     "description": "text",

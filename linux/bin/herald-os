@@ -802,6 +802,9 @@ QR_SECRET_WORDS = re.compile(r"\b(pass(word|wd|code|phrase)s?|pwd|secret|token|a
 QR_SECRET_LABELS = re.compile(r"\b(pass|pin|key|seed|code|otp)\b\s*[:=]", re.I | re.A)
 QR_SECRET_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
 QR_SECRET_PATH = re.compile(r"invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem", re.I)
+QR_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])")
+QR_LONG_DIGITS_MIN = 16
+QR_LUHN_DIGITS_MIN = 13
 QR_KNOWN_TOKEN = re.compile(r"^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}")
 QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 QR_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
@@ -944,6 +947,36 @@ def qr_uri_parts(uri: str) -> tuple[str | None, str, str, str]:
     return authority, path, query, fragment
 
 
+def qr_luhn(digits: str) -> bool:
+    """The Luhn checksum card numbers carry."""
+    total = 0
+    for i, char in enumerate(reversed(digits)):
+        digit = int(char)
+        if i % 2 == 1:
+            digit *= 2
+            digit -= 9 if digit > 9 else 0
+        total += digit
+    return total % 10 == 0
+
+
+def qr_ean13(digits: str) -> bool:
+    """An EAN-13 barcode's own checksum."""
+    if len(digits) != 13:
+        return False
+    return (sum(int(digits[i]) * (3 if i % 2 == 1 else 1) for i in range(12)) + int(digits[12])) % 10 == 0
+
+
+def qr_digits_look_secret(text: str) -> bool:
+    """16+ digits in a row or grouped, or 13 to 15 that pass Luhn; an unbroken valid EAN-13 is a barcode."""
+    for run in QR_DIGIT_RUN.findall(text):
+        digits = re.sub(r"[ -]", "", run)
+        if len(digits) >= QR_LONG_DIGITS_MIN:
+            return True
+        if len(digits) >= QR_LUHN_DIGITS_MIN and qr_luhn(digits) and not (run == digits and qr_ean13(digits)):
+            return True
+    return False
+
+
 def qr_uri_host(uri: str) -> str:
     authority = qr_uri_parts(uri)[0] or ""
     host = re.sub(r":\d*$", "", authority.split("@")[-1]).lower()
@@ -969,7 +1002,7 @@ def qr_uri_looks_secret(uri: str, depth: int = 0) -> bool:
 
 def qr_looks_secret(text: str) -> bool:
     """A password, key, recovery phrase or credentialled link, as far as one can tell from the text."""
-    if re.search(r"private key", text, re.I) or QR_SECRET_WORDS.search(text) or QR_SECRET_LABELS.search(text) or re.search(r"otpauth", qr_decode_deep(text), re.I):
+    if re.search(r"private key", text, re.I) or QR_SECRET_WORDS.search(text) or QR_SECRET_LABELS.search(text) or re.search(r"otpauth", qr_decode_deep(text), re.I) or qr_digits_look_secret(text):
         return True
     words = [word for word in re.split(r"[\s,]+", text) if word]
     if QR_RECOVERY_WORDS[0] <= len(words) <= QR_RECOVERY_WORDS[1] and all(QR_SEED_WORD.fullmatch(word.lower()) for word in words):
