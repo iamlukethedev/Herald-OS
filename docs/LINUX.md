@@ -97,7 +97,7 @@ hermes config set model.default <model>  # a Portal model id, as in the Mac's co
 
 | Piece | Role |
 | --- | --- |
-| `/etc/greetd/config.toml` | Logs `hermes` in on VT1 and runs `herald-os-compositor`. Respawns when it exits. |
+| `/etc/greetd/config.toml` | Logs `hermes` in on VT1 and runs `herald-os-compositor`. Respawns when it exits. On a system switched from another bootc system it is `greetd-login.toml` instead: a login screen (agreety) that starts `herald-os-compositor` for whoever signs in. |
 | `herald-os-compositor` | Sets `XDG_*`, picks `WLR_RENDERER=pixman` when there is no GPU render node, sources `~/.config/herald-os/session.env`, renders Herald's niri config (`~/.config/niri/herald-os.kdl`, from the installed template and your keymap) and starts niri with it. A `~/.config/niri/config.kdl` of your own is never read or changed, so the session also starts on a fresh account; Herald's other files beside it are `theme.kdl`, `outputs.kdl` and `local.kdl` (yours to edit). Without hardware GL (QEMU and Apple Virtualization without virgl) niri runs windowed inside `cage` (`herald-os-niri-nested`). `HERALD_OS_COMPOSITOR=cage` runs the Stage 1 kiosk instead. |
 | `herald-os-session` | Publishes `WAYLAND_DISPLAY` to systemd/D-Bus, starts PipeWire + portals and the session services below, runs Electron on Wayland (Ozone) as panels: the menu bar, dock and Hermes window are separate windows niri places. Restarts the shell on a crash (5 per minute), exits on a clean quit. |
 | `herald-os.desktop` | `wayland-sessions` entry so a normal greeter can also start Herald OS. |
@@ -258,7 +258,9 @@ default again.
 asks who the computer is for. For yourself: a name, a password (set with `passwd` as you, so the
 setup never needs root), Wi-Fi and Hermes's sign-in. For someone else: just Wi-Fi, and setup waits
 for them at the next start. `herald-os reset` (type ERASE, then your password) erases the account,
-its apps and saved networks on the next restart and runs setup again; the system stays.
+its apps and saved networks on the next restart and runs setup again; the system stays. A system
+switched from another bootc system is different: it gets a login screen and a locked account instead
+([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
 **Security.**
 
@@ -283,13 +285,22 @@ Fedora Silverblue, Kinoite, Bazzite, Bluefin and other bootc systems can switch 
 image in place. It replaces the system you run, so try it on a spare machine or in a virtual machine,
 not on the computer you work on. What happens on its first start:
 
-- **A new account signs in by itself.** The first boot creates `hermes`, an administrator (in
-  `wheel`) with no password, and greetd signs it in with no login screen, so you cannot pick your own
-  account there. Until you set a password in Herald OS's first-start setup (or with
-  `herald-os password`), anyone at the keyboard has administrator rights. Your own account and its
-  files stay.
+- **A login screen, and your account stays.** The first boot sees the accounts your system already
+  has, so greetd does not sign anyone in by itself. It shows a text login screen on the first
+  console (agreety) instead. Sign in with your own account and its password, and you get the
+  Herald OS desktop. Herald OS's first-start setup then asks only for your name, Wi-Fi and Hermes's
+  sign-in. Your password stays as it is (`herald-os password` changes it). The first boot installs
+  Hermes Agent only for `hermes`, so run `herald-os setup` in a terminal once in your own account
+  to install Hermes there too.
+- **A locked `hermes` account.** The first boot also creates `hermes`, an administrator (in `wheel`)
+  that Herald OS sets Hermes Agent up for. It is locked: no one can sign in to it or use its
+  administrator rights until you give it a password from your own account
+  (`sudo passwd hermes`). After that, `hermes` can sign in at the login screen too.
+  `herald-os-login.service` checks this at every start. A system switched with an earlier Herald OS
+  image, which signed `hermes` in with no password, gets the login screen at its next start, and a
+  `hermes` without a password is locked.
 - **The first start takes a while.** It installs Hermes Agent, which needs the network, before the
-  desktop appears. Without a network the desktop comes up first, and Hermes installs once you are
+  login screen appears. Without a network the desktop comes up first, and Hermes installs once you are
   online.
 - **SELinux becomes permissive** (greetd and the compositors have no policy yet, ADR-012).
 - **The firewall changes.** firewalld's default zone becomes `herald-os`, which refuses every
