@@ -40,6 +40,23 @@ describe('mayOpenExternally', () => {
     }
   })
 
+  it('refuses a query parameter after the anchor', () => {
+    expect(mayOpenExternally(`${PRIVACY}?Privacy_Camera&x=1`, 'darwin')).toBe(false)
+  })
+
+  it('refuses a fragment after the anchor', () => {
+    expect(mayOpenExternally(`${PRIVACY}?Privacy_Camera#frag`, 'darwin')).toBe(false)
+  })
+
+  it('refuses the scheme in upper case', () => {
+    expect(mayOpenExternally('X-APPLE.SYSTEMPREFERENCES:com.apple.settings.PrivacySecurity.extension?Privacy_Camera', 'darwin')).toBe(false)
+    expect(mayOpenExternally('X-APPLE.systempreferences:com.apple.settings.PrivacySecurity.extension', 'darwin')).toBe(false)
+  })
+
+  it('refuses a trailing newline after the anchor', () => {
+    expect(mayOpenExternally(`${PRIVACY}?Privacy_Camera\n`, 'darwin')).toBe(false)
+  })
+
   it('refuses every other scheme', () => {
     for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'mailto:a@b.c', 'smb://server/share', 'x-apple.systempreferencesx:foo', 'ssh://host', '/etc/passwd', '']) {
       expect(mayOpenExternally(url, 'darwin'), url).toBe(false)
