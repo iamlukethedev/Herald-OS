@@ -38,31 +38,58 @@ jobs:
       - run: npm ci
       - name: Check the signing secrets
         id: signing
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        # A build is signed only with all five: electron-builder fails outright when APPLE_ID is set
+        # without the other two notarization secrets, and a signed but unnotarized app still trips
+        # Gatekeeper. Missing secrets never fail the job; the build goes out unsigned with a warning.
+        # Only the names are printed, never the values.
         run: |
-          if [[ -n "$CSC_LINK" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" ]]; then
+          missing=()
+          for name in MAC_CERTIFICATE_P12 MAC_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} == 0 )); then
             echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "All five signing secrets are set: this build is signed and notarized."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::The signing secrets are not set: this build is unsigned and not notarized."
+            printf -v list '%s, ' "${missing[@]}"
+            echo "::warning title=Unsigned macOS build::Missing secrets: ${list%, }. This build is not signed or notarized. See docs/MACOS-SIGNING.md."
           fi
+      - name: Check the mac signing config
+        run: |
+          node apps/desktop/scripts/check-mac-signing-config.mjs
+          plutil -lint apps/desktop/build/entitlements.mac.plist
       - name: Build, sign and notarize
         env:
           # Never pick up a stray identity from the runner's keychain for an unsigned build.
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed }}
         run: |
-          if [[ "${{ steps.signing.outputs.signed }}" != "true" ]]; then
+          if [[ "${{ steps.signing.outputs.signed }}" == "true" ]]; then
+            npm run dist:mac --workspace apps/desktop -- -c.dmg.sign=true
+          else
             # Unset secrets arrive as empty variables, and electron-builder reads an empty CSC_LINK as
-            # a certificate path (the working directory).
+            # a certificate path (the working directory). A partial set must not reach it either.
             unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            npm run dist:mac --workspace apps/desktop -- -c.mac.notarize=false
           fi
-          npm run dist:mac --workspace apps/desktop -- ${{ steps.signing.outputs.signed == 'true' && '-c.dmg.sign=true' || '' }}
       - name: Verify the signature and the notarization ticket
         if: steps.signing.outputs.signed == 'true'
         run: |
           app="$(find apps/desktop/release -maxdepth 3 -name 'Herald OS.app' -print -quit)"
+          [[ -n "$app" ]] || { echo "::error::No Herald OS.app under apps/desktop/release"; exit 1; }
           codesign --verify --deep --strict --verbose=2 "$app"
+          details="$(codesign --display --verbose=4 "$app" 2>&1)"
+          grep -q '^Authority=Developer ID Application:' <<<"$details" || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
+          grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" <<<"$details" || { echo "::error::$app is not signed by the team in APPLE_TEAM_ID"; exit 1; }
+          grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime' <<<"$details" || { echo "::error::$app is not signed with the hardened runtime"; exit 1; }
           xcrun stapler validate "$app"
-          spctl --assess --type execute --verbose "$app"
+          spctl --assess --type execute -vv "$app"
+          for dmg in apps/desktop/release/*.dmg; do
+            codesign --verify --strict --verbose=2 "$dmg"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: herald-os-macos
