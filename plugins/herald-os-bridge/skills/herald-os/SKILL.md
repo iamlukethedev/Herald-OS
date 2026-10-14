@@ -187,12 +187,14 @@ logs from `journalctl`, trash from `gio trash`, notifications from `notify-send`
   `camera.show`, `capture.color` (the person clicks a colour; you get #rrggbb), `capture.qr` and
   `capture.text` (OCR; the person selects the area); on Linux also `capture.transcode` (file,
   gif|mp4|webm) and `capture.share`. Use `screen.askRegion` to have the person pick what to show you.
-- `capture.qr` gives you the contents of ordinary links and text only. For a 2FA setup code, Wi-Fi
-  details or anything that looks like a password or key you get `kind` and `description` ("a 2FA
-  setup code for GitHub") and `onClipboard: true`: the contents are on the clipboard for the person
-  to paste where they belong. Tell them that; never ask them to paste or read the secret to you.
-  Personal links (sign-in, reset, invitation, a token) come the same way, with only the host. When
-  the person selected several codes nothing is copied: ask them to select just one.
+- `capture.qr` gives you ordinary links and text in full (`text`). For a 2FA setup code, Wi-Fi
+  details, a card number or anything that looks like a password or key you get `kind` and
+  `description` ("a 2FA setup code for GitHub") and `onClipboard: true`: the contents are on the
+  clipboard for the person to paste where they belong. Tell them that; never ask them to paste or
+  read the secret to you. A link that carries a secret comes as `link`, with the secret parts (a
+  token, a password, a Zoom passcode) taken out, or as its host alone in `description` when the
+  secret is in the middle of it; the whole link is on the clipboard. When the person selected
+  several codes nothing is copied: ask them to select just one.
 - Switches (both platforms): `os_ui` run `dnd.set`, `awake.set` (stay awake), `nightlight.set`
   (Linux) or `screensaver.set` with `{"enabled": true|false}`; `idle.set` changes when the screen
   locks, turns off and sleeps (minutes).

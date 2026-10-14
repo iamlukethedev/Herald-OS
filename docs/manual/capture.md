@@ -44,15 +44,17 @@ folder, and opens LocalSend, when it is installed, to send it to another device 
 - **Copy text from the screen:** say "copy the text on screen", or `herald-os capture text`. Select
   the area; the text it reads is copied. On Linux it is read by tesseract on this computer.
 - **Read a QR code:** say "read this QR code", or `herald-os capture qr`. Select the code; what it
-  says is copied, and nowhere else: QR codes often carry secrets, such as the code behind a 2FA
-  setup or a Wi-Fi password. The notification says what kind of thing it was ("2FA setup code
-  copied"; for a web link, "Link copied: example.com", so you can see where it points), clipboard
-  history leaves it out, and Hermes only learns the contents of ordinary links and text. A link
-  that looks personal (a sign-in, reset or invitation link, or one carrying a token) only shows
-  where it points, even to Hermes. Pasting works as usual. Select one code at a time: when the
-  selection holds several, nothing is copied. If the clipboard cannot keep a secret out of its
-  history (on Linux, wl-clipboard before 2.2), that code is not copied either and the notification
-  says so; ordinary links and text are still copied. In scripts, `herald-os capture qr --print`
-  prints the contents.
+  says is copied, and nowhere else when it looks secret: QR codes often carry secrets, such as the
+  code behind a 2FA setup, a Wi-Fi password or a card number. The notification says what kind of
+  thing it was ("2FA setup code copied"), clipboard history leaves it out, and Hermes only learns
+  what kind of thing it was. Web links are shown in full, to you and to Hermes. When a link carries
+  a secret (a password, a sign-in token, a Zoom passcode), that part is left out of what is shown;
+  when it sits in the middle of the link, only the site is shown. Card and account numbers (16 or
+  more digits, or a number that passes the card checksum) count as secrets; product barcodes,
+  phone numbers and short order numbers do not. Pasting works as usual. Select one code at a time:
+  when the selection holds several, nothing is copied. If the clipboard cannot keep a secret out of
+  its history (on Linux, wl-clipboard before 2.2), that code is not copied either and the
+  notification says so; ordinary links and text are still copied. In scripts,
+  `herald-os capture qr --print` prints the contents.
 
 On a Mac these use macOS's own eyedropper and text recognition.
