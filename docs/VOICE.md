@@ -245,7 +245,7 @@ model switches between fast, accurate, multilingual and most-accurate models.
 ```
 apps/desktop/src/store/voice.ts          state machine, hotkey/CLI commands, announcements, Live accounting
 apps/desktop/src/store/wake.ts           wake.start / wake.feed / wake.detected
-apps/desktop/src/store/audio-devices.ts  which microphones exist, which one is used, the mic test
+apps/desktop/src/store/audio-devices.ts  which microphones exist, which one is used, the level bar
 apps/desktop/src/lib/audio-devices.ts    device list, identity of a stored choice, name matcher (pure)
 apps/desktop/src/lib/voice/audio-capture.ts   one mic graph (AudioWorklet -> 16 kHz int16 frames)
 apps/desktop/src/lib/voice/capture-policy.ts  when to reopen the mic and when to wait (pure)
@@ -259,4 +259,4 @@ apps/desktop/src/features/office/typing.ts     dictation into the Docs page, She
 apps/desktop/electron/ipc/voice.ts        mic permission, audio WebSocket URL, global hotkey
 ```
 
-Decisions: `docs/DECISIONS.md` ADR-013, ADR-022 (and the ADR-007 amendment).
+Decisions: `docs/DECISIONS.md` ADR-013, ADR-024 (and the ADR-007 amendment).

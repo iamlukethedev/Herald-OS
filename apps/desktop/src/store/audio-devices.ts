@@ -4,7 +4,7 @@
 // stay thin and answer the same questions the same way.
 import type { AudioDevicePref } from '../../shared/ipc.ts'
 import { computed } from 'nanostores'
-import { describeDeviceChoice, resolveAudioDevice, type AudioDeviceKind } from '../lib/audio-devices.ts'
+import { describeDeviceChoice, resolveAudioDevice } from '../lib/audio-devices.ts'
 import { $inputDevices, $micLevel, refreshInputDevices } from '../lib/voice/audio-capture.ts'
 import { $prefs, updatePrefs } from './backend.ts'
 
@@ -16,9 +16,9 @@ export const $inputChoice = computed([$prefs, $inputDevices], (prefs, list) => r
 /** The level meter's fill, 0 to 100. Frames carry RMS, so a quiet room reads nearly empty. */
 export const $micLevelPercent = computed($micLevel, level => Math.min(100, Math.round(level * 500)))
 
-/** One line describing the current device choice, for a row's detail or a command's answer. */
-export function deviceSummary(kind: AudioDeviceKind): string {
-  return describeDeviceChoice(resolveAudioDevice($prefs.get().voice[kind === 'input' ? 'inputDevice' : 'outputDevice'], $inputDevices.get()), kind)
+/** One line describing the current microphone choice, for a row's detail or a command's answer. */
+export function microphoneSummary(): string {
+  return describeDeviceChoice(resolveAudioDevice($prefs.get().voice.inputDevice, $inputDevices.get()), 'input')
 }
 
 /** Re-read the device list. Called when a picker mounts, which is usually while the mic is closed. */

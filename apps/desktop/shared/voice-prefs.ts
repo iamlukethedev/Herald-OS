@@ -16,9 +16,7 @@ export const VOICE_DEFAULTS: VoicePrefs = {
   liveIdleSeconds: 45,
   liveDailyCapMinutes: 60,
   liveUsage: { day: '', seconds: 0 },
-  inputDevice: null,
-  outputDevice: null,
-  outputVolume: 100
+  inputDevice: null
 }
 
 /** Longest device id and label kept from storage; longer values are malformed, not useful. */
@@ -39,9 +37,7 @@ export function normalizeVoicePrefs(raw: unknown): VoicePrefs {
     liveIdleSeconds: clampNumber(source.liveIdleSeconds, 10, 600, VOICE_DEFAULTS.liveIdleSeconds),
     liveDailyCapMinutes: clampNumber(source.liveDailyCapMinutes, 0, 24 * 60, VOICE_DEFAULTS.liveDailyCapMinutes),
     liveUsage: { day: typeof usage.day === 'string' ? usage.day : '', seconds: clampNumber(usage.seconds, 0, Number.MAX_SAFE_INTEGER, 0) },
-    inputDevice: normalizeDevicePref(source.inputDevice),
-    outputDevice: normalizeDevicePref(source.outputDevice),
-    outputVolume: Math.round(clampNumber(source.outputVolume, 0, 100, VOICE_DEFAULTS.outputVolume))
+    inputDevice: normalizeDevicePref(source.inputDevice)
   }
 }
 

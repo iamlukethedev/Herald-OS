@@ -968,19 +968,18 @@ Alternatives considered:
 translating it needs Herald's own application menu. The items macOS adds to menus, and Chromium's own
 text, follow the system's language rather than Herald's.
 
-## ADR-024: The voice's audio devices are Herald's own choice where Herald is one app among others
+## ADR-024: The voice's microphone is Herald's own choice where Herald is one app among others
 
-Herald OS opened the system default microphone and played through the system default output, and
-neither could be chosen. A device that went away while the microphone was open left the graph silent
+Herald OS opened the system default microphone, and no other could be chosen. A device that went away while the microphone was open left the graph silent
 (no `ended` handling, no `devicechange` handling), and the Sound panel on macOS showed one
 placeholder output and no inputs at all.
 
 - **Per app off Linux, per session on Linux.** On Herald OS Linux the shell *is* the session, so the
-  Sound panel keeps setting the machine's PipeWire default (`pactl`) and that is the microphone and
-  speaker the voice uses. Everywhere else Herald OS is one app among others: the choice is its own
-  (`voice.inputDevice`, `voice.outputDevice` in `prefs.json`) and the machine's default is left to
-  the system, as the Bluetooth panel already leaves pairing to Control Center.
-- **Automatic follows the system.** Both choices default to `null`, meaning "the system default".
+  Sound panel keeps setting the machine's PipeWire default (`pactl`) and that is the microphone the
+  voice uses. Everywhere else Herald OS is one app among others: the choice is its own
+  (`voice.inputDevice` in `prefs.json`) and the machine's default is left to the system, as the
+  Bluetooth panel already leaves pairing to Control Center.
+- **Automatic follows the system.** The choice defaults to `null`, meaning "the system default".
   Wearing a headset and letting the system pick it up therefore still works, and a person who never
   opens the picker sees no change.
 - **A choice outlives its device.** A chosen device that is not connected falls back to the system
@@ -1012,5 +1011,5 @@ placeholder output and no inputs at all.
 - **Rejected: priority lists and transport classification.** "Chosen, then system" covers the case;
   Chromium's label already marks `(Bluetooth)`, `(Built-in)` and `(Virtual)`, and Herald OS uses it
   only to order the list, never to decide.
-- **Carried forward, not yet done:** a Herald-only output volume, the speaker picker itself, and a
-  "no sound from this device" warning after a warm-up window.
+- **Carried forward, not yet done:** the speaker picker (and `voice.outputDevice` with it), a
+  Herald-only output volume, and a "no sound from this device" warning after a warm-up window.

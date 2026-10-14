@@ -2,7 +2,7 @@ import type { ControlAction, StatusPanelId, StatusPanelState } from '../../share
 import { findAudioDevice, isAutomaticDeviceName } from '../lib/audio-devices.ts'
 import { ownsSystemAudio } from '../lib/platform-labels.ts'
 import { $inputDevices } from '../lib/voice/audio-capture.ts'
-import { chooseInputDevice, deviceSummary, refreshAudioDevices } from '../store/audio-devices.ts'
+import { chooseInputDevice, microphoneSummary, refreshAudioDevices } from '../store/audio-devices.ts'
 import { fail, ok, type OsCommand } from '../store/os-commands.ts'
 import { openStatusPanel, PANEL_TITLES } from '../store/status-panel.ts'
 
@@ -227,7 +227,7 @@ export const controlCommands: readonly OsCommand[] = [
       if (isAutomaticDeviceName(name)) {
         await chooseInputDevice(null)
 
-        return ok(`The microphone follows the system: ${deviceSummary('input')}`)
+        return ok(`The microphone follows the system: ${microphoneSummary()}`)
       }
 
       const match = findAudioDevice($inputDevices.get(), name)
@@ -258,7 +258,7 @@ export const controlCommands: readonly OsCommand[] = [
 
       await refreshAudioDevices()
 
-      return ok(deviceSummary('input'), { data: { devices: $inputDevices.get().devices } })
+      return ok(microphoneSummary(), { data: { devices: $inputDevices.get().devices } })
     }
   },
   {

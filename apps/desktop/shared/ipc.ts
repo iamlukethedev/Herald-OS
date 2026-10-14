@@ -496,10 +496,6 @@ export interface VoicePrefs {
   liveUsage: { day: string; seconds: number }
   /** Microphone the voice uses; `null` follows the system default. Only when Herald owns the audio path (see docs/VOICE.md). */
   inputDevice: AudioDevicePref | null
-  /** Speaker the voice plays through; `null` follows the system default. */
-  outputDevice: AudioDevicePref | null
-  /** Volume of Herald's voice, 0 to 100. Never touches the system volume. */
-  outputVolume: number
 }
 
 export type MicPermission = 'granted' | 'denied' | 'not-determined' | 'restricted' | 'unknown'
