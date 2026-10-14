@@ -20,10 +20,14 @@ refs can reach them. Create it before adding any secret:
 4. Add the five secrets under Environment secrets (the steps below show how).
 
 If the workflow references `macos-release` before you create it, GitHub creates it with no rules, so
-any branch could use it. Create it with the rules first. With the rules in place, a manual run from
-any other branch stops at the macOS job with "not allowed to deploy to macos-release". That is
-GitHub enforcing the rule, not a missing secret. Do not keep copies of these secrets as repository
-secrets: the job would read those too, and they are not limited to `main` and `v*`.
+any branch could use it. Create it with the rules first. Do not keep copies of these secrets as
+repository secrets: the job would read those too, and they are not limited to `main` and `v*`.
+
+Only `main` and `v*` tags may deploy to the environment. A manual Release run from a feature branch
+therefore fails: the macOS job stops at the `macos-release` gate with "not allowed to deploy to
+macos-release" before any step runs, signed or unsigned. That is GitHub enforcing the rule, not a
+missing secret. To try workflow changes, merge them to `main` first or push a `v*` release-candidate
+tag.
 
 ## The secrets
 
@@ -49,6 +53,17 @@ Dependencies are installed with `npm ci --ignore-scripts`, then only node-pty's 
 scripts run (`npm rebuild node-pty esbuild`). None of these steps can see a secret. The job's
 `GITHUB_TOKEN` can only read the repository, and checkouts don't keep it (`persist-credentials:
 false`). Only the separate release job, which holds no Apple secrets, can write to releases.
+
+The DMG notarization step passes the app-specific password to `xcrun notarytool` on its command
+line (`--password`), as `@electron/notarize` does for the app. Other processes on the same machine
+could read it from the process list while notarytool runs. That is acceptable on GitHub-hosted
+runners: each job gets a fresh, single-use VM that is destroyed afterwards, and GitHub masks the
+value in logs. To keep the password off argv entirely, use an App Store Connect API key instead of
+an Apple ID: a `.p8` private key, its key ID, and the issuer ID, created under App Store Connect >
+Users and Access > Integrations. notarytool reads the key from a file (`--key`, `--key-id`,
+`--issuer`), and electron-builder uses it through `APPLE_API_KEY`, `APPLE_API_KEY_ID` and
+`APPLE_API_ISSUER`. The workflow doesn't support the API key yet: switching would replace the two
+Apple ID secrets and change the five-secret check.
 
 ## Setting them up
 
