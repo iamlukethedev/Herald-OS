@@ -123,9 +123,16 @@ function savedNotifyKeys(): Set<string> {
 }
 
 /** Switches a window kept in localStorage: each one is saved only when prefs.json has no value for it yet. */
-export function adoptLegacyNotify(flags: Partial<NotifyPrefs>): HeraldOSPrefs {
+export function adoptLegacyNotify(flags: unknown): HeraldOSPrefs {
+  // Comes over IPC: anything but a plain object of known switches is ignored.
+  if (!flags || typeof flags !== 'object' || Array.isArray(flags)) {
+    return readPrefs()
+  }
+
   const saved = savedNotifyKeys()
-  const missing = Object.fromEntries(Object.entries(flags).filter(([key, value]) => key in NOTIFY_DEFAULTS && typeof value === 'boolean' && !saved.has(key)))
+  const missing: Partial<NotifyPrefs> = Object.fromEntries(
+    Object.entries(flags).filter(([key, value]) => Object.hasOwn(NOTIFY_DEFAULTS, key) && typeof value === 'boolean' && !saved.has(key))
+  )
 
   return Object.keys(missing).length ? writePrefs({ notify: missing }) : readPrefs()
 }

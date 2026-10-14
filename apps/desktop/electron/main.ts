@@ -1,7 +1,7 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
 import os from 'node:os'
 import path from 'node:path'
-import { type EnvInfo, type HeraldOSPrefs, IPC, type NotifyPrefs, type PrefsPatch, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
+import { type EnvInfo, type HeraldOSPrefs, IPC, type PrefsPatch, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
 import { BackendManager } from './backend/manager.ts'
 import { forgetInheritedSession } from './backend/session-env.ts'
 import { CrashWatcher } from './crash/watch.ts'
@@ -275,7 +275,7 @@ function registerCoreIpc(): void {
 
     return next
   })
-  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (_event, flags: Partial<NotifyPrefs>) => {
+  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (_event, flags: unknown) => {
     const next = adoptLegacyNotify(flags)
 
     for (const win of BrowserWindow.getAllWindows()) {

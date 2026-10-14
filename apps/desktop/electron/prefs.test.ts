@@ -173,7 +173,28 @@ describe('adopting Alerts switches from localStorage', () => {
     store({ notify: { approvals: true } })
     const before = fs.readFileSync(file(), 'utf8')
 
-    expect(adoptLegacyNotify({ approvals: false, sound: false } as never).notify).toEqual(NOTIFY_DEFAULTS)
+    expect(adoptLegacyNotify({ approvals: false, sound: false }).notify).toEqual(NOTIFY_DEFAULTS)
     expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+  })
+
+  it('ignores flags that are null, not an object, or an array, and writes nothing', () => {
+    store({ notify: { approvals: false } })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    for (const flags of [null, undefined, 'approvals', 42, true, [false, false]]) {
+      expect(adoptLegacyNotify(flags).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false })
+    }
+
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+  })
+
+  it('takes only keys that are switches of its own, not ones inherited from Object', () => {
+    store({ notify: { approvals: true } })
+    const before = fs.readFileSync(file(), 'utf8')
+
+    expect(adoptLegacyNotify({ toString: false, constructor: false, hasOwnProperty: false }).notify).toEqual(NOTIFY_DEFAULTS)
+    expect(fs.readFileSync(file(), 'utf8')).toBe(before)
+
+    expect(adoptLegacyNotify(JSON.parse('{"__proto__": {"approvals": false}, "taskUpdates": false}')).notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false })
   })
 })
