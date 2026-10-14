@@ -258,9 +258,10 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
   in it, or else the only internal disk) and writes `ignoredisk --only-use` and
   `clearpart --drives` for it, so other disks are left alone. `DISK=` must be one name (no spaces,
   commas or options), resolve (`readlink -f`) to a writable `lsblk` `TYPE` `disk`, and not be a
-  disk under the installer's mounts, which `lsblk -s` traces through partitions, LVM and RAID. The
-  automatic choice also skips multipath and BIOS (or md) RAID members. `/dev/mapper/` multipath
-  targets are not supported as `DISK=` (their `TYPE` is `mpath`, so they are refused). With
+  disk under the installer's mounts, which `lsblk -s` traces through partitions, LVM and RAID, nor
+  a multipath path or a BIOS (or md) RAID member, which the automatic choice skips too.
+  `/dev/mapper/` multipath targets are not supported as `DISK=` (their `TYPE` is `mpath`, so they
+  are refused). With
   several internal disks and no `DISK=`, or a `DISK=` that fails those checks, it stops before
   erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
   `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.

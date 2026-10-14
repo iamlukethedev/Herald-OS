@@ -14,9 +14,11 @@ wipe a disk without asking.
   (`nvme0n1`, not the partition `nvme0n1p1`) that can be written to, and not the USB stick or the
   disk holding the installer, even when the ISO file sits on an LVM volume or RAID set. `DISK=`
   takes one name and nothing else: spaces, commas and options such as `--foo` are refused.
-  Multipath storage is not supported: a `/dev/mapper/` multipath device (`/dev/mapper/mpatha`,
-  or its `/dev/disk/by-id/dm-uuid-mpath-` link) is refused as `DISK=` because it is not a whole
-  disk, so install to such storage by hand.
+  Multipath storage and RAID sets are not supported: a `/dev/mapper/` multipath device
+  (`/dev/mapper/mpatha`, or its `/dev/disk/by-id/dm-uuid-mpath-` link) is refused as `DISK=`
+  because it is not a whole disk, and so is one disk of a set, such as `sda` when it is a path to
+  `mpatha`, or a disk that is a member of a BIOS or md RAID set, because erasing it would break
+  the set. Install to such storage by hand.
   With `DISK=` left empty, it uses the PC's internal disk if there is exactly one, not counting
   USB and removable disks, disks that belong to a multipath device or a BIOS or md RAID set, or
   the one the installer started from. If `DISK=` is not usable, or it finds no internal disk or
