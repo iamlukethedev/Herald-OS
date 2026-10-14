@@ -103,6 +103,10 @@ if [[ "$MODE" == "--image" ]]; then
   install -Dm0644 "$LINUX/image/kargs.toml" /usr/lib/bootc/kargs.d/10-herald-os.toml
   # Updates are signed with the project's cosign key (not keyless: that would write to a public
   # log); with its public half in the repo, the image only accepts signed updates of itself.
+  # Without linux/image/cosign.pub this whole block is skipped and no signature policy is installed:
+  # until the maintainer generates the key and CI signs with it, enforcing a policy would make the
+  # image reject every update (unsigned images fail it). The image workflow and CI's signing check
+  # refuse a committed cosign.pub without the signing key, so the two never ship out of step (#18).
   if [[ -f "$LINUX/image/cosign.pub" ]]; then
     install -Dm0644 "$LINUX/image/cosign.pub" /etc/pki/containers/herald-os.pub
     install -d /etc/containers/registries.d
