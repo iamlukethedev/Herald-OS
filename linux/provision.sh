@@ -1,14 +1,49 @@
 #!/usr/bin/env bash
 # Turn a stock Fedora Cloud install into the Herald OS Linux development VM. Runs as root, idempotent.
-# Invoked by cloud-init on first boot (see linux/vm/make-seed.sh); safe to re-run by hand:
+# Invoked by cloud-init on first boot (see linux/vm/make-seed.sh); safe to re-run by hand inside
+# the development VM:
 #
 #   sudo bash /usr/local/share/herald-os-linux/provision.sh
+#
+# It refuses to run anywhere else: it carries on only in a virtual machine with the cloud-init seed
+# attached (the disc labelled cidata), or when given --dev-vm (cloud-init's runcmd passes it).
 #
 # The same two halves build the bootc image (linux/image/Containerfile):
 #   1. image/packages.sh --dev   packages, the session and CLIs, the boot splash, services
 #   2. image/firstboot.sh        the session user's home folder, Hermes Agent, the omakase apps
 # and then, for development only: the helper scripts and building the shell from the repo.
 set -euo pipefail
+
+DEV_VM=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev-vm) DEV_VM=1 ;;
+    *) echo "provision.sh: unknown argument '$arg' (the only one is --dev-vm)" >&2; exit 2 ;;
+  esac
+done
+
+# Everything below changes the whole system and is meant for a throwaway VM, so this check comes
+# before anything is written, the log included.
+if [[ $DEV_VM -eq 0 ]] && ! { systemd-detect-virt --quiet --vm && blkid -L cidata; } >/dev/null 2>&1; then
+  cat >&2 <<EOF
+provision.sh turns a fresh Fedora Cloud VM into the Herald OS development VM, and this machine
+does not look like one: it is not a virtual machine with the cloud-init seed (the disc labelled
+cidata) attached. On this machine it would:
+
+  - set SELinux to permissive, now and after every reboot
+  - install greetd and log ${HERMES_USER:-hermes} in automatically on VT 1, with no password prompt
+  - make Herald's firewall zone the default (SSH allowed) and restart firewalld
+  - enable sshd and seatd, and make graphical.target the default
+  - rebuild every initramfs and change the kernel arguments of every installed kernel
+  - install development packages, Flathub and the default apps, and set up Hermes Agent in the
+    session user's home
+
+Nothing has been changed. If this is the development VM, run it again with --dev-vm:
+
+  sudo bash ${BASH_SOURCE[0]} --dev-vm
+EOF
+  exit 1
+fi
 
 PAYLOAD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export HERMES_USER="${HERMES_USER:-hermes}"
