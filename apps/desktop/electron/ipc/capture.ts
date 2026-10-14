@@ -12,22 +12,34 @@ import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { copyConcealedMac, pickColourMac, readImageMac } from '../platform/mac-tools.ts'
 
+export const QR_NOT_COPIED = 'The code was not copied: it looks secret, and the clipboard could not mark it as concealed, so clipboard managers would keep it.'
+
 /**
  * One QR code goes on the clipboard, marked as concealed so clipboard managers skip it (QR codes
  * often carry secrets, such as a 2FA setup code). Several are refused rather than run together.
- * The renderer only gets a description, so the contents never leave main.
+ * If the concealed copy fails, only ordinary links and text are copied plainly; a secret is not
+ * copied at all. The renderer only gets a description, so the contents never leave main.
  */
 async function copyQrCode(codes: string[]): Promise<CaptureToolResult> {
   if (codes.length !== 1) {
     return { codes: codes.length }
   }
 
-  await copyConcealedMac(codes[0]).catch(error => {
-    log('capture', `concealed copy: ${error instanceof Error ? error.message : String(error)}`)
-    clipboard.writeText(codes[0])
-  })
+  const reading = describeQr(codes[0])
 
-  return { codes: 1, qr: describeQr(codes[0]) }
+  try {
+    await copyConcealedMac(codes[0])
+  } catch (error) {
+    log('capture', `concealed copy (${reading.kind}): ${error instanceof Error ? error.message : String(error)}`)
+
+    if (reading.text === undefined) {
+      throw new Error(QR_NOT_COPIED)
+    }
+
+    clipboard.writeText(codes[0])
+  }
+
+  return { codes: 1, qr: reading }
 }
 
 /** Screen grabs handed to Hermes; they only need to outlive the question about them. */

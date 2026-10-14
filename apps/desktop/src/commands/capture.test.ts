@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CaptureToolResult, HeraldOsResult } from '../../shared/ipc.ts'
 import { describeQr } from '../../shared/qr.ts'
 import { $env } from '../store/backend.ts'
-import type { CommandContext } from '../store/os-commands.ts'
+import { type CommandContext, defineCommands, resetCommands, runCommand } from '../store/os-commands.ts'
 import { captureCommands } from './capture.ts'
 
 const bridge = vi.hoisted(() => ({
@@ -56,6 +56,14 @@ describe('capture.qr on a Mac', () => {
     bridge.tool.mockResolvedValue(scanned('Table 4'))
 
     expect(await readQr()).toMatchObject({ ok: true, summary: 'QR code copied', data: { kind: 'text', text: 'Table 4' } })
+  })
+
+  it('passes on main\'s refusal to copy a secret it could not conceal', async () => {
+    resetCommands()
+    defineCommands(captureCommands)
+    bridge.tool.mockRejectedValueOnce(new Error("Error invoking remote method 'herald-os:capture:tool': Error: The code was not copied: it looks secret."))
+
+    expect(await runCommand('capture.qr', {}, AGENT)).toMatchObject({ ok: false, error: 'The code was not copied: it looks secret.' })
   })
 
   it('refuses a selection with several codes', async () => {

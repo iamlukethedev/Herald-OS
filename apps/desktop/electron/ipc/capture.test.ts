@@ -38,7 +38,7 @@ vi.mock('../attachments.ts', () => ({ allowAttachments: vi.fn() }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 
 const { IPC } = await import('../../shared/ipc.ts')
-const { captureRegion, captureScreenshot, capturesDir, registerCaptureIpc, resetScreenRecordingCheck } = await import('./capture.ts')
+const { captureRegion, captureScreenshot, capturesDir, QR_NOT_COPIED, registerCaptureIpc, resetScreenRecordingCheck } = await import('./capture.ts')
 
 const platform = process.platform
 const blocked = /^Herald OS needs Screen Recording permission\. Turn on Herald OS in System Settings > Privacy & Security > Screen & System Audio Recording/
@@ -245,12 +245,26 @@ describe('the QR and text readers on macOS', () => {
     expect(copyConcealedMac).not.toHaveBeenCalled()
   })
 
-  it('still copies it plainly when the concealed copy fails, so pasting works', async () => {
-    readImageMac.mockResolvedValueOnce([OTP])
+  it.each([OTP, 'WIFI:S:Home;T:WPA;P:hunter22;;', 'https://example.com/reset?token=0000aaaa1111bbbb', 'ab12cd34ef56'])('refuses a secret it cannot copy concealed, rather than copy it plainly: %s', async code => {
+    readImageMac.mockResolvedValueOnce([code])
     copyConcealedMac.mockRejectedValueOnce(new Error('osascript failed'))
 
-    await electron.handlers.get(IPC.captureTool)!({}, 'qr')
-    expect(writeText).toHaveBeenCalledWith(OTP)
+    const error = await Promise.resolve(electron.handlers.get(IPC.captureTool)!({}, 'qr')).then(
+      () => null,
+      (failure: Error) => failure
+    )
+
+    expect(error?.message).toBe(QR_NOT_COPIED)
+    expect(error?.message).not.toContain(code)
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it.each(['https://example.com/menu', 'Table 4'])('still copies a link or text plainly when the concealed copy fails, so pasting works: %s', async code => {
+    readImageMac.mockResolvedValueOnce([code])
+    copyConcealedMac.mockRejectedValueOnce(new Error('osascript failed'))
+
+    expect(await electron.handlers.get(IPC.captureTool)!({}, 'qr')).toMatchObject({ codes: 1, qr: { text: code } })
+    expect(writeText).toHaveBeenCalledWith(code)
   })
 
   it('copies text read off the screen as before', async () => {
