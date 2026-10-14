@@ -64,14 +64,17 @@ function run(argv) {
 
 // The text arrives on stdin, so it is never in a process list. org.nspasteboard.ConcealedType is
 // the nspasteboard.org marker clipboard managers read as "a password: do not keep or show this".
-const CONCEALED = `ObjC.import('AppKit')
+// Both types are declared, and the marker written, before the text, so no clipboard manager ever
+// sees the text without the marker.
+export const CONCEALED_COPY_SCRIPT = `ObjC.import('AppKit')
 function run() {
   const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile
   const text = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)
   const board = $.NSPasteboard.generalPasteboard
-  board.clearContents
+  const concealed = 'org.nspasteboard.ConcealedType'
+  board.declareTypesOwner($([concealed, $.NSPasteboardTypeString]), null)
+  if (!board.setDataForType($.NSData.data, concealed)) throw new Error('The clipboard did not take the concealed marker')
   if (!board.setStringForType(text, $.NSPasteboardTypeString)) throw new Error('The clipboard did not take the text')
-  board.setDataForType($.NSData.data, 'org.nspasteboard.ConcealedType')
   return ''
 }
 `
@@ -114,7 +117,7 @@ export async function readImageMac(image: string, mode: 'text' | 'codes'): Promi
 
 /** Text on the clipboard marked as concealed, so clipboard managers skip it; pasting works as usual. */
 export async function copyConcealedMac(text: string): Promise<void> {
-  const result = await run('osascript', ['-l', 'JavaScript', scriptFile('concealed-copy', CONCEALED)], 10_000, text)
+  const result = await run('osascript', ['-l', 'JavaScript', scriptFile('concealed-copy', CONCEALED_COPY_SCRIPT)], 10_000, text)
 
   if (result.code !== 0) {
     throw new Error(result.stderr.trim() || 'The clipboard did not take the text')
