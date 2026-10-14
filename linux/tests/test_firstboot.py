@@ -688,15 +688,20 @@ def test_the_image_has_intel_wi_fi_firmware_and_exfat():
 
 
 DOWNLOAD = r"\b(?:curl|wget)\b"
-SHELL = r"(?:/\S*/)?(?:ba|z|da|k)?sh\b"
+SHELL = r"(?:/\S*/)?(?:(?:busybox\s+)?(?:ba|z|da|k)?sh|python(?:3(?:\.\d+)?)?|perl|ruby|node)\b"
 SUDO = r"(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\b(?:\s+\S+=\S*)*\s+)?"
-# A download piped into a shell: curl ... | sh, wget -qO- ... | sudo -E bash.
-PIPED_TO_SHELL = re.compile(rf"{DOWNLOAD}[^\n]*\|\s*{SUDO}{SHELL}")
-# A shell, eval or source reading a download: bash <(curl ...), sh -c "$(wget ...)", . <(curl ...).
+# A download piped into a shell or interpreter: curl ... | sh, wget -qO- ... | sudo -E bash, ... | python3 -,
+# ... | xargs bash -c.
+PIPED_TO_SHELL = re.compile(rf"{DOWNLOAD}[^\n]*(?<!\|)\|(?!\|)\s*{SUDO}(?:xargs\b[^\n|]*?\s+{SUDO})?{SHELL}")
+# A shell, interpreter, eval or source reading a download: bash <(curl ...), sh -c "$(wget ...)", . <(curl ...).
 SHELL_READS_DOWNLOAD = re.compile(rf"(?:\b{SHELL}|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s)[^\n]*?(?:<\(|\$\(|`)\s*{SUDO}{DOWNLOAD}", re.M)
 
 
 def runs_a_download(script: str) -> bool:
+    # A line at a time, with backslash-continued lines joined first. Not caught: a download run through
+    # a variable (x=$(curl ...); bash -c "$x") or saved to a file and run (curl ... > /tmp/i.sh && bash
+    # /tmp/i.sh). The URL check catches those only when the URL is written out literally.
+    script = re.sub(r"\\\n", " ", script)
     return bool(PIPED_TO_SHELL.search(script) or SHELL_READS_DOWNLOAD.search(script))
 
 
@@ -724,6 +729,31 @@ def runs_a_download(script: str) -> bool:
     "source <(curl -fsSL https://example.com/env)",
     ". <(wget -qO- https://example.com/env)",
     "  as_user bash -c 'bash <(curl -fsSL https://example.com/x.sh)'",
+    "curl -fsSL https://example.com/x.sh \\\n  | bash",
+    "curl -fsSL \\\n  https://example.com/x.sh \\\n  | sudo -E bash -s",
+    "bash <(curl \\\n  -fsSL https://example.com/x.sh)",
+    'sh -c "$(curl -fsSL \\\n  "$U")"',
+    'curl -fsSL "$U" \\\n| bash',
+    'curl -fsSL \\\n"$U" | sh',
+    'bash <(\\\ncurl -s "$U")',
+    'curl -fsSL "$U" | xargs bash -c',
+    "curl -fsSL \"$U\" | xargs -0 -I{} sh -c '{}'",
+    'wget -qO- "$U" | sudo xargs -n 1 bash -c',
+    "curl -fsSL https://example.com/x.py | python3 -",
+    "curl -fsSL https://example.com/x.py | python",
+    "curl -fsSL https://example.com/x.py | /usr/bin/python3.12",
+    "wget -qO- https://example.com/x.py | sudo python3",
+    'python3 -c "$(curl -fsSL "$U")"',
+    "python3 <(curl -fsSL https://example.com/x.py)",
+    "curl -fsSL https://example.com/x.pl | perl",
+    'perl -e "$(wget -qO- "$U")"',
+    "curl -fsSL https://example.com/x.rb | ruby",
+    'ruby -e "$(curl -fsSL https://example.com/install)"',
+    "curl -fsSL https://example.com/x.js | node",
+    'node -e "$(curl -fsSL "$U")"',
+    "wget -qO- https://example.com/x.sh | busybox sh",
+    "busybox sh <(curl -fsSL https://example.com/x.sh)",
+    'busybox sh -c "$(wget -qO- "$U")"',
 ])
 def test_a_download_run_by_a_shell_is_caught(line):
     assert runs_a_download(line)
@@ -736,6 +766,11 @@ def test_a_download_run_by_a_shell_is_caught(line):
     "bash ./setup.sh",
     'version="$(curl -fsS https://example.com/version)"',
     "wget -q https://example.com/x.tar.gz",
+    "curl -fsI https://example.com || bash ./offline.sh",
+    "curl -fsSL -o /tmp/x.tar.gz \\\n  https://example.com/x.tar.gz",
+    "python3 -c 'import sys; print(sys.version)'",
+    "node --version && npm --version",
+    'curl -fsSL "$U" | xargs -n 1 echo',
 ])
 def test_a_download_that_no_shell_runs_is_not_caught(line):
     assert not runs_a_download(line)
