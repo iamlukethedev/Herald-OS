@@ -2538,6 +2538,62 @@
     "full": true
   },
   {
+    "note": "the caption cut does not split a ZWJ sequence: on the joiner",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut does not split a ZWJ sequence: after the joiner",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut keeps a skin tone with its emoji",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👍🏽xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut keeps a combining accent with its letter",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxéxxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut keeps a variation selector with its emoji",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx❤️xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut does not split a flag",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🇬🇧xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "the caption cut may fall between two flags",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🇬🇧🇫🇷xxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx🇬🇧…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
     "note": "a secret word after a digit is part of a name",
     "text": "Get 1Password",
     "kind": "text",

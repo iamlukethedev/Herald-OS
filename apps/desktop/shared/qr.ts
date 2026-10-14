@@ -101,6 +101,29 @@ const CARD_LEAD = /^[2-6]/
  * a host this long or longer is not treated as one.
  */
 export const SHOWN_LINK_MAX = 100
+/**
+ * Code points that belong with the one before: combining marks, joiners, variation selectors, skin
+ * tones and tags. Listed by hand, as Python's re has no \p{…}, so both cut links alike.
+ */
+const EXTEND = /^[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u200c\u200d\u20d0-\u20ff\ufe00-\ufe0f\ufe20-\ufe2f\u{1f3fb}-\u{1f3ff}\u{e0020}-\u{e007f}]$/u
+const regional = (char: string) => /^[\u{1f1e6}-\u{1f1ff}]$/u.test(char)
+
+/** `cut` (in code points), moved back so it doesn't split a combining mark, ZWJ sequence, skin tone, tag or flag. */
+export function graphemeCut(chars: string[], cut: number): number {
+  let at = cut
+
+  while (at > 0 && (EXTEND.test(chars[at]) || chars[at - 1] === '\u200d')) {
+    at--
+  }
+
+  let flags = 0
+
+  while (flags < at && regional(chars[at - 1 - flags])) {
+    flags++
+  }
+
+  return flags % 2 === 1 && regional(chars[at]) ? at - 1 : at
+}
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -612,7 +635,7 @@ export function shownLink(link: string, host: string): string {
     return `${host}…`
   }
 
-  return `${chars.slice(0, SHOWN_LINK_MAX - 1).join('')}…`
+  return `${chars.slice(0, graphemeCut(chars, SHOWN_LINK_MAX - 1)).join('')}…`
 }
 
 /**

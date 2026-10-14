@@ -830,6 +830,7 @@ QR_KEY_GROUP_MIN = 3
 QR_CAMEL_WORD = re.compile(r"[A-Z][a-z]{2,}")
 QR_RECOVERY_WORDS = (11, 24)
 QR_SHOWN_LINK_MAX = 100
+QR_EXTEND = re.compile("[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u200c\u200d\u20d0-\u20ff\ufe00-\ufe0f\ufe20-\ufe2f\U0001F3FB-\U0001F3FF\U000E0020-\U000E007F]")
 
 
 def qr_label(value: str) -> str:
@@ -1155,7 +1156,21 @@ def qr_shown_link(link: str, host: str) -> str:
     authority = re.match(r"[^:]*://[^/?#]*", link)
     if authority and len(authority.group(0)) >= QR_SHOWN_LINK_MAX:
         return f"{host}…"
-    return f"{link[:QR_SHOWN_LINK_MAX - 1]}…"
+    return f"{link[:qr_grapheme_cut(link, QR_SHOWN_LINK_MAX - 1)]}…"
+
+
+def qr_regional(char: str) -> bool:
+    return "\U0001F1E6" <= char <= "\U0001F1FF"
+
+
+def qr_grapheme_cut(text: str, cut: int) -> int:
+    """cut, moved back so it doesn't split a combining mark, ZWJ sequence, skin tone, tag or flag (see QR_EXTEND)."""
+    while cut > 0 and (QR_EXTEND.match(text[cut]) or text[cut - 1] == "\u200d"):
+        cut -= 1
+    flags = 0
+    while flags < cut and qr_regional(text[cut - 1 - flags]):
+        flags += 1
+    return cut - 1 if flags % 2 == 1 and qr_regional(text[cut]) else cut
 
 
 def qr_link(text: str) -> dict | None:
