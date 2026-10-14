@@ -364,7 +364,7 @@ function ThreadCard({ thread, active, editor, now, list }: { thread: ThreadView;
       </div>
       {thread.replies.map((reply) => (
         <div key={reply.id} className="border-t border-line pt-2.5">
-          <Entry comment={reply} small now={now} editing={editing === reply.id} onSave={save(reply.id)} onStopEditing={() => setEditing(null)} actions={<div className="reveal focus-within:opacity-100">{more(reply.id, 'More for this reply')}</div>} />
+          <Entry comment={reply} small now={now} editing={editing === reply.id} onSave={save(reply.id)} onStopEditing={() => setEditing(null)} actions={<div className="reveal">{more(reply.id, 'More for this reply')}</div>} />
         </div>
       ))}
       {active && !thread.resolved && <Composer placeholder="Reply" action="Reply" signs onPost={(text, author) => applyLive(view, replyToComment(thread.id, text, author))} />}
