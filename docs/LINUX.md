@@ -23,7 +23,8 @@ kernel + systemd  ->  greetd (autologin/login*)   ->  niri  ->  Herald OS shell 
 
 \* greetd signs `hermes` in by itself on an image install and in the development VM. On a system
 switched from another bootc system it shows a login screen (agreety) instead, and the session starts
-for whoever signs in ([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
+for whoever signs in, unless no account there can sign in, when `hermes` signs in by itself without
+a password, outside `wheel` ([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
 ## Quick start (QEMU, all from the terminal)
 
