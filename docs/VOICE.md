@@ -197,10 +197,13 @@ belongs to Herald OS alone: `voice.inputDevice` in `prefs.json`, applied with Ch
   the system pick it up is enough.
 - A **chosen device wins while it is connected**, even when another device is plugged in later.
   That is what makes "AirPods for the speakers, a desk microphone for the voice" possible.
-- A chosen device that **goes away**, or is listed but cannot be opened, falls back to the system
-  default and is remembered; when it comes back it is used again. The fallback is quiet: the panel
-  names the device in use and no notice is posted. A notice is posted only when the microphone
-  cannot be reopened at all, or keeps changing device (three reopens in ten seconds).
+- A chosen device that **goes away**, or cannot be opened (away, busy, a device error), falls back
+  to the system default and is remembered; when it comes back it is used again. The fallback is
+  quiet: the panel names the device in use and no notice is posted. A notice is posted only when
+  not even the system default can be opened (a revoked permission, say), and then a GPT-Live
+  session ends with that reason instead of sending a stopped track; or when the system keeps
+  changing device (three of its reopens in ten seconds). Picks the person makes never count toward
+  that guard, however many in a row.
 - A device that disappears mid-conversation reopens the stream immediately, and so does a new
   choice; a change caused by the system waits for the conversation to end. A GPT-Live session keeps
   running across a reopen (its WebRTC sender swaps in the new track), and a muted conversation stays

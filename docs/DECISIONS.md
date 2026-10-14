@@ -994,9 +994,12 @@ handling), and the Sound panel on macOS showed one placeholder output and no inp
   so a device the system makes default becomes the one in use.
 - **A lost device is reopened, a system change waits.** `track.ended` from an unplugged device
   reopens the stream at once; a change caused by the system is applied when the conversation ends,
-  so it never cuts into a sentence being listened to. Three reopen attempts in ten seconds is the
-  guard; after that Herald OS keeps the current device and says so. A reopen that fails outright
-  posts a notice too: then there is no device in use to name.
+  so it never cuts into a sentence being listened to. Three reopens the system caused (a lost
+  device, a device list change) in ten seconds is the guard; after that Herald OS keeps the current
+  device and says so. A person's picks are not counted: choosing four microphones in a row is not a
+  device flapping, and the last one picked is the one used. A device that fails to open falls back
+  to the system default; when that fails too, a notice is posted and the stream's holders are told
+  (`onFailed`), so Live ends with the reason rather than sending a stopped track.
 - **A reopen is invisible to the consumers.** Frame subscribers keep receiving frames; the WebRTC
   sender holds the stream (`holdMicrophoneStream`) and is handed the new track for `replaceTrack`,
   so a Live session survives a change of device; mute is the graph's state, applied to every
