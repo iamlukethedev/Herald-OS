@@ -99,3 +99,14 @@ def test_policy_file_is_reloaded_when_it_changes(plugin, isolated_home):
     path.write_text("tiers:\n  act: allow\n")
     os.utime(path, (time.time() + 5, time.time() + 5))
     assert perm.load_policy().mode(perm.Tier.ACT) == "allow"
+
+
+def test_a_scope_narrows_a_mutate_rule_key_and_no_scope_keeps_it(plugin, monkeypatch):
+    perm = _perm(plugin)
+    keys = []
+    monkeypatch.setattr(perm, "_confirm", lambda tool, reason, rule_key: keys.append(rule_key) or perm.Decision(True, "approved"))
+    perm.authorize("system_files", perm.Tier.MUTATE, "mkdir", "create folder")
+    perm.authorize("system_os", perm.Tier.MUTATE, "restart", "restart Wi-Fi", scope="wifi")
+    perm.authorize("system_os", perm.Tier.MUTATE, "restart", "restart sound", scope="sound")
+    perm.authorize("system_os", perm.Tier.MUTATE, "restart", "restart Wi-Fi", scope="wifi")
+    assert keys == ["herald_os:system_files:mkdir", "herald_os:system_os:restart:wifi", "herald_os:system_os:restart:sound", "herald_os:system_os:restart:wifi"]

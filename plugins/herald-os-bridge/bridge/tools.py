@@ -90,9 +90,9 @@ class PartialFailure(RuntimeError):
         self.payload = payload
 
 
-def _guarded(tool: str, tier: Tier, action: str, summary: str, args: dict[str, Any], paths: Iterable[Path], execute: Callable[[], dict[str, Any]]) -> str:
-    """Authorize, run, audit. Shared by every act/mutate/destructive handler."""
-    decision = authorize(tool, tier, action, summary, paths=paths)
+def _guarded(tool: str, tier: Tier, action: str, summary: str, args: dict[str, Any], paths: Iterable[Path], execute: Callable[[], dict[str, Any]], *, scope: str | None = None) -> str:
+    """Authorize, run, audit. Shared by every act/mutate/destructive handler; ``scope`` narrows the approval rule."""
+    decision = authorize(tool, tier, action, summary, paths=paths, **({"scope": scope} if scope else {}))
     if not decision.allowed:
         _finish(tool=tool, tier=tier, action=action, args=args, decision=decision.outcome, ok_=False, summary=summary, error=decision.message)
         return fail(decision.message or "not permitted", decision=decision.outcome, summary=summary)
@@ -1294,7 +1294,9 @@ def system_os_handler(args: dict[str, Any], **_: Any) -> str:
             return {"action": action, "catalog": compact_catalog(result.stdout)}
         return {"action": action, "output": truncate(result.stdout.strip(), _OS_OUTPUT_LIMIT)}
 
-    return _guarded("system_os", tier, action, summary, args, (), execute)
+    # "Always allow" for restarting Wi-Fi must not also allow cutting the sound.
+    scope = cli_args[1] if action == "restart" else None
+    return _guarded("system_os", tier, action, summary, args, (), execute, scope=scope)
 
 
 handle_system_os = system_os_handler

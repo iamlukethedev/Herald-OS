@@ -156,7 +156,7 @@ and refuses their calls everywhere, Herald OS sessions included.
 | --- | --- | --- |
 | `read` | Runs immediately, audited | info, processes, disk usage, search |
 | `act` | Runs immediately, audited, surfaced as a notification | open Safari, open a repo in VS Code |
-| `mutate` | Requires confirmation; `session` and `always` are honoured | mkdir, move, rename |
+| `mutate` | Requires confirmation; `session` and `always` are honoured, per action (`system_os` restart: per device, so allowing Wi-Fi does not allow cutting the sound) | mkdir, move, rename, restart Wi-Fi |
 | `destructive` | Always requires confirmation; per-call rule key so `always` cannot persist | kill process, trash files, save over a document |
 
 Confirmation goes through upstream's `tools.approval.request_tool_approval`, which the shell

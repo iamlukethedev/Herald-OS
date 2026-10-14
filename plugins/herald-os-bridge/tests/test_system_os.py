@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 import types
 
 import pytest
@@ -26,15 +27,16 @@ class _Capture:
         self.tier = None
         self.summary = None
         self.action = None
+        self.scope = None
 
     def run(self, argv, *, timeout=15.0, **_):
         self.argv = list(argv)
         self.timeout = timeout
         return self.result
 
-    def authorize(self, tool, tier, action, summary, *, paths=()):
+    def authorize(self, tool, tier, action, summary, *, paths=(), scope=None):
         assert tool == "system_os"
-        self.tier, self.action, self.summary = tier, action, summary
+        self.tier, self.action, self.summary, self.scope = tier, action, summary, scope
         return self.perm.Decision(True, "allowed")
 
 
@@ -184,8 +186,9 @@ def test_a_restart_the_user_turns_down_does_not_run(plugin, linux, monkeypatch, 
     tools = _mod(plugin, "tools")
     asked = []
 
-    def decline(tool, tier, action, summary, *, paths=()):
+    def decline(tool, tier, action, summary, *, paths=(), scope=None):
         asked.append(tier.value)
+        assert scope == device
         return linux.perm.Decision(False, "denied", "no")
 
     monkeypatch.setattr(tools, "authorize", decline)
@@ -285,3 +288,69 @@ def test_denied_action_does_not_run(plugin, linux, monkeypatch):
     result = json.loads(tools.system_os_handler({"action": "suspend"}))
     assert not result["success"] and result["decision"] == "denied"
     assert linux.argv is None
+
+
+class _Approvals:
+    """Hermes's approval channel: asks once per rule key, and remembers an "always" answer for that key."""
+
+    def __init__(self):
+        self.asked: list[str] = []
+        self.always: set[str] = set()
+
+    def request_tool_approval(self, tool, reason, *, rule_key):
+        if rule_key in self.always:
+            return {"approved": True}
+        self.asked.append(rule_key)
+        self.always.add(rule_key)
+        return {"approved": True, "choice": "always"}
+
+
+@pytest.fixture
+def approvals(plugin, monkeypatch):
+    """The real permission engine behind ``system_os``, answering through a fake ``tools.approval``."""
+    tools = _mod(plugin, "tools")
+    util = _mod(plugin, "util")
+    channel = _Approvals()
+    package = types.ModuleType("tools")
+    module = types.ModuleType("tools.approval")
+    module.request_tool_approval = channel.request_tool_approval
+    package.approval = module
+    monkeypatch.setitem(sys.modules, "tools", package)
+    monkeypatch.setitem(sys.modules, "tools.approval", module)
+    monkeypatch.setattr(tools, "host", lambda: types.SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(tools, "run", lambda argv, **_: util.ExecResult(0, "done\n", ""))
+    return channel
+
+
+def test_always_allowing_one_restart_still_asks_for_another_device(plugin, approvals):
+    tools = _mod(plugin, "tools")
+    restart = lambda device: json.loads(tools.system_os_handler({"action": "restart", "device": device}))
+    assert restart("wifi")["success"]
+    assert restart("wifi")["success"]
+    assert approvals.asked == ["herald_os:system_os:restart:wifi"], "always for Wi-Fi is remembered for Wi-Fi"
+    assert restart("sound")["success"]
+    assert approvals.asked == ["herald_os:system_os:restart:wifi", "herald_os:system_os:restart:sound"]
+
+
+def test_each_device_has_its_own_approval_key(plugin, approvals):
+    tools = _mod(plugin, "tools")
+    for device in tools.RESTART_DEVICES:
+        tools.system_os_handler({"action": "restart", "device": device})
+    assert approvals.asked == [f"herald_os:system_os:restart:{device}" for device in tools.RESTART_DEVICES]
+    assert len(set(approvals.asked)) == 4
+
+
+def test_other_actions_keep_their_approval_keys(plugin, approvals):
+    tools = _mod(plugin, "tools")
+    for _ in range(2):
+        assert json.loads(tools.system_os_handler({"action": "install_app", "name": "firefox"}))["success"]
+        assert json.loads(tools.system_os_handler({"action": "install_app", "name": "gimp"}))["success"]
+    assert approvals.asked == ["herald_os:system_os:install_app"], "installs stay keyed by the action alone"
+
+
+def test_only_restart_narrows_the_approval_to_its_target(plugin, linux):
+    tools = _mod(plugin, "tools")
+    tools.system_os_handler({"action": "restart", "device": "Bluetooth"})
+    assert linux.scope == "bluetooth"
+    tools.system_os_handler({"action": "update"})
+    assert linux.scope is None

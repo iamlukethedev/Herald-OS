@@ -182,8 +182,8 @@ def protected_root(path: Path, policy: Policy) -> Path | None:
     return None
 
 
-def _stable_rule_key(tool: str, action: str) -> str:
-    return f"herald_os:{tool}:{action}"
+def _stable_rule_key(tool: str, action: str, scope: str | None = None) -> str:
+    return f"herald_os:{tool}:{action}:{scope}" if scope else f"herald_os:{tool}:{action}"
 
 
 def _confirm(tool: str, reason: str, rule_key: str) -> Decision:
@@ -197,8 +197,11 @@ def _confirm(tool: str, reason: str, rule_key: str) -> Decision:
     return Decision(False, "denied", result.get("message") or "The user did not approve this action.")
 
 
-def authorize(tool: str, tier: Tier, action: str, summary: str, *, paths: Iterable[Path] = ()) -> Decision:
-    """Decide whether ``tool``/``action`` may run. Protected paths are refused before anyone is asked."""
+def authorize(tool: str, tier: Tier, action: str, summary: str, *, paths: Iterable[Path] = (), scope: str | None = None) -> Decision:
+    """Decide whether ``tool``/``action`` may run. Protected paths are refused before anyone is asked.
+
+    ``scope`` narrows a mutate action's "always allow" to one target (restart's device), so allowing
+    one does not allow the rest; without it the key is the action's alone, as before."""
     policy = load_policy()
     for path in paths:
         root = protected_root(path, policy)
@@ -213,7 +216,7 @@ def authorize(tool: str, tier: Tier, action: str, summary: str, *, paths: Iterab
         # A fresh key per call: "always allow" can never stick to a destructive action.
         rule_key = f"herald_os:{tool}:{action}:{uuid.uuid4().hex[:8]}"
     else:
-        rule_key = _stable_rule_key(tool, action)
+        rule_key = _stable_rule_key(tool, action, scope)
     return _confirm(tool, summary, rule_key)
 
 
