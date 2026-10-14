@@ -2373,5 +2373,184 @@
     "caption": "QR code copied",
     "description": "text",
     "full": true
+  },
+  {
+    "note": "an AWS key in .env form, lower case (QA round 7)",
+    "text": "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key in .env form, upper case (QA round 7)",
+    "text": "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key in .env form, mixed case",
+    "text": "Aws_Secret_Access_Key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key after a colon and a space",
+    "text": "aws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key after a colon",
+    "text": "AWS_SECRET_ACCESS_KEY:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key in a shell export",
+    "text": "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS credentials .env file",
+    "text": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "AKIAIOSFODNN7EXAMPLE"
+    ]
+  },
+  {
+    "note": "a key-shaped value after = counts whatever the name",
+    "text": "creds=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "a key-shaped value after : counts whatever the name",
+    "text": "creds:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS key shape after =, with aws in the name",
+    "text": "AWS_ACCESS=Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghijabcdefghijabcdefghijabcdefghi1"
+    ]
+  },
+  {
+    "note": "an AWS key shape after = without aws nearby",
+    "text": "note=Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a secret word between underscores",
+    "text": "DB_PASSWORD=hunter22",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "hunter22"
+    ]
+  },
+  {
+    "note": "a secret word before a digit",
+    "text": "Password1: hunter",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "hunter"
+    ]
+  },
+  {
+    "note": "a secret word inside a longer word: after it",
+    "text": "Ask the secretary",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a secret word inside a longer word: before it",
+    "text": "Visit the nonsecret garden",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a password word inside a longer word",
+    "text": "Read the passwordless guide",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "ordinary name=value and a time stay text",
+    "text": "Meet at 12:30pm, room=B12",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a secret word after a digit is part of a name",
+    "text": "Get 1Password",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an e-mail address after = is not a token",
+    "text": "contact=x7k2m9p4q8zz@example.com",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
   }
 ]

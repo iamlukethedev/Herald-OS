@@ -29,7 +29,7 @@ export const QR_COPIED = 'QR code copied'
 const SECRET_DESCRIPTION = 'something that looks like a password, key or recovery phrase'
 
 /** Words that mark the text around them as a secret wherever they appear. */
-const SECRET_WORDS = /\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b/i
+const SECRET_WORDS = /(?<![a-z0-9])(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)(?![a-z])/i
 /** Shorter words that only count as a label: "pin: 4821", "key=…". */
 const SECRET_LABELS = /\b(pass|pin|key|seed|code|otp)\b\s*[:=]/i
 /**
@@ -516,14 +516,27 @@ export function looksSecret(text: string): boolean {
     return true
   }
 
-  if (AWS.test(text) && text.split(/\s+/).some(awsKey)) {
+  if (AWS.test(text) && text.split(/\s+/).some(word => [word, ...labelParts(word)].some(awsKey))) {
     return true
   }
 
   return text
     .split(/\s+/)
     .filter(Boolean)
-    .some(word => (SCHEME.test(word) ? uriLooksSecret(word) : !word.includes('@') && looksLikeToken(word, TEXT_TOKEN_MIN)))
+    .some(
+      word =>
+        (SCHEME.test(word) ? uriLooksSecret(word) : !word.includes('@') && looksLikeToken(word, TEXT_TOKEN_MIN)) ||
+        (!word.includes('@') && labelParts(word).some(part => looksLikeToken(part, TEXT_TOKEN_MIN)))
+    )
+}
+
+/** A name=value or name:value word in its parts (AWS_SECRET_ACCESS_KEY=…); none for scheme://… links. */
+export function labelParts(word: string): string[] {
+  if (SCHEME.test(word) && word.replace(SCHEME, '').startsWith('//')) {
+    return []
+  }
+
+  return /[=:]/.test(word) ? word.split(/[=:]/).filter(Boolean) : []
 }
 
 function describeOtp(text: string): QrReading {

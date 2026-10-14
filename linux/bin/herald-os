@@ -798,7 +798,7 @@ def capture_color() -> int:
 # apps/desktop/shared/qr-cases.json. When in doubt it hides.
 QR_COPIED = "QR code copied"
 QR_SECRET_DESCRIPTION = "something that looks like a password, key or recovery phrase"
-QR_SECRET_WORDS = re.compile(r"\b(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)\b", re.I | re.A)
+QR_SECRET_WORDS = re.compile(r"(?<![a-z0-9])(pass(word|wd|code|phrase)s?|pwd|secret|token|api[ _-]?key|private[ _-]?key|recovery phrase|seed phrase|mnemonic)(?![a-z])", re.I | re.A)
 QR_SECRET_LABELS = re.compile(r"\b(pass|pin|key|seed|code|otp)\b\s*[:=]", re.I | re.A)
 QR_SECRET_NAME_WORDS = {"token", "key", "apikey", "secret", "pass", "passcode", "password", "passwd", "pwd", "sig", "signature", "auth", "session", "sessionid", "otp", "code", "credential", "credentials", "jwt", "bearer"}
 QR_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])")
@@ -1097,12 +1097,20 @@ def qr_looks_secret(text: str) -> bool:
     words = [word for word in re.split(r"[\s,]+", text) if word]
     if QR_RECOVERY_WORDS[0] <= len(words) <= QR_RECOVERY_WORDS[1] and all(QR_SEED_WORD.fullmatch(word.lower()) for word in words):
         return True
-    if QR_AWS.search(text) and any(qr_aws_key(word) for word in text.split()):
+    if QR_AWS.search(text) and any(qr_aws_key(part) for word in text.split() for part in [word, *qr_label_parts(word)]):
         return True
     return any(
-        qr_uri_looks_secret(word) if QR_SCHEME.match(word) else "@" not in word and qr_looks_like_token(word, QR_TEXT_TOKEN_MIN)
+        (qr_uri_looks_secret(word) if QR_SCHEME.match(word) else "@" not in word and qr_looks_like_token(word, QR_TEXT_TOKEN_MIN))
+        or ("@" not in word and any(qr_looks_like_token(part, QR_TEXT_TOKEN_MIN) for part in qr_label_parts(word)))
         for word in text.split()
     )
+
+
+def qr_label_parts(word: str) -> list[str]:
+    """A name=value or name:value word in its parts (AWS_SECRET_ACCESS_KEY=…); none for scheme://… links."""
+    if QR_SCHEME.match(word) and QR_SCHEME.sub("", word, count=1).startswith("//"):
+        return []
+    return [part for part in re.split(r"[=:]", word) if part] if re.search(r"[=:]", word) else []
 
 
 def wifi_fields(text: str) -> dict[str, str]:
