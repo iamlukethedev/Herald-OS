@@ -80,6 +80,9 @@ export interface NotifyInput {
   category?: NotifyCategory
 }
 
+/** Categorized alerts raised before the prefs loaded, by notification id. */
+const held = new Map<string, { toast: boolean; native: boolean }>()
+
 export function notify(input: NotifyInput): HermesNotification {
   const existing = input.key ? $notifications.get().find(n => n.key === input.key) : undefined
   const item: HermesNotification = {
@@ -98,21 +101,56 @@ export function notify(input: NotifyInput): HermesNotification {
   }
   const rest = $notifications.get().filter(n => n.id !== item.id)
   $notifications.set([item, ...rest].slice(0, MAX))
-  // Do not disturb, this kind's Alerts switch off, or the switches not known yet: the bell still collects everything, nothing pops up or makes a sound.
-  const prefs = $prefs.get()
-  const quiet = !$prefsLoaded.get() || Boolean(prefs.doNotDisturb) || (input.category !== undefined && !prefs.notify[CATEGORY_SWITCH[input.category]])
+  const how = { toast: input.toast !== false, native: Boolean(input.native) }
 
-  if (input.toast !== false && !quiet) {
-    $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
-    setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
-  }
-
-  if (input.native && !quiet && prefs.notify.nativeWhenUnfocused && !$windowState.get().focused) {
-    void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
+  // A switch may be off, but which ones is not known until the prefs are in: hold the alert until then.
+  if (item.category && !$prefsLoaded.get()) {
+    held.set(item.id, how)
+  } else {
+    held.delete(item.id)
+    raiseAlert(item, how)
   }
 
   return item
 }
+
+/** Toast and native notification for an item already in the bell, as do not disturb and the Alerts switches allow. */
+function raiseAlert(item: HermesNotification, how: { toast: boolean; native: boolean }): void {
+  const prefs = $prefs.get()
+  // Do not disturb, or this kind's Alerts switch off: the bell keeps it, nothing pops up or makes a sound.
+  const quiet = Boolean(prefs.doNotDisturb) || (item.category !== undefined && !prefs.notify[CATEGORY_SWITCH[item.category]])
+
+  if (quiet) {
+    return
+  }
+
+  if (how.toast) {
+    $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
+    setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
+  }
+
+  if (how.native && prefs.notify.nativeWhenUnfocused && !$windowState.get().focused) {
+    void window.heraldOS.notifications.native(item.title, item.body ?? '').catch(logFailure('notifications.native'))
+  }
+}
+
+// Replay what was held once the prefs are in, skipping anything already read or dismissed meanwhile.
+$prefsLoaded.listen(loaded => {
+  if (!loaded) {
+    return
+  }
+
+  const pending = [...held]
+  held.clear()
+
+  for (const [id, how] of pending) {
+    const item = $notifications.get().find(n => n.id === id)
+
+    if (item && !item.read) {
+      raiseAlert(item, how)
+    }
+  }
+})
 
 let historyBound = false
 

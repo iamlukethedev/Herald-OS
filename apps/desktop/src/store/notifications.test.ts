@@ -180,20 +180,71 @@ describe('notify and the Alerts switches', () => {
 })
 
 describe('alerts before the prefs are in', () => {
-  it('keeps everything in the bell, without toasts or native notifications, until the prefs have loaded', () => {
+  it('shows uncategorized alerts, such as a crash or an error, at once', () => {
     $prefsLoaded.set(false)
 
-    notify({ title: 'Early', native: true, category: 'approval' })
-    notify({ title: 'Untagged', native: true })
+    notify({ title: 'Crash', native: true, level: 'warn' })
+    notify({ title: 'Could not save', level: 'error' })
+
+    expect($toasts.get().map(t => t.title)).toEqual(['Could not save', 'Crash'])
+    expect(bridge.native.map(n => n.title)).toEqual(['Crash'])
+  })
+
+  it('holds categorized alerts in the bell, then replays them once the prefs are in', () => {
+    $prefsLoaded.set(false)
+
+    notify({ title: 'Approval needed', native: true, category: 'approval' })
+    notify({ title: 'Finished', category: 'toolCompletion' })
 
     expect($notifications.get()).toHaveLength(2)
     expect($toasts.get()).toEqual([])
     expect(bridge.native).toEqual([])
 
     $prefsLoaded.set(true)
-    notify({ title: 'Later', native: true, category: 'approval' })
-    expect($toasts.get().map(t => t.title)).toEqual(['Later'])
-    expect(bridge.native.map(n => n.title)).toEqual(['Later'])
+    expect($toasts.get().map(t => t.title)).toEqual(['Finished', 'Approval needed'])
+    expect(bridge.native.map(n => n.title)).toEqual(['Approval needed'])
+
+    // Replayed once only.
+    $prefsLoaded.set(false)
+    $prefsLoaded.set(true)
+    expect(bridge.native).toHaveLength(1)
+  })
+
+  it('replays held alerts as the loaded prefs allow', () => {
+    $prefsLoaded.set(false)
+    notify({ title: 'Approval needed', native: true, category: 'approval' })
+    notify({ title: 'Question', native: true, category: 'approval' })
+    notify({ title: 'Finished', category: 'toolCompletion' })
+
+    // The saved prefs arrive with Approvals off and native notifications off.
+    alerts({ approvals: false, nativeWhenUnfocused: false })
+    $prefsLoaded.set(true)
+
+    expect($toasts.get().map(t => t.title)).toEqual(['Finished'])
+    expect(bridge.native).toEqual([])
+  })
+
+  it('replays a held approval as a toast only while the window is focused, and with no native notification under the native switch off', () => {
+    $prefsLoaded.set(false)
+    notify({ title: 'Approval needed', native: true, category: 'approval' })
+    $windowState.set({ fullscreen: false, focused: true })
+    $prefsLoaded.set(true)
+
+    expect($toasts.get().map(t => t.title)).toEqual(['Approval needed'])
+    expect(bridge.native).toEqual([])
+  })
+
+  it('does not replay a held alert that was read or dismissed meanwhile, nor one held back with toast: false', () => {
+    $prefsLoaded.set(false)
+    const read = notify({ title: 'Read', native: true, category: 'approval' })
+    const gone = notify({ title: 'Dismissed', native: true, category: 'approval' })
+    notify({ title: 'Quiet', category: 'taskUpdate', toast: false })
+    $notifications.set($notifications.get().filter(n => n.id !== gone.id).map(n => (n.id === read.id ? { ...n, read: true } : n)))
+
+    $prefsLoaded.set(true)
+
+    expect($toasts.get()).toEqual([])
+    expect(bridge.native).toEqual([])
   })
 })
 
