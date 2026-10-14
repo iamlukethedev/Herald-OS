@@ -63,7 +63,11 @@ class FakeMac:
                 rows = [(pid, *row) for pid, row in self.procs.items()]
                 self.after_listing()
             return self.util.ExecResult(0 if rows else 1, "".join(f"{pid:>6} {uid:>5} {comm}\n" for pid, uid, comm in rows), "")
-        code, stdout, stderr = self.replies.get(argv[0], (0, "", ""))
+        reply = self.replies.get(argv[0], (0, "", ""))
+        # A list answers successive calls in turn, its last entry from then on.
+        if isinstance(reply, list):
+            reply = reply.pop(0) if len(reply) > 1 else reply[0]
+        code, stdout, stderr = reply
         return self.util.ExecResult(code, stdout, stderr)
 
     def kill(self, pid, sig):
@@ -93,6 +97,8 @@ def mac(plugin, monkeypatch):
         AppInfo(name="Visual Studio Code", path=VSCODE, bundle_id="com.microsoft.VSCode"),
         AppInfo(name="Notes", path="/System/Applications/Notes.app", bundle_id="com.apple.Notes"),
         AppInfo(name="Safari", path="/Applications/Safari.app", bundle_id="com.apple.Safari"),
+        AppInfo(name="Docker", path="/Applications/Docker.app", bundle_id="com.docker.docker"),
+        AppInfo(name="Herald OS", path="/Applications/Herald OS.app", bundle_id="dev.iamluke.heraldos"),
     ]
     monkeypatch.setattr(adapter, "installed_apps", lambda: apps)
     clock = [0.0]
@@ -206,13 +212,84 @@ def test_another_users_app_alone_is_not_running_for_us(mac):
     assert not machine.signals and not machine.ran("osascript")
 
 
-def test_session_processes_are_never_quit_by_name(mac):
+SESSION_NAMES = [
+    "loginwindow", "com.apple.loginwindow", "WindowServer", "com.apple.WindowServer", "Dock", "com.apple.dock", "Dock.app",
+    "SystemUIServer", "com.apple.systemuiserver", "ControlCenter", "Control Center", "com.apple.controlcenter",
+    "NotificationCenter", "com.apple.notificationcenterui", "SecurityAgent", "com.apple.SecurityAgent",
+    "System Events", "com.apple.systemevents",
+]
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("name", SESSION_NAMES)
+def test_session_processes_are_never_quit_by_name_or_bundle_id(mac, name, force):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    machine.procs[89] = (ME, "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock")
+    result = quit_app(tools, name, force)
+    assert not result["success"]
+    assert result["error"] == f"{name} is part of macOS and is never quit by Herald OS"
+    assert 88 in machine.procs and 89 in machine.procs
+    assert not machine.signals and not machine.ran("osascript") and not machine.ran("ps")
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("name", ["Herald OS", "herald os", "Herald OS.app", "dev.iamluke.heraldos"])
+def test_herald_os_never_quits_itself(mac, name, force):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    machine.procs[900] = (ME, "/Applications/Herald OS.app/Contents/MacOS/Herald OS")
+    result = quit_app(tools, name, force)
+    assert result["error"] == "Herald OS does not quit itself"
+    assert 900 in machine.procs and not machine.signals and not machine.ran("osascript")
+
+
+def test_a_partial_match_that_lands_on_herald_os_is_refused(mac):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "not running\n", "")})
+    machine.procs[900] = (ME, "/Applications/Herald OS.app/Contents/MacOS/Herald OS")
+    assert quit_app(tools, "Herald")["error"] == "Herald OS does not quit itself"
+    assert machine.ran("osascript") == [by_name("Herald")]
+    assert 900 in machine.procs
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_dock_never_reaches_docker(mac, force):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    machine.procs[950] = (ME, "/Applications/Docker.app/Contents/MacOS/Docker")
+    assert quit_app(tools, "Dock", force)["error"] == "Dock is part of macOS and is never quit by Herald OS"
+    assert 950 in machine.procs and not machine.signals and not machine.ran("osascript")
+
+
+def test_docker_by_its_own_name_still_quits(mac):
     _, tools, fake = mac
     machine = fake()
-    assert quit_app(tools, "loginwindow", force=True)["error"].startswith("no app called loginwindow in the Applications folders")
-    for name in ("loginwindow", "Dock", "WindowServer", "SystemUIServer"):
-        assert quit_app(tools, name)["error"] == f"{name} is part of macOS and is not quit by name"
-    assert 88 in machine.procs and not machine.signals and not machine.ran("osascript")
+    machine.procs[950] = (ME, "/Applications/Docker.app/Contents/MacOS/Docker")
+    assert quit_app(tools, "Docker")["success"]
+    assert machine.ran("osascript") == [["osascript", "-e", 'tell application "Docker" to quit']]
+
+
+def test_polite_quit_tries_an_open_app_by_exact_name_before_a_partial_match(mac):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    assert quit_app(tools, "Text")["success"]
+    assert machine.ran("osascript") == [by_name("Text")]
+    assert not machine.ran("ps") and 501 in machine.procs
+
+
+def test_polite_quit_falls_back_to_a_partial_match_only_when_nothing_is_open_by_that_name(mac):
+    _, tools, fake = mac
+    machine = fake({"osascript": [(0, "not running\n", ""), (0, "", "")]})
+    assert quit_app(tools, "Code")["success"]
+    assert machine.ran("osascript") == [by_name("Code"), ["osascript", "-e", 'tell application "Visual Studio Code" to quit']]
+
+
+def test_polite_quit_says_not_running_when_neither_finds_an_app(mac):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "not running\n", "")})
+    assert quit_app(tools, "Nothing Like This")["error"] == "Nothing Like This is not running"
+    assert machine.ran("osascript") == [by_name("Nothing Like This")]
 
 
 def by_name(label):
