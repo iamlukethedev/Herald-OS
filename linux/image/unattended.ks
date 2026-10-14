@@ -104,7 +104,8 @@ checked_disk() {
 if [[ -n "$DISK" ]]; then
   disk="$(checked_disk)" || exit 1
 else
-  mapfile -t disks < <(internal_disks)
+  disks=()
+  while read -r name; do disks+=("$name"); done < <(internal_disks)
   (( ${#disks[@]} > 0 )) ||
     refuse "no internal disk to install to, so nothing was erased." \
       "Set DISK= in the kickstart's %pre to the disk to erase (a name lsblk lists, or /dev/disk/by-id/<id>)."

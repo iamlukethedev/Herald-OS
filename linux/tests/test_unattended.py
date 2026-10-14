@@ -1,6 +1,8 @@
 """linux/image/unattended.ks erases one disk, the one its %pre picks, and leaves every other disk alone."""
 
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KICKSTART = (ROOT / "linux" / "image" / "unattended.ks").read_text()
 INCLUDE = "/tmp/herald-os-disk.ks"
 PRE = re.search(r"^%pre [^\n]*\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
+# The bash that runs the %pre and the fakes: Anaconda has bash 5, macOS CI has bash 3.2, so both
+# must work. HERALD_OS_TEST_BASH=/path/to/bash-3.2 runs them under another one.
+BASH = shutil.which(os.environ.get("HERALD_OS_TEST_BASH", "bash"))
 
 # The fakes answer the lsblk, findmnt and readlink calls the %pre makes, from files in $FAKE.
 LSBLK = """#!/usr/bin/env bash
@@ -137,6 +142,7 @@ def run_pre(tmp_path: Path, disks, pre: str = PRE, **machine) -> tuple[subproces
     fake, bin_dir = tmp_path / "fake", tmp_path / "bin"
     (fake / "trees").mkdir(parents=True)
     bin_dir.mkdir()
+    (bin_dir / "bash").symlink_to(BASH)
     files = {"disks": disks, "devices": [], "mounts": [], "below": [], "links": []}
     files.update({name: lines for name, lines in machine.items() if name != "trees"})
     for name, lines in files.items():
@@ -191,6 +197,37 @@ def test_the_disk_commands_come_only_from_the_pre():
     assert "ignoredisk" not in commands
     assert f"%include {INCLUDE}" in main_section().splitlines()
     assert "--erroronfail" in KICKSTART.split("\n%pre ", 1)[1].splitlines()[0]
+
+
+# What bash 3.2 (macOS) lacks, so the %pre and the fakes stay runnable there.
+BASH_4_ONLY = {
+    "mapfile or readarray": r"\b(mapfile|readarray)\b",
+    "coproc": r"\bcoproc\b",
+    "associative arrays or namerefs": r"\b(declare|local|typeset)\s+-[A-Za-z]*[An]",
+    "case changes": r"\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,,?|\^\^?)\}",
+    "@ transformations": r"\$\{[^}]*@[QEPAaKkUuL]\}",
+    "negative indexes": r"\$\{[A-Za-z_][A-Za-z0-9_]*\[-",
+    "|&": r"\|&",
+    "&>>": r"&>>",
+    "case fall-through": r";;?&",
+    "fd variables": r"\{[A-Za-z_][A-Za-z0-9_]*\}[<>]",
+    "bash 4 options": r"\b(wait\s+-n|read\s+-[A-Za-z]*[iN]|shopt\s+-s\s+(globstar|lastpipe|direxpand|autocd))\b",
+}
+
+
+@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+def test_the_scripts_need_only_bash_3_2(script):
+    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    found = {name for name, pattern in BASH_4_ONLY.items() if re.search(pattern, code)}
+    assert found == set()
+
+
+def test_the_bash_3_2_check_finds_mapfile():
+    assert re.search(BASH_4_ONLY["mapfile or readarray"], "  mapfile -t disks < <(internal_disks)")
+    assert re.search(BASH_4_ONLY["case changes"], 'echo "${DISK,,}"')
+    assert re.search(BASH_4_ONLY["associative arrays or namerefs"], "  local -A seen")
+    assert not re.search(BASH_4_ONLY["case changes"], 'echo "${2//,/ }"')
 
 
 @pytest.mark.parametrize("name", MACHINES)
