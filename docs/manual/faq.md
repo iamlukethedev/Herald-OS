@@ -54,9 +54,12 @@ Fedora Silverblue, Kinoite, Bazzite, Bluefin and other bootc systems can also sw
 OS image in place, which replaces the system you run, so try it on a spare machine or in a virtual
 machine. Afterwards a login screen asks who signs in, and your own account and its password keep
 working; run `herald-os setup` once in your own account to install Hermes Agent there. Herald OS
-also adds a `hermes` account, which stays locked, and is not an administrator, until you give it a
-password (`sudo passwd hermes`). [docs/LINUX.md](../LINUX.md#switching-a-bootc-system-to-herald-os)
-has the steps, what changes and how to go back.
+also adds a `hermes` account, which stays locked until you give it a password
+(`sudo passwd hermes`), and becomes an administrator only at the next restart after that. If no
+login screen appears, press `Ctrl+Alt+F2` for a text console and sign in there; see
+[Locked out of your account](troubleshooting.md#locked-out-of-your-account).
+[docs/LINUX.md](../LINUX.md#switching-a-bootc-system-to-herald-os) has the steps, what changes and
+how to go back.
 
 **How is this different from Omarchy?**
 Omarchy makes Linux something your coding agent can fix and reshape. Herald OS makes the agent how
