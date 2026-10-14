@@ -1,0 +1,174 @@
+[
+  {
+    "text": "otpauth://totp/GitHub:alice%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code for GitHub",
+    "hidden": [
+      "JBSWY3DPEHPK3PXP",
+      "alice"
+    ]
+  },
+  {
+    "text": "otpauth://totp/Example%20Bank%3Abob?secret=GEZDGNBVGY3TQOJQ&algorithm=SHA1&digits=6",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code for Example Bank",
+    "hidden": [
+      "GEZDGNBVGY3TQOJQ",
+      "bob"
+    ]
+  },
+  {
+    "text": "OTPAUTH://hotp/?secret=GEZDGNBVGY3TQOJQ&counter=1",
+    "kind": "otp",
+    "caption": "2FA setup code copied",
+    "description": "a 2FA setup code",
+    "hidden": [
+      "GEZDGNBVGY3TQOJQ"
+    ]
+  },
+  {
+    "text": "otpauth-migration://offline?data=CjEKCkhlbGxvId6tvu8SGEV4YW1wbGU",
+    "kind": "otp",
+    "caption": "2FA codes copied",
+    "description": "a 2FA export from an authenticator app",
+    "hidden": [
+      "CjEKCkhlbGxvId6tvu8SGEV4YW1wbGU"
+    ]
+  },
+  {
+    "text": "WIFI:T:WPA;S:Home;P:correct horse battery staple;;",
+    "kind": "wifi",
+    "caption": "Wi-Fi details copied",
+    "description": "a Wi-Fi network called \"Home\"",
+    "hidden": [
+      "correct horse"
+    ]
+  },
+  {
+    "text": "WIFI:S:Caf\\;e Guest;T:nopass;H:false;;",
+    "kind": "wifi",
+    "caption": "Wi-Fi details copied",
+    "description": "a Wi-Fi network called \"Caf;e Guest\"",
+    "hidden": [
+      "nopass"
+    ]
+  },
+  {
+    "text": "wifi:P:hunter22;;",
+    "kind": "wifi",
+    "caption": "Wi-Fi details copied",
+    "description": "Wi-Fi details",
+    "hidden": [
+      "hunter22"
+    ]
+  },
+  {
+    "text": "https://Example.com/menu?table=4",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "text": "http://www.example.org:8080/a/b#top",
+    "kind": "link",
+    "caption": "Link copied: www.example.org",
+    "description": "a link to www.example.org",
+    "full": true
+  },
+  {
+    "text": "https://example.com/reset?token=0000aaaa1111bbbb",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "0000aaaa1111bbbb",
+      "reset"
+    ]
+  },
+  {
+    "text": "https://alice:s3cret@files.example.com/share",
+    "kind": "link",
+    "caption": "Link copied: files.example.com",
+    "description": "a link to files.example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "s3cret",
+      "alice"
+    ]
+  },
+  {
+    "text": "https://app.example.com/callback#access_token=abc123&state=x",
+    "kind": "link",
+    "caption": "Link copied: app.example.com",
+    "description": "a link to app.example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "abc123"
+    ]
+  },
+  {
+    "text": "sk-live-4eC39HqLyjWDarjtT1zdp7dc",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4eC39HqLyjWDarjtT1zdp7dc"
+    ]
+  },
+  {
+    "text": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n-----END OPENSSH PRIVATE KEY-----",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "b3Bl"
+    ]
+  },
+  {
+    "text": "Guest network password: tulip-river-42",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "tulip-river-42"
+    ]
+  },
+  {
+    "text": "abandon ability able about above absent absorb abstract absurd abuse access accident",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abandon"
+    ]
+  },
+  {
+    "text": "4006381333931",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "text": "Table 4, ask for the specials",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "text": "mailto:hello@example.com",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "text": "  BEGIN:VCARD\nVERSION:3.0\nFN:Ada Lovelace\nEND:VCARD\n",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  }
+]

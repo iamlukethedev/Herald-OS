@@ -16,7 +16,7 @@ call the tools directly.
   Trigger       reminder <duration> <message> | reminder list | reminder clear
                 notice time|battery|weather | screenshot | ocr | clipboard | notify <title> [body]
   Capture       capture screenshot [region|window|screen] | capture record [region] [audio] | capture stop
-                capture region --ask | capture color | capture qr | capture text
+                capture region --ask | capture color | capture qr [--print] | capture text
                 capture transcode <file> [gif|mp4|webm] | capture share <file>
   Canvas        canvas open [file] | canvas new [name] [WxH] | canvas status | canvas layers [project] | canvas history
                 canvas text <words> [--x --y --size --font --color --align] | canvas resize <WxH> [--anchor <a>]
@@ -111,7 +111,7 @@ COMMANDS: dict[str, str] = {
     "notice": "notice time | battery | weather",
     "weather": "weather (now) | weather location [--set <city> | --clear] (default: from your network)",
     "screenshot": "Screenshot the screen and hand it to Hermes",
-    "capture": "capture region [--ask] | screenshot [region|window|screen] [--edit] | record [region] [audio] | stop | color | qr | text | transcode <file> [gif|mp4|webm] | share <file>",
+    "capture": "capture region [--ask] | screenshot [region|window|screen] [--edit] | record [region] [audio] | stop | color | qr [--print|--json] | text | transcode <file> [gif|mp4|webm] | share <file>",
     "ocr": "Select a screen region, extract its text (tesseract) to the clipboard",
     "clipboard": "Clipboard history picker",
     "notify": "Show a notification: notify <title> [body]",
@@ -747,14 +747,14 @@ def capture(args: list[str]) -> int:
     if sub == "color":
         return capture_color()
     if sub == "qr":
-        return capture_qr()
+        return capture_qr(args[1:])
     if sub == "text":
         return ocr()
     if sub == "transcode" and len(args) >= 2:
         return transcode(Path(args[1]).expanduser(), args[2] if len(args) > 2 else "gif")
     if sub == "share" and len(args) >= 2:
         return share(Path(args[1]).expanduser())
-    die("capture region [--ask] | screenshot [region|window|screen] [--edit] | record [region] [audio] | stop | color | qr | text | transcode <file> [gif|mp4|webm] | share <file>", 2)
+    die("capture region [--ask] | screenshot [region|window|screen] [--edit] | record [region] [audio] | stop | color | qr [--print|--json] | text | transcode <file> [gif|mp4|webm] | share <file>", 2)
     return 2
 
 
@@ -791,8 +791,116 @@ def capture_color() -> int:
     return 0
 
 
-def capture_qr() -> int:
-    """Select a QR code or barcode; what it says goes on the clipboard."""
+# What a QR code says, described without giving it away: the same rules as
+# apps/desktop/shared/qr.ts, and both are checked against apps/desktop/shared/qr-cases.json.
+QR_COPIED = "QR code copied"
+QR_SENSITIVE_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
+QR_LABELLED_SECRET = re.compile(r"\b(pass(word|wd|code|phrase)?|pwd|pin|secret|token|api[ _-]?key|private[ _-]?key|seed)\b\s*[:=]", re.I)
+QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+QR_RECOVERY_LENGTHS = {12, 15, 18, 21, 24}
+
+
+def qr_label(value: str) -> str:
+    clean = re.sub(r"[\x00-\x1f\x7f]", "", value).strip()
+    return f"{clean[:39]}…" if len(clean) > 40 else clean
+
+
+def qr_params(query: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for pair in query.split("&"):
+        if pair:
+            name, _, value = pair.partition("=")
+            out[urllib.parse.unquote_plus(name).lower()] = urllib.parse.unquote_plus(value)
+    return out
+
+
+def wifi_fields(text: str) -> dict[str, str]:
+    """WIFI:S:<name>;T:<WPA|WEP|nopass>;P:<password>;H:<true|false>;; with backslash escapes."""
+    fields: dict[str, str] = {}
+    current, escaped = "", False
+
+    def flush() -> None:
+        key, sep, value = current.partition(":")
+        if sep and key:
+            fields[key.upper()] = value
+
+    for char in re.sub(r"^WIFI:", "", text, flags=re.I):
+        if escaped:
+            current, escaped = current + char, False
+        elif char == "\\":
+            escaped = True
+        elif char == ";":
+            flush()
+            current = ""
+        else:
+            current += char
+    flush()
+    return fields
+
+
+def qr_looks_secret(text: str) -> bool:
+    """A password, key or recovery phrase, as far as one can tell from the text alone."""
+    if "PRIVATE KEY" in text or QR_LABELLED_SECRET.search(text):
+        return True
+    words = text.split()
+    if len(words) in QR_RECOVERY_LENGTHS and all(re.fullmatch(r"[a-z]{3,8}", word) for word in words):
+        return True
+    return bool(re.fullmatch(r"\S{16,}", text)) and not QR_SCHEME.match(text) and "@" not in text and bool(re.search(r"[A-Za-z]", text)) and bool(re.search(r"\d", text))
+
+
+def qr_link(text: str) -> dict | None:
+    try:
+        url = urllib.parse.urlsplit(text)
+        host = (url.hostname or "").encode("idna").decode()
+        has_userinfo = bool(url.username or url.password)
+    except (ValueError, UnicodeError):
+        return None
+    if not re.fullmatch(r"[a-z0-9.-]+", host):
+        return None
+    names = [*qr_params(url.query), *qr_params(url.fragment)]
+    if has_userinfo or any(QR_SENSITIVE_PARAM.search(name) for name in names):
+        return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host} that carries what looks like a password, key or sign-in token"}
+    return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host}", "text": text}
+
+
+def describe_qr(raw: str) -> dict:
+    """{kind, caption, description, text?}: text only for ordinary links and text."""
+    text = raw.strip()
+    if re.match(r"^otpauth-migration:", text, re.I):
+        return {"kind": "otp", "caption": "2FA codes copied", "description": "a 2FA export from an authenticator app"}
+    if re.match(r"^otpauth:", text, re.I):
+        path, _, query = re.sub(r"^otpauth://[^/?#]*/?", "", text, flags=re.I).partition("?")
+        name = urllib.parse.unquote_plus(path)
+        issuer = qr_label(qr_params(query.split("#")[0]).get("issuer", name.split(":")[0] if ":" in name else ""))
+        return {"kind": "otp", "caption": "2FA setup code copied", "description": f"a 2FA setup code for {issuer}" if issuer else "a 2FA setup code"}
+    if re.match(r"^WIFI:", text, re.I):
+        network = qr_label(wifi_fields(text).get("S", ""))
+        return {"kind": "wifi", "caption": "Wi-Fi details copied", "description": f'a Wi-Fi network called "{network}"' if network else "Wi-Fi details"}
+    if re.match(r"^https?://", text, re.I):
+        link = qr_link(text)
+        if link:
+            return link
+    if qr_looks_secret(text):
+        return {"kind": "secret", "caption": QR_COPIED, "description": "something that looks like a password, key or recovery phrase"}
+    return {"kind": "text", "caption": QR_COPIED, "description": "text", "text": text}
+
+
+def copy_sensitive(text: str) -> None:
+    """On the clipboard, marked as a secret so clipboard history (cliphist) skips it.
+
+    wl-clipboard before 2.2 has no --sensitive; there it is copied plainly so pasting still works.
+    """
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "check": False}
+    if subprocess.run(["wl-copy", "--sensitive"], input=text.encode(), **quiet).returncode != 0:
+        subprocess.run(["wl-copy"], input=text.encode(), **quiet)
+
+
+def capture_qr(args: list[str]) -> int:
+    """Select a QR code or barcode; what it says goes on the clipboard and nowhere else.
+
+    The notification and the output say what kind of thing it is (a link's host, at most). --json
+    prints {kind, caption, description, text?} for the shell; --print prints the contents, for scripts.
+    """
     need("slurp", "grim", "zbarimg", "wl-copy")
     region = sh(["slurp"], timeout=300)
     if region.returncode != 0 or not region.stdout.strip():
@@ -803,9 +911,15 @@ def capture_qr() -> int:
     if not text:
         notify("No code found", "The selection had no QR code or barcode")
         return 1
-    subprocess.run(["wl-copy"], input=text.encode(), check=False)
-    notify("Code copied", text[:160])
-    print(text)
+    copy_sensitive(text)
+    reading = describe_qr(text)
+    notify(reading["caption"])
+    if "--print" in args:
+        print(text)
+    elif "--json" in args:
+        print(json.dumps(reading, ensure_ascii=False))
+    else:
+        print(reading["caption"])
     return 0
 
 

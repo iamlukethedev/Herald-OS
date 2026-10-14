@@ -833,3 +833,82 @@ def test_plugin_add_waits_for_the_clone_and_says_it_is_off(monkeypatch, capsys):
     with pytest.raises(SystemExit) as stopped:
         cli.plugin_cmd(["remove"])
     assert stopped.value.code == 2
+
+
+QR_CASES = json.loads((ROOT / "apps" / "desktop" / "shared" / "qr-cases.json").read_text())
+
+
+@pytest.mark.parametrize("case", QR_CASES, ids=lambda case: f"{case['kind']}:{case['text'][:24]}")
+def test_qr_contents_are_described_the_way_the_shell_describes_them(case):
+    reading = cli.describe_qr(case["text"])
+    assert reading["kind"] == case["kind"]
+    assert reading["caption"] == case["caption"]
+    assert reading["description"] == case["description"]
+    if case.get("full"):
+        assert reading["text"] == case["text"].strip()
+    else:
+        assert "text" not in reading
+        for secret in case["hidden"]:
+            assert secret not in json.dumps(reading, ensure_ascii=False)
+
+
+def qr_scan(monkeypatch, decoded: str, *, sensitive_ok: bool = True):
+    """Run capture_qr against a fake slurp, grim, zbarimg and wl-copy; returns (copies, notifications)."""
+    copies: list[tuple[list[str], bytes]] = []
+    notes: list[tuple[str, str]] = []
+
+    def run(argv, **kwargs):
+        if argv[0] == "grim":
+            return subprocess.CompletedProcess(argv, 0, b"png", b"")
+        if argv[0] == "zbarimg":
+            return subprocess.CompletedProcess(argv, 0, decoded.encode() + b"\n", b"")
+        if argv[0] == "wl-copy":
+            copies.append((argv, kwargs.get("input")))
+            assert kwargs.get("stdout") is subprocess.DEVNULL and kwargs.get("stderr") is subprocess.DEVNULL
+            return subprocess.CompletedProcess(argv, 0 if sensitive_ok or "--sensitive" not in argv else 1)
+        raise AssertionError(f"unexpected {argv}")
+
+    monkeypatch.setattr(cli, "need", lambda *tools: None)
+    monkeypatch.setattr(cli, "sh", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "10,10 100x100\n", ""))
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    monkeypatch.setattr(cli, "notify", lambda title, body="": notes.append((title, body)))
+    return copies, notes
+
+
+OTP = "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub"
+
+
+def test_qr_secret_goes_on_the_clipboard_marked_sensitive_and_nowhere_else(monkeypatch, capsys):
+    copies, notes = qr_scan(monkeypatch, OTP)
+    assert cli.capture_qr([]) == 0
+    assert copies == [(["wl-copy", "--sensitive"], OTP.encode())]
+    assert notes == [("2FA setup code copied", "")]
+    out = capsys.readouterr().out
+    assert out == "2FA setup code copied\n"
+    assert "JBSWY3DPEHPK3PXP" not in out
+
+
+def test_qr_json_is_for_the_shell_and_print_is_for_scripts(monkeypatch, capsys):
+    qr_scan(monkeypatch, OTP)
+    assert cli.capture_qr(["--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"kind": "otp", "caption": "2FA setup code copied", "description": "a 2FA setup code for GitHub"}
+    assert cli.capture_qr(["--print"]) == 0
+    assert capsys.readouterr().out == f"{OTP}\n"
+
+    qr_scan(monkeypatch, "https://example.com/menu")
+    assert cli.capture_qr(["--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["text"] == "https://example.com/menu"
+
+
+def test_qr_link_shows_where_it_points(monkeypatch, capsys):
+    _, notes = qr_scan(monkeypatch, "https://example.com/menu?table=4")
+    assert cli.capture_qr([]) == 0
+    assert notes == [("Link copied: example.com", "")]
+    assert capsys.readouterr().out == "Link copied: example.com\n"
+
+
+def test_qr_older_wl_clipboard_still_copies(monkeypatch):
+    copies, _ = qr_scan(monkeypatch, OTP, sensitive_ok=False)
+    assert cli.capture_qr([]) == 0
+    assert [argv for argv, _ in copies] == [["wl-copy", "--sensitive"], ["wl-copy"]]
+    assert copies[-1][1] == OTP.encode()
