@@ -6,7 +6,8 @@
 #   sudo bash /usr/local/share/herald-os-linux/provision.sh
 #
 # It refuses to run anywhere else: it carries on only in a virtual machine with the cloud-init seed
-# attached (the disc labelled cidata), or when given --dev-vm (cloud-init's runcmd passes it).
+# attached (the disc labelled cidata, in any case), or when given --dev-vm (cloud-init's runcmd
+# passes it).
 #
 # The same two halves build the bootc image (linux/image/Containerfile):
 #   1. image/packages.sh --dev   packages, the session and CLIs, the boot splash, services
@@ -22,13 +23,22 @@ for arg in "$@"; do
   esac
 done
 
+# The NoCloud seed's label is matched in any case: make-seed.sh writes cidata, other tools CIDATA.
+seed_attached() {
+  local label
+  while IFS= read -r label; do
+    case "$label" in [Cc][Ii][Dd][Aa][Tt][Aa]) return 0 ;; esac
+  done < <(blkid -s LABEL -o value 2>/dev/null)
+  return 1
+}
+
 # Everything below changes the whole system and is meant for a throwaway VM, so this check comes
 # before anything is written, the log included.
-if [[ $DEV_VM -eq 0 ]] && ! { systemd-detect-virt --quiet --vm && blkid -L cidata; } >/dev/null 2>&1; then
+if [[ $DEV_VM -eq 0 ]] && ! { systemd-detect-virt --quiet --vm >/dev/null 2>&1 && seed_attached; }; then
   cat >&2 <<EOF
 provision.sh turns a fresh Fedora Cloud VM into the Herald OS development VM, and this machine
 does not look like one: it is not a virtual machine with the cloud-init seed (the disc labelled
-cidata) attached. On this machine it would:
+cidata or CIDATA) attached. On this machine it would:
 
   - set SELinux to permissive, now and after every reboot
   - install greetd and log ${HERMES_USER:-hermes} in automatically on VT 1, with no password prompt

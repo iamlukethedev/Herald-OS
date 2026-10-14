@@ -1,6 +1,6 @@
 """linux/provision.sh refuses to run outside the development VM: it carries on only in a virtual
-machine with the cloud-init seed attached, or when given --dev-vm, and otherwise exits before it
-writes anything. The script runs from a temporary payload folder with stand-ins for
+machine with the cloud-init seed attached (labelled cidata, in any case), or when given --dev-vm,
+and otherwise exits before it writes anything. The script runs from a temporary payload folder with stand-ins for
 systemd-detect-virt, blkid and everything that would change the machine; the stand-in packages.sh
 writes down that it was reached and stops the run there."""
 
@@ -22,15 +22,19 @@ def executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[str, ...] | None = None,
+              env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+    """Runs provision.sh; `labels` are the filesystem labels blkid reports (cidata when `seed`, plus
+    the root disk's)."""
     payload = tmp_path / "payload"
     payload.mkdir(exist_ok=True)
     shutil.copy(PROVISION, payload / "provision.sh")
     calls = tmp_path / "calls"
     calls.write_text("")
     bin_dir = tmp_path / "bin"
+    labels = ("fedora", *(labels if labels is not None else ("cidata",) if seed else ()))
     executable(bin_dir / "systemd-detect-virt", f'echo "systemd-detect-virt $*" >>"$CALLS"; [ "$*" = "--quiet --vm" ] && exit {0 if vm else 1}; exit 2')
-    executable(bin_dir / "blkid", f'echo "blkid $*" >>"$CALLS"; [ "$*" = "-L cidata" ] && {{ {"echo /dev/sr0; exit 0" if seed else "exit 2"}; }}; exit 2')
+    executable(bin_dir / "blkid", f'echo "blkid $*" >>"$CALLS"; [ "$*" = "-s LABEL -o value" ] && {{ printf "%s\\n" {" ".join(labels)}; exit 0; }}; exit 2')
     for name in ("mkdir", "getent"):
         executable(bin_dir / name, f'echo "{name} $*" >>"$CALLS"')
     executable(bin_dir / "tee", 'echo "tee $*" >>"$CALLS"; exec cat')
@@ -78,6 +82,21 @@ def test_in_a_vm_with_the_seed_attached_it_provisions(tmp_path):
     assert "mkdir -p /var/lib/herald-os" in calls
     assert "packages.sh --dev" in calls
     assert "Nothing has been changed" not in result.stderr
+
+
+@pytest.mark.parametrize("label", ["cidata", "CIDATA", "CiData"])
+def test_the_seed_label_is_matched_in_any_case(tmp_path, label):
+    result, calls = provision(tmp_path, vm=True, seed=True, labels=(label,))
+    assert "packages.sh --dev" in calls
+    assert "Nothing has been changed" not in result.stderr
+
+
+@pytest.mark.parametrize("label", ["cidata2", "my-cidata", "cidat"])
+def test_only_the_whole_seed_label_counts(tmp_path, label):
+    result, calls = provision(tmp_path, vm=True, seed=True, labels=(label,))
+    assert result.returncode == 1
+    assert changes(calls) == []
+    assert "Nothing has been changed" in result.stderr
 
 
 def test_dev_vm_provisions_without_looking(tmp_path):

@@ -96,7 +96,8 @@ hermes config set model.default <model>  # a Portal model id, as in the Mac's co
 
 These are system-wide changes meant for the throwaway development VM, so the script refuses to run
 anywhere else: it lists what it would change and exits without touching anything unless it is in a
-virtual machine with the cloud-init seed (the `cidata` disc) attached, or is given `--dev-vm`.
+virtual machine with the cloud-init seed (the disc labelled `cidata` or `CIDATA`) attached, or is
+given `--dev-vm`.
 cloud-init passes `--dev-vm` on the first boot; to re-run it by hand in a VM whose seed disc has been
 removed, use `sudo bash /usr/local/share/herald-os-linux/provision.sh --dev-vm`.
 
