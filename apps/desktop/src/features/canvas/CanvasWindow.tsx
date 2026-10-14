@@ -128,7 +128,7 @@ function Tabs({ documents, active }: { documents: CanvasDocument[]; active: Canv
           role="tab"
           aria-selected={doc === active}
           onClick={() => activate(doc.key)}
-          className={cn('group flex h-7 max-w-52 shrink-0 cursor-default items-center gap-1.5 rounded-md pl-2.5 pr-1 text-[12px]', doc === active ? 'bg-white/10 text-fg' : 'text-fg-3 hover:bg-white/5 hover:text-fg-2')}
+          className={cn('group/reveal-row flex h-7 max-w-52 shrink-0 cursor-default items-center gap-1.5 rounded-md pl-2.5 pr-1 text-[12px]', doc === active ? 'bg-white/10 text-fg' : 'text-fg-3 hover:bg-white/5 hover:text-fg-2')}
           title={doc.path ?? doc.name}
         >
           <span className="truncate">{doc.name}</span>

@@ -36,7 +36,7 @@ describe('reveal', () => {
 
     const shown = css.match(/([^{}]+)\{\s*opacity:\s*1;?\s*\}/)?.[1] ?? ''
 
-    const row = shown.match(/\.reveal:is\(:where\(\.group\):is\((.*?)\) \*\)/)?.[1].split(/,\s*/) ?? []
+    const row = shown.match(/\.reveal:is\(:where\(\.group\\\/reveal-row\):is\((.*?)\) \*\)/)?.[1].split(/,\s*/) ?? []
 
     expect(row).toEqual([':hover', ':focus-visible', ':has(:focus-visible)'])
     expect(shown).toContain('.reveal:focus-visible')

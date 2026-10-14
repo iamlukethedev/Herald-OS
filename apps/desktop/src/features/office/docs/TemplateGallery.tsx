@@ -236,7 +236,7 @@ export function TemplateGallery() {
       title={card.description}
       onClick={() => setSelected(index)}
       onDoubleClick={() => create(card)}
-      className={cn('group relative flex cursor-default flex-col items-center gap-2 rounded-xl border p-2 outline-none transition-colors duration-120', index === selected ? 'border-accent-strong/70 bg-accent-soft' : 'border-transparent hover:bg-white/6')}
+      className={cn('group/reveal-row relative flex cursor-default flex-col items-center gap-2 rounded-xl border p-2 outline-none transition-colors duration-120', index === selected ? 'border-accent-strong/70 bg-accent-soft' : 'border-transparent hover:bg-white/6')}
     >
       <Thumbnail doc={card.doc} scope={card.key} />
       {card.saved && renaming === card.saved.id ? (

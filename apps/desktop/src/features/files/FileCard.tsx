@@ -197,7 +197,7 @@ export function FileRow({ item, selected, renaming, onSelect, onOpen, onAction, 
         onSelect()
         setMenu(true)
       }}
-      className={cn('group relative flex h-9 cursor-pointer items-center gap-3 rounded-lg px-2.5 text-[12.5px] transition-colors duration-120', selected ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/5', item.hidden && 'opacity-70', menu && 'z-30')}
+      className={cn('group/reveal-row relative flex h-9 cursor-pointer items-center gap-3 rounded-lg px-2.5 text-[12.5px] transition-colors duration-120', selected ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/5', item.hidden && 'opacity-70', menu && 'z-30')}
     >
       <span className="flex w-5 shrink-0 items-center justify-center">
         {item.kind === 'directory' ? (

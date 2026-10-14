@@ -79,7 +79,7 @@ function ThreadCard({ thread, online }: { thread: ContinuityThread; online: bool
   const lead = thread.items.find(item => item.kind === 'project') ?? thread.items[0]
 
   return (
-    <GlassCard className="group flex flex-col gap-3 p-4" data-os-target={`thread:${thread.id}`}>
+    <GlassCard className="group/reveal-row flex flex-col gap-3 p-4" data-os-target={`thread:${thread.id}`}>
       <div className="flex gap-3.5">
         <IconTile size={40}>{lead ? GLYPH[lead.kind] : <IconBrain />}</IconTile>
         <div className="flex min-w-0 flex-1 flex-col gap-1">

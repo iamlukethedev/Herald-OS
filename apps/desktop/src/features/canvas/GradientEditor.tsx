@@ -299,7 +299,7 @@ function GradientEditor({ onClose, at }: { onClose: () => void; at: { left: numb
       </div>
       <div className="grid grid-cols-8 gap-1.5" role="listbox" aria-label="Gradient presets">
         {[...GRADIENT_PRESETS, ...saved].map((preset, i) => (
-          <div key={`${preset.name}-${i}`} className="group relative">
+          <div key={`${preset.name}-${i}`} className="group/reveal-row relative">
             <button
               type="button"
               role="option"

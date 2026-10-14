@@ -56,7 +56,7 @@ function ThemeCard({ theme, size, current, label, onPick, children }: { theme: T
   const slide = useMemo(() => titleSample(theme, size), [theme, size])
 
   return (
-    <div className="group relative">
+    <div className="group/reveal-row relative">
       <button
         type="button"
         aria-pressed={current}

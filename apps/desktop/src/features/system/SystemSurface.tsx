@@ -141,7 +141,7 @@ export function SystemSurface() {
         </thead>
         <tbody>
           {processes.map(proc => (
-            <tr key={proc.pid} className="group border-t border-hairline">
+            <tr key={proc.pid} className="group/reveal-row border-t border-hairline">
               <td className="max-w-0 truncate py-1.5 pr-3 font-mono text-fg-2" title={proc.command}>
                 {proc.name}
               </td>

@@ -88,7 +88,7 @@ export function SessionList() {
           const title = live?.title || row.title || row.preview || 'Untitled'
 
           return (
-            <div key={row.id} className={cn('group relative flex items-center rounded-md', active ? 'bg-white/6' : 'hover:bg-white/4')}>
+            <div key={row.id} className={cn('group/reveal-row relative flex items-center rounded-md', active ? 'bg-white/6' : 'hover:bg-white/4')}>
               <button type="button" onClick={() => void openStoredSession(row.id, profile)} className="min-w-0 flex-1 px-2.5 py-2 text-left">
                 <div className="flex items-center gap-2">
                   {live?.streaming && <span className="size-1.5 shrink-0 rounded-full bg-accent animate-pulse-soft" />}
