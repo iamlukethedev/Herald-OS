@@ -38,7 +38,8 @@ import { registerPetIpc } from './pet/ipc.ts'
 import { PetWindow } from './pet/window.ts'
 import { SwitchService } from './switches.ts'
 import { hermesHome, heraldOsDataDir, isDev } from './paths.ts'
-import { adoptLegacyNotify, readPrefs, writePrefs } from './prefs.ts'
+import { readPrefs, writePrefs } from './prefs.ts'
+import { handleAdoptLegacyNotify, sendPrefsToOthers } from './prefs-ipc.ts'
 import { forwardRendererConsole } from './renderer-console.ts'
 import { isOmarchy, readOmarchyTheme } from './theme/omarchy.ts'
 import { prefsForTheme } from './theme/themes.ts'
@@ -267,25 +268,11 @@ function registerCoreIpc(): void {
     }
 
     // Every surface window sees the same preferences.
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.webContents !== _event.sender) {
-        win.webContents.send(IPC.prefsChanged, next)
-      }
-    }
+    sendPrefsToOthers(BrowserWindow.getAllWindows(), _event.sender, next)
 
     return next
   })
-  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (_event, flags: unknown) => {
-    const next = adoptLegacyNotify(flags)
-
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.webContents !== _event.sender) {
-        win.webContents.send(IPC.prefsChanged, next)
-      }
-    }
-
-    return next
-  })
+  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (event, flags: unknown) => handleAdoptLegacyNotify(BrowserWindow.getAllWindows(), event.sender, flags))
 
   ipcMain.handle(
     IPC.envInfo,
