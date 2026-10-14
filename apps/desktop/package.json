@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "test": "vitest run",
     "dist:mac": "npm run build && npm run pack:mac --",
-    "pack:mac": "electron-builder --mac --arm64 -c.npmRebuild=false --publish never",
+    "pack:mac": "electron-builder --mac --arm64 --x64 -c.npmRebuild=false --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never"
   },
   "dependencies": {
