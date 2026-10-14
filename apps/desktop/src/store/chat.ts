@@ -1,6 +1,7 @@
 import type { GatewayEvent, SessionCreateResult, SessionResumeResult } from '@herald-os/client'
 import { atom, computed, map } from 'nanostores'
 import { appendSystem, appendUser, type ChatState, emptyChat, fromTranscript, reduceChatEvent } from '../lib/chat-model.ts'
+import { currentModelText } from '../lib/model-provider.ts'
 import { $env, $prefs } from './backend.ts'
 import { gatewayRequest, onAnyGatewayEvent } from './gateway.ts'
 import { notify } from './notifications.ts'
@@ -184,6 +185,20 @@ export async function runSlash(command: string, sessionId?: string): Promise<voi
   }
 
   try {
+    // Hermes answers a bare /model from the session's agent, which it builds once the session is
+    // open, seconds later, and says "(unknown)" until then; model.options knows the model either way.
+    const model = /^\/model\s*$/i.test(command.trim()) ? currentModelText(await gatewayRequest('model.options', { session_id: sid }).catch(() => null)) : null
+
+    if (model) {
+      const current = $chats.get()[sid]
+
+      if (current) {
+        $chats.setKey(sid, { ...appendSystem(current, model), streaming: false })
+      }
+
+      return
+    }
+
     const result = await gatewayRequest('slash.exec', { session_id: sid, command })
     const current = $chats.get()[sid]
 

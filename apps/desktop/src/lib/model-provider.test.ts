@@ -1,6 +1,6 @@
 import type { ModelOptionsResult } from '@herald-os/client'
 import { describe, expect, it } from 'vitest'
-import { endpointKeys, type KeyCatalog, matchProvider, pickModel, providerChoices, type SignInProvider } from './model-provider.ts'
+import { currentModelText, endpointKeys, type KeyCatalog, matchProvider, pickModel, providerChoices, type SignInProvider } from './model-provider.ts'
 
 // Rows as hermes_cli/inventory.py builds them for `model.options` with the unconfigured ones: a
 // provider that is set up carries no auth hints, a skeleton carries its auth type and key variable.
@@ -146,6 +146,19 @@ describe('providerChoices for custom endpoints', () => {
 
   it('leaves an endpoint that names no key as Hermes has it', () => {
     expect(custom('ollama')).toMatchObject({ ready: true, setup: 'endpoint', keyEnv: null, command: null })
+  })
+})
+
+describe('currentModelText', () => {
+  it('names the model and its provider, a custom endpoint by its name rather than custom:<name>', () => {
+    expect(currentModelText(OPTIONS)).toBe('Current model: hermes-4-405b (Nous Portal)')
+    expect(currentModelText(ENDPOINT_ROWS)).toBe('Current model: qwen3-30b-a3b (qwen-flash)')
+    expect(currentModelText({ model: 'llama3', provider: 'custom', providers: [] })).toBe('Current model: llama3 (custom)')
+  })
+
+  it('leaves the answer to Hermes when it names no model', () => {
+    expect(currentModelText({ model: '', provider: 'nous', providers: [] })).toBeNull()
+    expect(currentModelText(null)).toBeNull()
   })
 })
 

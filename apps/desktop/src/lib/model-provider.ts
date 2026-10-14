@@ -152,6 +152,18 @@ export function endpointKeys(config: { providers?: unknown; custom_providers?: u
   return found
 }
 
+/** A bare `/model`'s answer from `model.options` for the session: its model, and its provider by name. */
+export function currentModelText(options: ModelOptionsResult | null | undefined): string | null {
+  if (!options?.model) {
+    return null
+  }
+
+  const id = options.provider ?? ''
+  const provider = id && (options.providers.find(row => row.slug === id || row.aliases?.includes(id))?.name ?? id)
+
+  return `Current model: ${options.model}${provider ? ` (${provider})` : ''}`
+}
+
 /** The model a switch to `row` lands on: the saved one when the provider stays, else Hermes's recommendation, else its first. */
 export function pickModel(row: Pick<ModelOptionProvider, 'is_current' | 'models'> | undefined, savedModel: string | null | undefined, recommended: string | null | undefined): string | null {
   if (row?.is_current && savedModel) {
