@@ -9,6 +9,12 @@ Herald OS is running but something misbehaves.
   `hermes doctor` in a terminal; if it asks you to sign in, sign in or change provider under
   Settings > Hermes & agents > Model provider, or run `hermes setup`. Herald OS's own log is
   `~/.hermes/logs/herald-os.log`.
+- **Hermes cannot reach a model server on your network.** A Mac lets an app reach devices on your
+  local network only once you allow it, and Hermes counts as part of Herald OS, which starts it.
+  Allow Herald OS when macOS asks, or turn it on in System Settings > Privacy & Security > Local
+  Network. Mac builds up to 0.1.0 alpha 4 never ask, and every request to the server fails with "No
+  route to host" (Errno 65, in `~/.hermes/logs/agent.log`). Hermes Desktop uses a Hermes that is
+  already running, so if you open it while Herald OS runs, it uses Herald OS's and fails the same way.
 - **Hermes runs shell commands instead of its system tools.** The system bridge is not loaded:
   run `npm run bootstrap` in your Herald OS checkout (or `herald-os setup` from a package), then
   restart Herald OS. `hermes plugins list` should show `herald-os-bridge` as enabled.

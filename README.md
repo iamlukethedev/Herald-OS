@@ -87,6 +87,9 @@ for each of these the first time a feature needs it:
   Events), and Hermes listing or quitting apps, locking the screen, switching dark mode and moving
   files to the Trash (through Finder).
 - **Calendars**: today's events on the Overview.
+- **Local Network**: Hermes reaching a model server or another device on your network, such as a
+  custom endpoint at a `192.168…` address. Hermes runs inside Herald OS, so this is Herald OS's to
+  allow.
 - **Files and Folders**: your Desktop, Documents and Downloads, for recent files on the Overview,
   the Files page and Hermes's file tools.
 - **Notifications**: alerts while you are in another app, in a code-signed build (this release is

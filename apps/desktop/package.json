@@ -220,7 +220,8 @@
         "NSMicrophoneUsageDescription": "Herald OS uses the microphone for voice input.",
         "NSCameraUsageDescription": "Herald OS shows your camera in a bubble while you record the screen, when you turn it on.",
         "NSCalendarsFullAccessUsageDescription": "Herald OS shows today's events on the Overview, and gives their titles and times to Hermes when you turn on Pick up where you left off.",
-        "NSCalendarsUsageDescription": "Herald OS shows today's events on the Overview, and gives their titles and times to Hermes when you turn on Pick up where you left off."
+        "NSCalendarsUsageDescription": "Herald OS shows today's events on the Overview, and gives their titles and times to Hermes when you turn on Pick up where you left off.",
+        "NSLocalNetworkUsageDescription": "Herald OS lets Hermes reach the devices on your local network that you set it up to use, such as a computer that runs your model."
       }
     },
     "dmg": {
