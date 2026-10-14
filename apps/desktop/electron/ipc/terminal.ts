@@ -25,6 +25,17 @@ interface PtyModule {
 let ptyModule: PtyModule | null | undefined
 
 /**
+ * The `spawn-helper`s node-pty may start a shell through: beside the pty.node it loads, one it
+ * compiled or its prebuild for this machine. In a packaged app it runs them from app.asar.unpacked;
+ * the same path inside app.asar can be read but never changed.
+ */
+export function spawnHelperPaths(ptyEntry: string, platform: string = process.platform, arch: string = process.arch): string[] {
+  const root = path.dirname(path.dirname(ptyEntry)).replace(/app\.asar(?=[\\/]|$)/, 'app.asar.unpacked')
+
+  return [path.join(root, 'build', 'Release', 'spawn-helper'), path.join(root, 'prebuilds', `${platform}-${arch}`, 'spawn-helper')]
+}
+
+/**
  * npm strips the executable bit from node-pty's prebuilt `spawn-helper` (the tarball ships it
  * 0644), and pty.spawn then fails with `posix_spawnp failed`. Restore it before the first load.
  */
@@ -33,17 +44,20 @@ export function ensureSpawnHelperExecutable(ptyEntry: string): void {
     return
   }
 
-  const helper = path.join(path.dirname(path.dirname(ptyEntry)), 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')
+  for (const helper of spawnHelperPaths(ptyEntry)) {
+    try {
+      const mode = fs.statSync(helper).mode
 
-  try {
-    const mode = fs.statSync(helper).mode
-
-    if ((mode & 0o111) === 0) {
-      fs.chmodSync(helper, mode | 0o755)
-      log('terminal', `restored executable bit on ${helper}`)
+      if ((mode & 0o111) === 0) {
+        fs.chmodSync(helper, mode | 0o755)
+        log('terminal', `restored executable bit on ${helper}`)
+      }
+    } catch (error) {
+      // node-pty compiles a helper only when it has no prebuild, so one of the two is usually missing.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log('terminal', `could not make ${helper} executable: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-  } catch {
-    // No prebuilt helper (compiled from source); nothing to fix.
   }
 }
 

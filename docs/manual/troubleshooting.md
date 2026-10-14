@@ -16,6 +16,16 @@ Herald OS is running but something misbehaves.
   always refused, and destructive actions ask every time. Settings > Privacy shows the rules and the
   audit log of what happened.
 
+## The Terminal
+
+- **The Terminal says "posix_spawnp failed." and never shows a shell.** The Mac builds up to 0.1.0
+  alpha 4 shipped the helper that starts its shells without permission to run. Run this once, then
+  press Try again:
+
+  ```bash
+  chmod +x "/Applications/Herald OS.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
+  ```
+
 ## Themes and the look
 
 - **A theme does not change everything.** On a Mac, Herald OS recolours itself and Hermes's skin;

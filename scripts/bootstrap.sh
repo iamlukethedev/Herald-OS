@@ -30,9 +30,10 @@ echo "==> Installing Node workspaces"
 echo "==> Fetching the Electron binary"
 (cd "$ROOT/apps/desktop" && node -e "require('electron')") || echo "    WARNING: could not download Electron; npm run dev will try again"
 
-# npm strips the executable bit from node-pty's prebuilt spawn-helper; the app also repairs this at
-# runtime, but fixing it here keeps packaged builds working. (Linux has no prebuilds; see
-# linux/dev/build.sh, which compiles node-pty.)
+# npm strips the executable bit from node-pty's prebuilt spawn-helper. Packaged builds set it on the
+# copy they ship (apps/desktop/scripts/after-pack.mjs) and the app repairs it when it loads node-pty;
+# fixing it here covers the checkout before then. (Linux has no prebuilds; see linux/dev/build.sh,
+# which compiles node-pty.)
 helper="$ROOT/node_modules/node-pty/prebuilds/$(node -p 'process.platform + "-" + process.arch')/spawn-helper"
 [[ -f "$helper" ]] && chmod 755 "$helper"
 

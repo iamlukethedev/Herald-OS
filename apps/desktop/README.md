@@ -30,7 +30,7 @@ src/                   React renderer
   components/          shared UI primitives and the two brand marks
 public/                served as-is: favicon, audio-capture worklet
 build/                 app icons and macOS entitlements for electron-builder
-scripts/               bundle-electron.mjs (esbuild for main and preload)
+scripts/               bundle-electron.mjs (esbuild for main and preload), after-pack.mjs (electron-builder hook)
 ```
 
 ## Scripts
@@ -43,7 +43,7 @@ Run them here, or from the repository root (`npm run dev`, `npm run build`, `npm
 | `npm run build` | Renderer into `dist/renderer`, main and preload into `dist/electron` |
 | `npm start` | Build, then run the built app |
 | `npm run typecheck` | `tsc` for the renderer and for main and preload |
-| `npm test` | Vitest over `src`, `electron` and `shared` |
+| `npm test` | Vitest over `src`, `electron`, `shared` and `scripts` |
 | `npm run dist:mac` | Apple Silicon DMG and zip in `release/` (unsigned) |
 | `npm run dist:linux` | `herald-os-<version>-linux-<arch>.tar.gz` in `release/` for this machine's architecture (`-- --x64` or `-- --arm64` to pick), with the Linux CLIs, session, themes, catalog and bridge plugin in `resources/` |
 

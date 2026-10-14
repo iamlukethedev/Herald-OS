@@ -188,8 +188,10 @@
     "asar": true,
     "asarUnpack": [
       "**/*.node",
-      "**/node-pty/prebuilds/**"
+      "**/node-pty/prebuilds/**",
+      "**/node-pty/build/Release/spawn-helper"
     ],
+    "afterPack": "scripts/after-pack.mjs",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
