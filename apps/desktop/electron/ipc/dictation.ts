@@ -33,15 +33,16 @@ export function resetTypingPermissionCheck(): void {
 
 /**
  * Which permission a failed `osascript` paste lacked: -1743 is an Apple event macOS refused
- * (Automation, for System Events); 1002 "not allowed to send keystrokes" and -1719 "not allowed
- * assistive access" mean Accessibility. Anything else (a timeout, another error) is not known.
+ * (Automation, for System Events); 1002 "not allowed to send keystrokes" means Accessibility, and
+ * so does -1719 when it says "not allowed assistive access" (on its own, -1719 is an invalid index).
+ * Anything else (a timeout, another error) is not known.
  */
 export function missingPermission(stderr: string): TypingPermission | null {
   if (/-1743\b|not authori[sz]ed to send apple events/i.test(stderr)) {
     return 'automation'
   }
 
-  if (/\(1002\)|\(-1719\)|not allowed to send keystrokes|assistive access/i.test(stderr)) {
+  if (/\(1002\)|not allowed to send keystrokes/i.test(stderr) || (/\(-1719\)/.test(stderr) && /assistive access/i.test(stderr))) {
     return 'accessibility'
   }
 

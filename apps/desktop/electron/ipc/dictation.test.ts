@@ -71,6 +71,32 @@ describe('reading why a paste failed', () => {
     expect(missingPermission('execution error: osascript is not allowed assistive access. (-1719)')).toBe('accessibility')
   })
 
+  // Each string carries exactly one of the patterns, so every pattern is needed on its own.
+  it.each([
+    ['the -1743 code alone', 'execution error: (-1743)', 'automation'],
+    ['the refused Apple events text alone', 'execution error: Not authorized to send Apple events to System Events.', 'automation'],
+    ['the British spelling of that text', 'execution error: Not authorised to send Apple events to System Events.', 'automation'],
+    ['the 1002 code alone', 'execution error: System Events got an error. (1002)', 'accessibility'],
+    ['-1719 with the assistive access text', 'execution error: osascript is not allowed assistive access. (-1719)', 'accessibility'],
+    ['the keystrokes text alone', 'execution error: System Events got an error: osascript is not allowed to send keystrokes.', 'accessibility']
+  ])('reads %s', (_name, stderr, permission) => {
+    expect(missingPermission(stderr)).toBe(permission)
+  })
+
+  it.each([
+    ['-1744 (consent would be needed, not refused)', 'execution error: (-1744)'],
+    ['1743 without its minus sign', 'execution error: (1743)'],
+    ['a longer code that starts with -1743', 'execution error: (-17430)'],
+    ['a longer code that starts with 1002', 'execution error: (10020)']
+  ])('does not read %s as a permission', (_name, stderr) => {
+    expect(missingPermission(stderr)).toBeNull()
+  })
+
+  it('takes -1719 for Accessibility only when it says assistive access', () => {
+    expect(missingPermission('execution error: System Events got an error: Invalid index. (-1719)')).toBeNull()
+    expect(missingPermission('execution error: osascript is not allowed assistive access.')).toBeNull()
+  })
+
   it('names nothing for a timeout or another error', () => {
     expect(missingPermission('')).toBeNull()
     expect(missingPermission('execution error: Can’t get application "System Events". (-1728)')).toBeNull()
