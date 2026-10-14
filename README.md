@@ -49,7 +49,8 @@ Pick the way that matches your machine:
 
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
 account, or an API key for a provider Hermes supports (OpenRouter, OpenAI, Anthropic, a local model,
-and others). Herald OS shows a sign-in card the first time Hermes needs one.
+and others). Herald OS shows a sign-in card the first time Hermes needs one, and Settings > Hermes &
+agents > Model provider switches to another provider or takes its API key.
 
 ### macOS
 
@@ -360,7 +361,8 @@ bash linux/dev/push.sh
 
 **5. Sign Hermes in.** The first time Hermes needs a model, Herald OS shows a sign-in card with a
 short code: open the link on any device and enter the code. To use an API key or another provider
-instead, open a shell in the VM with `bash linux/dev/push.sh ssh` and run `hermes setup`.
+instead, choose it under Settings > Hermes & agents > Model provider (or run `hermes setup` in a
+shell in the VM, `bash linux/dev/push.sh ssh`).
 
 From then on, `bash linux/vm/run-qemu.sh stop` shuts the VM down and `bash linux/vm/run-qemu.sh`
 starts it again, straight into Herald OS. After you change the code on your Mac,
@@ -387,8 +389,8 @@ hermes setup
 ```
 
 `hermes setup` walks you through choosing a model provider and signing in. You can change it later
-with `hermes model`, or from Herald OS under Settings. Check that Hermes works on its own before
-going further:
+with `hermes model`, or from Herald OS under Settings > Hermes & agents. Check that Hermes works on
+its own before going further:
 
 ```bash
 hermes doctor

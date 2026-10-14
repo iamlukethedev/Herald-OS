@@ -7,8 +7,9 @@ dates (file names, project branches, chat titles), never contents, and only afte
 
 **Which AI model does it use?**
 Whatever your Hermes is set up with: a Nous Portal subscription, or an API key for OpenRouter,
-OpenAI, Anthropic, a local model and others. Change it in Settings > Hermes & agents or with
-`hermes model`.
+OpenAI, Anthropic, a local model and others. Change it in Settings > Hermes & agents: Model provider
+signs you in to another account or takes an API key, and Preferred model picks the model.
+`hermes model` does the same in a terminal.
 
 **What does it cost?**
 Herald OS is free and open source. The model is billed by its provider; Settings > Usage shows how

@@ -11,13 +11,18 @@ import {
   type DeviceLoginStart,
   type DeviceLoginStatus,
   loginTarget,
+  type OAuthProvider,
   pollDeviceLogin,
+  refreshHermesAuth,
   snoozeHermesLogin,
   startDeviceLogin
 } from '../../store/hermes-auth.ts'
+import { focusProvider, providerName, providersChanged, switchToProvider } from '../../store/model-provider.ts'
+import { notify } from '../../store/notifications.ts'
 import { isPanels } from '../../store/shell.ts'
 import { $webWindows, closeWebWindow, focusWebWindow, openWebWindow } from '../../store/web-windows.ts'
 import { type Bounds, desktopArea, showPage } from '../../store/windows.ts'
+import { errorText, focusSettings } from '../settings/sections/shared.tsx'
 
 /** The card's width plus the gap it keeps from the screen edge and from the sign-in window. */
 const CARD_WIDTH = 440
@@ -34,11 +39,44 @@ function signInBounds(): Bounds {
 
 type Phase = { kind: 'idle' } | { kind: 'starting' } | { kind: 'code'; login: DeviceLoginStart; status: DeviceLoginStatus; error: string | null; secondsLeft: number } | { kind: 'done' } | { kind: 'failed'; message: string }
 
+/** Close the card and show the provider chooser (Settings, or first-run setup while it is up), at `slug`'s setup when given. */
+function chooseAnotherProvider(close: () => void, slug?: string): void {
+  close()
+  showPage('settings')
+  focusSettings({ section: 'agents' })
+  focusProvider(slug)
+}
+
+/**
+ * Signed in: a provider other than the active one (picked in Settings, or the first on a fresh
+ * install) becomes the one Hermes thinks with, on its recommended model.
+ */
+async function finishSignIn(provider: OAuthProvider): Promise<void> {
+  const auth = await refreshHermesAuth()
+
+  if (auth.activeProvider !== provider.id) {
+    try {
+      const change = await switchToProvider(provider.id)
+
+      if (!change.ok) {
+        notify({ title: `Choose a model for ${provider.name}`, body: `${change.confirm} Pick one in Settings > Hermes & agents > Preferred model.`, level: 'info' })
+      }
+    } catch (error) {
+      notify({ title: `Signed in, but Hermes still uses ${providerName(auth.activeProvider) ?? auth.activeProvider ?? 'its old provider'}`, body: errorText(error), level: 'error' })
+    }
+  }
+
+  await completeHermesLogin(provider.name)
+  providersChanged()
+}
+
 /**
  * The OS-level sign-in for Hermes's model provider. Shown when the active provider has no usable
- * credentials (boot check or a failed turn). Runs the runtime's device-code flow: show the code,
- * open the portal in a Herald OS web window beside the card, poll until approved; the runtime
- * persists the credentials itself. The portal never opens in the system browser.
+ * credentials (boot check or a failed turn), or for a provider the person picked to sign in to.
+ * Runs the runtime's device-code flow: show the code, open the portal in a Herald OS web window
+ * beside the card, poll until approved; the runtime persists the credentials itself. The portal
+ * never opens in the system browser. When Hermes uses an API key there is nothing to sign in to,
+ * and a refused turn sends the person to Settings to replace the key or change provider.
  */
 export function HermesLoginCard() {
   const auth = useStore($hermesAuth)
@@ -79,8 +117,34 @@ export function HermesLoginCard() {
     }
   }, [auth.needsLogin])
 
-  if (!auth.needsLogin || !target) {
+  // Another provider picked while the card is up gets a sign-in of its own, not this one's code.
+  const targetId = target?.id
+
+  useEffect(() => {
+    if (sessionRef.current) {
+      void cancelDeviceLogin(sessionRef.current)
+      sessionRef.current = null
+    }
+
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current)
+    }
+
+    if (webRef.current) {
+      closeWebWindow(webRef.current)
+      webRef.current = null
+      setWebId(null)
+    }
+
+    setPhase(current => (current.kind === 'done' ? current : { kind: 'idle' }))
+  }, [targetId])
+
+  if (!auth.needsLogin) {
     return null
+  }
+
+  if (!target) {
+    return auth.activeProvider ? <ProviderRefusedCard slug={auth.activeProvider} reason={auth.reason} /> : null
   }
 
   const closeSignInPage = () => {
@@ -146,7 +210,7 @@ export function HermesLoginCard() {
           setPhase({ kind: 'done' })
           // The portal has done its job; the page closes with the approval.
           closeSignInPage()
-          await completeHermesLogin(target.name)
+          await finishSignIn(target)
 
           return
         }
@@ -198,6 +262,8 @@ export function HermesLoginCard() {
   }
 
   const others = auth.providers.filter(p => p.id !== target.id && p.loggedIn)
+  // Signing in to a provider Hermes does not use yet (picked, or the first on a fresh install) moves Hermes to it.
+  const switching = target.id !== auth.activeProvider
 
   return (
     // With the sign-in page open the card steps aside: no dimming, anchored right, page on the left.
@@ -215,7 +281,15 @@ export function HermesLoginCard() {
               Sign in to Hermes
             </h2>
             <p className="mt-0.5 text-[12.5px] leading-snug text-fg-2">
-              Hermes uses <span className="font-medium text-fg">{target.name}</span> for its model and is signed out, so it cannot answer until you sign in.
+              {switching ? (
+                <>
+                  Sign in to <span className="font-medium text-fg">{target.name}</span> and Hermes thinks with it from then on.
+                </>
+              ) : (
+                <>
+                  Hermes uses <span className="font-medium text-fg">{target.name}</span> for its model and is signed out, so it cannot answer until you sign in.
+                </>
+              )}
             </p>
           </div>
           <button type="button" aria-label="Not now" onClick={close} className="-mt-1 -mr-1 flex size-7 items-center justify-center rounded-md text-fg-3 hover:bg-white/10 hover:text-fg">
@@ -223,7 +297,7 @@ export function HermesLoginCard() {
           </button>
         </div>
 
-        {auth.reason && phase.kind === 'idle' && <div className="mt-3 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-snug text-warn">{auth.reason}</div>}
+        {auth.reason && phase.kind === 'idle' && !switching && <div className="mt-3 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-snug text-warn">{auth.reason}</div>}
 
         <div className="mt-4">
           {target.flow === 'external' ? (
@@ -255,12 +329,47 @@ export function HermesLoginCard() {
                 {others.map(p => p.name).join(', ')} {others.length === 1 ? 'is' : 'are'} already signed in.{' '}
               </>
             ) : null}
-            <button type="button" className="text-accent-strong hover:underline" onClick={() => showPage('settings')}>
-              Change provider in Settings
+            <button type="button" className="text-accent-strong hover:underline" onClick={() => chooseAnotherProvider(close)}>
+              Use another provider
             </button>
           </span>
           <GlassButton size="sm" variant="ghost" onClick={close} aria-label="Not now">
             Not now
+          </GlassButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Hermes uses an API key and a turn was refused for its credentials: nothing to sign in to, so the key or the provider changes in Settings. */
+function ProviderRefusedCard({ slug, reason }: { slug: string; reason: string | null }) {
+  return (
+    <div className="absolute inset-0 z-(--z-request) flex items-center justify-center bg-black/35 backdrop-blur-[2px]" role="dialog" aria-modal aria-labelledby="hermes-refused-title">
+      <div className="float w-[440px] rounded-2xl p-5 animate-rise">
+        <div className="flex items-start gap-3">
+          <HermesAvatar size={36} rounded={10} />
+          <div className="min-w-0 flex-1">
+            <h2 id="hermes-refused-title" className="text-[15px] font-semibold text-fg">
+              Hermes cannot reach its model
+            </h2>
+            <p className="mt-0.5 text-[12.5px] leading-snug text-fg-2">
+              <span className="font-medium text-fg">{providerName(slug) ?? slug}</span> turned Hermes down: the API key Hermes has for it is missing or no longer works. Replace it, or choose another provider.
+            </p>
+          </div>
+          <button type="button" aria-label="Not now" onClick={snoozeHermesLogin} className="-mt-1 -mr-1 flex size-7 items-center justify-center rounded-md text-fg-3 hover:bg-white/10 hover:text-fg">
+            <IconX size={15} />
+          </button>
+        </div>
+
+        {reason && <div className="mt-3 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-snug text-warn">{reason}</div>}
+
+        <div className="mt-4 flex items-center justify-end gap-2 border-t border-line pt-3">
+          <GlassButton size="sm" variant="ghost" onClick={snoozeHermesLogin} aria-label="Not now">
+            Not now
+          </GlassButton>
+          <GlassButton size="sm" variant="primary" onClick={() => chooseAnotherProvider(snoozeHermesLogin, slug)}>
+            Open Settings
           </GlassButton>
         </div>
       </div>

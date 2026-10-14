@@ -6,8 +6,9 @@ Herald OS is running but something misbehaves.
 ## Hermes
 
 - **Hermes does not answer.** The menu bar shows a badge while Hermes is unreachable. Run
-  `hermes doctor` in a terminal; if it asks you to sign in, run `hermes setup`. Herald OS's own
-  log is `~/.hermes/logs/herald-os.log`.
+  `hermes doctor` in a terminal; if it asks you to sign in, sign in or change provider under
+  Settings > Hermes & agents > Model provider, or run `hermes setup`. Herald OS's own log is
+  `~/.hermes/logs/herald-os.log`.
 - **Hermes runs shell commands instead of its system tools.** The system bridge is not loaded:
   run `npm run bootstrap` in your Herald OS checkout (or `herald-os setup` from a package), then
   restart Herald OS. `hermes plugins list` should show `herald-os-bridge` as enabled.

@@ -17,6 +17,8 @@ export type {
   InflightTurn,
   InsightsGetResult,
   MessageCompletePayload,
+  ModelOptionProvider,
+  ModelOptionsResult,
   NotificationShowPayload,
   OpenRequestEntry,
   PluginsManageParams,

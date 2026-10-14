@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { IconBolt, IconCloud, IconCpu, IconFileText, IconHistory, IconKey, IconLock, IconMessage, IconRefresh, IconScale, IconSearch, IconUsers } from '@tabler/icons-react'
+import { IconBolt, IconCloud, IconCpu, IconFileText, IconHistory, IconLock, IconMessage, IconScale, IconSearch, IconUsers } from '@tabler/icons-react'
 import { useMemo, useState } from 'react'
 import type { AuditEntry } from '../../../../shared/ipc.ts'
 import { HermesAvatar } from '../../../components/app-icon.tsx'
@@ -10,16 +10,18 @@ import { rest } from '../../../lib/rest.ts'
 import { useBackendData, useLocalData } from '../../../lib/use-async.ts'
 import { $activeChat } from '../../../store/chat.ts'
 import { $connection, gatewayRequest } from '../../../store/gateway.ts'
-import { $hermesAuth, loginTarget, refreshHermesAuth, requestHermesLogin } from '../../../store/hermes-auth.ts'
+import { $providerChanges, type ModelChange, setHermesModel } from '../../../store/model-provider.ts'
 import { notify } from '../../../store/notifications.ts'
 import { readTier, withTier } from './policy.ts'
+import { ModelConfirm, ModelProviderRow } from './ProviderRow.tsx'
 import { errorText, InlineNote, markSaved, MenuDropdown, RadioCard, SectionTitle, SettingsBlock, SettingsGroup, SettingsRow, Stepper, useDismiss } from './shared.tsx'
 import { ToolSearchRow } from './ToolSearchRow.tsx'
 
 /*
  * Hermes & agents: the default Settings section. Every control here binds to real Hermes state:
  *   approvals.mode (gateway config.get/set)            -> Autonomy cards
- *   model.options + slash /model                       -> Preferred model
+ *   model.options, /api/providers/oauth, /api/env      -> Model provider (ProviderRow.tsx)
+ *   model.options + /api/model/set + config.set model  -> Preferred model
  *   /api/tools/terminal/backend(s)                     -> Run on
  *   delegation.max_concurrent_children (/api/config)   -> Background agents
  *   `memory` toolset (/api/tools/toolsets)             -> Remember preferences
@@ -52,7 +54,7 @@ export function AgentsSection() {
       <AutonomyBlock ready={ready} />
 
       <SettingsGroup title="Account">
-        <ProviderAccountRow />
+        <ModelProviderRow />
       </SettingsGroup>
 
       <SettingsGroup title="Model & performance">
@@ -68,43 +70,6 @@ export function AgentsSection() {
         <ActivityHistoryRow />
       </SettingsGroup>
     </>
-  )
-}
-
-// ---- Account -------------------------------------------------------------------------------
-
-/** The model provider's sign-in state; "Sign in" opens the OS sign-in card (device-code flow). */
-function ProviderAccountRow() {
-  const auth = useStore($hermesAuth)
-  const target = loginTarget(auth)
-  const signedIn = Boolean(target?.loggedIn)
-  const others = auth.providers.filter(p => p.loggedIn && p.id !== target?.id)
-
-  return (
-    <SettingsRow
-      icon={<IconKey />}
-      label={target ? `${target.name}` : 'Model provider'}
-      description={
-        !auth.checked
-          ? 'Checking sign-in…'
-          : !target
-            ? 'No OAuth provider is configured; the model uses an API key.'
-            : signedIn
-              ? `Signed in${target.source ? ` (${target.source.replace(/_/g, ' ')})` : ''}.${others.length ? ` Also signed in: ${others.map(p => p.name).join(', ')}.` : ''}`
-              : 'Signed out. Hermes cannot answer until you sign in.'
-      }
-      keywords="login sign in account oauth nous portal credentials"
-    >
-      {target && (signedIn ? <Pill tone="ok" dot>Signed in</Pill> : <Pill tone="warn" dot>Signed out</Pill>)}
-      {target && !signedIn && (
-        <GlassButton size="sm" variant="primary" onClick={() => requestHermesLogin(`${target.name} is signed out.`)} aria-label={`Sign in with ${target.name}`}>
-          Sign in
-        </GlassButton>
-      )}
-      <GlassButton size="sm" variant="ghost" onClick={() => void refreshHermesAuth()} aria-label="Refresh sign-in status">
-        <IconRefresh />
-      </GlassButton>
-    </SettingsRow>
   )
 }
 
@@ -202,38 +167,43 @@ function shortModel(model: string | undefined | null): string {
 
 function PreferredModelRow({ ready }: { ready: boolean }) {
   const chat = useStore($activeChat)
-  const options = useBackendData(() => gatewayRequest('model.options', { include_unconfigured: false }), [], { enabled: ready })
+  const changes = useStore($providerChanges)
+  const options = useBackendData(() => gatewayRequest('model.options', { include_unconfigured: false }), [changes], { enabled: ready })
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [pending, setPending] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<Extract<ModelChange, { ok: false }> | null>(null)
   const ref = useDismiss(open, () => setOpen(false))
 
   const current = options.data?.model ?? chat?.info.model
   const provider = options.data?.provider ?? chat?.info.provider
+  const providerLabel = options.data?.providers.find(p => p.slug === provider)?.name ?? provider
   const providers = useMemo(() => {
     const q = filter.trim().toLowerCase()
 
     return (options.data?.providers ?? [])
-      .filter(p => (p.models?.length ?? 0) > 0)
+      .filter(p => p.authenticated !== false && (p.models?.length ?? 0) > 0)
       .map(p => ({ ...p, models: (p.models ?? []).filter(model => !q || model.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) }))
       .filter(p => p.models.length > 0)
   }, [options.data, filter])
 
-  const setModel = async (providerSlug: string, model: string) => {
-    if (!chat) {
-      notify({ title: 'Open a session first', body: 'Model changes apply to the active session and become the default for new ones.', level: 'info' })
-
-      return
-    }
-
+  const setModel = async (providerSlug: string, model: string, confirmed = false) => {
     setPending(`${providerSlug}:${model}`)
+    setConfirm(null)
 
     try {
-      await gatewayRequest('slash.exec', { session_id: chat.sessionId, command: `/model ${providerSlug}:${model}` })
-      markSaved()
-      notify({ title: 'Model changed', body: `${providerSlug} · ${model}`, level: 'success' })
+      const change = await setHermesModel(providerSlug, model, confirmed)
       setOpen(false)
-      options.reload()
+
+      if (!change.ok) {
+        setConfirm(change)
+
+        return
+      }
+
+      markSaved()
+      const name = options.data?.providers.find(p => p.slug === change.provider)?.name ?? change.provider
+      notify({ title: 'Model changed', body: `${name} · ${change.model}, ${chat ? 'in this chat and new ones' : 'for new conversations'}.`, level: 'success' })
     } catch (error) {
       notify({ title: 'Could not change model', body: errorText(error), level: 'error' })
     } finally {
@@ -242,9 +212,15 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
   }
 
   return (
-    <SettingsRow icon={<IconCpu />} label="Preferred model" description="Choose the model Hermes uses for most tasks." keywords="llm provider">
+    <SettingsRow
+      icon={<IconCpu />}
+      label="Preferred model"
+      description="Choose the model Hermes uses for most tasks."
+      keywords="llm provider"
+      below={confirm ? <ModelConfirm message={confirm.confirm} busy={Boolean(pending)} onCancel={() => setConfirm(null)} onConfirm={() => void setModel(confirm.provider, confirm.model, true)} /> : undefined}
+    >
       <div ref={ref} className="relative">
-        <Dropdown label={<span className="max-w-[240px] truncate">{provider ? `${provider} · ${shortModel(current)}` : `Hermes · ${shortModel(current)}`}</span>} onClick={() => ready && setOpen(o => !o)} className={cn(!ready && 'opacity-50')} />
+        <Dropdown label={<span className="max-w-[240px] truncate">{providerLabel ? `${providerLabel} · ${shortModel(current)}` : `Hermes · ${shortModel(current)}`}</span>} onClick={() => ready && setOpen(o => !o)} className={cn(!ready && 'opacity-50')} />
         {open && (
           <div className="float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 flex w-[380px] flex-col rounded-lg" role="dialog" aria-label="Choose model">
             <label className="glass-input m-2 flex h-8 items-center gap-2 rounded-lg px-2.5">
@@ -278,7 +254,6 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
                 </section>
               ))}
             </div>
-            {!chat && <div className="border-t border-line px-3 py-2 text-[11.5px] text-fg-4">Open a session to change the model.</div>}
           </div>
         )}
       </div>

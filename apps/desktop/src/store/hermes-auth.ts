@@ -1,5 +1,5 @@
 import { atom } from 'nanostores'
-import { isAuthErrorText, parseActiveProvider } from '../lib/hermes-auth.ts'
+import { isAuthErrorText, parseActiveProvider, signInTarget } from '../lib/hermes-auth.ts'
 import { rest } from '../lib/rest.ts'
 import { $gatewayReady, onGatewayEvent } from './gateway.ts'
 import { notify } from './notifications.ts'
@@ -35,6 +35,8 @@ export interface HermesAuthSnapshot {
   reason: string | null
   /** The user chose "Not now"; the card stays hidden until the next failed turn. */
   snoozed: boolean
+  /** A provider the person picked to sign in to (Settings, setup, a command): the card signs into it, and Hermes switches to it after. */
+  chosen: string | null
 }
 
 export interface DeviceLoginStart {
@@ -47,7 +49,7 @@ export interface DeviceLoginStart {
 
 export type DeviceLoginStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'error'
 
-export const $hermesAuth = atom<HermesAuthSnapshot>({ checked: false, activeProvider: null, providers: [], needsLogin: false, reason: null, snoozed: false })
+export const $hermesAuth = atom<HermesAuthSnapshot>({ checked: false, activeProvider: null, providers: [], needsLogin: false, reason: null, snoozed: false, chosen: null })
 
 export { isAuthErrorText, parseActiveProvider }
 
@@ -76,14 +78,16 @@ export async function refreshHermesAuth(): Promise<HermesAuthSnapshot> {
     const active = providers.find(p => p.id === activeProvider)
     const signedOut = Boolean(active && !active.loggedIn)
     const current = $hermesAuth.get()
+    // A sign-in the person asked for stays up whatever state the active provider is in.
+    const asked = Boolean(current.chosen && current.needsLogin)
 
     patch({
       checked: true,
       activeProvider,
       providers,
       // A signed-in provider closes the card; a signed-out one opens it unless the user snoozed it.
-      needsLogin: signedOut ? current.needsLogin || !current.snoozed : false,
-      reason: signedOut ? (current.reason ?? `${active?.name ?? activeProvider} is signed out.`) : null
+      needsLogin: asked || (signedOut ? current.needsLogin || !current.snoozed : false),
+      reason: asked ? current.reason : signedOut ? (current.reason ?? `${active?.name ?? activeProvider} is signed out.`) : null
     })
   } catch {
     // Older runtimes without the OAuth routes: nothing to show; turn errors still open the card.
@@ -93,18 +97,22 @@ export async function refreshHermesAuth(): Promise<HermesAuthSnapshot> {
   return $hermesAuth.get()
 }
 
-/** A turn failed for lack of credentials (text or voice): show the card regardless of snooze. */
-export function requestHermesLogin(reason?: string): void {
-  patch({ needsLogin: true, snoozed: false, reason: reason ?? $hermesAuth.get().reason ?? 'Hermes needs you to sign in.' })
+/**
+ * A turn failed for lack of credentials (text or voice), or the person picked `providerId` to sign
+ * in to: show the card regardless of snooze.
+ */
+export function requestHermesLogin(reason?: string, providerId?: string): void {
+  const current = $hermesAuth.get()
+  patch({ needsLogin: true, snoozed: false, chosen: providerId ?? current.chosen, reason: reason ?? current.reason ?? 'Hermes needs you to sign in.' })
 }
 
 export function snoozeHermesLogin(): void {
-  patch({ needsLogin: false, snoozed: true })
+  patch({ needsLogin: false, snoozed: true, chosen: null })
 }
 
-/** The provider the card signs into: the active one, else the first device-code provider. */
+/** The provider the card signs into (see `signInTarget`); null when Hermes uses an API key. */
 export function loginTarget(snapshot: HermesAuthSnapshot = $hermesAuth.get()): OAuthProvider | null {
-  return snapshot.providers.find(p => p.id === snapshot.activeProvider) ?? snapshot.providers.find(p => p.flow === 'device_code') ?? null
+  return signInTarget(snapshot.providers, snapshot.activeProvider, snapshot.chosen)
 }
 
 export async function startDeviceLogin(providerId: string): Promise<DeviceLoginStart> {
@@ -126,7 +134,7 @@ export function cancelDeviceLogin(sessionId: string): Promise<unknown> {
 
 /** Sign-in finished: refresh status, close the card, tell the user. */
 export async function completeHermesLogin(providerName: string): Promise<void> {
-  patch({ needsLogin: false, snoozed: false, reason: null })
+  patch({ needsLogin: false, snoozed: false, reason: null, chosen: null })
   await refreshHermesAuth()
   notify({ title: 'Signed in', body: `Hermes is connected to ${providerName}. Ask it something.`, level: 'success' })
 }

@@ -17,6 +17,7 @@ const SECTION_ALIASES: Record<string, string> = {
   agent: 'agents',
   hermes: 'agents',
   model: 'agents',
+  provider: 'agents',
   account: 'agents',
   look: 'appearance',
   theme: 'appearance',

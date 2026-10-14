@@ -39,7 +39,8 @@ enabling it at launch makes the guest adopt the initial window size).
 ### Signing Hermes in
 
 Hermes in the VM starts signed out. Sign it in from the card Herald OS shows (a short code you
-confirm on any device), or from a shell in the VM:
+confirm on any device), choose another provider or paste an API key under Settings > Hermes &
+agents > Model provider, or set it up from a shell in the VM:
 
 ```bash
 bash linux/dev/push.sh ssh

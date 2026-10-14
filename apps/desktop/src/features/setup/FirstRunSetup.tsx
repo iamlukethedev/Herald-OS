@@ -2,10 +2,12 @@ import { useStore } from '@nanostores/react'
 import { IconArrowRight, IconCheck, IconGift, IconLock, IconUser, IconWifi } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import { HeraldLogo } from '../../components/herald-logo.tsx'
-import { GlassButton } from '../../components/ui/glass.tsx'
+import { GlassButton, GlassCard, LinkAction } from '../../components/ui/glass.tsx'
 import { Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
 import { $hermesAuth, refreshHermesAuth, requestHermesLogin } from '../../store/hermes-auth.ts'
+import { $providerFocus, providerName } from '../../store/model-provider.ts'
+import { ModelProviderRow } from '../settings/sections/ProviderRow.tsx'
 import { StatusPanel } from '../status/StatusPanel.tsx'
 
 type Step = 'welcome' | 'account' | 'wifi' | 'hermes' | 'done'
@@ -19,7 +21,10 @@ export function FirstRunSetup() {
   const [due, setDue] = useState(false)
   const [step, setStep] = useState<Step>('welcome')
   const [forSomeoneElse, setForSomeoneElse] = useState(false)
+  // Kept here: the Hermes step unmounts while the sign-in card is up.
+  const [otherProvider, setOtherProvider] = useState(false)
   const auth = useStore($hermesAuth)
+  const providerFocus = useStore($providerFocus)
 
   useEffect(() => {
     void window.heraldOS.setup
@@ -27,6 +32,13 @@ export function FirstRunSetup() {
       .then(state => setDue(state.needed))
       .catch(() => undefined)
   }, [])
+
+  // The sign-in card's "Use another provider" lands on the Hermes step while setup is up.
+  useEffect(() => {
+    if (providerFocus) {
+      setOtherProvider(true)
+    }
+  }, [providerFocus])
 
   if (!due) {
     return null
@@ -76,7 +88,7 @@ export function FirstRunSetup() {
             <Footer onNext={next} label="Next" />
           </div>
         )}
-        {step === 'hermes' && <HermesStep onDone={next} />}
+        {step === 'hermes' && <HermesStep onDone={next} choosing={otherProvider} onChoose={() => setOtherProvider(true)} />}
         {step === 'done' && (
           <div className="flex flex-col gap-4">
             <Heading
@@ -185,7 +197,8 @@ function Account({ onDone }: { onDone: () => void }) {
   )
 }
 
-function HermesStep({ onDone }: { onDone: () => void }) {
+/** Hermes's model provider: sign in to the default one, or choose another (an account or an API key). */
+function HermesStep({ onDone, choosing, onChoose }: { onDone: () => void; choosing: boolean; onChoose: () => void }) {
   const auth = useStore($hermesAuth)
   const [checking, setChecking] = useState(true)
 
@@ -200,9 +213,23 @@ function HermesStep({ onDone }: { onDone: () => void }) {
       <Heading
         icon={<IconUser size={18} />}
         title="Sign in to Hermes"
-        text={signedIn ? `Hermes is signed in${auth.activeProvider ? ` with ${auth.activeProvider}` : ''}.` : 'Hermes needs a model provider to think with. Signing in opens the provider page beside a short code.'}
+        text={
+          signedIn
+            ? `Hermes thinks with ${providerName(auth.activeProvider) ?? auth.activeProvider}.`
+            : 'Hermes needs a model provider to think with. Signing in opens the provider page beside a short code; another provider can take an API key instead.'
+        }
       />
-      <div className="flex justify-end gap-2">
+      {choosing && (
+        <GlassCard className="flex flex-col">
+          <ModelProviderRow />
+        </GlassCard>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {!choosing && (
+          <LinkAction className="mr-auto" onClick={onChoose}>
+            Use another provider
+          </LinkAction>
+        )}
         {!signedIn && (
           <GlassButton variant="ghost" onClick={onDone}>
             Later
@@ -211,9 +238,11 @@ function HermesStep({ onDone }: { onDone: () => void }) {
         {signedIn ? (
           <Footer onNext={onDone} label="Next" />
         ) : (
-          <GlassButton variant="primary" onClick={() => requestHermesLogin('setup')} disabled={checking}>
-            {checking ? <Spinner /> : null} Sign in <IconArrowRight size={15} />
-          </GlassButton>
+          !choosing && (
+            <GlassButton variant="primary" onClick={() => requestHermesLogin('setup')} disabled={checking}>
+              {checking ? <Spinner /> : null} Sign in <IconArrowRight size={15} />
+            </GlassButton>
+          )
         )}
       </div>
     </div>

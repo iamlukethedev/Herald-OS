@@ -204,7 +204,8 @@ model switches between fast, accurate, multilingual and most-accurate models.
   card: one click opens the provider's page with a one-time code inside Herald OS, as a Herald OS
   window beside the card (never the system browser), and both the page and the card close
   themselves once the sign-in is approved. The voice says so too instead of failing silently.
-  Settings > Hermes & agents > Account shows the current state and a Sign in button.
+  Settings > Hermes & agents > Model provider shows the current state and a Sign in button, and
+  switches to another provider.
 - The wake word runs inside the Hermes runtime (openWakeWord, on-device). On runtimes older than
   0.21.3 the runtime opens the host mic itself; newer ones take audio from Herald OS. Only one
   Hermes client can own the detector at a time.

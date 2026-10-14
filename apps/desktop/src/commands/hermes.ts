@@ -1,13 +1,17 @@
+import { focusSettings } from '../features/settings/sections/shared.tsx'
+import { matchProvider } from '../lib/model-provider.ts'
 import { pauseAllAgents } from '../store/agents-control.ts'
 import { $activeChat, createChat, interruptChat, openStoredSession, sendPrompt } from '../store/chat.ts'
+import { requestHermesLogin } from '../store/hermes-auth.ts'
 import { $activeMissions, $completedMissions, $missions, $reviewMissions, focusMissions, markReviewed, type Mission } from '../store/missions.ts'
 import { startMission } from '../store/missions-actions.ts'
+import { focusProvider, readProviderChoices, switchToProvider } from '../store/model-provider.ts'
 import { fail, ok, type OsCommand } from '../store/os-commands.ts'
 import { $sessions, refreshSessions } from '../store/sessions.ts'
 import { readToolSearch, setToolSearch } from '../store/tool-search.ts'
 import { openApp, showPage } from '../store/windows.ts'
 
-/* Chat sessions and missions, and how Hermes reaches its tools. */
+/* Chat sessions and missions, how Hermes reaches its tools, and the model provider it thinks with. */
 
 function findMission(query: string): { mission: Mission | null; candidates: Mission[] } {
   const needle = query.trim().toLowerCase()
@@ -276,6 +280,68 @@ export const hermesCommands: readonly OsCommand[] = [
       await setToolSearch(on)
 
       return ok(`Tool search ${on ? 'on' : 'off'} for new conversations`, { highlight: { kind: 'setting', id: 'agents' }, data: { enabled: on } })
+    }
+  },
+  {
+    id: 'agents.provider.list',
+    title: 'Model providers',
+    description: 'The model providers Hermes knows (Nous Portal, OpenRouter, OpenAI, Anthropic, a ChatGPT account, …), the one it thinks with, and which are set up.',
+    tier: 'read',
+    args: [],
+    phrases: ['which model providers are set up', 'list the model providers', 'which model provider does hermes use'],
+    run: async () => {
+      const choices = await readProviderChoices()
+      const current = choices.find(choice => choice.current)
+      const ready = choices.filter(choice => choice.ready && !choice.current)
+
+      return ok(`${current ? `Hermes thinks with ${current.name}${current.ready ? '' : ', which is not set up'}` : 'Hermes has no model provider yet'}. ${ready.length ? `Also set up: ${ready.map(choice => choice.name).join(', ')}.` : 'No other provider is set up.'}`, {
+        highlight: { kind: 'setting', id: 'agents' },
+        items: choices.map(choice => ({ id: choice.slug, name: choice.name, current: choice.current, ready: choice.ready, setup: choice.ready ? null : choice.setup }))
+      })
+    }
+  },
+  {
+    id: 'agents.provider.set',
+    title: 'Use a model provider',
+    description:
+      "Switch the provider Hermes thinks with. One that is set up (signed in, or its API key saved) is used at once, on Hermes's recommended model for it; one that signs in on an account opens the sign-in card; any other opens Settings > Hermes & agents at its setup. An API key is only ever typed into Settings, never passed to a command.",
+    tier: 'mutate',
+    args: [{ name: 'provider', type: 'string', description: 'Provider name or id: OpenRouter, Anthropic, Nous Portal, openai-codex, …', required: true }],
+    phrases: ['switch hermes to {provider}', 'use {provider} as the model provider', 'change the model provider to {provider}', 'set the model provider to {provider}'],
+    run: async ({ provider }) => {
+      const choices = await readProviderChoices()
+      const { choice, candidates } = matchProvider(choices, String(provider))
+      const highlight = { kind: 'setting', id: 'agents' } as const
+
+      if (!choice) {
+        return candidates.length > 1 ? ambiguous('provider', candidates.map(item => item.name)) : fail(`Hermes knows no provider called "${String(provider)}". agents.provider.list names them.`)
+      }
+
+      if (choice.ready && choice.current) {
+        return ok(`Hermes already thinks with ${choice.name}`, { highlight })
+      }
+
+      if (choice.ready) {
+        const change = await switchToProvider(choice.slug)
+
+        if (!change.ok) {
+          return fail(`${change.confirm} Choose ${choice.name}'s model in Settings > Hermes & agents.`, { highlight })
+        }
+
+        return ok(`Hermes now thinks with ${choice.name} (${change.model})`, { spoken: `Hermes now uses ${choice.name}.`, highlight, data: { provider: change.provider, model: change.model } })
+      }
+
+      if (choice.setup === 'sign-in') {
+        requestHermesLogin(`Sign in to ${choice.name} to use it with Hermes.`, choice.slug)
+
+        return ok(`Sign in to ${choice.name} on the card`, { data: { provider: choice.slug } })
+      }
+
+      showPage('settings')
+      focusSettings({ section: 'agents' })
+      focusProvider(choice.slug)
+
+      return ok(choice.setup === 'key' ? `Paste the ${choice.name} API key in Settings > Hermes & agents` : `Settings > Hermes & agents shows how to set ${choice.name} up`, { page: 'settings', highlight, data: { provider: choice.slug, setup: choice.setup } })
     }
   }
 ]
