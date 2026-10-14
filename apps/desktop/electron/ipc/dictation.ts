@@ -1,6 +1,7 @@
 import { type BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, shell, systemPreferences } from 'electron'
 import { translate } from '../../shared/i18n.ts'
 import { IPC, type ShellCommand, type TypeResult, type TypingPermission } from '../../shared/ipc.ts'
+import { privacyPaneUrl } from '../../shared/privacy-panes.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
@@ -14,11 +15,6 @@ const FIRST_PASTE_TIMEOUT_MS = 60_000
 const PASTE_TIMEOUT_MS = 10_000
 /** The harmless Apple event that makes macOS ask for Automation; the prompt waits for the person. */
 const AUTOMATION_PROBE_TIMEOUT_MS = 120_000
-
-const PANES: Record<TypingPermission, string> = {
-  accessibility: 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility',
-  automation: 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Automation'
-}
 
 let firstPasteRan = false
 let explaining = false
@@ -103,7 +99,7 @@ function explain(kind: 'setup' | TypingPermission): void {
         return
       }
 
-      await shell.openExternal(PANES[kind])
+      await shell.openExternal(privacyPaneUrl(kind))
     })
     .catch(error => log('dictation', `typing permission explanation: ${error instanceof Error ? error.message : String(error)}`))
     .finally(() => {
