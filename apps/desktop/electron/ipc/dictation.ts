@@ -9,7 +9,7 @@ import { run } from '../platform/exec.ts'
 const MAC_DICTATION_KEY = 'Command+Control+X'
 /** The pasted text must land before the clipboard gets its old contents back. */
 const RESTORE_CLIPBOARD_MS = 700
-/** Until a paste has worked this launch, macOS may be showing its Automation prompt, which takes reading. */
+/** The first paste of a launch may bring up macOS's Automation prompt, which takes reading. */
 const FIRST_PASTE_TIMEOUT_MS = 60_000
 const PASTE_TIMEOUT_MS = 10_000
 /** The harmless Apple event that makes macOS ask for Automation; the prompt waits for the person. */
@@ -20,13 +20,13 @@ const PANES: Record<TypingPermission, string> = {
   automation: 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Automation'
 }
 
-let pastedThisLaunch = false
+let firstPasteRan = false
 let explaining = false
 const explainedThisLaunch = new Set<'setup' | TypingPermission>()
 
 /** Tests start each case as a fresh launch. */
 export function resetTypingPermissionCheck(): void {
-  pastedThisLaunch = false
+  firstPasteRan = false
   explaining = false
   explainedThisLaunch.clear()
 }
@@ -135,10 +135,16 @@ async function typeMac(text: string, submit: boolean): Promise<TypeResult> {
   }
 
   const keys = ['-e', 'tell application "System Events" to keystroke "v" using command down', ...(submit ? ['-e', 'tell application "System Events" to key code 36'] : [])]
-  const result = await run('osascript', keys, pastedThisLaunch ? PASTE_TIMEOUT_MS : FIRST_PASTE_TIMEOUT_MS)
+  const result = await run('osascript', keys, firstPasteRan ? PASTE_TIMEOUT_MS : FIRST_PASTE_TIMEOUT_MS)
+
+  const missing = result.code !== 0 ? missingPermission(result.stderr) : null
+
+  // A refused permission may be granted before the next attempt, which can bring up the other prompt.
+  if (!missing) {
+    firstPasteRan = true
+  }
 
   if (result.code !== 0) {
-    const missing = missingPermission(result.stderr)
     log('dictation', `paste failed: ${result.stderr.trim() || `exit ${result.code}`}`)
 
     if (missing) {
@@ -150,7 +156,6 @@ async function typeMac(text: string, submit: boolean): Promise<TypeResult> {
     return { typed: false, copied: true }
   }
 
-  pastedThisLaunch = true
   setTimeout(() => void clipboard.writeText(previous).catch(() => undefined), RESTORE_CLIPBOARD_MS)
 
   return { typed: true, copied: false }

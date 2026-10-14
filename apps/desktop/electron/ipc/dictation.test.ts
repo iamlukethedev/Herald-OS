@@ -116,13 +116,36 @@ describe('typing into another app on macOS', () => {
 
   it('gives the first paste of a launch time to read macOS’s prompt, and later ones the usual 10 seconds', async () => {
     electron.trusted = true
+
+    await type('a')
+    await type('b')
+
+    expect(pastes().map(([, , timeout]) => timeout)).toEqual([60_000, 10_000])
+  })
+
+  it('counts a first paste that timed out or failed for another reason as the first', async () => {
+    electron.trusted = true
     run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: '' })
+    run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'execution error: Invalid index. (-1719)' })
 
     await type('a')
     await type('b')
     await type('c')
 
-    expect(pastes().map(([, , timeout]) => timeout)).toEqual([60_000, 60_000, 10_000])
+    expect(pastes().map(([, , timeout]) => timeout)).toEqual([60_000, 10_000, 10_000])
+  })
+
+  it('keeps the long timeout after a permission failure, since the next attempt may bring up the other prompt', async () => {
+    electron.trusted = true
+    run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: AUTOMATION_REFUSED })
+    run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: NO_KEYSTROKES })
+
+    await type('a')
+    await type('b')
+    await type('c')
+    await type('d')
+
+    expect(pastes().map(([, , timeout]) => timeout)).toEqual([60_000, 60_000, 60_000, 10_000])
   })
 
   it('without Accessibility, explains before macOS asks, leaves the text copied and presses nothing', async () => {
