@@ -1,4 +1,5 @@
 import type { CaptureTool, ScreenshotMode } from '../../shared/ipc.ts'
+import { describeQr, parseQrReading, type QrReading } from '../../shared/qr.ts'
 import { CLI_UNAVAILABLE_MESSAGE, runHeraldOs } from '../lib/herald-os-cli.ts'
 import { $env } from '../store/backend.ts'
 import { $recording, askAbout, offerCapture } from '../store/capture.ts'
@@ -37,9 +38,44 @@ async function screenTool(tool: CaptureTool, linuxArgv: string[], title: string)
     return fail(tool === 'qr' ? 'No QR code or barcode in that part of the screen.' : 'No text in that part of the screen.')
   }
 
-  const summary = tool === 'colour' ? `Copied ${result.text}` : tool === 'qr' ? `Copied: ${result.text.length > 80 ? `${result.text.slice(0, 79)}…` : result.text}` : `Copied ${result.lines === 1 ? 'a line' : `${result.lines} lines`} of text`
+  if (tool === 'qr') {
+    return qrResult(describeQr(result.text))
+  }
+
+  const summary = tool === 'colour' ? `Copied ${result.text}` : `Copied ${result.lines === 1 ? 'a line' : `${result.lines} lines`} of text`
 
   return ok(summary, { data: { text: result.text } })
+}
+
+/**
+ * What a QR code says stays on the clipboard: the caption (and the voice) say what kind of thing it
+ * is, and Hermes gets the contents only when they are an ordinary link or text.
+ */
+function qrResult(reading: QrReading) {
+  const { kind, caption, description, text } = reading
+
+  return ok(caption, {
+    data: text === undefined ? { kind, description, onClipboard: true, note: 'The contents are on the clipboard for the person to paste and are kept out of this conversation; do not ask for them.' } : { kind, description, text }
+  })
+}
+
+async function readQr() {
+  if (isMac()) {
+    return screenTool('qr', [], 'QR code')
+  }
+
+  const outcome = await runHeraldOs(['capture', 'qr', '--json'])
+
+  if (outcome.unavailable) {
+    return fail(`QR code: ${CLI_UNAVAILABLE_MESSAGE.toLowerCase()}.`)
+  }
+
+  if (!outcome.ok) {
+    return fail(outcome.output || 'QR code did not work')
+  }
+
+  // An older CLI prints the contents themselves; say only that something was copied.
+  return qrResult(parseQrReading(outcome.output) ?? { kind: 'secret', caption: 'QR code copied', description: 'a QR code' })
 }
 
 export const captureCommands: readonly OsCommand[] = [
@@ -140,11 +176,11 @@ export const captureCommands: readonly OsCommand[] = [
   {
     id: 'capture.qr',
     title: 'Read a QR code',
-    description: 'Select a QR code or barcode on screen and copy what it says.',
+    description: 'Select a QR code or barcode on screen and copy what it says. You get the contents of ordinary links and text; for a 2FA setup code, Wi-Fi details or anything that looks like a password you only get what kind of thing it is, and the contents stay on the clipboard.',
     tier: 'act',
     args: [],
     phrases: ['read this qr code', 'scan the qr code'],
-    run: () => screenTool('qr', ['capture', 'qr'], 'QR code')
+    run: () => readQr()
   },
   {
     id: 'capture.text',

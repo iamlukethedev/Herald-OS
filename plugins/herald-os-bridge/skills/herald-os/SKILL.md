@@ -187,6 +187,10 @@ logs from `journalctl`, trash from `gio trash`, notifications from `notify-send`
   `camera.show`, `capture.color` (the person clicks a colour; you get #rrggbb), `capture.qr` and
   `capture.text` (OCR; the person selects the area); on Linux also `capture.transcode` (file,
   gif|mp4|webm) and `capture.share`. Use `screen.askRegion` to have the person pick what to show you.
+- `capture.qr` gives you the contents of ordinary links and text only. For a 2FA setup code, Wi-Fi
+  details or anything that looks like a password or key you get `kind` and `description` ("a 2FA
+  setup code for GitHub") and `onClipboard: true`: the contents are on the clipboard for the person
+  to paste where they belong. Tell them that; never ask them to paste or read the secret to you.
 - Switches (both platforms): `os_ui` run `dnd.set`, `awake.set` (stay awake), `nightlight.set`
   (Linux) or `screensaver.set` with `{"enabled": true|false}`; `idle.set` changes when the screen
   locks, turns off and sleeps (minutes).

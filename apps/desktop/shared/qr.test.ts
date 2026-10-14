@@ -1,0 +1,61 @@
+import fs from 'node:fs'
+import { describe, expect, it } from 'vitest'
+import { describeQr, parseQrReading, wifiFields } from './qr.ts'
+
+interface QrCase {
+  text: string
+  kind: string
+  caption: string
+  description: string
+  full?: boolean
+  hidden?: string[]
+}
+
+// linux/tests/test_cli.py checks the CLI's Python copy of these rules against the same cases.
+const cases = JSON.parse(fs.readFileSync(new URL('./qr-cases.json', import.meta.url), 'utf8')) as QrCase[]
+
+describe('describeQr', () => {
+  it.each(cases)('$kind: $text', ({ text, kind, caption, description, full, hidden }) => {
+    const reading = describeQr(text)
+
+    expect(reading).toMatchObject({ kind, caption, description })
+
+    if (full) {
+      expect(reading.text).toBe(text.trim())
+    } else {
+      expect(reading).not.toHaveProperty('text')
+
+      for (const secret of hidden ?? []) {
+        expect(JSON.stringify(reading)).not.toContain(secret)
+      }
+    }
+  })
+
+  it('covers every kind', () => {
+    expect(new Set(cases.map(entry => entry.kind))).toEqual(new Set(['otp', 'wifi', 'link', 'secret', 'text']))
+  })
+
+  it('reads Wi-Fi fields with their escapes', () => {
+    expect(Object.fromEntries(wifiFields('WIFI:S:a\\;b\\:c;P:p\\\\w;;'))).toEqual({ S: 'a;b:c', P: 'p\\w' })
+  })
+
+  it('keeps names short and printable', () => {
+    expect(describeQr(`otpauth://totp/x?secret=A&issuer=${'Long'.repeat(20)}`).description).toBe(`a 2FA setup code for ${'Long'.repeat(10).slice(0, 39)}…`)
+    expect(describeQr('WIFI:S:Ho\u0007me;;').description).toBe('a Wi-Fi network called "Home"')
+  })
+})
+
+describe('parseQrReading', () => {
+  it('takes the CLI line that describes the code', () => {
+    expect(parseQrReading('{"kind": "otp", "caption": "2FA setup code copied", "description": "a 2FA setup code"}\n')).toEqual({ kind: 'otp', caption: '2FA setup code copied', description: 'a 2FA setup code' })
+    expect(parseQrReading('{"kind": "link", "caption": "Link copied: example.com", "description": "a link to example.com", "text": "https://example.com"}')).toMatchObject({ text: 'https://example.com' })
+  })
+
+  it('refuses anything else, such as an older CLI printing the contents', () => {
+    expect(parseQrReading('otpauth://totp/GitHub?secret=JBSWY3DPEHPK3PXP')).toBeNull()
+    expect(parseQrReading('{"kind": "otp"}')).toBeNull()
+    expect(parseQrReading('{"kind": "password", "caption": "x", "description": "y"}')).toBeNull()
+    expect(parseQrReading('null')).toBeNull()
+    expect(parseQrReading('')).toBeNull()
+  })
+})
