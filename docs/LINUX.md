@@ -273,7 +273,19 @@ its apps and saved networks on the next restart and runs setup again; the system
 - **Image signatures:** the image workflow signs each image with the project's cosign key, never
   keyless (which would publish to a transparency log) and without a log upload. Once
   `linux/image/cosign.pub` is in the repository, the image only accepts signed updates of itself
-  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os`).
+  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os`). Turning signing on is a
+  maintainer step, in this order, so no image ever carries the policy without a matching signature:
+  1. Generate the key pair: `cosign generate-key-pair` (keep `cosign.key` and its password offline).
+  2. Set the repository secrets `COSIGN_PRIVATE_KEY` (the contents of `cosign.key`) and
+     `COSIGN_PASSWORD`.
+  3. Set the repository variable `SIGNING_ENABLED` to `true`. CI's Signing policy check warns until
+     `cosign.pub` is committed.
+  4. Verify: run the Herald OS image workflow from `main`, then
+     `cosign verify --key cosign.pub --insecure-ignore-tlog=true ghcr.io/iamlukethedev/herald-os:edge`
+     (no transparency log, as above).
+  5. Only then commit `cosign.pub` as `linux/image/cosign.pub`. From then on the image workflow fails
+     if `COSIGN_PRIVATE_KEY` is missing or does not match it, and CI fails if `SIGNING_ENABLED` is
+     not `true`.
 - **SELinux** stays permissive for now (ADR-012).
 
 ### Switching a bootc system to Herald OS
