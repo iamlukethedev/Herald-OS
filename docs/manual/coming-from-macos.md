@@ -32,7 +32,7 @@ what you reach for has a home here, and Hermes can do most of it for you if you 
   your Mac apps, files and settings are untouched.
 - **On Herald OS Linux, windows place themselves.** niri, the window manager, lines windows up in
   scrolling columns instead of overlapping them. `Super+F` makes one wide, `Super+T` floats it,
-  `Super+O` shows the overview of everything.
+  `Super+O` shows the overview of everything; see [Windows and Spaces](windows-and-spaces.md).
 
 Give it a week: press `Super+K` (Linux) whenever you forget a key, and ask Hermes whenever you
 forget where something is.

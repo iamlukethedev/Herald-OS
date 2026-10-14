@@ -967,3 +967,64 @@ Alternatives considered:
 **Known limits.** The macOS app menu is Electron's default, whose items Electron names in English;
 translating it needs Herald's own application menu. The items macOS adds to menus, and Chromium's own
 text, follow the system's language rather than Herald's.
+
+## ADR-024: The voice's microphone is Herald's own choice where Herald is one app among others
+
+Herald OS opened the system default microphone, and no other could be chosen. A device that went
+away while the microphone was open left the graph silent (no `ended` handling, no `devicechange`
+handling), and the Sound panel on macOS showed one placeholder output and no inputs at all.
+
+- **Per app off Linux, per session on Linux.** On Herald OS Linux the shell *is* the session, so the
+  Sound panel keeps setting the machine's PipeWire default (`pactl`) and that is the microphone the
+  voice uses. Everywhere else Herald OS is one app among others: the choice is its own
+  (`voice.inputDevice` in `prefs.json`) and the machine's default is left to the system, as the
+  Bluetooth panel already leaves pairing to Control Center.
+- **Automatic follows the system.** The choice defaults to `null`, meaning "the system default".
+  Wearing a headset and letting the system pick it up therefore still works, and a person who never
+  opens the picker sees no change.
+- **A choice outlives its device.** A chosen device that is not connected falls back to the system
+  default and is *kept*: when it comes back it is used again. A listed device that cannot be opened
+  (`OverconstrainedError`) is treated the same. The fallback is quiet: the panel's
+  line names the device in use and the list says the chosen one comes back on its own — a device
+  that sleeps is no problem to report. Two states, not one — what was chosen
+  and what is in use — because an app that forgets the choice the moment a device sleeps (as Teams
+  does with Bluetooth headsets) never comes back to it.
+- **A choice wins over a new device; Automatic does not.** While a chosen device is connected,
+  plugging in another one does not take the microphone away from it. In Automatic the system decides,
+  so a device the system makes default becomes the one in use.
+- **A lost device is reopened, a system change waits.** `track.ended` from an unplugged device
+  reopens the stream at once; a change caused by the system is applied when the conversation ends,
+  so it never cuts into a sentence being listened to. Three reopens the system caused (a lost
+  device, a device list change) in ten seconds is the guard; after that Herald OS keeps the current
+  device and says so. A person's picks are not counted: choosing four microphones in a row is not a
+  device flapping, and the last one picked is the one used. A device that fails to open falls back
+  to the system default; when that fails too, a notice is posted and the stream's holders are told
+  (`onFailed`), so Live ends with the reason rather than sending a stopped track. Frame
+  subscribers are told too and stay subscribed; the device list is watched for as long as anyone
+  wants the microphone, so the next device change (or pick) tries again, under the same guard, and
+  the wake word is not left deaf.
+- **A reopen is invisible to the consumers.** Frame subscribers keep receiving frames; the WebRTC
+  sender holds the stream (`holdMicrophoneStream`) and is handed the new track for `replaceTrack`,
+  so a Live session survives a change of device; mute is the graph's state, applied to every
+  stream it opens. A holder keeps the microphone open like a subscriber, and releasing the last one
+  closes it.
+- **One microphone, one choice.** `audio-capture.ts` is the only owner of the mic (wake feed,
+  utterance recorder, barge-in monitor, WebRTC sender), so there is one setting, not one per
+  consumer. The decisions themselves are a pure table (`capture-policy.ts`), unit-tested without a
+  browser.
+- **Identity is the id, with the name as fallback.** `deviceId` is stable only for one origin, so a
+  choice stores `{ id, label }`: the label identifies the device after a cache clear or a switch from
+  a dev build to a packaged one, and the stored id is rewritten to the one found. A name shared by
+  two devices identifies neither, so the choice is then treated as not connected. Two devices are
+  the same when their groups match, or their ids when either reports no group.
+- **The microphone is still only opened deliberately.** A conversation or the armed wake word; never
+  by opening a panel, and never while voice is off. The level bar in the pickers is live exactly
+  while the microphone is open.
+- **Rejected: changing the macOS system default device.** It affects every other app and needs a
+  native helper; Herald OS already declines that for Bluetooth.
+- **Rejected: a separate microphone for the wake word.** The capture graph is deliberately single.
+- **Rejected: priority lists and transport classification.** "Chosen, then system" covers the case;
+  Chromium's label already marks `(Bluetooth)`, `(Built-in)` and `(Virtual)`, and Herald OS uses it
+  only to order the list, never to decide.
+- **Carried forward, not yet done:** the speaker picker (and `voice.outputDevice` with it), a
+  Herald-only output volume, and a "no sound from this device" warning after a warm-up window.

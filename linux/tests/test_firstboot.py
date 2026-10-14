@@ -663,10 +663,138 @@ def test_a_stray_folder_on_a_switched_system_does_not_stand_in_for_an_account_th
     fallback(accounts)
 
 
+def image_packages() -> list[str]:
+    """packages.txt as packages.sh reads it: one package per line, # comments and blank lines dropped."""
+    lines = (ROOT / "linux" / "image" / "packages.txt").read_text().splitlines()
+    return [line.split("#", 1)[0].strip() for line in lines if line.split("#", 1)[0].strip()]
+
+
+def test_the_image_packages_are_one_per_line():
+    assert all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", package) for package in image_packages())
+
+
 def test_the_image_has_cmp():
-    packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
+    packages = image_packages()
     assert "diffutils" in packages
     assert "cmp -s" in FIRSTBOOT.read_text()
+
+
+def test_the_image_has_intel_wi_fi_firmware_and_exfat():
+    # Fedora ships Intel CNVi firmware apart from linux-firmware; without it most laptops have no Wi-Fi,
+    # and first boot needs the network for Hermes.
+    packages = image_packages()
+    assert "iwlwifi-mvm-firmware" in packages and "NetworkManager-wifi" in packages
+    assert "exfatprogs" in packages
+
+
+DOWNLOAD = r"\b(?:curl|wget)\b"
+SHELL = r"(?:/\S*/)?(?:(?:busybox\s+)?(?:ba|z|da|k)?sh|python(?:3(?:\.\d+)?)?|perl|ruby|node)\b"
+SUDO = r"(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\b(?:\s+\S+=\S*)*\s+)?"
+# A download piped into a shell or interpreter: curl ... | sh, wget -qO- ... | sudo -E bash, ... | python3 -,
+# ... | xargs bash -c.
+PIPED_TO_SHELL = re.compile(rf"{DOWNLOAD}[^\n]*(?<!\|)\|(?!\|)\s*{SUDO}(?:xargs\b[^\n|]*?\s+{SUDO})?{SHELL}")
+# A shell, interpreter, eval or source reading a download: bash <(curl ...), sh -c "$(wget ...)", . <(curl ...).
+SHELL_READS_DOWNLOAD = re.compile(rf"(?:\b{SHELL}|\beval\b|\bsource\b|(?:^|[\s;&|(])\.\s)[^\n]*?(?:<\(|\$\(|`)\s*{SUDO}{DOWNLOAD}", re.M)
+
+
+def runs_a_download(script: str) -> bool:
+    # A line at a time, with backslash-continued lines joined first. Not caught: a download run through
+    # a variable (x=$(curl ...); bash -c "$x") or saved to a file and run (curl ... > /tmp/i.sh && bash
+    # /tmp/i.sh). The URL check catches those only when the URL is written out literally.
+    script = re.sub(r"\\\n", " ", script)
+    return bool(PIPED_TO_SHELL.search(script) or SHELL_READS_DOWNLOAD.search(script))
+
+
+@pytest.mark.parametrize("line", [
+    "curl -fsSL https://bun.sh/install | bash",
+    "curl -fsSL https://example.com/x.sh | sh",
+    "curl -s https://example.com/x.sh | sudo bash",
+    "curl -s https://example.com/x.sh | sudo -E bash",
+    "curl -s https://example.com/x.sh | sudo -E env FOO=1 bash -s -- --yes",
+    "curl -s https://example.com/x.sh | /bin/bash",
+    "curl -s https://example.com/x.sh | tee /tmp/x.sh | zsh",
+    "wget -qO- https://example.com/x.sh | sh",
+    "wget -O - https://example.com/x.sh | sudo -E bash",
+    "bash <(curl -fsSL https://example.com/x.sh)",
+    'bash <(curl -fsSL "$U")',
+    "bash <(curl -fsSL ${URL})",
+    'bash < <(curl -fsSL "$U")',
+    'curl -fsSL "$U" | bash',
+    'sh -c "$(curl -fsSL "$U")"',
+    "sudo -E bash <(wget -qO- https://example.com/x.sh)",
+    'sh -c "$(curl -fsSL https://example.com/x.sh)"',
+    'bash -c "$(wget -qO- https://example.com/x.sh)"',
+    "sh -c \"`curl -fsSL https://example.com/x.sh`\"",
+    'eval "$(curl -fsSL https://example.com/env)"',
+    "source <(curl -fsSL https://example.com/env)",
+    ". <(wget -qO- https://example.com/env)",
+    "  as_user bash -c 'bash <(curl -fsSL https://example.com/x.sh)'",
+    "curl -fsSL https://example.com/x.sh \\\n  | bash",
+    "curl -fsSL \\\n  https://example.com/x.sh \\\n  | sudo -E bash -s",
+    "bash <(curl \\\n  -fsSL https://example.com/x.sh)",
+    'sh -c "$(curl -fsSL \\\n  "$U")"',
+    'curl -fsSL "$U" \\\n| bash',
+    'curl -fsSL \\\n"$U" | sh',
+    'bash <(\\\ncurl -s "$U")',
+    'curl -fsSL "$U" | xargs bash -c',
+    "curl -fsSL \"$U\" | xargs -0 -I{} sh -c '{}'",
+    'wget -qO- "$U" | sudo xargs -n 1 bash -c',
+    "curl -fsSL https://example.com/x.py | python3 -",
+    "curl -fsSL https://example.com/x.py | python",
+    "curl -fsSL https://example.com/x.py | /usr/bin/python3.12",
+    "wget -qO- https://example.com/x.py | sudo python3",
+    'python3 -c "$(curl -fsSL "$U")"',
+    "python3 <(curl -fsSL https://example.com/x.py)",
+    "curl -fsSL https://example.com/x.pl | perl",
+    'perl -e "$(wget -qO- "$U")"',
+    "curl -fsSL https://example.com/x.rb | ruby",
+    'ruby -e "$(curl -fsSL https://example.com/install)"',
+    "curl -fsSL https://example.com/x.js | node",
+    'node -e "$(curl -fsSL "$U")"',
+    "wget -qO- https://example.com/x.sh | busybox sh",
+    "busybox sh <(curl -fsSL https://example.com/x.sh)",
+    'busybox sh -c "$(wget -qO- "$U")"',
+])
+def test_a_download_run_by_a_shell_is_caught(line):
+    assert runs_a_download(line)
+
+
+@pytest.mark.parametrize("line", [
+    "curl -fsI --connect-timeout 10 -o /dev/null https://github.com/NousResearch/hermes-agent",
+    "curl -fsSL -o /tmp/x.tar.gz https://example.com/x.tar.gz && sha256sum -c sums",
+    "printf 'n\\nn\\n' | bash ./setup-hermes.sh",
+    "bash ./setup.sh",
+    'version="$(curl -fsS https://example.com/version)"',
+    "wget -q https://example.com/x.tar.gz",
+    "curl -fsI https://example.com || bash ./offline.sh",
+    "curl -fsSL -o /tmp/x.tar.gz \\\n  https://example.com/x.tar.gz",
+    "python3 -c 'import sys; print(sys.version)'",
+    "node --version && npm --version",
+    'curl -fsSL "$U" | xargs -n 1 echo',
+])
+def test_a_download_that_no_shell_runs_is_not_caught(line):
+    assert not runs_a_download(line)
+
+
+def fetches_more_than_hermes_agent(script: str) -> bool:
+    urls = set(re.findall(r"https?://[^\s'\";)]+", script))
+    return urls != {"https://github.com/NousResearch/hermes-agent"} or runs_a_download(script)
+
+
+def test_first_boot_fetches_hermes_agent_and_nothing_else():
+    # Third-party code is never fetched and run by default at first boot: no other sources, and no
+    # installer from the network handed to a shell.
+    assert not fetches_more_than_hermes_agent(FIRSTBOOT.read_text())
+
+
+@pytest.mark.parametrize("line", [
+    'bash <(curl -fsSL "$U")',
+    "  as_user bash -c 'bash <(curl -fsSL \"$U\")' || true",
+    'curl -fsSL "$U" | sudo -E bash',
+])
+def test_a_download_from_a_variable_added_to_first_boot_is_caught(line):
+    # The URL is in a variable, so only the shell patterns can see it.
+    assert fetches_more_than_hermes_agent(FIRSTBOOT.read_text() + f'U="$1"\n{line}\n')
 
 
 def test_a_switched_system_where_no_one_can_sign_in_never_has_a_passwordless_hermes_in_wheel(tmp_path):

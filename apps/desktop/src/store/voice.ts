@@ -1,6 +1,6 @@
 import type { VoiceEngine, VoicePrefs } from '../../shared/ipc.ts'
 import { atom, computed } from 'nanostores'
-import { $micLevel, $micOpen, setMicrophoneMuted } from '../lib/voice/audio-capture.ts'
+import { acknowledgeCaptureNotice, $captureNotice, $micLevel, $micOpen, setCaptureConversing, setMicrophoneMuted } from '../lib/voice/audio-capture.ts'
 import { earcons } from '../lib/voice/earcons.ts'
 import type { ConversationEndReason, ConversationEngine, TurnHandlers, VoiceCaptions, VoiceHost, VoiceState } from '../lib/voice/engine.ts'
 import { matchIntent } from '../lib/voice/intents.ts'
@@ -491,6 +491,8 @@ export async function endConversation(reason: ConversationEndReason = 'user', de
   }
 
   const error = reason === 'error' || reason === 'connection-lost' ? (detail ?? 'The conversation ended unexpectedly.') : null
+  // The wake word keeps the microphone open after a conversation, and must not inherit its mute.
+  setMicrophoneMuted(false)
   patch({ state: idleState(), engine: null, muted: false, error, startedBy: null })
 
   if (error) {
@@ -680,6 +682,15 @@ export function bindVoice(): () => void {
       void tuneLocalStt()
     }
   })
+  // A change of device caused by the system waits for a conversation to end; the graph needs to know
+  // when one is listening. A change the person made in the picker applies at once and does not wait.
+  const offActive = $voiceActive.subscribe(active => setCaptureConversing(active))
+  const offMicrophone = $captureNotice.listen(notice => {
+    if (notice) {
+      notify({ title: 'Microphone', body: notice.message, level: 'info', surface: 'chat', key: notice.key })
+      acknowledgeCaptureNotice()
+    }
+  })
 
   return () => {
     offPrefs()
@@ -687,6 +698,8 @@ export function bindVoice(): () => void {
     offCommand()
     offNotify()
     offReady()
+    offActive()
+    offMicrophone()
     bound = false
   }
 }

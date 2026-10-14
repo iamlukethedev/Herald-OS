@@ -461,6 +461,17 @@ export interface SpaceDef {
 /** Which pipeline turns speech into a Hermes turn and back. See docs/VOICE.md. */
 export type VoiceEngine = 'chained' | 'live'
 
+/**
+ * One audio device the person chose, remembered across reconnects. `id` is Chromium's `deviceId`,
+ * which is only stable for one origin, so `label` is the fallback identity when it changes.
+ */
+export interface AudioDevicePref {
+  /** Chromium's `deviceId`; up to 256 characters, refused if longer. */
+  id: string
+  /** The device name as Chromium reports it, up to 200 characters. */
+  label: string
+}
+
 export interface VoicePrefs {
   /** Master switch: when off, no microphone is ever opened and the orb stays hidden. */
   enabled: boolean
@@ -483,6 +494,8 @@ export interface VoicePrefs {
   liveDailyCapMinutes: number
   /** Live engine: seconds of session time used on `day` (YYYY-MM-DD, local). */
   liveUsage: { day: string; seconds: number }
+  /** Microphone the voice uses; `null` follows the system default. Only when Herald owns the audio path (see docs/VOICE.md). */
+  inputDevice: AudioDevicePref | null
 }
 
 export type MicPermission = 'granted' | 'denied' | 'not-determined' | 'restricted' | 'unknown'

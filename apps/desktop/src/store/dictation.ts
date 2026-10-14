@@ -66,7 +66,7 @@ export async function startDictation(): Promise<void> {
       } else if (event === 'speech-end' || event === 'timeout') {
         void finishDictation()
       }
-    })
+    }, () => void finishDictation())
   } catch (error) {
     $dictation.set({ phase: 'idle' })
     notify({ title: 'Dictation needs the microphone', body: error instanceof Error ? error.message : String(error), level: 'error' })

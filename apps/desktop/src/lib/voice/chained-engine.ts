@@ -55,7 +55,14 @@ export class ChainedEngine implements ConversationEngine {
     this.stopped = false
 
     try {
-      this.unsubscribeMic = await subscribeMicrophone(frame => this.onFrame(frame))
+      this.unsubscribeMic = await subscribeMicrophone(
+        frame => this.onFrame(frame),
+        error => {
+          if (!this.stopped) {
+            this.host.ended('error', `The microphone stopped working: ${error.message}`)
+          }
+        }
+      )
     } catch (error) {
       throw error instanceof MicrophoneUnavailableError ? error : new Error(`Microphone failed: ${error instanceof Error ? error.message : String(error)}`)
     }
