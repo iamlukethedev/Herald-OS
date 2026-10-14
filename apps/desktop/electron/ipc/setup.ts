@@ -10,10 +10,13 @@ import { loadPty } from './terminal.ts'
  * First-boot setup on the Herald OS image: the image's first boot made the account (no password)
  * and installed Hermes; the person names it, sets a password, joins Wi-Fi and signs in to Hermes.
  * Nothing here needs root: `passwd` changes the person's own password (the current one is empty on
- * a new account), and the name Herald greets with lives in ~/.config/herald-os/name.
+ * a new account), and the name Herald greets with lives in ~/.config/herald-os/name. On a system
+ * switched from another bootc system the first boot leaves a login screen instead (firstboot.sh), so
+ * the account has a password already and setup asks only for the name.
  */
 
 const FIRSTBOOT_DONE = '/var/lib/herald-os/firstboot-done'
+const LOGIN_SCREEN = '/var/lib/herald-os/login-screen'
 const configDir = () => path.join(os.homedir(), '.config', 'herald-os')
 const doneFile = () => path.join(configDir(), 'setup-done')
 export const nameFile = (): string => path.join(configDir(), 'name')
@@ -28,7 +31,7 @@ export function setupState(): SetupState {
     // Not named yet.
   }
 
-  return { needed: process.platform === 'linux' && image && !fs.existsSync(doneFile()), user: os.userInfo().username, name }
+  return { needed: process.platform === 'linux' && image && !fs.existsSync(doneFile()), user: os.userInfo().username, name, signedIn: fs.existsSync(LOGIN_SCREEN) }
 }
 
 /** What `passwd` asks (LANG=C), most specific first: "Retype new password:" also ends in "new password:". */

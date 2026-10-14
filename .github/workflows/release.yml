@@ -8,8 +8,8 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: write
+# Every job asks for what it needs; only the release job can write.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,52 +17,128 @@ concurrency:
 
 jobs:
   mac:
-    name: macOS app (signed and notarized)
+    name: macOS app (signed and notarized when the secrets are set)
     runs-on: macos-latest
-    env:
-      # A Developer ID Application certificate as a base64 .p12, and its password.
-      CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
-      CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
-      # electron-builder notarizes (and staples) through @electron/notarize when these are set.
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    # The five signing secrets live in this environment, whose deployment rules admit only main and
+    # v* tags (docs/MACOS-SIGNING.md). Each step below gets only the secrets it uses.
+    environment: macos-release
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - name: Fetch the pinned Hermes Agent snapshot
         run: npm run sync-upstream
-      - run: npm ci
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Run the install scripts the Mac build needs
+        # node-pty's install checks for its darwin-arm64 prebuild and compiles one if it is missing;
+        # esbuild's checks its native binary. Nothing else in the tree needs one for this build.
+        run: npm rebuild node-pty esbuild
+      - name: Build the renderer and the Electron bundles
+        run: npm run build --workspace apps/desktop
       - name: Check the signing secrets
         id: signing
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # A build is signed only with all five: electron-builder fails outright when APPLE_ID is set
+        # without the other two notarization secrets, and a signed but unnotarized app still trips
+        # Gatekeeper. Missing secrets never fail the job; the build goes out unsigned with a warning.
+        # Only the names are printed, never the values.
         run: |
-          if [[ -n "$CSC_LINK" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" ]]; then
+          missing=()
+          for name in MAC_CERTIFICATE_P12 MAC_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} == 0 )); then
             echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "All five signing secrets are set: this build is signed and notarized."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::The signing secrets are not set: this build is unsigned and not notarized."
+            printf -v list '%s, ' "${missing[@]}"
+            echo "::warning title=Unsigned macOS build::Missing secrets: ${list%, }. This build is not signed or notarized. See docs/MACOS-SIGNING.md."
           fi
-      - name: Build, sign and notarize
+      - name: Check the mac signing config
+        run: |
+          node apps/desktop/scripts/check-mac-signing-config.mjs
+          plutil -lint apps/desktop/build/entitlements.mac.plist
+      - name: Package, sign and notarize the app
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          # A Developer ID Application certificate as a base64 .p12, and its password.
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          # electron-builder notarizes and staples the app through @electron/notarize with these.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run pack:mac --workspace apps/desktop -- -c.dmg.sign=true
+      - name: Package the app unsigned
+        if: steps.signing.outputs.signed != 'true'
         env:
           # Never pick up a stray identity from the runner's keychain for an unsigned build.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed }}
-        run: |
-          if [[ "${{ steps.signing.outputs.signed }}" != "true" ]]; then
-            # Unset secrets arrive as empty variables, and electron-builder reads an empty CSC_LINK as
-            # a certificate path (the working directory).
-            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
-          fi
-          npm run dist:mac --workspace apps/desktop -- ${{ steps.signing.outputs.signed == 'true' && '-c.dmg.sign=true' || '' }}
-      - name: Verify the signature and the notarization ticket
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run pack:mac --workspace apps/desktop -- -c.mac.notarize=false
+      - name: Notarize and staple the DMG
         if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # electron-builder notarizes only the app inside; the DMG around it is a separate submission.
         run: |
+          shopt -s nullglob
+          dmgs=(apps/desktop/release/*.dmg)
+          (( ${#dmgs[@]} )) || { echo "::error::No DMG under apps/desktop/release"; exit 1; }
+          for dmg in "${dmgs[@]}"; do
+            result="$RUNNER_TEMP/notarytool-$(basename "$dmg").json"
+            xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+              --wait --timeout 1h --output-format json > "$result" || true
+            status="$(jq -r '.status // empty' "$result" 2>/dev/null || true)"
+            if [[ "$status" != "Accepted" ]]; then
+              echo "::error::Notarization of $(basename "$dmg") ended as '${status:-no result}'"
+              id="$(jq -r '.id // empty' "$result" 2>/dev/null || true)"
+              [[ -z "$id" ]] || xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID"
+              exit 1
+            fi
+            xcrun stapler staple "$dmg"
+          done
+      - name: Verify the signatures and the notarization tickets
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          shopt -s nullglob
           app="$(find apps/desktop/release -maxdepth 3 -name 'Herald OS.app' -print -quit)"
+          [[ -n "$app" ]] || { echo "::error::No Herald OS.app under apps/desktop/release"; exit 1; }
           codesign --verify --deep --strict --verbose=2 "$app"
+          details="$(codesign --display --verbose=4 "$app" 2>&1)"
+          grep -q '^Authority=Developer ID Application:' <<<"$details" || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
+          grep -q "^TeamIdentifier=$APPLE_TEAM_ID\$" <<<"$details" || { echo "::error::$app is not signed by the team in APPLE_TEAM_ID"; exit 1; }
+          grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(.*runtime' <<<"$details" || { echo "::error::$app is not signed with the hardened runtime"; exit 1; }
           xcrun stapler validate "$app"
-          spctl --assess --type execute --verbose "$app"
+          spctl --assess --type execute -vv "$app"
+          for dmg in apps/desktop/release/*.dmg; do
+            codesign --verify --strict --verbose=2 "$dmg"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type open --context context:primary-signature -vv "$dmg"
+          done
+          # A zip cannot carry a ticket; check that the app it ships is the stapled one.
+          for zip in apps/desktop/release/*.zip; do
+            dir="$(mktemp -d)"
+            ditto -x -k "$zip" "$dir"
+            xcrun stapler validate "$dir/Herald OS.app"
+            spctl --assess --type execute -vv "$dir/Herald OS.app"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: herald-os-macos
@@ -70,14 +146,6 @@ jobs:
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
           if-no-files-found: error
-      - name: Attach to the draft release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip)
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
-          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
 
   linux:
     name: Linux tarball (${{ matrix.arch }})
@@ -91,8 +159,12 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -121,10 +193,28 @@ jobs:
             apps/desktop/release/herald-os-*-linux-*.tar.gz
             apps/desktop/release/herald-os-*-linux-*.tar.gz.sha256
           if-no-files-found: error
-      - name: Attach to the draft release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+  release:
+    name: Attach to the draft release
+    needs: [mac, linux]
+    # Attach whatever built, as each platform's own job used to, even when another platform failed.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herald-os-*
+          path: dist
+          merge-multiple: true
+      - name: Upload to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.zip dist/herald-os-*-linux-*.tar.gz dist/herald-os-*-linux-*.tar.gz.sha256)
+          (( ${#files[@]} )) || { echo "::error::No build artifacts to attach"; exit 1; }
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
-          gh release upload "$GITHUB_REF_NAME" apps/desktop/release/herald-os-*-linux-*.tar.gz apps/desktop/release/herald-os-*-linux-*.tar.gz.sha256 --clobber
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

@@ -60,6 +60,11 @@ describe('runCommand', () => {
     expect(await runCommand('nope.nothing', {}, { source: 'agent' })).toMatchObject({ ok: false, error: 'Unknown command "nope.nothing"' })
   })
 
+  it("reports main's error without the IPC prefix", async () => {
+    defineCommands([{ id: 'test.ipc', title: 'IPC', description: '', tier: 'act', args: [], hidden: true, run: () => Promise.reject(new Error("Error invoking remote method 'herald-os:capture:region': Error: Herald OS needs Screen Recording permission. Turn it on.")) }])
+    expect(await runCommand('test.ipc', {}, { source: 'agent' })).toMatchObject({ ok: false, error: 'Herald OS needs Screen Recording permission. Turn it on.' })
+  })
+
   it('lists commands without hidden ones by default and rejects bad ids', () => {
     expect(listCommands().map(c => c.id)).toEqual(['test.echo'])
     expect(listCommands({ includeHidden: true }).map(c => c.id)).toEqual(['test.boom', 'test.echo'])

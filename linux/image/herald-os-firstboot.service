@@ -2,8 +2,10 @@
 Description=Herald OS: first-boot setup (the session user, the home folder, Hermes Agent)
 # Once per machine; `herald-os reset` removes the stamp to run it again.
 ConditionPathExists=!/var/lib/herald-os/firstboot-done
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target systemd-homed.service systemd-userdbd.service sssd.service
+# The accounts it looks for: systemd-homed's, and SSSD's or LDAP's, are only there once their
+# services are up. On a system without them, these name nothing.
+After=network-online.target systemd-homed.service systemd-userdbd.service sssd.service
 Before=greetd.service
 
 [Service]
