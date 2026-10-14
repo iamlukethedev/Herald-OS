@@ -1,5 +1,6 @@
 """The ready-made VM disks: x86_64 and aarch64 qcow2, the Hyper-V VHDX and the UTM bundle (#67)."""
 
+import fnmatch
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -61,11 +62,11 @@ def builder_output(tmp_path: Path, kind: str, data: bytes = b"herald-os disk\n" 
     return out
 
 
-def package(tmp_path: Path, out: Path, arch: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def package(tmp_path: Path, out: Path, arch: str, env: dict | None = None, version: str = "9.9.9") -> subprocess.CompletedProcess:
     bin_dir, _ = stubs(tmp_path)
     full_env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", **(env or {})}
     return subprocess.run(
-        ["bash", str(PACKAGE), str(out), arch, "9.9.9", str(tmp_path / "dist")],
+        ["bash", str(PACKAGE), str(out), arch, version, str(tmp_path / "dist")],
         capture_output=True, text=True, env=full_env, check=False,
     )
 
@@ -102,6 +103,12 @@ def test_the_disks_job_packages_with_the_script_and_uploads_what_it_made():
     room = next(step for step in steps if step.get("name") == "Make room for the VM disks")
     assert room["if"] == "matrix.type == 'qcow2'"
     assert all(tool in room["run"] for tool in ("qemu-utils", "zip", "zstd"))
+    build = next(step for step in steps if step.get("name") == "Build the disk with bootc-image-builder")["run"]
+    assert build.index("sudo podman rmi --ignore") > build.index("bootc-image-builder@sha256:")
+    rmi = build[build.index("sudo podman rmi"):]
+    assert '"$IMAGE:$CHANNEL-${{ matrix.arch }}"' in rmi and "quay.io/centos-bootc/bootc-image-builder@sha256:" in rmi
+    pack = next(step for step in steps if step.get("name") == "Name, compress and split it")["run"]
+    assert pack.rstrip().endswith("df -h .")
     upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact"))
     assert upload["with"]["path"] == "dist/herald-os-*"
     assert upload["with"]["name"] == "herald-os-${{ matrix.type }}-${{ matrix.arch }}"
@@ -174,12 +181,88 @@ def test_big_files_are_split_the_way_their_tools_join_them(tmp_path):
     assert "herald-os-9.9.9-x86_64.qcow2.zst" not in names and "herald-os-9.9.9-x86_64.vhdx.zip" not in names
     assert checksum_matches(dist, "herald-os-9.9.9-x86_64.qcow2.zst", qcow2_parts)
     assert checksum_matches(dist, "herald-os-9.9.9-x86_64.vhdx.zip", zip_parts)
+    assert sorted(n for n in names if n.endswith(".sha256sums")) == [
+        "herald-os-9.9.9-x86_64.qcow2.zst.sha256sums", "herald-os-9.9.9-x86_64.vhdx.zip.sha256sums",
+    ]
+    for name, parts in (("herald-os-9.9.9-x86_64.qcow2.zst", qcow2_parts), ("herald-os-9.9.9-x86_64.vhdx.zip", zip_parts)):
+        lines = [line.split() for line in (dist / f"{name}.sha256sums").read_text().splitlines()]
+        assert [listed for _, listed in lines] == parts
+        assert all(digest == hashlib.sha256((dist / part).read_bytes()).hexdigest() for digest, part in lines)
+
+
+@linux_only
+def test_the_documented_commands_check_the_parts_join_them_and_check_the_whole(tmp_path):
+    disk = b"".join(hashlib.sha256(i.to_bytes(2, "big")).digest() for i in range(320))
+    env = {"SPLIT_AT": "4096", "PART_SIZE": "4096"}
+    assert package(tmp_path, builder_output(tmp_path, "qcow2", disk), "amd64", env).returncode == 0
+    dist = tmp_path / "dist"
+    script = """set -e
+    sha256sum -c --quiet herald-os-9.9.9-x86_64.qcow2.zst.sha256sums
+    sha256sum -c --quiet herald-os-9.9.9-x86_64.vhdx.zip.sha256sums
+    cat herald-os-9.9.9-x86_64.qcow2.zst.part* > herald-os-9.9.9-x86_64.qcow2.zst
+    cat herald-os-9.9.9-x86_64.vhdx.zip.[0-9][0-9][0-9] > herald-os-9.9.9-x86_64.vhdx.zip
+    sha256sum -c --quiet herald-os-9.9.9-x86_64.qcow2.zst.sha256
+    sha256sum -c --quiet herald-os-9.9.9-x86_64.vhdx.zip.sha256
+    """
+    result = subprocess.run(["bash", "-c", script], cwd=dist, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (dist / "herald-os-9.9.9-x86_64.qcow2.zst").read_bytes() == disk
+
+    (dist / "herald-os-9.9.9-x86_64.vhdx.zip.002").write_bytes(b"damaged")
+    damaged = subprocess.run(["sha256sum", "-c", "--quiet", "herald-os-9.9.9-x86_64.vhdx.zip.sha256sums"],
+                             cwd=dist, capture_output=True, text=True, check=False)
+    assert damaged.returncode != 0
+    assert "herald-os-9.9.9-x86_64.vhdx.zip.002: FAILED" in damaged.stdout
+
+
+@linux_only
+@pytest.mark.parametrize("arch, leftovers", [("amd64", (".vhdx", "disk.qcow2")), ("arm64", ("Herald OS.utm", "disk.qcow2"))])
+def test_the_disk_and_the_conversions_are_gone_before_the_zip_is_checksummed(tmp_path, arch, leftovers):
+    # A sha256sum that first lists every file packaging still holds, under the output and dist.
+    real = shutil.which("sha256sum")
+    seen = tmp_path / "seen.log"
+    out = builder_output(tmp_path, "qcow2")
+    stubs(tmp_path)
+    (tmp_path / "bin" / "sha256sum").write_text(
+        f'#!/usr/bin/env bash\necho "== $*" >>"{seen}"\nfind "{out}" "{tmp_path / "dist"}" >>"{seen}"\nexec "{real}" "$@"\n')
+    (tmp_path / "bin" / "sha256sum").chmod(0o755)
+    full_env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    result = subprocess.run(["bash", str(PACKAGE), str(out), arch, "9.9.9", str(tmp_path / "dist")],
+                            capture_output=True, text=True, env=full_env, check=False)
+    assert result.returncode == 0, result.stderr
+    at_zip = seen.read_text().split("== herald-os-9.9.9-")[2]
+    assert ".zip" in at_zip.splitlines()[0]
+    held = at_zip.splitlines()[1:]
+    assert any(line.endswith(".zip") for line in held)
+    for leftover in leftovers:
+        assert not [line for line in held if line.endswith(leftover)]
+    assert not (out / "qcow2" / "disk.qcow2").exists()
 
 
 @linux_only
 def test_no_work_files_are_left_behind_for_the_upload(tmp_path):
     assert package(tmp_path, builder_output(tmp_path, "qcow2"), "arm64").returncode == 0
     assert not [p for p in (tmp_path / "dist").iterdir() if not p.name.startswith("herald-os-")]
+
+
+@linux_only
+@pytest.mark.parametrize("version", ["1.0 beta", "../1.0", "1.0/2", "1.0;rm -rf x", "1.0*", "$(id)", "", "1.0\n"])
+def test_a_version_that_is_not_one_plain_word_is_refused_before_anything_is_written(tmp_path, version):
+    out = builder_output(tmp_path, "qcow2")
+    result = package(tmp_path, out, "amd64", version=version)
+    assert result.returncode == 2
+    assert "may only use letters, digits, '.', '_' and '-'" in result.stderr
+    assert not (tmp_path / "dist").exists()
+    assert (out / "qcow2" / "disk.qcow2").exists()
+    assert not (tmp_path / "tools.log").exists()
+
+
+@linux_only
+@pytest.mark.parametrize("version", ["0.1.0-alpha.5", "edge-abc1234", "dev-1a2b3c4", "1_0"])
+def test_release_and_channel_versions_are_accepted(tmp_path, version):
+    result = package(tmp_path, builder_output(tmp_path, "iso"), "amd64", version=version)
+    assert result.returncode == 0, result.stderr
+    assert files(tmp_path) == [f"herald-os-{version}-x86_64.iso", f"herald-os-{version}-x86_64.iso.sha256"]
 
 
 @linux_only
@@ -275,6 +358,21 @@ def test_the_install_table_lists_the_mac_and_windows_virtual_machines():
     links = re.findall(r"\(#([^)]+)\)", table)
     assert set(links) <= anchors(text), set(links) - anchors(text)
     assert "#on-windows-with-hyper-v" in windows
+
+
+@pytest.mark.parametrize("doc", [README, ROOT / "docs" / "LINUX.md"])
+def test_the_documented_joins_take_every_part_and_never_the_checksums(doc):
+    text = doc.read_text()
+    joins = re.findall(r"^\s*cat (herald-os-<version>-\S+) > (herald-os-<version>-\S+)$", text, re.M)
+    assert joins
+    for glob, whole in joins:
+        glob, whole = glob.replace("<version>", "9.9.9"), whole.replace("<version>", "9.9.9")
+        parts = [f"{whole}.part0", f"{whole}.part1"] if ".part" in glob else [f"{whole}.001", f"{whole}.002"]
+        assert all(fnmatch.fnmatchcase(p, glob) for p in parts)
+        for checksum in (f"{whole}.sha256", f"{whole}.sha256sums"):
+            assert not fnmatch.fnmatchcase(checksum, glob)
+        assert f"{whole.replace('9.9.9', '<version>')}.sha256sums" in text
+        assert f"{whole.replace('9.9.9', '<version>')}.sha256" in text
 
 
 def test_the_readme_names_the_files_the_release_carries():
