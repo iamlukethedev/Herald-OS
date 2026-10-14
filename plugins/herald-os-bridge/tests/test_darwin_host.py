@@ -200,14 +200,56 @@ def test_another_users_app_alone_is_not_running_for_us(mac):
     assert not machine.signals and not machine.ran("osascript")
 
 
-def test_names_that_are_not_installed_apps_are_never_quit(mac):
+def test_session_processes_are_never_quit_by_name(mac):
     _, tools, fake = mac
     machine = fake()
-    for force in (False, True):
-        result = quit_app(tools, "loginwindow", force)
-        assert not result["success"]
-        assert result["error"].startswith("no app called loginwindow in the Applications folders")
+    assert quit_app(tools, "loginwindow", force=True)["error"].startswith("no app called loginwindow in the Applications folders")
+    for name in ("loginwindow", "Dock", "WindowServer", "SystemUIServer"):
+        assert quit_app(tools, name)["error"] == f"{name} is part of macOS and is not quit by name"
     assert 88 in machine.procs and not machine.signals and not machine.ran("osascript")
+
+
+def by_name(label):
+    return ["osascript", "-e", f'if application "{label}" is running then\ntell application "{label}" to quit\nreturn "quit"\nend if\nreturn "not running"']
+
+
+@pytest.mark.parametrize("name", ["Finder", "Downloaded Tool"])
+def test_polite_quit_of_an_app_outside_the_applications_folders_goes_through_applescript(mac, name):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    result = quit_app(tools, name)
+    assert result["success"], result
+    assert machine.ran("osascript") == [by_name(name)]
+    assert not machine.ran("ps") and not machine.signals
+
+
+def test_polite_quit_by_name_reports_an_app_that_is_not_open(mac):
+    _, tools, fake = mac
+    fake({"osascript": (0, "not running\n", "")})
+    assert quit_app(tools, "Finder")["error"] == "Finder is not running"
+
+
+def test_polite_quit_by_name_names_the_automation_switch(mac):
+    _, tools, fake = mac
+    fake({"osascript": (1, "", REFUSED.format(target="Finder"))})
+    error = quit_app(tools, "Finder")["error"]
+    assert "turn on Finder under Herald OS" in error and "Automation" in error
+
+
+def test_polite_quit_by_name_reports_other_applescript_errors(mac):
+    _, tools, fake = mac
+    fake({"osascript": (1, "", "execution error: Finder got an error: User canceled. (-128)")})
+    assert "-128" in quit_app(tools, "Finder")["error"]
+
+
+def test_force_quit_keeps_the_strict_rules_outside_the_applications_folders(mac):
+    _, tools, fake = mac
+    machine = fake({"osascript": (0, "quit\n", "")})
+    machine.procs[90] = (ME, "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder")
+    result = quit_app(tools, "Finder", force=True)
+    assert not result["success"]
+    assert "exact name or bundle id" in result["error"]
+    assert not machine.signals and not machine.ran("osascript")
 
 
 def test_force_quit_needs_the_exact_name_or_bundle_id(mac):

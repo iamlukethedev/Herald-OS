@@ -62,6 +62,10 @@ def osascript_error(result: ExecResult, target: str, fallback: str) -> RuntimeEr
 
 FORCE_QUIT_GRACE = 2.0
 
+# Processes that keep the session itself running; asking them to quit could sign the person out
+# or blank the screen, so a polite quit by name never reaches them.
+NEVER_QUIT_BY_NAME = frozenset({"loginwindow", "windowserver", "dock", "systemuiserver", "controlcenter", "notificationcenter"})
+
 
 # Safari and the apps updated with it run from a cryptex (a sealed, system-signed copy) since macOS
 # 13, so ps shows them under one of these roots rather than /Applications.
@@ -587,14 +591,30 @@ class DarwinHost(HostAdapter):
         if denied:
             raise RuntimeError(f"macOS did not let Herald OS stop {label} (process {', '.join(str(p) for p in sorted(denied))})")
 
+    def _quit_by_name(self, label: str) -> None:
+        """Ask an app outside the Applications folders (Finder, one in ~/Downloads) to quit through
+        AppleScript alone; ``is running`` asks Launch Services, so an app that is not open is never
+        launched just to be told to quit."""
+        if label.strip().lower().removesuffix(".app") in NEVER_QUIT_BY_NAME:
+            raise RuntimeError(f"{label} is part of macOS and is not quit by name")
+        quoted = _applescript_string(label)
+        script = f'if application "{quoted}" is running then\ntell application "{quoted}" to quit\nreturn "quit"\nend if\nreturn "not running"'
+        result = run(["osascript", "-e", script], timeout=20)
+        if not result.ok:
+            raise osascript_error(result, label, f"could not quit {label}")
+        if result.stdout.strip() == "not running":
+            raise RuntimeError(f"{label} is not running")
+
     def quit_app(self, name: str, force: bool) -> None:
         app = self._resolve_exact(name) if force else self.resolve_app(name)
-        if app is None:
-            hint = " (force quit needs the app's exact name or bundle id)" if force else ""
-            raise RuntimeError(f"no app called {name} in the Applications folders{hint}")
-        bundles = bundle_executables(app.path)
-        if not bundles:
+        bundles = bundle_executables(app.path) if app else ()
+        if force and not bundles:
+            if app is None:
+                raise RuntimeError(f"no app called {name} in the Applications folders (force quit needs the app's exact name or bundle id)")
             raise RuntimeError(f"{app.name} is not in an Applications folder")
+        if app is None or not bundles:
+            self._quit_by_name(app.name if app else name.strip())
+            return
         pids = self._own_app_processes(bundles)
         if not pids:
             raise RuntimeError(f"{app.name} is not running")
