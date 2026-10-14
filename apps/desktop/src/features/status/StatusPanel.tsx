@@ -13,6 +13,7 @@ import {
   IconLock,
   IconMicrophone,
   IconRefresh,
+  IconRotateClockwise,
   IconSettings,
   IconSun,
   IconVolume,
@@ -28,7 +29,9 @@ import { Chips, GlassButton, Toggle } from '../../components/ui/glass.tsx'
 import { Meter } from '../../components/ui/primitives.tsx'
 import { describeDeviceChoice } from '../../lib/audio-devices.ts'
 import { cn } from '../../lib/cn.ts'
-import { audioScope } from '../../lib/platform-labels.ts'
+import { runHeraldOs } from '../../lib/herald-os-cli.ts'
+import { audioScope, isLinux } from '../../lib/platform-labels.ts'
+import { restartArgv, restartForPanel, type RestartTarget } from '../../lib/restart-devices.ts'
 import { $inputDevices } from '../../lib/voice/audio-capture.ts'
 import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../store/audio-devices.ts'
 import { $env, $prefs } from '../../store/backend.ts'
@@ -85,7 +88,9 @@ function usePanel(panel: LivePanel) {
 }
 
 export function StatusPanel({ panel, onClose }: { panel: StatusPanelId; onClose?: () => void }) {
+  useStore($env)
   const section = SETTINGS_FOR[panel]
+  const restart = restartForPanel(panel)
 
   return (
     <div className="float flex w-full flex-col overflow-hidden rounded-2xl animate-pop" role="dialog" aria-label={PANEL_TITLES[panel]}>
@@ -105,6 +110,7 @@ export function StatusPanel({ panel, onClose }: { panel: StatusPanelId; onClose?
         {panel === 'power' && <PowerPanel />}
         {panel === 'clock' && <ClockPanel />}
       </div>
+      {restart && restart.panel && restart.panel !== 'clock' && isLinux() && <RestartFooter target={restart} panel={restart.panel} />}
       {section && (
         <button
           type="button"
@@ -117,6 +123,35 @@ export function StatusPanel({ panel, onClose }: { panel: StatusPanelId; onClose?
           <IconSettings size={14} />
           {PANEL_TITLES[panel]} settings…
         </button>
+      )}
+    </div>
+  )
+}
+
+/** Restart for when the device stopped working, the step before a reboot; the panel reloads after it. */
+function RestartFooter({ target, panel }: { target: RestartTarget; panel: LivePanel }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const restart = async () => {
+    setBusy(true)
+    setResult(null)
+    const outcome = await runHeraldOs(restartArgv(target.device))
+    setResult({ ok: outcome.ok, text: outcome.output || (outcome.ok ? `${target.label} restarted` : `Could not restart ${target.label}`) })
+    setBusy(false)
+    await loadPanel(panel).catch(() => undefined)
+  }
+
+  return (
+    <div className="border-t border-line">
+      <button type="button" disabled={busy} onClick={() => void restart()} title={target.hint} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12.5px] text-fg-2 hover:bg-white/6 hover:text-fg disabled:opacity-50">
+        <IconRotateClockwise size={14} className={cn(busy && 'animate-spin')} />
+        {busy ? `Restarting ${target.label}…` : `Restart ${target.label}`}
+      </button>
+      {result && (
+        <div className="px-2 pb-1">
+          <Note tone={result.ok ? 'muted' : 'danger'}>{result.text}</Note>
+        </div>
       )}
     </div>
   )

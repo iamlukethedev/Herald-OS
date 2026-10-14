@@ -5,6 +5,11 @@ export function hostPlatform(): NodeJS.Platform | 'darwin' {
   return ($env.get()?.platform as NodeJS.Platform | undefined) ?? 'darwin'
 }
 
+/** True on Linux, where the `herald-os` CLI and its system chores exist. */
+export function isLinux(): boolean {
+  return hostPlatform() === 'linux'
+}
+
 /** Name of the host file manager, for "Reveal in …" affordances. */
 export function fileManagerName(): string {
   switch (hostPlatform()) {

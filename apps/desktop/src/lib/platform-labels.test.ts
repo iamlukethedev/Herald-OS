@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { $env } from '../store/backend.ts'
-import { shortcutLabel, voiceKeyLabel } from './platform-labels.ts'
+import { isLinux, shortcutLabel, voiceKeyLabel } from './platform-labels.ts'
 
 const onPlatform = (platform: NodeJS.Platform) => $env.set({ platform, hermesHome: '/h/.hermes', homeDir: '/h', version: '0.0.0', isDev: false, shellMode: 'panels' })
 
@@ -34,5 +34,17 @@ describe('voiceKeyLabel', () => {
 
     expect(voiceKeyLabel('Alt+Space')).toBe('Alt+Space')
     expect(voiceKeyLabel(' ')).toBeUndefined()
+  })
+})
+
+describe('isLinux', () => {
+  it('is true on Linux only, and false until main reports the platform', () => {
+    expect(isLinux()).toBe(false)
+
+    for (const [platform, linux] of [['linux', true], ['darwin', false], ['win32', false], ['freebsd', false]] as const) {
+      onPlatform(platform)
+
+      expect(isLinux()).toBe(linux)
+    }
   })
 })

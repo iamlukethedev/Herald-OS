@@ -149,6 +149,7 @@ def test_every_herald_os_command_in_the_manual_exists():
         "page": set(cli.COMMANDS["page"].split(": ", 1)[1].split()),
         "panel": set(re.search(r"panel ([\w|]+)", cli.COMMANDS["panel"]).group(1).split("|")),
         "toggle": set(re.search(r"toggle ([\w|]+)", cli.COMMANDS["toggle"]).group(1).split("|")),
+        "restart": set(re.search(r"restart ([\w|]+)", cli.COMMANDS["restart"]).group(1).split("|")),
     }
     unknown = []
     for page in CHAPTERS:
@@ -221,7 +222,7 @@ def test_flags_are_read_per_command_line():
 def test_the_manual_names_commands_the_cli_has():
     assert {"page", "panel", "toggle", "omarchy", "keymap"} <= set(cli.COMMANDS)
     found = {command for page in CHAPTERS for command, _ in COMMAND.findall(page.read_text())}
-    assert {"update", "rollback", "channel", "reset", "install", "windows", "omarchy"} <= found
+    assert {"update", "rollback", "channel", "reset", "install", "windows", "omarchy", "restart"} <= found
 
 
 def test_every_linux_hotkey_in_the_manual_is_bound():
