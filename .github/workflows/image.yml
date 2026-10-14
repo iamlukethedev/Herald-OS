@@ -1,9 +1,10 @@
 name: Herald OS image
 
 # The Fedora bootc image (ADR-018) per architecture on matching runners, pushed to the repository's
-# GHCR package, joined into one multi-arch tag; then the installer ISO
-# (x86_64) and the VM disk (aarch64) from it. A tag attaches the disks to the draft release; nothing
-# here makes the image, the package or a release public.
+# GHCR package, joined into one multi-arch tag; then the installer ISO (x86_64) and the VM disks from
+# it: a qcow2 for both architectures, a Hyper-V VHDX (x86_64) and a UTM bundle (aarch64), packaged by
+# linux/vm/package-disk.sh. A tag attaches the disks to the draft release; nothing here makes the
+# image, the package or a release public.
 
 on:
   push:
@@ -157,6 +158,10 @@ jobs:
             runner: ubuntu-24.04
             type: anaconda-iso
             config: iso.toml
+          - arch: amd64
+            runner: ubuntu-24.04
+            type: qcow2
+            config: disk.toml
           - arch: arm64
             runner: ubuntu-24.04-arm
             type: qcow2
@@ -166,6 +171,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Make room for the VM disks
+        # The qcow2, its .zst and the VHDX or UTM bundle are on the runner's disk at once.
+        if: matrix.type == 'qcow2'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-utils zip zstd
+          df -h .
       - name: Build the disk with bootc-image-builder
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -182,28 +194,12 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] || version="${CHANNEL%%-*}-$(git rev-parse --short HEAD)"
           sudo chown -R "$(id -u)" output
-          if [[ "${{ matrix.type }}" == "anaconda-iso" ]]; then
-            file="herald-os-$version-x86_64.iso"
-            mv output/bootiso/install.iso "$file"
-          else
-            file="herald-os-$version-aarch64.qcow2.zst"
-            zstd -T0 -19 -q output/qcow2/disk.qcow2 -o "$file"
-          fi
-          sha256sum "$file" >"$file.sha256"
-          size="$(stat -c %s "$file")"
-          echo "$file: $((size / 1024 / 1024)) MiB"
-          # GitHub refuses release assets of 2 GiB or more, so a bigger disk goes up in parts
-          # (.part0, .part1, …) that cat joins again; the .sha256 is the whole file's.
-          if (( size >= 2147483648 )); then
-            split -b 1900M -d -a 1 "$file" "$file.part"
-            rm "$file"
-          fi
-          ls -l "$file"*
-          echo "DISK=$file" >>"$GITHUB_ENV"
+          # Over 2 GiB, a file goes up in parts that join again; the .sha256 is the whole file's.
+          bash linux/vm/package-disk.sh output "${{ matrix.arch }}" "$version" dist
       - uses: actions/upload-artifact@v4
         with:
           name: herald-os-${{ matrix.type }}-${{ matrix.arch }}
-          path: ${{ env.DISK }}*
+          path: dist/herald-os-*
           if-no-files-found: error
 
   release:
