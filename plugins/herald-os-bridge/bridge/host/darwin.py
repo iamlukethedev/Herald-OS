@@ -8,6 +8,7 @@ import os
 import plistlib
 import re
 import signal
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Sequence
@@ -57,6 +58,41 @@ def osascript_error(result: ExecResult, target: str, fallback: str) -> RuntimeEr
             "System Settings > Privacy & Security > Automation, then try again"
         )
     return RuntimeError(result.stderr.strip() or fallback)
+
+
+FORCE_QUIT_GRACE = 2.0
+
+
+# Safari and the apps updated with it run from a cryptex (a sealed, system-signed copy) since macOS
+# 13, so ps shows them under one of these roots rather than /Applications.
+CRYPTEX_APP_ROOTS = ("/System/Cryptexes/App/System/Applications", "/System/Volumes/Preboot/Cryptexes/App/System/Applications")
+
+
+def bundle_executables(app_path: str) -> tuple[str, ...]:
+    """Where the main executable of an app in an Applications folder may run from: its bundle's
+    ``Contents/MacOS/``, and the same bundle in the system cryptex. Empty for any other path."""
+    path = os.path.normpath(app_path or "")
+    roots = ("/Applications", "/System/Applications", str(Path.home() / "Applications"))
+    if not path.endswith(".app") or not any(path.startswith(f"{root}/") for root in roots):
+        return ()
+    bundles = [path]
+    if os.path.dirname(path) in ("/Applications", "/System/Applications"):
+        bundles += [f"{root}/{os.path.basename(path)}" for root in CRYPTEX_APP_ROOTS]
+    return tuple(f"{bundle}/Contents/MacOS/" for bundle in bundles)
+
+
+def ps_error(result: ExecResult) -> RuntimeError:
+    return RuntimeError(f"could not read the process list (ps: {result.stderr.strip() or f'exit {result.code}'})")
+
+
+def parse_pid_uid_comm(text: str) -> list[tuple[int, int, str]]:
+    """``ps -o pid=,uid=,comm=`` lines -> (pid, uid, executable); the executable may hold spaces."""
+    rows: list[tuple[int, int, str]] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*(\d+)\s+(\d+)\s+(.+?)\s*$", line)
+        if match:
+            rows.append((int(match[1]), int(match[2]), match[3]))
+    return rows
 
 
 def _mdfind_date(value: str, end_of_day: bool) -> str:
@@ -368,7 +404,10 @@ class DarwinHost(HostAdapter):
         }
 
     def _ps(self) -> list[ProcessRow]:
-        return parse_ps(run(["ps", "-Axo", "pid=,ppid=,user=,%cpu=,%mem=,rss=,comm="]).stdout)
+        result = run(["ps", "-Axo", "pid=,ppid=,user=,%cpu=,%mem=,rss=,comm="])
+        if not result.ok:
+            raise ps_error(result)
+        return parse_ps(result.stdout)
 
     def list_processes(self, sort: Literal["cpu", "memory"], limit: int) -> list[ProcessRow]:
         rows = self._ps()
@@ -501,29 +540,70 @@ class DarwinHost(HostAdapter):
         if not result.ok:
             raise RuntimeError(result.stderr.strip() or f"could not reveal {path}")
 
-    def _app_pids(self, app: AppInfo | None, label: str) -> list[int]:
-        """The app's main processes, found with ``ps`` so the check needs no Automation permission:
-        the executable inside its bundle, or a process named exactly like the app."""
-        bundle = f"{app.path.rstrip('/')}/Contents/MacOS/" if app and app.path else None
-        pids = {r.pid for r in self._ps() if (bundle and r.command.startswith(bundle)) or r.name == label}
-        return sorted(pids - {0, 1, os.getpid(), os.getppid()})
+    def _resolve_exact(self, name: str) -> AppInfo | None:
+        """An installed app by its exact name or bundle id (force quit never guesses)."""
+        needle = name.strip().lower().removesuffix(".app")
+        for app in self.installed_apps():
+            if app.name.lower() == needle or (app.bundle_id and app.bundle_id.lower() == needle):
+                return app
+        return None
 
-    def quit_app(self, name: str, force: bool) -> None:
-        app = self.resolve_app(name)
-        label = app.name if app else name
-        pids = self._app_pids(app, label)
-        if not pids:
-            raise RuntimeError(f"{label} is not running")
-        if force:
-            for pid in pids:
+    def _own_app_processes(self, bundles: tuple[str, ...], pid: int | None = None) -> list[int]:
+        """This user's processes running the app's main executable, read with ``ps`` (no
+        Automation permission needed); with ``pid``, whether that one process still is. A ``ps``
+        that fails raises rather than reading as "not running"."""
+        argv = ["ps", "-o", "pid=,uid=,comm="] + (["-p", str(pid)] if pid is not None else ["-U", str(os.getuid())])
+        result = run(argv, timeout=10)
+        # `ps -p` exits 1 with no output when the process has gone.
+        if not result.ok and not (pid is not None and result.code == 1 and not result.stdout.strip()):
+            raise ps_error(result)
+        rows = parse_pid_uid_comm(result.stdout)
+        excluded = {0, 1, os.getpid(), os.getppid()}
+        return sorted({p for p, uid, command in rows if uid == os.getuid() and command.startswith(bundles) and p not in excluded})
+
+    def _terminate(self, label: str, bundles: tuple[str, ...], pids: list[int]) -> None:
+        """TERM, up to ``FORCE_QUIT_GRACE`` seconds to exit, then KILL; each process is checked
+        again right before each signal, so a reused pid is never hit."""
+        denied: set[int] = set()
+
+        def send(sig: signal.Signals, targets: list[int]) -> None:
+            for pid in targets:
+                if pid in denied or not self._own_app_processes(bundles, pid):
+                    continue
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, sig)
                 except ProcessLookupError:
                     continue
+                except PermissionError:
+                    denied.add(pid)
+
+        send(signal.SIGTERM, pids)
+        deadline = time.monotonic() + FORCE_QUIT_GRACE
+        remaining = [p for p in pids if p not in denied]
+        while remaining and time.monotonic() < deadline:
+            time.sleep(0.2)
+            remaining = [p for p in remaining if self._own_app_processes(bundles, p)]
+        send(signal.SIGKILL, remaining)
+        if denied:
+            raise RuntimeError(f"macOS did not let Herald OS stop {label} (process {', '.join(str(p) for p in sorted(denied))})")
+
+    def quit_app(self, name: str, force: bool) -> None:
+        app = self._resolve_exact(name) if force else self.resolve_app(name)
+        if app is None:
+            hint = " (force quit needs the app's exact name or bundle id)" if force else ""
+            raise RuntimeError(f"no app called {name} in the Applications folders{hint}")
+        bundles = bundle_executables(app.path)
+        if not bundles:
+            raise RuntimeError(f"{app.name} is not in an Applications folder")
+        pids = self._own_app_processes(bundles)
+        if not pids:
+            raise RuntimeError(f"{app.name} is not running")
+        if force:
+            self._terminate(app.name, bundles, pids)
             return
-        result = run(["osascript", "-e", f'tell application "{_applescript_string(label)}" to quit'], timeout=20)
+        result = run(["osascript", "-e", f'tell application "{_applescript_string(app.name)}" to quit'], timeout=20)
         if not result.ok:
-            raise osascript_error(result, label, f"could not quit {label}")
+            raise osascript_error(result, app.name, f"could not quit {app.name}")
 
     # --- system state (read) -----------------------------------------------------------------
     def network_status(self) -> dict[str, Any]:
