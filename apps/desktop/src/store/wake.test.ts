@@ -37,6 +37,7 @@ beforeEach(() => {
 
 describe('wake word after a failed microphone reopen', () => {
   it('reports that it cannot hear, and recovers when frames come back', async () => {
+    vi.resetModules()
     const { $wake, bindWake } = await import('./wake.ts')
     bindWake()
     await vi.waitFor(() => expect(mic.failed).not.toBeNull())
@@ -47,5 +48,23 @@ describe('wake word after a failed microphone reopen', () => {
 
     mic.frame?.({ pcm: new Int16Array(1280), level: 0.1, ms: 80 })
     expect($wake.get().error).toBeNull()
+  })
+
+  it('keeps an error that did not come from the microphone when frames resume', async () => {
+    vi.resetModules()
+    const { $wake, bindWake } = await import('./wake.ts')
+    bindWake()
+    await vi.waitFor(() => expect(mic.failed).not.toBeNull())
+
+    const owned = 'Another Hermes client (tui) owns the wake word.'
+    $wake.set({ ...$wake.get(), error: owned })
+    mic.frame?.({ pcm: new Int16Array(1280), level: 0.1, ms: 80 })
+    expect($wake.get().error).toBe(owned)
+
+    // A microphone failure that something else then overrides: frames resuming leave the newer error.
+    mic.failed?.(new Error('Microphone access was denied.'))
+    $wake.set({ ...$wake.get(), error: owned })
+    mic.frame?.({ pcm: new Int16Array(1280), level: 0.1, ms: 80 })
+    expect($wake.get().error).toBe(owned)
   })
 })

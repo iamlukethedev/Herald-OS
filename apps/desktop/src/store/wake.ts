@@ -30,6 +30,8 @@ let paused = false
 let stopFeed: (() => void) | null = null
 let arming: Promise<void> | null = null
 let feedInFlight = 0
+/** The error the microphone failure set, so frames resuming clear that one and no other. */
+let microphoneError: string | null = null
 
 function patch(next: Partial<WakeSnapshot>): void {
   $wake.set({ ...$wake.get(), ...next })
@@ -40,9 +42,14 @@ async function startFeeding(frameLength: number): Promise<void> {
   const slicer = new FrameSlicer(frameLength)
   stopFeed = await subscribeMicrophone(
     frame => {
-      // Frames again after a failed reopen: the detector hears once more.
-      if ($wake.get().error && armed) {
-        patch({ error: null })
+      // Frames again after a failed reopen: the detector hears once more. Only the microphone's own
+      // error goes; one set since (another client owns the wake word, say) is still true.
+      if (microphoneError !== null) {
+        if ($wake.get().error === microphoneError) {
+          patch({ error: null })
+        }
+
+        microphoneError = null
       }
 
       if (paused || !armed) {
@@ -65,7 +72,10 @@ async function startFeeding(frameLength: number): Promise<void> {
     },
     // The feed stays subscribed and resumes on the next device change or pick; until then the
     // wake word cannot hear, and Settings says why.
-    error => patch({ error: `Wake word cannot hear: ${error.message}` })
+    error => {
+      microphoneError = `Wake word cannot hear: ${error.message}`
+      patch({ error: microphoneError })
+    }
   )
 }
 
