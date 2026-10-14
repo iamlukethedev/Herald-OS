@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CaptureToolResult, HeraldOsResult } from '../../shared/ipc.ts'
+import { describeQr } from '../../shared/qr.ts'
 import { $env } from '../store/backend.ts'
 import type { CommandContext } from '../store/os-commands.ts'
 import { captureCommands } from './capture.ts'
@@ -25,6 +26,7 @@ vi.hoisted(() => {
 const AGENT: CommandContext = { source: 'agent' }
 const ENV = { hermesHome: '/h/.hermes', homeDir: '/h', version: '0.0.0', isDev: false, shellMode: 'desktop' as const }
 const OTP = 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub'
+const scanned = (text: string): CaptureToolResult => ({ codes: 1, qr: describeQr(text) })
 const readQr = () => captureCommands.find(command => command.id === 'capture.qr')!.run({}, AGENT)
 
 beforeEach(() => {
@@ -36,7 +38,7 @@ describe('capture.qr on a Mac', () => {
   beforeEach(() => $env.set({ ...ENV, platform: 'darwin' }))
 
   it('says a 2FA code was copied, and keeps the secret out of the caption and of Hermes', async () => {
-    bridge.tool.mockResolvedValue({ text: OTP, lines: 1 })
+    bridge.tool.mockResolvedValue(scanned(OTP))
     const result = await readQr()
 
     expect(bridge.tool).toHaveBeenCalledWith('qr')
@@ -45,19 +47,25 @@ describe('capture.qr on a Mac', () => {
   })
 
   it('says where a link points, and hands Hermes the link', async () => {
-    bridge.tool.mockResolvedValue({ text: 'https://example.com/menu', lines: 1 })
+    bridge.tool.mockResolvedValue(scanned('https://example.com/menu'))
 
     expect(await readQr()).toMatchObject({ ok: true, summary: 'Link copied: example.com', data: { kind: 'link', text: 'https://example.com/menu' } })
   })
 
   it('hands Hermes ordinary text without showing it in the caption', async () => {
-    bridge.tool.mockResolvedValue({ text: 'Table 4', lines: 1 })
+    bridge.tool.mockResolvedValue(scanned('Table 4'))
 
     expect(await readQr()).toMatchObject({ ok: true, summary: 'QR code copied', data: { kind: 'text', text: 'Table 4' } })
   })
 
+  it('refuses a selection with several codes', async () => {
+    bridge.tool.mockResolvedValueOnce({ codes: 2 })
+
+    expect(await readQr()).toMatchObject({ ok: false, error: 'Several codes in that part of the screen, so nothing was copied; select just one.' })
+  })
+
   it('reports nothing found and cancelling as before', async () => {
-    bridge.tool.mockResolvedValueOnce({ text: '', lines: 0 })
+    bridge.tool.mockResolvedValueOnce({ codes: 0 })
     expect(await readQr()).toMatchObject({ ok: false, error: 'No QR code or barcode in that part of the screen.' })
     bridge.tool.mockResolvedValueOnce({ cancelled: true })
     expect(await readQr()).toMatchObject({ ok: false, error: 'QR code: cancelled.' })

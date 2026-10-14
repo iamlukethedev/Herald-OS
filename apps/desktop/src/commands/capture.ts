@@ -1,5 +1,5 @@
 import type { CaptureTool, ScreenshotMode } from '../../shared/ipc.ts'
-import { describeQr, parseQrReading, type QrReading } from '../../shared/qr.ts'
+import { parseQrReading, QR_COPIED, type QrReading } from '../../shared/qr.ts'
 import { CLI_UNAVAILABLE_MESSAGE, runHeraldOs } from '../lib/herald-os-cli.ts'
 import { $env } from '../store/backend.ts'
 import { $recording, askAbout, offerCapture } from '../store/capture.ts'
@@ -22,8 +22,8 @@ async function linuxTool(argv: string[], title: string) {
 
 const isMac = () => $env.get()?.platform === 'darwin'
 
-/** The colour picker, a QR code or text from the screen: macOS's own tools, through main. */
-async function screenTool(tool: CaptureTool, linuxArgv: string[], title: string) {
+/** The colour picker or text from the screen: macOS's own tools, through main. */
+async function screenTool(tool: Exclude<CaptureTool, 'qr'>, linuxArgv: string[], title: string) {
   if (!isMac()) {
     return linuxTool(linuxArgv, title)
   }
@@ -35,11 +35,7 @@ async function screenTool(tool: CaptureTool, linuxArgv: string[], title: string)
   }
 
   if (!result.text) {
-    return fail(tool === 'qr' ? 'No QR code or barcode in that part of the screen.' : 'No text in that part of the screen.')
-  }
-
-  if (tool === 'qr') {
-    return qrResult(describeQr(result.text))
+    return fail('No text in that part of the screen.')
   }
 
   const summary = tool === 'colour' ? `Copied ${result.text}` : `Copied ${result.lines === 1 ? 'a line' : `${result.lines} lines`} of text`
@@ -59,9 +55,22 @@ function qrResult(reading: QrReading) {
   })
 }
 
+const SEVERAL_CODES = 'Several codes in that part of the screen, so nothing was copied; select just one.'
+
 async function readQr() {
   if (isMac()) {
-    return screenTool('qr', [], 'QR code')
+    // Main copies the code and sends back only its description.
+    const result = await window.heraldOS.capture.tool('qr')
+
+    if (result.cancelled) {
+      return fail('QR code: cancelled.')
+    }
+
+    if ((result.codes ?? 0) > 1) {
+      return fail(SEVERAL_CODES)
+    }
+
+    return result.qr ? qrResult(result.qr) : fail('No QR code or barcode in that part of the screen.')
   }
 
   const outcome = await runHeraldOs(['capture', 'qr', '--json'])
@@ -75,7 +84,7 @@ async function readQr() {
   }
 
   // An older CLI prints the contents themselves; say only that something was copied.
-  return qrResult(parseQrReading(outcome.output) ?? { kind: 'secret', caption: 'QR code copied', description: 'a QR code' })
+  return qrResult(parseQrReading(outcome.output) ?? { kind: 'secret', caption: QR_COPIED, description: 'a QR code' })
 }
 
 export const captureCommands: readonly OsCommand[] = [

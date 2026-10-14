@@ -5,11 +5,30 @@ import path from 'node:path'
 import { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, systemPreferences } from 'electron'
 import { translate } from '../../shared/i18n.ts'
 import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, type ScreenshotMode } from '../../shared/ipc.ts'
+import { describeQr } from '../../shared/qr.ts'
 import { allowAttachments } from '../attachments.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { copyConcealedMac, pickColourMac, readImageMac } from '../platform/mac-tools.ts'
+
+/**
+ * One QR code goes on the clipboard, marked as concealed so clipboard managers skip it (QR codes
+ * often carry secrets, such as a 2FA setup code). Several are refused rather than run together.
+ * The renderer only gets a description, so the contents never leave main.
+ */
+async function copyQrCode(codes: string[]): Promise<CaptureToolResult> {
+  if (codes.length !== 1) {
+    return { codes: codes.length }
+  }
+
+  await copyConcealedMac(codes[0]).catch(error => {
+    log('capture', `concealed copy: ${error instanceof Error ? error.message : String(error)}`)
+    clipboard.writeText(codes[0])
+  })
+
+  return { codes: 1, qr: describeQr(codes[0]) }
+}
 
 /** Screen grabs handed to Hermes; they only need to outlive the question about them. */
 export function capturesDir(): string {
@@ -400,16 +419,14 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
     }
 
     try {
-      const lines = await readImageMac(file, tool === 'qr' ? 'codes' : 'text')
+      if (tool === 'qr') {
+        return await copyQrCode([...new Set(await readImageMac(file, 'codes'))])
+      }
+
+      const lines = await readImageMac(file, 'text')
       const text = lines.join('\n')
 
-      if (text && tool === 'qr') {
-        // QR codes often carry secrets (a 2FA setup code); keep them out of clipboard managers.
-        await copyConcealedMac(text).catch(error => {
-          log('capture', `concealed copy: ${error instanceof Error ? error.message : String(error)}`)
-          clipboard.writeText(text)
-        })
-      } else if (text) {
+      if (text) {
         clipboard.writeText(text)
       }
 

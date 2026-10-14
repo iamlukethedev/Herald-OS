@@ -6,6 +6,7 @@ import type { LanguageSetting } from './i18n.ts'
 import type { MenuBarLayout } from './menu-bar.ts'
 import type { OfficeApp } from './office/files.ts'
 import type { PetPrefs } from './pet.ts'
+import type { QrReading } from './qr.ts'
 import type { ColorScheme, ThemeColors } from './theme.ts'
 
 /** `waiting`: there is no Hermes Agent to start yet; the shell starts one as soon as it is installed. */
@@ -606,9 +607,13 @@ export type ScreenshotMode = 'region' | 'window' | 'screen'
 export type CaptureTool = 'colour' | 'qr' | 'text'
 
 export interface CaptureToolResult {
-  /** What was copied: #rrggbb, the code's contents, or the text read. Empty when nothing was found. */
+  /** What was copied: #rrggbb or the text read. Empty when nothing was found. Never a QR code's contents. */
   text?: string
   lines?: number
+  /** QR codes: how many different codes were in the selection (only one is ever copied). */
+  codes?: number
+  /** QR codes: what the one code says, described by main so its contents stay there. */
+  qr?: QrReading
   /** Escape before anything was picked or selected. */
   cancelled?: boolean
 }

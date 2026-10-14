@@ -211,13 +211,38 @@ describe('the QR and text readers on macOS', () => {
     electron.status = 'granted'
   })
 
-  it('copies a QR code marked as concealed, so clipboard managers skip it', async () => {
+  it('copies a QR code marked as concealed, and hands the renderer only a description', async () => {
     readImageMac.mockResolvedValueOnce([OTP])
+    const result = await electron.handlers.get(IPC.captureTool)!({}, 'qr')
 
-    expect(await electron.handlers.get(IPC.captureTool)!({}, 'qr')).toEqual({ text: OTP, lines: 1 })
+    expect(result).toEqual({ codes: 1, qr: { kind: 'otp', caption: '2FA setup code copied', description: 'a 2FA setup code for GitHub' } })
+    expect(JSON.stringify(result)).not.toContain('JBSWY3DPEHPK3PXP')
     expect(readImageMac.mock.calls[0][1]).toBe('codes')
     expect(copyConcealedMac).toHaveBeenCalledWith(OTP)
     expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('copies nothing when the selection has several codes', async () => {
+    readImageMac.mockResolvedValueOnce(['https://example.com', 'WIFI:S:Home;T:WPA;P:hunter22;;'])
+    const result = await electron.handlers.get(IPC.captureTool)!({}, 'qr')
+
+    expect(result).toEqual({ codes: 2 })
+    expect(copyConcealedMac).not.toHaveBeenCalled()
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('counts the same code read twice once', async () => {
+    readImageMac.mockResolvedValueOnce(['https://example.com/menu', 'https://example.com/menu'])
+
+    expect(await electron.handlers.get(IPC.captureTool)!({}, 'qr')).toMatchObject({ codes: 1, qr: { kind: 'link', text: 'https://example.com/menu' } })
+    expect(copyConcealedMac).toHaveBeenCalledWith('https://example.com/menu')
+  })
+
+  it('reports no code without copying anything', async () => {
+    readImageMac.mockResolvedValueOnce([])
+
+    expect(await electron.handlers.get(IPC.captureTool)!({}, 'qr')).toEqual({ codes: 0 })
+    expect(copyConcealedMac).not.toHaveBeenCalled()
   })
 
   it('still copies it plainly when the concealed copy fails, so pasting works', async () => {
