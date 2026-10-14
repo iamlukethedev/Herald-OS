@@ -65,6 +65,7 @@ import { GlassButton } from '../../components/ui/glass.tsx'
 import { Kbd, Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
 import { CLI_UNAVAILABLE_MESSAGE, type CliOutcome, parseThemeList, runHeraldOs, runHeraldOsWithToast } from '../../lib/herald-os-cli.ts'
+import { isLinux } from '../../lib/platform-labels.ts'
 import { logFailure } from '../../lib/report.ts'
 import { RESTART_TARGETS, type RestartDevice, restartArgv } from '../../lib/restart-devices.ts'
 import { $env } from '../../store/backend.ts'
@@ -169,8 +170,23 @@ const field = (id: string, label: string, placeholder: string): FormField => ({ 
 
 const RESTART_ICONS: Record<RestartDevice, Icon> = { wifi: IconWifi, bluetooth: IconBluetooth, sound: IconVolume, touchpad: IconHandClick }
 
+/** System > Fix: one `herald-os restart` per device that can stop working. */
+const fixGroup = (): MenuItem => ({
+  id: 'system-fix',
+  label: 'Fix',
+  hint: 'Restart Wi-Fi, Bluetooth, sound or the touchpad when it stopped working',
+  icon: IconTool,
+  children: RESTART_TARGETS.map(target => ({
+    id: `system-fix-${target.device}`,
+    label: `Restart ${target.label}`,
+    hint: target.hint,
+    icon: RESTART_ICONS[target.device],
+    leaf: { kind: 'cli', argv: restartArgv(target.device) }
+  }))
+})
+
 /** The menu tree. `herald-os` argv per leaf is spelled out inline so it doubles as documentation. */
-function buildMenu(actions: { applications: () => void; close: () => void }): MenuItem[] {
+function buildMenu(actions: { applications: () => void; close: () => void }, linux: boolean): MenuItem[] {
   return [
     {
       id: 'install',
@@ -302,7 +318,7 @@ function buildMenu(actions: { applications: () => void; close: () => void }): Me
     {
       id: 'system',
       label: 'System',
-      hint: 'Lock, sleep, power, fix Wi-Fi or sound',
+      hint: linux ? 'Lock, sleep, power, fix Wi-Fi or sound' : 'Lock, sleep, power',
       icon: IconPower,
       children: [
         ...POWER_ITEMS.map((item): MenuItem => ({
@@ -313,19 +329,8 @@ function buildMenu(actions: { applications: () => void; close: () => void }): Me
           danger: item.danger,
           leaf: { kind: 'power', action: item.action, confirm: item.confirm }
         })),
-        {
-          id: 'system-fix',
-          label: 'Fix',
-          hint: 'Restart Wi-Fi, Bluetooth, sound or the touchpad when it stopped working',
-          icon: IconTool,
-          children: RESTART_TARGETS.map((target): MenuItem => ({
-            id: `system-fix-${target.device}`,
-            label: `Restart ${target.label}`,
-            hint: target.hint,
-            icon: RESTART_ICONS[target.device],
-            leaf: { kind: 'cli', argv: restartArgv(target.device) }
-          }))
-        }
+        // Restarting Wi-Fi, Bluetooth, sound or the touchpad is a Linux chore; elsewhere the OS owns them.
+        ...(linux ? [fixGroup()] : [])
       ]
     },
     {
@@ -509,7 +514,10 @@ export interface ControlMenuProps {
 
 export function ControlMenu({ onClose, onApplications, initialItem }: ControlMenuProps) {
   const [extensions, setExtensions] = useState<MenuExtensions>({ entries: [], errors: [] })
-  const menu = useMemo(() => withExtensions(buildMenu({ applications: onApplications, close: onClose }), extensions, onClose), [onApplications, onClose, extensions])
+  // Subscribed so the menu follows the platform once main reports it.
+  useStore($env)
+  const linux = isLinux()
+  const menu = useMemo(() => withExtensions(buildMenu({ applications: onApplications, close: onClose }, linux), extensions, onClose), [onApplications, onClose, extensions, linux])
 
   // Read menu.json each time the menu opens, so an edit shows up without a restart.
   useEffect(() => {

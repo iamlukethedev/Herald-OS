@@ -30,7 +30,7 @@ import { Meter } from '../../components/ui/primitives.tsx'
 import { describeDeviceChoice } from '../../lib/audio-devices.ts'
 import { cn } from '../../lib/cn.ts'
 import { runHeraldOs } from '../../lib/herald-os-cli.ts'
-import { audioScope } from '../../lib/platform-labels.ts'
+import { audioScope, isLinux } from '../../lib/platform-labels.ts'
 import { restartArgv, restartForPanel, type RestartTarget } from '../../lib/restart-devices.ts'
 import { $inputDevices } from '../../lib/voice/audio-capture.ts'
 import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../store/audio-devices.ts'
@@ -88,6 +88,7 @@ function usePanel(panel: LivePanel) {
 }
 
 export function StatusPanel({ panel, onClose }: { panel: StatusPanelId; onClose?: () => void }) {
+  useStore($env)
   const section = SETTINGS_FOR[panel]
   const restart = restartForPanel(panel)
 
@@ -109,7 +110,7 @@ export function StatusPanel({ panel, onClose }: { panel: StatusPanelId; onClose?
         {panel === 'power' && <PowerPanel />}
         {panel === 'clock' && <ClockPanel />}
       </div>
-      {restart && restart.panel && restart.panel !== 'clock' && !isMac() && <RestartFooter target={restart} panel={restart.panel} />}
+      {restart && restart.panel && restart.panel !== 'clock' && isLinux() && <RestartFooter target={restart} panel={restart.panel} />}
       {section && (
         <button
           type="button"
