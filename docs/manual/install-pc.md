@@ -38,8 +38,10 @@ On Windows, in a Command Prompt, join the parts, then compare the hash `certutil
 in the `.sha256`:
 
 ```bat
-copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso
-certutil -hashfile herald-os-<version>-x86_64.iso SHA256
+rem replace with the version you downloaded
+set VERSION=0.1.0-alpha.4
+copy /b herald-os-%VERSION%-x86_64.iso.part0 + herald-os-%VERSION%-x86_64.iso.part1 herald-os-%VERSION%-x86_64.iso
+certutil -hashfile herald-os-%VERSION%-x86_64.iso SHA256
 ```
 
 ## 2. Write the USB stick
