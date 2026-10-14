@@ -663,8 +663,18 @@ def test_a_stray_folder_on_a_switched_system_does_not_stand_in_for_an_account_th
     fallback(accounts)
 
 
+def image_packages() -> list[str]:
+    """packages.txt as packages.sh reads it: one package per line, # comments and blank lines dropped."""
+    lines = (ROOT / "linux" / "image" / "packages.txt").read_text().splitlines()
+    return [line.split("#", 1)[0].strip() for line in lines if line.split("#", 1)[0].strip()]
+
+
+def test_the_image_packages_are_one_per_line():
+    assert all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", package) for package in image_packages())
+
+
 def test_the_image_has_cmp():
-    packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
+    packages = image_packages()
     assert "diffutils" in packages
     assert "cmp -s" in FIRSTBOOT.read_text()
 
@@ -672,7 +682,7 @@ def test_the_image_has_cmp():
 def test_the_image_has_intel_wi_fi_firmware_and_exfat():
     # Fedora ships Intel CNVi firmware apart from linux-firmware; without it most laptops have no Wi-Fi,
     # and first boot needs the network for Hermes.
-    packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
+    packages = image_packages()
     assert "iwlwifi-mvm-firmware" in packages and "NetworkManager-wifi" in packages
     assert "exfatprogs" in packages
 
@@ -701,6 +711,11 @@ def runs_a_download(script: str) -> bool:
     "wget -qO- https://example.com/x.sh | sh",
     "wget -O - https://example.com/x.sh | sudo -E bash",
     "bash <(curl -fsSL https://example.com/x.sh)",
+    'bash <(curl -fsSL "$U")',
+    "bash <(curl -fsSL ${URL})",
+    'bash < <(curl -fsSL "$U")',
+    'curl -fsSL "$U" | bash',
+    'sh -c "$(curl -fsSL "$U")"',
     "sudo -E bash <(wget -qO- https://example.com/x.sh)",
     'sh -c "$(curl -fsSL https://example.com/x.sh)"',
     'bash -c "$(wget -qO- https://example.com/x.sh)"',
@@ -726,13 +741,25 @@ def test_a_download_that_no_shell_runs_is_not_caught(line):
     assert not runs_a_download(line)
 
 
+def fetches_more_than_hermes_agent(script: str) -> bool:
+    urls = set(re.findall(r"https?://[^\s'\";)]+", script))
+    return urls != {"https://github.com/NousResearch/hermes-agent"} or runs_a_download(script)
+
+
 def test_first_boot_fetches_hermes_agent_and_nothing_else():
     # Third-party code is never fetched and run by default at first boot: no other sources, and no
     # installer from the network handed to a shell.
-    script = FIRSTBOOT.read_text()
-    urls = set(re.findall(r"https?://[^\s'\";)]+", script))
-    assert urls == {"https://github.com/NousResearch/hermes-agent"}
-    assert not runs_a_download(script)
+    assert not fetches_more_than_hermes_agent(FIRSTBOOT.read_text())
+
+
+@pytest.mark.parametrize("line", [
+    'bash <(curl -fsSL "$U")',
+    "  as_user bash -c 'bash <(curl -fsSL \"$U\")' || true",
+    'curl -fsSL "$U" | sudo -E bash',
+])
+def test_a_download_from_a_variable_added_to_first_boot_is_caught(line):
+    # The URL is in a variable, so only the shell patterns can see it.
+    assert fetches_more_than_hermes_agent(FIRSTBOOT.read_text() + f'U="$1"\n{line}\n')
 
 
 def test_a_switched_system_where_no_one_can_sign_in_never_has_a_passwordless_hermes_in_wheel(tmp_path):
