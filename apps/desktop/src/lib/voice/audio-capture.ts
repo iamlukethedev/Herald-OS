@@ -30,7 +30,10 @@ type TrackListener = (track: MediaStreamTrack) => void
 
 /** A consumer of the raw stream (the WebRTC sender) and the way to let go of it. */
 export interface MicrophoneHold {
-  stream: MediaStream
+  /** The stream open right now; a reopen replaces it, and it is null while one is in progress. */
+  readonly stream: MediaStream | null
+  /** The audio track open right now. Read this when adding the track, never a copy taken earlier. */
+  readonly track: MediaStreamTrack | null
   release: () => void
 }
 
@@ -102,19 +105,30 @@ async function open(): Promise<void> {
     media.getAudioTracks().forEach(track => {
       track.enabled = !muted
     })
-    const ctx = new AudioContext({ latencyHint: 'interactive' })
+    let ctx: AudioContext | null = null
+    let node: AudioWorkletNode
+    let src: MediaStreamAudioSourceNode
 
+    // Anything failing from here on must not leave the tracks running: the privacy indicator would
+    // stay on with nobody listening.
     try {
-      await ctx.audioWorklet.addModule(new URL('voice-capture-worklet.js', document.baseURI).toString())
+      ctx = new AudioContext({ latencyHint: 'interactive' })
+
+      try {
+        await ctx.audioWorklet.addModule(new URL('voice-capture-worklet.js', document.baseURI).toString())
+      } catch (error) {
+        throw new MicrophoneUnavailableError('failed', `Audio worklet failed to load: ${error instanceof Error ? error.message : String(error)}`)
+      }
+
+      node = new AudioWorkletNode(ctx, 'hermes-capture', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 })
+      src = ctx.createMediaStreamSource(media)
+      src.connect(node)
     } catch (error) {
       media.getTracks().forEach(track => track.stop())
-      await ctx.close()
-      throw new MicrophoneUnavailableError('failed', `Audio worklet failed to load: ${error instanceof Error ? error.message : String(error)}`)
+      await ctx?.close().catch(closeError => console.warn('[voice] Could not close the audio context', closeError))
+      throw error instanceof MicrophoneUnavailableError ? error : new MicrophoneUnavailableError('failed', `Audio capture could not start: ${error instanceof Error ? error.message : String(error)}`)
     }
 
-    const node = new AudioWorkletNode(ctx, 'hermes-capture', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 })
-    const src = ctx.createMediaStreamSource(media)
-    src.connect(node)
     const inputRate = ctx.sampleRate
 
     node.port.onmessage = (event: MessageEvent<Float32Array>) => {
@@ -451,7 +465,12 @@ export async function holdMicrophoneStream(onTrack: TrackListener): Promise<Micr
   let held = true
 
   return {
-    stream,
+    get stream() {
+      return stream
+    },
+    get track() {
+      return stream?.getAudioTracks()[0] ?? null
+    },
     release: () => {
       if (!held) {
         return

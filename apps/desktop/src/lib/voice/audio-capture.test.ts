@@ -108,13 +108,21 @@ function getUserMedia(constraints: { audio: { deviceId?: { exact: string } } }) 
   return Promise.resolve(new FakeStream(track))
 }
 
+const contexts: FakeAudioContext[] = []
+
 class FakeAudioContext {
+  closed = false
   sampleRate = 48_000
+  constructor() {
+    contexts.push(this)
+  }
   audioWorklet = { addModule: () => Promise.resolve() }
   createMediaStreamSource() {
     return { connect: () => undefined, disconnect: () => undefined }
   }
   close() {
+    this.closed = true
+
     return Promise.resolve()
   }
 }
@@ -155,6 +163,7 @@ beforeEach(() => {
   tracks = []
   deviceChange = null
   userMedia.mockClear()
+  contexts.length = 0
 
   vi.stubGlobal('window', { heraldOS: { voice: { microphoneStatus: async () => 'granted', requestMicrophone: async () => 'granted' } } })
   vi.stubGlobal('document', { baseURI: 'file:///app/' })
@@ -237,6 +246,93 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
   })
 })
 
+describe('audio-capture hold', () => {
+  it('reads the current track and stream, not the ones it was taken with', async () => {
+    const capture = await loadCapture()
+    const hold = await capture.holdMicrophoneStream(() => undefined)
+    const first = hold.track
+
+    expect(first).toBe(tracks[0])
+
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    await settle()
+
+    expect(hold.track).toBe(tracks[1])
+    expect(hold.stream?.getAudioTracks()[0]).toBe(tracks[1])
+    expect((first as unknown as FakeTrack).stopped).toBe(true)
+    hold.release()
+  })
+})
+
+describe('audio-capture open failures', () => {
+  const failures: [string, () => void][] = [
+    [
+      'AudioContext',
+      () =>
+        vi.stubGlobal(
+          'AudioContext',
+          class {
+            constructor() {
+              throw new Error('no audio')
+            }
+          }
+        )
+    ],
+    [
+      'AudioWorkletNode',
+      () =>
+        vi.stubGlobal(
+          'AudioWorkletNode',
+          class {
+            constructor() {
+              throw new Error('no worklet')
+            }
+          }
+        )
+    ],
+    [
+      'createMediaStreamSource',
+      () =>
+        vi.stubGlobal(
+          'AudioContext',
+          class extends FakeAudioContext {
+            override createMediaStreamSource(): never {
+              throw new Error('no source')
+            }
+          }
+        )
+    ]
+  ]
+
+  for (const [name, breakIt] of failures) {
+    it(`stops the tracks and closes the context when ${name} throws`, async () => {
+      breakIt()
+      const capture = await loadCapture()
+
+      await expect(capture.subscribeMicrophone(() => undefined)).rejects.toMatchObject({ name: 'MicrophoneUnavailableError', reason: 'failed' })
+
+      expect(tracks).toHaveLength(1)
+      expect(tracks[0].stopped).toBe(true)
+      expect(contexts.every(context => context.closed)).toBe(true)
+      expect(capture.isMicrophoneOpen()).toBe(false)
+    })
+  }
+
+  it('stops the tracks when the worklet module fails to load', async () => {
+    vi.stubGlobal(
+      'AudioContext',
+      class extends FakeAudioContext {
+        override audioWorklet = { addModule: () => Promise.reject(new Error('404')) }
+      }
+    )
+    const capture = await loadCapture()
+
+    await expect(capture.subscribeMicrophone(() => undefined)).rejects.toThrow('Audio worklet failed to load: 404')
+    expect(tracks[0].stopped).toBe(true)
+    expect(contexts[0].closed).toBe(true)
+  })
+})
+
 describe('audio-capture mute', () => {
   it('keeps the microphone muted across a reopen', async () => {
     const capture = await loadCapture()
@@ -270,6 +366,19 @@ describe('audio-capture device identity', () => {
     await capture.refreshInputDevices()
     await settle()
     expect(backend.updatePrefs).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rebind when two devices share the chosen name', async () => {
+    devices = [BUILT_IN, { ...TONOR, deviceId: 'i-tonor-a', groupId: 'g-tonor-a' }, { ...TONOR, deviceId: 'i-tonor-b', groupId: 'g-tonor-b' }]
+    setChoice({ id: 'i-tonor-old', label: TONOR.label })
+    const capture = await loadCapture()
+
+    await capture.subscribeMicrophone(() => undefined)
+    await settle()
+
+    expect(backend.updatePrefs).not.toHaveBeenCalled()
+    expect(backend.prefs.get().voice.inputDevice).toEqual({ id: 'i-tonor-old', label: TONOR.label })
+    expect(tracks[0].deviceId).toBe(BUILT_IN.deviceId)
   })
 
   it('opens the label-matched device and does not reopen once its id is rewritten', async () => {
