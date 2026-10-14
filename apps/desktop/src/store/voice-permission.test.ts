@@ -17,6 +17,7 @@ const edges = vi.hoisted(() => {
 
 vi.mock('./backend.ts', () => ({
   $prefs: atom({ voice: { ...VOICE_DEFAULTS, enabled: true, engine: 'chained' } }),
+  $prefsLoaded: atom(true),
   get $env() {
     return atom({ platform: edges.platform })
   },
