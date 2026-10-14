@@ -4,6 +4,7 @@ import {
   IconAppWindow,
   IconApps,
   IconBattery,
+  IconBluetooth,
   IconBolt,
   IconBrush,
   IconCalendar,
@@ -23,6 +24,7 @@ import {
   IconDeviceDesktop,
   IconDownload,
   IconFolder,
+  IconHandClick,
   IconKeyboard,
   IconLock,
   IconLogout,
@@ -46,8 +48,11 @@ import {
   IconTerminal2,
   IconTextRecognition,
   IconToggleRight,
+  IconTool,
   IconTrash,
   IconVideo,
+  IconVolume,
+  IconWifi,
   IconWorld,
   type Icon
 } from '@tabler/icons-react'
@@ -61,6 +66,7 @@ import { Kbd, Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
 import { CLI_UNAVAILABLE_MESSAGE, type CliOutcome, parseThemeList, runHeraldOs, runHeraldOsWithToast } from '../../lib/herald-os-cli.ts'
 import { logFailure } from '../../lib/report.ts'
+import { RESTART_TARGETS, type RestartDevice, restartArgv } from '../../lib/restart-devices.ts'
 import { $env } from '../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../store/catalog.ts'
 import { openSurface, relayToMain } from '../../store/shell.ts'
@@ -160,6 +166,8 @@ export async function runPower(action: PowerAction): Promise<string | null> {
 }
 
 const field = (id: string, label: string, placeholder: string): FormField => ({ id, label, placeholder, required: true })
+
+const RESTART_ICONS: Record<RestartDevice, Icon> = { wifi: IconWifi, bluetooth: IconBluetooth, sound: IconVolume, touchpad: IconHandClick }
 
 /** The menu tree. `herald-os` argv per leaf is spelled out inline so it doubles as documentation. */
 function buildMenu(actions: { applications: () => void; close: () => void }): MenuItem[] {
@@ -294,16 +302,31 @@ function buildMenu(actions: { applications: () => void; close: () => void }): Me
     {
       id: 'system',
       label: 'System',
-      hint: 'Lock, sleep, power',
+      hint: 'Lock, sleep, power, fix Wi-Fi or sound',
       icon: IconPower,
-      children: POWER_ITEMS.map(item => ({
-        id: `system-${item.action}`,
-        label: item.label,
-        hint: item.hint,
-        icon: item.icon,
-        danger: item.danger,
-        leaf: { kind: 'power', action: item.action, confirm: item.confirm }
-      }))
+      children: [
+        ...POWER_ITEMS.map((item): MenuItem => ({
+          id: `system-${item.action}`,
+          label: item.label,
+          hint: item.hint,
+          icon: item.icon,
+          danger: item.danger,
+          leaf: { kind: 'power', action: item.action, confirm: item.confirm }
+        })),
+        {
+          id: 'system-fix',
+          label: 'Fix',
+          hint: 'Restart Wi-Fi, Bluetooth, sound or the touchpad when it stopped working',
+          icon: IconTool,
+          children: RESTART_TARGETS.map((target): MenuItem => ({
+            id: `system-fix-${target.device}`,
+            label: `Restart ${target.label}`,
+            hint: target.hint,
+            icon: RESTART_ICONS[target.device],
+            leaf: { kind: 'cli', argv: restartArgv(target.device) }
+          }))
+        }
+      ]
     },
     {
       id: 'hermes',
