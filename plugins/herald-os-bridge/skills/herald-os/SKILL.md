@@ -191,6 +191,8 @@ logs from `journalctl`, trash from `gio trash`, notifications from `notify-send`
   details or anything that looks like a password or key you get `kind` and `description` ("a 2FA
   setup code for GitHub") and `onClipboard: true`: the contents are on the clipboard for the person
   to paste where they belong. Tell them that; never ask them to paste or read the secret to you.
+  Personal links (sign-in, reset, invitation, a token) come the same way, with only the host. When
+  the person selected several codes nothing is copied: ask them to select just one.
 - Switches (both platforms): `os_ui` run `dnd.set`, `awake.set` (stay awake), `nightlight.set`
   (Linux) or `screensaver.set` with `{"enabled": true|false}`; `idle.set` changes when the screen
   locks, turns off and sleeps (minutes).

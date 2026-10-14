@@ -47,7 +47,10 @@ folder, and opens LocalSend, when it is installed, to send it to another device 
   says is copied, and nowhere else: QR codes often carry secrets, such as the code behind a 2FA
   setup or a Wi-Fi password. The notification says what kind of thing it was ("2FA setup code
   copied"; for a web link, "Link copied: example.com", so you can see where it points), clipboard
-  history leaves it out, and Hermes only learns the contents of ordinary links and text. Pasting
-  works as usual. In scripts, `herald-os capture qr --print` prints the contents.
+  history leaves it out, and Hermes only learns the contents of ordinary links and text. A link
+  that looks personal (a sign-in, reset or invitation link, or one carrying a token) only shows
+  where it points, even to Hermes. Pasting works as usual. Select one code at a time: when the
+  selection holds several, nothing is copied. In scripts, `herald-os capture qr --print` prints the
+  contents.
 
 On a Mac these use macOS's own eyedropper and text recognition.
