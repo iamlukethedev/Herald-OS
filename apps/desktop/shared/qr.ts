@@ -41,6 +41,10 @@ const SECRET_NAME_WORDS = new Set(['token', 'key', 'apikey', 'secret', 'pass', '
 const DIGIT_RUN = /(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])/g
 /** Token formats that are secret however they look: Slack, GitLab, Stripe, GitHub, OpenAI-style and AWS keys. */
 const KNOWN_TOKEN = /^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}/
+/** An AWS secret access key is 40 characters of base64; a character or two either way still counts. */
+const AWS_SECRET_KEY = /^[A-Za-z0-9/+]{38,42}$/
+/** "aws" as a word of its own (AWS_SECRET, aws:), not inside "laws". */
+const AWS = /(?<![a-z])aws(?![a-z])/i
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 const JWT = /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/
 const SEED_WORD = /^[a-z]{3,8}$/
@@ -58,6 +62,8 @@ export const ENCODED_TOKEN_MIN = 16
 export const RANDOM_CHUNK_MIN = 8
 /** Letters and digits switching this often, with no CamelCase word in the chunk, are random ("abc123SECRET"). */
 export const LETTER_DIGIT_SWITCHES_MIN = 2
+/** This often, they are random even with a CamelCase word ("Hunter2Hunter2Hunter2"); names switch twice at most. */
+export const CAMEL_SWITCHES_MIN = 4
 /** This many irregular switches in a row are random ("aZbYcX", "4eC39H"). */
 export const IRREGULAR_SWITCHES_MIN = 3
 /**
@@ -68,8 +74,22 @@ export const IRREGULAR_SWITCHES_MIN = 3
 export const ACRONYM_RUNS_MIN = 2
 export const CASE_SWITCHES_MIN = 4
 export const MIXED_CASE_MIN = 16
-/** Groups of letters and digits ("A1B2-C3D4-E5F6"), each at least KEY_GROUP_MIN long, make a key. */
-export const KEY_GROUPS_MIN = 3
+/**
+ * Such a chunk only counts when its lower-case runs average under this many letters: names are
+ * made of words ("XMLHttpRequestJSONParser"), random strings have short runs.
+ */
+export const WORD_RUN_MIN = 4
+/**
+ * A whole word, its letters and digits taken together whatever separates them, is random from
+ * RANDOM_WORD_MIN of them when they switch between letters and digits LETTER_DIGIT_SWITCHES_MIN
+ * times and between cases WORD_CASE_SWITCHES_MIN times ("aB3-xY9", "q7Wz2Lp9"). A CamelCase word
+ * only excuses words of CAMEL_WORD_MIN or more ("iPhone15ProMax", not "Win10Pro").
+ */
+export const RANDOM_WORD_MIN = 6
+export const WORD_CASE_SWITCHES_MIN = 2
+export const CAMEL_WORD_MIN = 10
+/** Groups of letters and digits ("A1B2-C3D4"), each at least KEY_GROUP_MIN long, make a key. */
+export const KEY_GROUPS_MIN = 2
 export const KEY_GROUP_MIN = 3
 /** Digits from this many in a run (or grouped) are secret, whatever they are: card numbers, account numbers. */
 export const LONG_DIGITS_MIN = 16
@@ -207,12 +227,21 @@ export function acronymRuns(chunk: string): number {
   return parts.filter((part, i) => part.kind === 'upper' && part.length >= 2 && parts[i + 1]?.kind === 'lower' && parts[i + 1].length >= 2).length
 }
 
+/** Lower-case runs averaging under WORD_RUN_MIN letters. */
+export function shortLowerRuns(chunk: string): boolean {
+  const lower = runs(chunk).filter(part => part.kind === 'lower')
+
+  return lower.reduce((sum, part) => sum + part.length, 0) < WORD_RUN_MIN * lower.length
+}
+
 /** A CamelCase word: a capital and two or more lower-case letters ("Phone", "Pro"). */
 const CAMEL_WORD = /[A-Z][a-z]{2,}/
 
 function randomChunk(chunk: string): boolean {
   if (chunk.length >= RANDOM_CHUNK_MIN) {
-    if (letterDigitSwitches(chunk) >= LETTER_DIGIT_SWITCHES_MIN && !CAMEL_WORD.test(chunk)) {
+    const switches = letterDigitSwitches(chunk)
+
+    if (switches >= CAMEL_SWITCHES_MIN || (switches >= LETTER_DIGIT_SWITCHES_MIN && !CAMEL_WORD.test(chunk))) {
       return true
     }
 
@@ -221,16 +250,41 @@ function randomChunk(chunk: string): boolean {
     }
   }
 
-  return chunk.length >= MIXED_CASE_MIN && caseSwitches(chunk) >= CASE_SWITCHES_MIN && acronymRuns(chunk) >= ACRONYM_RUNS_MIN
+  return chunk.length >= MIXED_CASE_MIN && caseSwitches(chunk) >= CASE_SWITCHES_MIN && acronymRuns(chunk) >= ACRONYM_RUNS_MIN && shortLowerRuns(chunk)
+}
+
+/** A whole word that looks random, judged on its letters and digits together (see RANDOM_WORD_MIN). */
+export function randomWord(value: string): boolean {
+  const word = value.replace(/[^A-Za-z0-9]/g, '')
+
+  return (
+    word.length >= RANDOM_WORD_MIN &&
+    letterDigitSwitches(word) >= LETTER_DIGIT_SWITCHES_MIN &&
+    caseSwitches(word) >= WORD_CASE_SWITCHES_MIN &&
+    (word.length < CAMEL_WORD_MIN || !CAMEL_WORD.test(word))
+  )
+}
+
+/** Shaped like an AWS secret access key: about 40 characters of base64, mixing upper case, lower case and digits. */
+export function awsKey(word: string): boolean {
+  return AWS_SECRET_KEY.test(word) && /[A-Z]/.test(word) && /[a-z]/.test(word) && /[0-9]/.test(word)
 }
 
 /**
- * A random-looking token: a known key format, a JWT, base32, hex, grouped key, or a chunk that
+ * A random-looking token: a known key format, an AWS secret key with / or +, a grouped key, a
+ * random word (these at any length), or from `min` characters a JWT, base32, hex, or a chunk that
  * looks random (see randomChunk). Names stay text: "iPhone15ProMax", "NETGEAR-5G-Guest",
  * "TheQuickBrownFoxJumps", "ORDER-2026-000123456", "correct-horse-battery-staple-99".
  */
 export function looksLikeToken(value: string, min: number): boolean {
-  if (KNOWN_TOKEN.test(value)) {
+  if (KNOWN_TOKEN.test(value) || (awsKey(value) && /[/+]/.test(value))) {
+    return true
+  }
+
+  const chunks = value.split(/[^A-Za-z0-9]+/).filter(Boolean)
+  const keyGroups = chunks.length >= KEY_GROUPS_MIN && chunks.every(chunk => chunk.length >= KEY_GROUP_MIN && /[A-Za-z]/.test(chunk) && /[0-9]/.test(chunk))
+
+  if (keyGroups || randomWord(value)) {
     return true
   }
 
@@ -246,10 +300,7 @@ export function looksLikeToken(value: string, min: number): boolean {
     return true
   }
 
-  const chunks = value.split(/[^A-Za-z0-9]+/).filter(Boolean)
-  const keyGroups = chunks.length >= KEY_GROUPS_MIN && chunks.every(chunk => chunk.length >= KEY_GROUP_MIN && /[A-Za-z]/.test(chunk) && /[0-9]/.test(chunk))
-
-  return keyGroups || chunks.some(randomChunk)
+  return chunks.some(randomChunk)
 }
 
 /** The Luhn checksum card numbers carry. */
@@ -457,6 +508,10 @@ export function looksSecret(text: string): boolean {
   const words = text.split(/[\s,]+/).filter(Boolean)
 
   if (words.length >= RECOVERY_WORDS.min && words.length <= RECOVERY_WORDS.max && words.every(word => SEED_WORD.test(word.toLowerCase()))) {
+    return true
+  }
+
+  if (AWS.test(text) && text.split(/\s+/).some(awsKey)) {
     return true
   }
 

@@ -806,6 +806,8 @@ QR_LONG_DIGITS_MIN = 16
 QR_LUHN_DIGITS_MIN = 13
 QR_CARD_LEAD = re.compile(r"[2-6]")
 QR_KNOWN_TOKEN = re.compile(r"^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}")
+QR_AWS_SECRET_KEY = re.compile(r"[A-Za-z0-9/+]{38,42}")
+QR_AWS = re.compile(r"(?<![a-z])aws(?![a-z])", re.I)
 QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 QR_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
 QR_SEED_WORD = re.compile(r"[a-z]{3,8}")
@@ -818,7 +820,12 @@ QR_IRREGULAR_SWITCHES_MIN = 3
 QR_ACRONYM_RUNS_MIN = 2
 QR_CASE_SWITCHES_MIN = 4
 QR_MIXED_CASE_MIN = 16
-QR_KEY_GROUPS_MIN = 3
+QR_WORD_RUN_MIN = 4
+QR_CAMEL_SWITCHES_MIN = 4
+QR_RANDOM_WORD_MIN = 6
+QR_WORD_CASE_SWITCHES_MIN = 2
+QR_CAMEL_WORD_MIN = 10
+QR_KEY_GROUPS_MIN = 2
 QR_KEY_GROUP_MIN = 3
 QR_CAMEL_WORD = re.compile(r"[A-Z][a-z]{2,}")
 QR_RECOVERY_WORDS = (11, 24)
@@ -911,18 +918,45 @@ def qr_acronym_runs(chunk: str) -> int:
     return sum(1 for here, after in zip(parts, parts[1:]) if here[0] == "upper" and here[1] >= 2 and after[0] == "lower" and after[1] >= 2)
 
 
+def qr_short_lower_runs(chunk: str) -> bool:
+    """Lower-case runs averaging under QR_WORD_RUN_MIN letters: random, where names are made of words."""
+    lower = [length for kind, length in qr_runs(chunk) if kind == "lower"]
+    return sum(lower) < QR_WORD_RUN_MIN * len(lower)
+
+
 def qr_random_chunk(chunk: str) -> bool:
     if len(chunk) >= QR_RANDOM_CHUNK_MIN:
-        if qr_switches(chunk) >= QR_LETTER_DIGIT_SWITCHES_MIN and not QR_CAMEL_WORD.search(chunk):
+        switches = qr_switches(chunk)
+        if switches >= QR_CAMEL_SWITCHES_MIN or (switches >= QR_LETTER_DIGIT_SWITCHES_MIN and not QR_CAMEL_WORD.search(chunk)):
             return True
         if qr_irregular_switches(chunk) >= QR_IRREGULAR_SWITCHES_MIN:
             return True
-    return len(chunk) >= QR_MIXED_CASE_MIN and qr_case_switches(chunk) >= QR_CASE_SWITCHES_MIN and qr_acronym_runs(chunk) >= QR_ACRONYM_RUNS_MIN
+    return len(chunk) >= QR_MIXED_CASE_MIN and qr_case_switches(chunk) >= QR_CASE_SWITCHES_MIN and qr_acronym_runs(chunk) >= QR_ACRONYM_RUNS_MIN and qr_short_lower_runs(chunk)
+
+
+def qr_random_word(value: str) -> bool:
+    """The letters and digits of a whole word switching both ways ("aB3-xY9"); CamelCase only excuses longer words."""
+    word = re.sub(r"[^A-Za-z0-9]", "", value)
+    return (
+        len(word) >= QR_RANDOM_WORD_MIN
+        and qr_switches(word) >= QR_LETTER_DIGIT_SWITCHES_MIN
+        and qr_case_switches(word) >= QR_WORD_CASE_SWITCHES_MIN
+        and (len(word) < QR_CAMEL_WORD_MIN or not QR_CAMEL_WORD.search(word))
+    )
+
+
+def qr_aws_key(word: str) -> bool:
+    """Shaped like an AWS secret access key: about 40 characters of base64, mixing upper case, lower case and digits."""
+    return bool(QR_AWS_SECRET_KEY.fullmatch(word) and re.search(r"[A-Z]", word) and re.search(r"[a-z]", word) and re.search(r"[0-9]", word))
 
 
 def qr_looks_like_token(value: str, minimum: int) -> bool:
-    """A known key format, a JWT, base32, hex, a grouped key, or a chunk that looks random (qr_random_chunk)."""
-    if QR_KNOWN_TOKEN.match(value):
+    """A known key format, an AWS secret key, a grouped key, a random word, a JWT, base32, hex, or a random chunk (qr_random_chunk)."""
+    if QR_KNOWN_TOKEN.match(value) or (qr_aws_key(value) and re.search(r"[/+]", value)):
+        return True
+    chunks = [chunk for chunk in re.split(r"[^A-Za-z0-9]+", value) if chunk]
+    key_groups = len(chunks) >= QR_KEY_GROUPS_MIN and all(len(chunk) >= QR_KEY_GROUP_MIN and re.search(r"[A-Za-z]", chunk) and re.search(r"[0-9]", chunk) for chunk in chunks)
+    if key_groups or qr_random_word(value):
         return True
     if len(value) < minimum:
         return False
@@ -930,9 +964,7 @@ def qr_looks_like_token(value: str, minimum: int) -> bool:
         return True
     if len(value) >= QR_ENCODED_TOKEN_MIN and (re.fullmatch(r"[A-Z2-7]+=*", value) or (re.fullmatch(r"[0-9a-fA-F]+", value) and re.search(r"[a-fA-F]", value))):
         return True
-    chunks = [chunk for chunk in re.split(r"[^A-Za-z0-9]+", value) if chunk]
-    key_groups = len(chunks) >= QR_KEY_GROUPS_MIN and all(len(chunk) >= QR_KEY_GROUP_MIN and re.search(r"[A-Za-z]", chunk) and re.search(r"[0-9]", chunk) for chunk in chunks)
-    return key_groups or any(qr_random_chunk(chunk) for chunk in chunks)
+    return any(qr_random_chunk(chunk) for chunk in chunks)
 
 
 def qr_uri_parts(uri: str) -> tuple[str | None, str, str, str]:
@@ -1062,6 +1094,8 @@ def qr_looks_secret(text: str) -> bool:
         return True
     words = [word for word in re.split(r"[\s,]+", text) if word]
     if QR_RECOVERY_WORDS[0] <= len(words) <= QR_RECOVERY_WORDS[1] and all(QR_SEED_WORD.fullmatch(word.lower()) for word in words):
+        return True
+    if QR_AWS.search(text) and any(qr_aws_key(word) for word in text.split()):
         return True
     return any(
         qr_uri_looks_secret(word) if QR_SCHEME.match(word) else "@" not in word and qr_looks_like_token(word, QR_TEXT_TOKEN_MIN)

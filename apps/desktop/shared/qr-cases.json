@@ -1142,12 +1142,14 @@
     ]
   },
   {
-    "note": "letters and digits with a CamelCase word are a name",
+    "note": "letters and digits switching 4 times are random even with a CamelCase word",
     "text": "ab12Cde34ef5",
-    "kind": "text",
+    "kind": "secret",
     "caption": "QR code copied",
-    "description": "text",
-    "full": true
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ab12Cde34ef5"
+    ]
   },
   {
     "note": "a capital with one lower-case letter is not a CamelCase word",
@@ -1216,12 +1218,14 @@
     ]
   },
   {
-    "note": "two groups are not a key",
+    "note": "two groups are a key",
     "text": "A1B2C3-D4E5F6",
-    "kind": "text",
+    "kind": "secret",
     "caption": "QR code copied",
-    "description": "text",
-    "full": true
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "A1B2C3-D4E5F6"
+    ]
   },
   {
     "note": "key groups of three characters",
@@ -1823,6 +1827,416 @@
     ]
   },
   {
+    "note": "an AWS secret key, one character short (QA round 6)",
+    "text": "wJalrXUtnFPK/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFPK/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "an AWS secret key: 40 characters of base64 with /",
+    "text": "wJalrXUtnFPKEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "wJalrXUtnFPKEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "AWS key shape: + counts like /",
+    "text": "Abcdefghij+abcdefghij+abcdefghij+abcdef1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghij+abcdefghij+abcdefghij+abcdef1"
+    ]
+  },
+  {
+    "note": "AWS key shape: 40 characters",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abcdef1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghij/abcdefghij/abcdefghij/abcdef1"
+    ]
+  },
+  {
+    "note": "AWS key shape: 38 characters is the minimum",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abcd1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghij/abcdefghij/abcdefghij/abcd1"
+    ]
+  },
+  {
+    "note": "AWS key shape: 37 characters is too short",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abc1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape: 42 characters is the maximum",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abcdefgh1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghij/abcdefghij/abcdefghij/abcdefgh1"
+    ]
+  },
+  {
+    "note": "AWS key shape: 43 characters is too long",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abcdefghi1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape needs a digit",
+    "text": "Abcdefghij/abcdefghij/abcdefghij/abcdefgh",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape needs an upper-case letter",
+    "text": "abcdefghij/abcdefghij/abcdefghij/abcdefg1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape needs a lower-case letter",
+    "text": "ABCDEFGHIJ/ABCDEFGHIJ/ABCDEFGHIJ/ABCDEFG1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a 40-character path is not an AWS key",
+    "text": "docs/guide/install/linux/ubuntu/noble/ab",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape without / or + needs aws nearby",
+    "text": "Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "AWS key shape with aws nearby",
+    "text": "AWS Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghijabcdefghijabcdefghijabcdefghi1"
+    ]
+  },
+  {
+    "note": "aws between underscores counts",
+    "text": "my_aws_key Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Abcdefghijabcdefghijabcdefghijabcdefghi1"
+    ]
+  },
+  {
+    "note": "aws inside a word does not count",
+    "text": "laws Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "aws at the start of a word does not count",
+    "text": "awsome Abcdefghijabcdefghijabcdefghijabcdefghi1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an encoded AWS key in a value is cut out; the tracking parameter stays",
+    "text": "https://example.com/?file=wJalrXUtnFPK%2FK7MDENG%2FbPxRfiCYEXAMPLEKEY&utm_source=news",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/?utm_source=news",
+    "description": "a link to example.com, with the parts that looked secret removed",
+    "link": "https://example.com/?utm_source=news",
+    "hidden": [
+      "wJalrXUtnFPK",
+      "bPxRfiCYEXAMPLEKEY"
+    ]
+  },
+  {
+    "note": "a password made of a word and a digit, repeated (QA round 6)",
+    "text": "Hunter2Hunter2Hunter2",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Hunter2Hunter2Hunter2"
+    ]
+  },
+  {
+    "note": "letters and digits switching 4 times, with a CamelCase word",
+    "text": "Hunter2Hunter2Hunter",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Hunter2Hunter2Hunter"
+    ]
+  },
+  {
+    "note": "3 switches with a CamelCase word are a name",
+    "text": "Hunter2Hunter2",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a key in two groups (QA round 6)",
+    "text": "A1B2-C3D4",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "A1B2-C3D4"
+    ]
+  },
+  {
+    "note": "a key in two groups of 8 (QA round 6)",
+    "text": "ABCD1234-EFGH5678",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ABCD1234-EFGH5678"
+    ]
+  },
+  {
+    "note": "one group is not a key",
+    "text": "COVID19",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "two groups, one of two characters, are not a key",
+    "text": "A1-B2C3",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random chunks too short to judge on their own (QA round 6)",
+    "text": "4eC3-9HqL",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4eC3-9HqL"
+    ]
+  },
+  {
+    "note": "random chunks too short to judge on their own (QA round 6)",
+    "text": "x7K-2pQ-9zR",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "x7K-2pQ-9zR"
+    ]
+  },
+  {
+    "note": "random chunks too short to judge on their own (QA round 6)",
+    "text": "aB3-xY9",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "aB3-xY9"
+    ]
+  },
+  {
+    "note": "random chunks too short to judge on their own (QA round 6)",
+    "text": "Ab3dE-9fGh2",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Ab3dE-9fGh2"
+    ]
+  },
+  {
+    "note": "a random word below the text token minimum (QA round 6)",
+    "text": "q7Wz2Lp9",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "q7Wz2Lp9"
+    ]
+  },
+  {
+    "note": "a random word in a sentence",
+    "text": "Use 4eC3-9HqL to sign in",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "4eC3-9HqL"
+    ]
+  },
+  {
+    "note": "random word: 6 letters and digits is the minimum",
+    "text": "aB-x9yZ",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "aB-x9yZ"
+    ]
+  },
+  {
+    "note": "random word: 5 letters and digits is below the minimum",
+    "text": "aB-x9y",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random word: two letter-digit switches",
+    "text": "aB-cD-e1f",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "aB-cD-e1f"
+    ]
+  },
+  {
+    "note": "random word: one letter-digit switch is not enough",
+    "text": "aB-cD-ef1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random word: two case switches",
+    "text": "ab3-cD4-ef",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ab3-cD4-ef"
+    ]
+  },
+  {
+    "note": "random word: one case switch is not enough",
+    "text": "ab3-cd4-eF",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random word: a CamelCase word does not excuse 9 characters",
+    "text": "Win10Pro6",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "Win10Pro6"
+    ]
+  },
+  {
+    "note": "random word: a CamelCase word excuses 10 characters",
+    "text": "Win10Pro64",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary model name: one case switch",
+    "text": "RTX4090Ti",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary model name: one case switch",
+    "text": "i7-12700K",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a CamelCase name with two acronyms: its lower-case runs are words (QA round 6)",
+    "text": "XMLHttpRequestJSONParser",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "acronym runs: lower-case runs averaging 4 letters are words",
+    "text": "abcdEFGHijklMNopqr",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "acronym runs: lower-case runs averaging under 4 letters are random",
+    "text": "abcdEFGHijkMNopqr",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abcdEFGHijkMNopqr"
+    ]
+  },
+  {
+    "note": "mixed case: 3 case switches are not enough, even with short lower-case runs",
+    "text": "ABCDEFghiJKLMnop",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
     "note": "12 digits that start like a card and pass Luhn are below the minimum",
     "text": "234567890129",
     "kind": "text",
@@ -1882,6 +2296,14 @@
     "kind": "text",
     "caption": "QR code copied",
     "description": "text",
+    "full": true
+  },
+  {
+    "note": "tracking parameters stay unless they look secret",
+    "text": "https://shop.example.com/p?utm_source=newsletter&utm_medium=email&utm_campaign=Spring2026Sale",
+    "kind": "link",
+    "caption": "Link copied: https://shop.example.com/p?utm_source=newsletter&utm_medium=email&utm_campaign=Spring2026Sale",
+    "description": "a link to shop.example.com",
     "full": true
   }
 ]
