@@ -83,7 +83,9 @@ for each of these the first time a feature needs it:
 - **Microphone**: talking to Hermes, dictation, and screen recordings with sound.
 - **Camera**: the camera bubble on a screen recording, when you turn it on.
 - **Screen Recording**: asking Hermes about the screen, copying text or a QR code from it,
-  screenshots and screen recordings.
+  screenshots and screen recordings. Without it, Herald OS captures nothing and says where to turn
+  it on (System Settings > Privacy & Security > Screen & System Audio Recording); reopen Herald OS
+  after switching it on.
 - **Accessibility and Automation**: typing an emoji or dictation into another app (through System
   Events), and Hermes listing or quitting apps, locking the screen, switching dark mode and moving
   files to the Trash (through Finder).

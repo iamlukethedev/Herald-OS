@@ -2,9 +2,11 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { clipboard, ClipboardItem, ipcMain, nativeImage, systemPreferences } from 'electron'
+import { clipboard, ClipboardItem, dialog, ipcMain, nativeImage, shell, systemPreferences } from 'electron'
+import { translate } from '../../shared/i18n.ts'
 import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, type ScreenshotMode } from '../../shared/ipc.ts'
 import { allowAttachments } from '../attachments.ts'
+import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { pickColourMac, readImageMac } from '../platform/mac-tools.ts'
@@ -30,6 +32,57 @@ function recordingsDir(): string {
   return process.platform === 'darwin' ? path.join(os.homedir(), 'Movies') : path.join(os.homedir(), 'Videos', 'Recordings')
 }
 
+const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture'
+
+let probedThisLaunch = false
+let explaining = false
+
+/** Tests start each case as a fresh launch. */
+export function resetScreenRecordingCheck(): void {
+  probedThisLaunch = false
+  explaining = false
+}
+
+/**
+ * Throws, after telling the person how to turn it on, unless macOS lets Herald OS read the screen.
+ * Without the permission `screencapture` still succeeds but sees only the wallpaper, the menu bar
+ * and Herald's own windows, so nothing it captures may reach Hermes or text recognition. The status
+ * reads `denied` until macOS has asked, and it asks only when a capture is attempted, so the first
+ * refusal in a launch takes one silent capture (then deletes it) to bring up macOS's prompt and put
+ * Herald OS in the pane's list. A change to the switch applies only after Herald OS reopens.
+ */
+export async function ensureScreenRecording(): Promise<void> {
+  if (process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === 'granted') {
+    return
+  }
+
+  if (!probedThisLaunch) {
+    probedThisLaunch = true
+    const probe = path.join(capturesDir(), `permission-${Date.now()}.png`)
+    fs.mkdirSync(capturesDir(), { recursive: true })
+    await run('screencapture', ['-x', '-t', 'png', probe], 15_000)
+    fs.rmSync(probe, { force: true })
+  }
+
+  const language = menuLanguage()
+  const title = translate(language, 'permission.screen.title')
+  const detail = translate(language, 'permission.screen.detail')
+
+  // Not awaited: the capture fails now (Hermes gets the reason) while the explanation stays up.
+  if (!explaining) {
+    explaining = true
+    void dialog
+      .showMessageBox({ type: 'warning', message: title, detail, buttons: [translate(language, 'permission.screen.open'), translate(language, 'permission.screen.notNow')], defaultId: 0, cancelId: 1 })
+      .then(({ response }) => (response === 0 ? shell.openExternal(SCREEN_RECORDING_PANE) : undefined))
+      .catch(error => log('capture', `screen recording explanation: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => {
+        explaining = false
+      })
+  }
+
+  throw new Error(`${title}. ${detail}`)
+}
+
 async function slurp(): Promise<string | null> {
   const region = await run('slurp', [], 300_000)
 
@@ -49,6 +102,7 @@ export async function captureRegion(): Promise<string | null> {
   const file = path.join(capturesDir(), `region-${new Date().toISOString().replace(/[:.]/g, '-')}.png`)
 
   if (process.platform === 'darwin') {
+    await ensureScreenRecording()
     await run('screencapture', ['-i', '-x', '-t', 'png', file], 300_000)
 
     return fs.existsSync(file) ? file : null
@@ -97,6 +151,7 @@ export async function captureScreenshot(mode: ScreenshotMode): Promise<string | 
 
   if (process.platform === 'darwin') {
     const flags = mode === 'region' ? ['-i'] : mode === 'window' ? ['-iW'] : []
+    await ensureScreenRecording()
     await run('screencapture', ['-x', ...flags, '-t', 'png', file], 300_000)
 
     return fs.existsSync(file) ? file : null
@@ -169,6 +224,7 @@ class Recorder {
     let file: string
 
     if (process.platform === 'darwin') {
+      await ensureScreenRecording()
       file = path.join(dir, `Herald OS Recording ${stamp()}.mov`)
       command = 'screencapture'
       args = ['-v', ...(options.audio ? ['-g'] : []), file]

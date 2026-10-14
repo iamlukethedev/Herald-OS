@@ -1,0 +1,117 @@
+import fs from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const electron = vi.hoisted(() => ({
+  status: 'denied',
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  showMessageBox: vi.fn(async (_options: Record<string, unknown>) => ({ response: 1 })),
+  openExternal: vi.fn(async () => undefined)
+}))
+const run = vi.hoisted(() => vi.fn(async (_command: string, args: string[]) => {
+  // screencapture writes its file wherever it is told to.
+  fs.writeFileSync(args[args.length - 1], 'png')
+
+  return { code: 0, stdout: '', stderr: '' }
+}))
+const readImageMac = vi.hoisted(() => vi.fn(async () => ['Order 4471']))
+
+vi.mock('electron', () => ({
+  clipboard: { writeText: vi.fn() },
+  ClipboardItem: class {},
+  dialog: { showMessageBox: electron.showMessageBox },
+  ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => unknown) => electron.handlers.set(channel, handler) },
+  nativeImage: {},
+  shell: { openExternal: electron.openExternal },
+  systemPreferences: { getMediaAccessStatus: () => electron.status, askForMediaAccess: vi.fn() }
+}))
+vi.mock('../platform/exec.ts', () => ({ run }))
+vi.mock('../platform/mac-tools.ts', () => ({ pickColourMac: vi.fn(), readImageMac }))
+vi.mock('../i18n.ts', () => ({ menuLanguage: () => 'en' }))
+vi.mock('../attachments.ts', () => ({ allowAttachments: vi.fn() }))
+vi.mock('../log.ts', () => ({ log: vi.fn() }))
+
+const { IPC } = await import('../../shared/ipc.ts')
+const { captureRegion, captureScreenshot, registerCaptureIpc, resetScreenRecordingCheck } = await import('./capture.ts')
+
+const platform = process.platform
+const blocked = /^Herald OS needs Screen Recording permission\. Turn on Herald OS in System Settings > Privacy & Security > Screen & System Audio Recording/
+const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const interactive = () => run.mock.calls.filter(([command, args]) => command === 'screencapture' && args.some(flag => flag.startsWith('-i') || flag === '-v'))
+const probes = () => run.mock.calls.filter(([command, args]) => command === 'screencapture' && args.length === 4 && args[0] === '-x')
+
+beforeEach(() => {
+  Object.defineProperty(process, 'platform', { value: 'darwin' })
+  electron.status = 'denied'
+  run.mockClear()
+  readImageMac.mockClear()
+  electron.showMessageBox.mockClear()
+  electron.openExternal.mockClear()
+  resetScreenRecordingCheck()
+  registerCaptureIpc(() => undefined)
+})
+
+afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: platform })
+})
+
+describe('the Screen Recording check on macOS', () => {
+  it('captures as before when the permission is granted', async () => {
+    electron.status = 'granted'
+    const file = await captureRegion()
+
+    expect(file).toMatch(/region-.*\.png$/)
+    expect(interactive()).toHaveLength(1)
+    expect(electron.showMessageBox).not.toHaveBeenCalled()
+    fs.rmSync(file!, { force: true })
+  })
+
+  it('without it, lets macOS ask once, discards that capture, explains, and never selects a region', async () => {
+    await expect(captureRegion()).rejects.toThrow(blocked)
+
+    expect(probes()).toHaveLength(1)
+    expect(fs.existsSync(probes()[0][1][3])).toBe(false)
+    expect(interactive()).toHaveLength(0)
+    expect(electron.showMessageBox).toHaveBeenCalledTimes(1)
+    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Herald OS needs Screen Recording permission', buttons: ['Open System Settings', 'Not Now'] })
+  })
+
+  it('asks macOS only once a launch, and does not stack explanations', async () => {
+    electron.showMessageBox.mockImplementationOnce(() => new Promise(() => undefined))
+    await expect(captureRegion()).rejects.toThrow(blocked)
+    await expect(captureScreenshot('screen')).rejects.toThrow(blocked)
+
+    expect(probes()).toHaveLength(1)
+    expect(electron.showMessageBox).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the Screen Recording pane when the person asks to', async () => {
+    electron.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    await expect(captureScreenshot('window')).rejects.toThrow(blocked)
+    await flush()
+
+    expect(electron.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture')
+  })
+
+  it('stops the text and QR readers before anything is read or copied', async () => {
+    const tool = electron.handlers.get(IPC.captureTool)!
+
+    await expect(tool({}, 'text')).rejects.toThrow(blocked)
+    await expect(tool({}, 'qr')).rejects.toThrow(blocked)
+    expect(readImageMac).not.toHaveBeenCalled()
+    expect(interactive()).toHaveLength(0)
+  })
+
+  it('does not start a recording', async () => {
+    const record = electron.handlers.get(IPC.captureRecord)!
+
+    await expect(record({}, 'start')).rejects.toThrow(blocked)
+    expect(interactive()).toHaveLength(0)
+    expect(await electron.handlers.get(IPC.captureRecordState)!({})).toEqual({ recording: false })
+  })
+
+  it('hands nothing over to be attached to a question', async () => {
+    await expect(electron.handlers.get(IPC.captureRegion)!({})).rejects.toThrow(blocked)
+    await expect(electron.handlers.get(IPC.captureScreenshot)!({}, 'region')).rejects.toThrow(blocked)
+    expect(interactive()).toHaveLength(0)
+  })
+})
