@@ -8,7 +8,9 @@ step is a deliberate decision.
 1. **Mac signing.** Enrol in the Apple Developer Program, create a Developer ID Application
    certificate, export it as a `.p12`, and add the repository secrets `MAC_CERTIFICATE_P12`
    (base64 of the file), `MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`
-   (from appleid.apple.com) and `APPLE_TEAM_ID`.
+   (from account.apple.com) and `APPLE_TEAM_ID`. [MACOS-SIGNING.md](../MACOS-SIGNING.md) walks
+   through each one. The build stays unsigned, with a warning naming what is missing, until all five
+   are set.
 2. **A dry run.** Run the Release workflow by hand and check the macOS job verified the signature,
    the notarization ticket and Gatekeeper (`spctl`). Install the DMG on a second Mac.
 3. **Linux artifacts.** Tag a release candidate (`v0.2.0-rc.1`); check the Linux tarballs and the

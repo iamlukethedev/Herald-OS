@@ -8,6 +8,7 @@
 | [SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md) | The tools Hermes uses on your machine, their permission tiers and audit log |
 | [VOICE.md](VOICE.md) | Voice: the two engines, wake word, push-to-talk, barge-in, settings |
 | [LINUX.md](LINUX.md) | Herald OS as a whole Linux desktop (Fedora, niri), in a VM on your Mac |
+| [MACOS-SIGNING.md](MACOS-SIGNING.md) | How the release workflow signs and notarizes the Mac app, and how to set up its five secrets |
 | [TRANSLATING.md](TRANSLATING.md) | How Herald OS's text is translated, and how to translate it into your language |
 | [DECISIONS.md](DECISIONS.md) | Architecture decision records: why things are the way they are |
 | [internal/](internal/) | Working notes from earlier phases (plans, roadmap, landscape research) |

@@ -31,7 +31,7 @@ src/                   React renderer
   components/          shared UI primitives and the two brand marks
 public/                served as-is: favicon, audio-capture worklet
 build/                 app icons and macOS entitlements for electron-builder
-scripts/               bundle-electron.mjs (esbuild for main and preload), after-pack.mjs (electron-builder hook)
+scripts/               bundle-electron.mjs (esbuild for main and preload), after-pack.mjs (electron-builder hook), check-mac-signing-config.mjs (release check)
 ```
 
 ## Scripts
