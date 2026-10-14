@@ -9,7 +9,7 @@ Install the Arch package, then let Herald OS fit itself into Omarchy:
 
 ```bash
 git clone https://github.com/iamlukethedev/Herald-OS.git
-cd Herald-OS/packaging/arch/herald-os-bin
+cd Herald-OS/packaging/arch/herald-os-bin || exit
 makepkg -si
 herald-os setup              # once: Hermes Agent and Herald's system tools
 herald-os omarchy install

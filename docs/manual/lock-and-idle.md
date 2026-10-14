@@ -25,8 +25,8 @@ Settings > General > When you step away sets what happens after some minutes wit
 | Sleep after | Never: the computer only sleeps when you ask |
 
 The screen also locks before the computer goes to sleep. From a terminal, `herald-os idle show`
-prints the timings and `herald-os idle set lock=5 screen_off=10 suspend=30` changes them (minutes;
-`0` is never).
+prints the timings in **seconds** (`lock=600` is 10 minutes), while
+`herald-os idle set lock=5 screen_off=10 suspend=30` takes **minutes** (`0` is never).
 
 ## Stay awake
 

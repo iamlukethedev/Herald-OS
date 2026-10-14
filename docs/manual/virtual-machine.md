@@ -10,7 +10,7 @@ Apple's Virtualization framework, so the graphics are accelerated:
 
 ```bash
 brew install qemu zstd
-git clone https://github.com/iamlukethedev/Herald-OS.git && cd Herald-OS
+git clone https://github.com/iamlukethedev/Herald-OS.git && cd Herald-OS || exit
 bash linux/vm/try.sh
 ```
 

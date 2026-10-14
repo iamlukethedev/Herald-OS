@@ -19,7 +19,7 @@ about this window"); GNOME and KDE are not supported yet
 
 ```bash
 git clone https://github.com/iamlukethedev/Herald-OS.git
-cd Herald-OS/packaging/arch/herald-os-bin
+cd Herald-OS/packaging/arch/herald-os-bin || exit
 makepkg -si
 herald-os setup        # once per account: Hermes Agent and Herald's system tools
 ```
@@ -34,9 +34,10 @@ Download `herald-os-<version>-linux-x64.tar.gz` (or `-linux-arm64`) and its `.sh
 [releases page](https://github.com/iamlukethedev/Herald-OS/releases), then:
 
 ```bash
-sha256sum -c herald-os-<version>-linux-x64.tar.gz.sha256
+VERSION=0.1.0-alpha.4    # the version you downloaded
+sha256sum -c "herald-os-$VERSION-linux-x64.tar.gz.sha256"
 sudo mkdir -p /opt/herald-os
-sudo tar -xzf herald-os-<version>-linux-x64.tar.gz -C /opt/herald-os --strip-components=1
+sudo tar -xzf "herald-os-$VERSION-linux-x64.tar.gz" -C /opt/herald-os --strip-components=1
 sudo /opt/herald-os/resources/herald-os-linux/bin/herald-os-tarball install
 herald-os setup        # once per account
 ```

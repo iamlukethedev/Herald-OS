@@ -58,7 +58,7 @@ your scripts drive the system the same way. Any of them can be a key of your own
 | `herald-os notify <title> [body]` | Show a notification |
 | `herald-os weather` | The weather (`weather location --set <city>`) |
 | `herald-os toggle dnd` | Switch `nightlight`, `dnd`, `idle` (stay awake) or `screensaver` |
-| `herald-os idle show` | The idle timings (`idle set lock=10`) |
+| `herald-os idle show` | The idle timings, in seconds (`idle set lock=10` takes minutes) |
 | `herald-os crash list` | Recent crashes (`crash diagnose`, `crash mute`) |
 | `herald-os hook list` | Scripts that run when something happens |
 | `herald-os event <name>` | Report an event, so hooks and event automations run |
