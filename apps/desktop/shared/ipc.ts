@@ -348,6 +348,18 @@ export interface CrashHelpPrefs {
   muted: string[]
 }
 
+/** The Alerts switches in Settings > Notifications (all on by default). The bell keeps everything either way. */
+export interface NotifyPrefs {
+  /** Toast when Hermes finishes in a session the person is not looking at. */
+  toolCompletions: boolean
+  /** Toast and system notification when Hermes waits for an approval or an answer. */
+  approvals: boolean
+  /** Toast for scheduled tasks that ran, failed or changed. */
+  taskUpdates: boolean
+  /** System notifications while Herald OS is in the background. */
+  nativeWhenUnfocused: boolean
+}
+
 export interface ImageInfo {
   width: number
   height: number
@@ -582,6 +594,7 @@ export interface HeraldOSPrefs {
   voice: VoicePrefs
   continuity: ContinuityPrefs
   crashHelp: CrashHelpPrefs
+  notify: NotifyPrefs
 }
 
 export type ScreenshotMode = 'region' | 'window' | 'screen'

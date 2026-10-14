@@ -1,5 +1,6 @@
 import { atom } from 'nanostores'
 import type { BackendState, EnvInfo, HeraldOSPrefs, WindowState } from '../../shared/ipc.ts'
+import { NOTIFY_DEFAULTS } from '../../shared/notify-prefs.ts'
 import { PALETTE_PROPERTIES, paletteVars, schemeOf } from '../../shared/theme.ts'
 import { VOICE_DEFAULTS } from '../../shared/voice-prefs.ts'
 import { logFailure } from '../lib/report.ts'
@@ -19,7 +20,8 @@ export const $prefs = atom<HeraldOSPrefs>({
   voice: VOICE_DEFAULTS,
   // Off until the real prefs arrive, so the Overview never flashes the catch-up offer.
   continuity: { enabled: false, exclude: [] },
-  crashHelp: { enabled: true, muted: [] }
+  crashHelp: { enabled: true, muted: [] },
+  notify: NOTIFY_DEFAULTS
 })
 
 /** A font family as a CSS value (quoted unless it is a generic family). */

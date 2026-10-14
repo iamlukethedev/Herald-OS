@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { NotifyPrefs } from '../shared/ipc.ts'
+import { NOTIFY_DEFAULTS } from '../shared/notify-prefs.ts'
 import { PET_PREFS_DEFAULTS, type PetPrefs } from '../shared/pet.ts'
 import { heraldOsDataDir } from './paths.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
@@ -119,5 +121,26 @@ describe('the pet in the prefs', () => {
 
     expect(writePrefs({ pet: { hidden: false } as PetPrefs }).pet).toEqual({ ...quiet, hidden: false })
     expect(readPrefs().pet).toEqual({ ...quiet, hidden: false })
+  })
+})
+
+describe('the Alerts switches in the prefs', () => {
+  it('reads every switch on when there is no prefs file, nothing stored, or something malformed', () => {
+    expect(readPrefs().notify).toEqual(NOTIFY_DEFAULTS)
+
+    store({ theme: 'graphite' })
+    expect(readPrefs().notify).toEqual(NOTIFY_DEFAULTS)
+
+    store({ notify: { approvals: 'no', taskUpdates: false } })
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false })
+  })
+
+  it('merges a partial write over what is stored and keeps it through other changes', () => {
+    writePrefs({ notify: { ...NOTIFY_DEFAULTS, approvals: false } })
+    expect(writePrefs({ notify: { nativeWhenUnfocused: false } as NotifyPrefs }).notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, nativeWhenUnfocused: false })
+
+    writePrefs({ theme: 'graphite' })
+    expect(onDisk()).toMatchObject({ theme: 'graphite', notify: { ...NOTIFY_DEFAULTS, approvals: false, nativeWhenUnfocused: false } })
+    expect(readPrefs().notify).toEqual({ ...NOTIFY_DEFAULTS, approvals: false, nativeWhenUnfocused: false })
   })
 })
