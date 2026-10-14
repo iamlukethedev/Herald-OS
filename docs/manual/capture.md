@@ -11,8 +11,9 @@ can look at any of it with you.
 | The window in front | `Super+Print` | `herald-os capture screenshot window` |
 | The whole screen | `Super+Shift+Print` | `herald-os capture screenshot screen` |
 
-Screenshots are saved in `~/Pictures/Screenshots` on Linux and on the Desktop on a Mac. Add `--edit`
-to the command to open the screenshot in Markup straight away and draw on it. The Capture section of
+Screenshots are saved in `~/Pictures/Screenshots` on Linux and on the Desktop on a Mac.
+`herald-os capture screenshot region --edit` (or `window`, `screen`) opens the screenshot in Markup
+straight away to draw on it. The Capture section of
 the Herald OS menu (`Super+M`) has the same, or just say "take a screenshot".
 
 ## Asking Hermes about the screen

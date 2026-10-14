@@ -70,7 +70,7 @@ your scripts drive the system the same way. Any of them can be a key of your own
 | `herald-os lock` | Lock the screen |
 | `herald-os password` | Set your password |
 | `herald-os suspend`, `herald-os power` | Sleep now, or open the power menu |
-| `herald-os setup` | Once per account on Arch or the tarball: Hermes Agent and Herald's tools (`--undo` takes them back) |
+| `herald-os setup` | Once per account on Arch or the tarball: Hermes Agent and Herald's tools (`herald-os setup --undo` takes them back) |
 | `herald-os setup fingerprint` | Fingerprint sign-in (`setup fido2` for a security key) |
 | `herald-os reset` | Erase this computer's account and start setup again |
 | `herald-os omarchy install` | Run Herald OS inside Omarchy |

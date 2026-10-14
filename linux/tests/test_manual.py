@@ -160,6 +160,64 @@ def test_every_herald_os_command_in_the_manual_exists():
     assert unknown == []
 
 
+FLAG = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
+# Commands the CLI hands to herald-os-catalog, which parses options of its own.
+CATALOG_COMMANDS = {"install", "remove", "catalog", "windows"}
+
+
+def code_segments(text: str) -> list[str]:
+    """Each inline code span, and each line of a fenced block without its trailing `# comment`."""
+    out, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            out.append(re.split(r"\s#\s", line, maxsplit=1)[0])
+        else:
+            out.extend(span for _, span in CODE_SPAN.findall(line))
+    return out
+
+
+def command_flags(segment: str) -> list[tuple[str, str]]:
+    """(command, --flag) for each flag that follows a `herald-os <command>` on the same command line."""
+    out = []
+    for match in COMMAND.finditer(segment):
+        rest = re.split(r"&&|;|\||\\\|", segment[match.end():], maxsplit=1)[0]
+        out.extend((match.group(1), flag) for flag in FLAG.findall(rest))
+    return out
+
+
+def catalog_flags() -> set[str]:
+    return set(re.findall(r'"(--[a-z][a-z0-9-]*)"', (ROOT / "linux" / "bin" / "herald-os-catalog").read_text()))
+
+
+def test_every_flag_the_manual_gives_a_command_is_in_its_help():
+    from_catalog = catalog_flags()
+    unknown = []
+    for page in CHAPTERS:
+        for segment in code_segments(page.read_text()):
+            for command, flag in command_flags(segment):
+                if command not in cli.COMMANDS:
+                    continue
+                known = set(FLAG.findall(cli.COMMANDS[command]))
+                if command in CATALOG_COMMANDS:
+                    known |= from_catalog
+                if flag not in known:
+                    unknown.append(f"{page.name}: herald-os {command} {flag}")
+    assert unknown == []
+
+
+def test_flags_are_read_per_command_line():
+    assert command_flags("herald-os update --check") == [("update", "--check")]
+    assert command_flags("herald-os weather location --set Melbourne") == [("weather", "--set")]
+    assert command_flags("herald-os setup && makepkg --skipchecksums") == []
+    assert command_flags("herald-os-tarball install --force") == []
+    assert {"--purge", "--group", "--json"} <= catalog_flags()
+    found = {pair for page in CHAPTERS for segment in code_segments(page.read_text()) for pair in command_flags(segment)}
+    assert {("update", "--check"), ("windows", "--purge"), ("capture", "--edit"), ("setup", "--undo"), ("weather", "--set")} <= found
+
+
 def test_the_manual_names_commands_the_cli_has():
     assert {"page", "panel", "toggle", "omarchy", "keymap"} <= set(cli.COMMANDS)
     found = {command for page in CHAPTERS for command, _ in COMMAND.findall(page.read_text())}
