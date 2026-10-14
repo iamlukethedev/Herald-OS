@@ -8,12 +8,13 @@ wipe a disk without asking.
 
 [`linux/image/unattended.ks`](../../linux/image/unattended.ks) is a starting point. As it stands, it:
 
-- erases one disk and partitions it with btrfs. The `%pre` section at the end of the file picks
-  the first internal disk by name (`nvme0n1` before `nvme1n1`, `sda` before `sdb`), skipping USB
-  and removable disks and the one the installer started from. Every other disk is left alone. To
-  choose the disk, set `DISK=` in that section to a name `lsblk` lists (`DISK="nvme1n1"`), or to
-  `/dev/disk/by-id/<id>` for an exact device. If it finds no disk, the install stops before
-  erasing anything;
+- erases one disk and partitions it with btrfs, and leaves every other disk alone. The disk is
+  the one set with `DISK=` in the `%pre` section at the end of the file: a name `lsblk` lists
+  (`DISK="nvme1n1"`), or `/dev/disk/by-id/<id>` for an exact device. With `DISK=` left empty, it
+  uses the PC's internal disk if there is exactly one, not counting USB and removable disks or
+  the one the installer started from. If it finds no internal disk, or more than one, the install
+  stops before erasing anything and says, on the screen and in `/tmp/herald-os-disk.log`, to set
+  `DISK=`;
 - encrypts it with the passphrase `change-me` (change it, or remove `--passphrase=change-me` to be
   asked for one at install time);
 - sets English, a US keyboard and UTC, which you can change in the `lang`, `keyboard` and
@@ -40,8 +41,9 @@ The installer then runs without stopping, and the PC restarts into Herald OS's f
 
 - Test the kickstart in a [virtual machine](virtual-machine.md) first, with a disk you do not need.
 - The disk it picks loses every partition, Windows included. To keep another system on that disk,
-  install by hand instead. On a PC with more than one internal disk, set `DISK=` rather than
-  relying on the name order. While the installer runs, `/tmp/herald-os-disk.log` (from the shell
-  on `Ctrl+Alt+F2`) says which disk it chose.
+  install by hand instead. On PCs with more than one internal disk, the kickstart needs `DISK=`
+  set, so one file may not suit every PC; a `/dev/disk/by-id/<id>` path names one exact disk. While
+  the installer runs, `/tmp/herald-os-disk.log` (from the shell on `Ctrl+Alt+F2`) says which disk
+  it chose.
 - Anaconda's [kickstart reference](https://pykickstart.readthedocs.io/en/latest/kickstart-docs.html)
   lists every command.
