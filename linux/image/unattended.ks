@@ -1,7 +1,8 @@
 # An unattended Herald OS install: boot the installer ISO with inst.ks=<url of this file>.
 # It erases one disk and encrypts it; change the passphrase (or remove --passphrase to be asked).
-# The %pre at the end picks the disk (the first internal one; set DISK there to choose) and every
-# other disk is left alone: ignoredisk hides them from zerombr, clearpart and autopart.
+# The %pre at the end picks the disk: DISK if set there, else the PC's only internal disk. With
+# several internal disks it stops and erases nothing until DISK is set. Every other disk is left
+# alone: ignoredisk hides them from zerombr, clearpart and autopart.
 text
 lang en_US.UTF-8
 keyboard us
@@ -19,9 +20,15 @@ reboot
 
 %pre --interpreter=/usr/bin/bash --erroronfail --log=/tmp/herald-os-disk.log
 # The disk to erase: a name from lsblk (nvme0n1, sda, vda) or /dev/disk/by-id/<id> for an exact
-# device. Empty picks the first internal disk, by name: not USB, removable or read-only, and not
-# the one the installer started from.
+# device. Empty uses the internal disk (not USB, removable or read-only, and not the one the
+# installer started from) when there is exactly one; with none or several, it erases nothing.
 DISK=""
+
+# --log takes stdout and stderr, so the console gets its own copy.
+say() {
+  echo "herald-os: $*" >&2
+  { echo "herald-os: $*" >>/dev/console; } 2>/dev/null || true
+}
 
 # The disks under the installer's own files (a USB stick, a disk holding the ISO).
 installer_disks() {
@@ -35,26 +42,33 @@ installer_disks() {
   done
 }
 
-pick_disk() {
+internal_disks() {
   local skip name type rm ro tran
   skip=" $(installer_disks | tr '\n' ' ') "
   while read -r name type rm ro tran; do
     [[ "$type" == disk && "$rm" == 0 && "$ro" == 0 && "$tran" != usb ]] || continue
     [[ "$name" == zram* || "$skip" == *" $name "* ]] && continue
     echo "$name"
-    return 0
-  done < <(lsblk -dnro NAME,TYPE,RM,RO,TRAN | LC_ALL=C sort)
-  return 1
+  done < <(lsblk -dnro NAME,TYPE,RM,RO,TRAN)
 }
 
-disk="${DISK:-$(pick_disk)}"
-if [[ -z "$disk" ]]; then
-  echo "herald-os: no internal disk to install to; set DISK in the kickstart's %pre" >&2
-  exit 1
+if [[ -z "$DISK" ]]; then
+  mapfile -t disks < <(internal_disks)
+  if (( ${#disks[@]} == 0 )); then
+    say "no internal disk to install to, so nothing was erased."
+    say "Set DISK= in the kickstart's %pre to the disk to erase (a name lsblk lists, or /dev/disk/by-id/<id>)."
+    exit 1
+  fi
+  if (( ${#disks[@]} > 1 )); then
+    say "found ${#disks[@]} internal disks (${disks[*]}), so nothing was erased."
+    say "Set DISK= in the kickstart's %pre to the one disk to erase: one of those names, or /dev/disk/by-id/<id>."
+    exit 1
+  fi
+  DISK="${disks[0]}"
 fi
-echo "herald-os: erasing $disk, and only $disk" >&2
+say "erasing $DISK, and only $DISK"
 {
-  echo "ignoredisk --only-use=$disk"
-  echo "clearpart --all --drives=$disk --initlabel --disklabel=gpt"
+  echo "ignoredisk --only-use=$DISK"
+  echo "clearpart --all --drives=$DISK --initlabel --disklabel=gpt"
 } >/tmp/herald-os-disk.ks
 %end
