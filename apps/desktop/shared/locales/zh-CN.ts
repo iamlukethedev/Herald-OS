@@ -19,7 +19,11 @@ export const zhCN: Translation = {
   'permission.screen.title': 'Herald OS 需要“屏幕录制”权限',
   'permission.screen.detail': '请在“系统设置”>“隐私与安全性”>“屏幕与系统录音”（较早的 macOS 中为“屏幕录制”）中打开 Herald OS，然后退出并重新打开 Herald OS。',
   'permission.screen.open': '打开系统设置',
+  'permission.screen.reopen': '退出并重新打开',
   'permission.screen.notNow': '以后再说',
+  'permission.screen.restrictedTitle': '这台 Mac 的“屏幕录制”由管理员管理',
+  'permission.screen.restrictedDetail': '设备管理描述文件决定 Herald OS 能否录制屏幕，因此“系统设置”中的开关已锁定。请联系这台 Mac 的管理员，为 Herald OS 允许“屏幕录制”。',
+  'permission.screen.ok': '好',
 
   'app.overview': '概览',
   'app.hermes': 'Hermes',

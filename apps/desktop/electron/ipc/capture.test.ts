@@ -1,11 +1,14 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const electron = vi.hoisted(() => ({
   status: 'denied',
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   showMessageBox: vi.fn(async (_options: Record<string, unknown>) => ({ response: 1 })),
-  openExternal: vi.fn(async () => undefined)
+  openExternal: vi.fn(async () => undefined),
+  relaunch: vi.fn(),
+  quit: vi.fn()
 }))
 const run = vi.hoisted(() => vi.fn(async (_command: string, args: string[]) => {
   // screencapture writes its file wherever it is told to.
@@ -16,6 +19,7 @@ const run = vi.hoisted(() => vi.fn(async (_command: string, args: string[]) => {
 const readImageMac = vi.hoisted(() => vi.fn(async () => ['Order 4471']))
 
 vi.mock('electron', () => ({
+  app: { relaunch: electron.relaunch, quit: electron.quit },
   clipboard: { writeText: vi.fn() },
   ClipboardItem: class {},
   dialog: { showMessageBox: electron.showMessageBox },
@@ -31,7 +35,7 @@ vi.mock('../attachments.ts', () => ({ allowAttachments: vi.fn() }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 
 const { IPC } = await import('../../shared/ipc.ts')
-const { captureRegion, captureScreenshot, registerCaptureIpc, resetScreenRecordingCheck } = await import('./capture.ts')
+const { captureRegion, captureScreenshot, capturesDir, registerCaptureIpc, resetScreenRecordingCheck } = await import('./capture.ts')
 
 const platform = process.platform
 const blocked = /^Herald OS needs Screen Recording permission\. Turn on Herald OS in System Settings > Privacy & Security > Screen & System Audio Recording/
@@ -46,6 +50,8 @@ beforeEach(() => {
   readImageMac.mockClear()
   electron.showMessageBox.mockClear()
   electron.openExternal.mockClear()
+  electron.relaunch.mockClear()
+  electron.quit.mockClear()
   resetScreenRecordingCheck()
   registerCaptureIpc(() => undefined)
 })
@@ -69,10 +75,13 @@ describe('the Screen Recording check on macOS', () => {
     await expect(captureRegion()).rejects.toThrow(blocked)
 
     expect(probes()).toHaveLength(1)
-    expect(fs.existsSync(probes()[0][1][3])).toBe(false)
+    const probe = probes()[0][1][3]
+    expect(path.basename(path.dirname(probe))).toMatch(/^herald-os-permission-/)
+    expect(path.dirname(probe)).not.toBe(capturesDir())
+    expect(fs.existsSync(path.dirname(probe))).toBe(false)
     expect(interactive()).toHaveLength(0)
     expect(electron.showMessageBox).toHaveBeenCalledTimes(1)
-    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Herald OS needs Screen Recording permission', buttons: ['Open System Settings', 'Not Now'] })
+    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Herald OS needs Screen Recording permission', buttons: ['Open System Settings', 'Quit & Reopen', 'Not Now'], cancelId: 2 })
   })
 
   it('asks macOS only once a launch, and does not stack explanations', async () => {
@@ -90,6 +99,67 @@ describe('the Screen Recording check on macOS', () => {
     await flush()
 
     expect(electron.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture')
+  })
+
+  it('Quit & Reopen relaunches Herald OS so a changed switch applies', async () => {
+    electron.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(captureRegion()).rejects.toThrow(blocked)
+    await flush()
+
+    expect(electron.relaunch).toHaveBeenCalledTimes(1)
+    expect(electron.quit).toHaveBeenCalledTimes(1)
+    expect(electron.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('Not Now opens and relaunches nothing', async () => {
+    electron.showMessageBox.mockResolvedValueOnce({ response: 2 })
+    await expect(captureRegion()).rejects.toThrow(blocked)
+    await flush()
+
+    expect(electron.openExternal).not.toHaveBeenCalled()
+    expect(electron.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('when a device-management profile restricts it, says the switch is locked, without asking macOS', async () => {
+    electron.status = 'restricted'
+    electron.showMessageBox.mockResolvedValueOnce({ response: 0 })
+    await expect(captureRegion()).rejects.toThrow(
+      'Screen Recording is managed on this Mac. A device-management profile decides whether Herald OS may record the screen, so the switch in System Settings is locked. Ask whoever manages this Mac to allow Screen Recording for Herald OS.'
+    )
+    await flush()
+
+    expect(probes()).toHaveLength(0)
+    expect(interactive()).toHaveLength(0)
+    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Screen Recording is managed on this Mac', buttons: ['OK'], cancelId: 0 })
+    expect(electron.openExternal).not.toHaveBeenCalled()
+    expect(electron.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('a probe that fails or times out still ends in the permission message', async () => {
+    run.mockRejectedValueOnce(new Error('spawn screencapture ENOENT'))
+    await expect(captureRegion()).rejects.toThrow(blocked)
+    expect(probes()).toHaveLength(1)
+    expect(fs.existsSync(path.dirname(probes()[0][1][3]))).toBe(false)
+  })
+
+  it('a folder that cannot be made does not hide the permission message', async () => {
+    const mkdir = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied, mkdir'), { code: 'EACCES' })
+    })
+    const mkdtemp = vi.spyOn(fs, 'mkdtempSync').mockImplementation(() => {
+      throw Object.assign(new Error('ENOSPC: no space left on device, mkdtemp'), { code: 'ENOSPC' })
+    })
+
+    try {
+      await expect(captureRegion()).rejects.toThrow(blocked)
+      await expect(captureScreenshot('screen')).rejects.toThrow(blocked)
+      await expect(electron.handlers.get(IPC.captureRecord)!({}, 'start')).rejects.toThrow(blocked)
+      await expect(electron.handlers.get(IPC.captureTool)!({}, 'text')).rejects.toThrow(blocked)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      mkdir.mockRestore()
+      mkdtemp.mockRestore()
+    }
   })
 
   it('stops the text and QR readers before anything is read or copied', async () => {

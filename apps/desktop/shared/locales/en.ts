@@ -16,7 +16,11 @@ export const en = {
   'permission.screen.title': 'Herald OS needs Screen Recording permission',
   'permission.screen.detail': 'Turn on Herald OS in System Settings > Privacy & Security > Screen & System Audio Recording (called Screen Recording on older macOS), then quit and reopen Herald OS.',
   'permission.screen.open': 'Open System Settings',
+  'permission.screen.reopen': 'Quit & Reopen',
   'permission.screen.notNow': 'Not Now',
+  'permission.screen.restrictedTitle': 'Screen Recording is managed on this Mac',
+  'permission.screen.restrictedDetail': 'A device-management profile decides whether Herald OS may record the screen, so the switch in System Settings is locked. Ask whoever manages this Mac to allow Screen Recording for Herald OS.',
+  'permission.screen.ok': 'OK',
 
   'app.overview': 'Overview',
   'app.hermes': 'Hermes',
