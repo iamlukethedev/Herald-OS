@@ -210,7 +210,9 @@ Each release carries ready-made virtual machines of Herald OS Linux, so you can 
 operating system without installing it. The first start sets itself up in a few minutes, Hermes
 Agent included, then Herald OS asks for your name and a password. Give the virtual machine 4 cores,
 6 GB of memory and 40 GB of disk space. The UTM bundle and the Hyper-V disk come with releases built
-after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`.
+after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`. The manual's
+[Trying it in a virtual machine](docs/manual/virtual-machine.md) has the same steps, with the
+system key and scaling inside a virtual machine.
 
 GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The zips are split as
 `.001`, `.002` and so on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or

@@ -6,7 +6,7 @@ underneath for the hardware and your Mac apps. Nothing on the Mac is replaced, a
 ## What you need
 
 - A Mac with Apple Silicon (M1 or later) and macOS 13 (Ventura) or later. There is no Intel build of
-  the Mac app yet; on an Intel Mac, run [Herald OS Linux in a virtual machine](virtual-machine.md), or
+  the Mac app yet; on an Intel Mac, run [Herald OS Linux in a virtual machine](virtual-machine.md#on-linux-or-an-intel-mac), or
   the app from source as in the [README](../../README.md#herald-os-on-macos-from-source).
 - Hermes Agent with a model provider: a [Nous Portal](https://portal.nousresearch.com) account, or
   an API key for OpenRouter, OpenAI, Anthropic, a local model and others.
