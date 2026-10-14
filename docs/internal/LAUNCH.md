@@ -6,7 +6,8 @@ step is a deliberate decision.
 ## Before the repository goes public
 
 1. **Mac signing.** Enrol in the Apple Developer Program, create a Developer ID Application
-   certificate, export it as a `.p12`, and add the repository secrets `MAC_CERTIFICATE_P12`
+   certificate, export it as a `.p12`, create the `macos-release` environment (deployments limited
+   to `main` and `v*` tags), and add its environment secrets `MAC_CERTIFICATE_P12`
    (base64 of the file), `MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`
    (from account.apple.com) and `APPLE_TEAM_ID`. [MACOS-SIGNING.md](../MACOS-SIGNING.md) walks
    through each one. The build stays unsigned, with a warning naming what is missing, until all five
