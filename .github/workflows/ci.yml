@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
-      - run: python -m pip install pytest pyyaml
+      - run: python -m pip install -r linux/tests/requirements.txt
       - name: pytest
         run: HERALD_OS_PYTHON="$(command -v python)" bash scripts/test-bridge.sh
 
