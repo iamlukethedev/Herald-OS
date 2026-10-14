@@ -8,14 +8,14 @@ import os
 import plistlib
 import re
 import signal
-import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
 from ..crash import MAC_REPORT_DIRS, is_crash_header, resolve_mac_report, summarise_ips
 from ..documents import EMPTY_PAGE_CHARS, DocumentText, document_type
-from ..util import run
+from ..util import ExecResult, run
 from .base import AppInfo, FileSearch, FoundFile, HostAdapter, PortListener, ProcessRow
 from .posix import parse_du, parse_ps  # noqa: F401 - shared with Linux; re-exported for callers/tests.
 
@@ -38,6 +38,76 @@ _KIND_QUERIES: dict[str, str] = {
 def _applescript_string(value: str) -> str:
     """Escape for interpolation inside an AppleScript double-quoted literal."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# osascript exits 1 for every AppleScript error, so a refused Apple Event is only visible in stderr:
+# -1743 (the person refused, or turned the switch off) and -1744 (macOS would have to ask first).
+_APPLE_EVENTS_REFUSED = ("-1743", "-1744", "not authorized to send apple events", "not allowed to send apple events")
+
+
+def apple_events_refused(stderr: str) -> bool:
+    text = stderr.lower()
+    return any(marker in text for marker in _APPLE_EVENTS_REFUSED)
+
+
+def osascript_error(result: ExecResult, target: str, fallback: str) -> RuntimeError:
+    """The error for a failed ``osascript`` call, naming the Automation switch when macOS refused it."""
+    if apple_events_refused(result.stderr):
+        return RuntimeError(
+            f"macOS did not let Herald OS control {target}: turn on {target} under Herald OS in "
+            "System Settings > Privacy & Security > Automation, then try again"
+        )
+    return RuntimeError(result.stderr.strip() or fallback)
+
+
+FORCE_QUIT_GRACE = 2.0
+
+# Processes that keep the session running (quitting one could sign the person out, blank the
+# screen or drop a password prompt), System Events (which the bridge drives), and Herald OS itself,
+# by name and by bundle id. Neither kind of quit ever reaches them.
+SESSION_PROCESSES = frozenset({
+    "loginwindow", "com.apple.loginwindow",
+    "windowserver", "com.apple.windowserver",
+    "dock", "com.apple.dock",
+    "systemuiserver", "com.apple.systemuiserver",
+    "controlcenter", "control center", "com.apple.controlcenter",
+    "notificationcenter", "notification center", "com.apple.notificationcenterui",
+    "securityagent", "com.apple.securityagent",
+    "system events", "com.apple.systemevents",
+})
+HERALD_OS = frozenset({"herald os", "dev.iamluke.heraldos"})
+
+
+# Safari and the apps updated with it run from a cryptex (a sealed, system-signed copy) since macOS
+# 13, so ps shows them under one of these roots rather than /Applications.
+CRYPTEX_APP_ROOTS = ("/System/Cryptexes/App/System/Applications", "/System/Volumes/Preboot/Cryptexes/App/System/Applications")
+
+
+def bundle_executables(app_path: str) -> tuple[str, ...]:
+    """Where the main executable of an app in an Applications folder may run from: its bundle's
+    ``Contents/MacOS/``, and the same bundle in the system cryptex. Empty for any other path."""
+    path = os.path.normpath(app_path or "")
+    roots = ("/Applications", "/System/Applications", str(Path.home() / "Applications"))
+    if not path.endswith(".app") or not any(path.startswith(f"{root}/") for root in roots):
+        return ()
+    bundles = [path]
+    if os.path.dirname(path) in ("/Applications", "/System/Applications"):
+        bundles += [f"{root}/{os.path.basename(path)}" for root in CRYPTEX_APP_ROOTS]
+    return tuple(f"{bundle}/Contents/MacOS/" for bundle in bundles)
+
+
+def ps_error(result: ExecResult) -> RuntimeError:
+    return RuntimeError(f"could not read the process list (ps: {result.stderr.strip() or f'exit {result.code}'})")
+
+
+def parse_pid_uid_comm(text: str) -> list[tuple[int, int, str]]:
+    """``ps -o pid=,uid=,comm=`` lines -> (pid, uid, executable); the executable may hold spaces."""
+    rows: list[tuple[int, int, str]] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*(\d+)\s+(\d+)\s+(.+?)\s*$", line)
+        if match:
+            rows.append((int(match[1]), int(match[2]), match[3]))
+    return rows
 
 
 def _mdfind_date(value: str, end_of_day: bool) -> str:
@@ -349,7 +419,10 @@ class DarwinHost(HostAdapter):
         }
 
     def _ps(self) -> list[ProcessRow]:
-        return parse_ps(run(["ps", "-Axo", "pid=,ppid=,user=,%cpu=,%mem=,rss=,comm="]).stdout)
+        result = run(["ps", "-Axo", "pid=,ppid=,user=,%cpu=,%mem=,rss=,comm="])
+        if not result.ok:
+            raise ps_error(result)
+        return parse_ps(result.stdout)
 
     def list_processes(self, sort: Literal["cpu", "memory"], limit: int) -> list[ProcessRow]:
         rows = self._ps()
@@ -425,7 +498,7 @@ class DarwinHost(HostAdapter):
         script = 'tell application "System Events" to get {name, unix id} of (every application process whose background only is false)'
         result = run(["osascript", "-e", script], timeout=10)
         if not result.ok:
-            return []
+            raise osascript_error(result, "System Events", "could not list the running apps")
         # Output: "Finder, Safari, ..., 123, 456, ..." (names then pids).
         parts = [p.strip() for p in result.stdout.strip().split(",")]
         half = len(parts) // 2
@@ -482,15 +555,119 @@ class DarwinHost(HostAdapter):
         if not result.ok:
             raise RuntimeError(result.stderr.strip() or f"could not reveal {path}")
 
+    def _resolve_exact(self, name: str) -> AppInfo | None:
+        """An installed app by its exact name or bundle id (force quit never guesses)."""
+        needle = name.strip().lower().removesuffix(".app")
+        for app in self.installed_apps():
+            if app.name.lower() == needle or (app.bundle_id and app.bundle_id.lower() == needle):
+                return app
+        return None
+
+    def _own_app_processes(self, bundles: tuple[str, ...], pid: int | None = None) -> list[int]:
+        """This user's processes running the app's main executable, read with ``ps`` (no
+        Automation permission needed); with ``pid``, whether that one process still is. A ``ps``
+        that fails raises rather than reading as "not running"."""
+        argv = ["ps", "-o", "pid=,uid=,comm="] + (["-p", str(pid)] if pid is not None else ["-U", str(os.getuid())])
+        result = run(argv, timeout=10)
+        # `ps -p` exits 1 with no output at all when the process has gone.
+        if not result.ok and not (pid is not None and result.code == 1 and not result.stdout.strip() and not result.stderr.strip()):
+            raise ps_error(result)
+        rows = parse_pid_uid_comm(result.stdout)
+        excluded = {0, 1, os.getpid(), os.getppid()}
+        return sorted({p for p, uid, command in rows if uid == os.getuid() and command.startswith(bundles) and p not in excluded})
+
+    def _terminate(self, label: str, bundles: tuple[str, ...], pids: list[int]) -> None:
+        """TERM, up to ``FORCE_QUIT_GRACE`` seconds to exit, then KILL; each process is checked
+        again right before each signal, so a reused pid is never hit. If ``ps`` fails partway, the
+        error names the signals already sent, since the app may be half stopped."""
+        denied: set[int] = set()
+        sent: list[str] = []
+
+        def send(sig: signal.Signals, targets: list[int]) -> None:
+            for pid in targets:
+                if pid in denied or not self._own_app_processes(bundles, pid):
+                    continue
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    continue
+                except PermissionError:
+                    denied.add(pid)
+                    continue
+                sent.append(f"{sig.name.removeprefix('SIG')} to process {pid}")
+
+        try:
+            send(signal.SIGTERM, pids)
+            deadline = time.monotonic() + FORCE_QUIT_GRACE
+            remaining = [p for p in pids if p not in denied]
+            while remaining and time.monotonic() < deadline:
+                time.sleep(0.2)
+                remaining = [p for p in remaining if self._own_app_processes(bundles, p)]
+            send(signal.SIGKILL, remaining)
+        except RuntimeError as exc:
+            if not sent:
+                raise
+            raise RuntimeError(f"{exc} while force quitting {label}, after sending {', '.join(sent)}") from exc
+        if denied:
+            raise RuntimeError(f"macOS did not let Herald OS stop {label} (process {', '.join(str(p) for p in sorted(denied))})")
+
+    @staticmethod
+    def _refuse_protected(*names: str | None) -> None:
+        """Refuse the session processes and Herald OS itself, whichever name or bundle id names them."""
+        for name in names:
+            key = (name or "").strip().lower().removesuffix(".app")
+            if key in HERALD_OS:
+                raise RuntimeError("Herald OS does not quit itself")
+            if key in SESSION_PROCESSES:
+                raise RuntimeError(f"{name.strip()} is part of macOS and is never quit by Herald OS")
+
+    def _quit_by_name(self, label: str) -> bool:
+        """Ask an app to quit through AppleScript alone (Finder, one in ~/Downloads); False when no
+        app by that name is open. ``is running`` asks Launch Services, so an app that is not open is
+        never launched just to be told to quit."""
+        quoted = _applescript_string(label)
+        script = f'if application "{quoted}" is running then\ntell application "{quoted}" to quit\nreturn "quit"\nend if\nreturn "not running"'
+        result = run(["osascript", "-e", script], timeout=20)
+        if not result.ok:
+            raise osascript_error(result, label, f"could not quit {label}")
+        return result.stdout.strip() == "quit"
+
     def quit_app(self, name: str, force: bool) -> None:
-        app = self.resolve_app(name)
-        label = app.name if app else name
+        label = name.strip()
+        self._refuse_protected(label)
+        app = self._resolve_exact(label)
+        if app is not None:
+            self._refuse_protected(app.name, app.bundle_id)
         if force:
-            result = run(["pkill", "-x", label], timeout=10)
-        else:
-            result = run(["osascript", "-e", f'tell application "{_applescript_string(label)}" to quit'], timeout=20)
-        if not result.ok and result.code != 1:
-            raise RuntimeError(result.stderr.strip() or f"could not quit {label}")
+            bundles = bundle_executables(app.path) if app else ()
+            if app is None:
+                raise RuntimeError(f"no app called {label} in the Applications folders (force quit needs the app's exact name or bundle id)")
+            if not bundles:
+                raise RuntimeError(f"{app.name} is not in an Applications folder")
+            pids = self._own_app_processes(bundles)
+            if not pids:
+                raise RuntimeError(f"{app.name} is not running")
+            self._terminate(app.name, bundles, pids)
+            return
+        # Polite: the exact app, then an app open under exactly that name, and only then a partial
+        # match, so "Dock" can never reach Docker.
+        if app is None:
+            if self._quit_by_name(label):
+                return
+            app = self.resolve_app(label)
+            if app is None:
+                raise RuntimeError(f"{label} is not running")
+            self._refuse_protected(app.name, app.bundle_id)
+        bundles = bundle_executables(app.path)
+        if not bundles:
+            if not self._quit_by_name(app.name):
+                raise RuntimeError(f"{app.name} is not running")
+            return
+        if not self._own_app_processes(bundles):
+            raise RuntimeError(f"{app.name} is not running")
+        result = run(["osascript", "-e", f'tell application "{_applescript_string(app.name)}" to quit'], timeout=20)
+        if not result.ok:
+            raise osascript_error(result, app.name, f"could not quit {app.name}")
 
     # --- system state (read) -----------------------------------------------------------------
     def network_status(self) -> dict[str, Any]:
@@ -581,7 +758,7 @@ class DarwinHost(HostAdapter):
     def set_dark_mode(self, enabled: bool) -> None:
         result = run(["osascript", "-e", f'tell application "System Events" to tell appearance preferences to set dark mode to {"true" if enabled else "false"}'], timeout=15)
         if not result.ok:
-            raise RuntimeError(result.stderr.strip() or "could not change appearance (grant Automation permission to Herald OS for System Events)")
+            raise osascript_error(result, "System Events", "could not change appearance")
 
     def open_settings(self, pane: str) -> str:
         key = pane.strip().lower().replace(" ", "_").replace("&", "and")
@@ -627,8 +804,10 @@ class DarwinHost(HostAdapter):
         script = f'tell application "Finder" to delete {{{items}}}'
         result = run(["osascript", "-e", script], timeout=30)
         if not result.ok:
-            raise RuntimeError(result.stderr.strip() or "Finder refused to move items to the Trash")
+            raise osascript_error(result, "Finder", "Finder refused to move items to the Trash")
 
     def notify(self, title: str, body: str) -> None:
         script = f'display notification "{_applescript_string(body)}" with title "{_applescript_string(title)}"'
-        subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = run(["osascript", "-e", script], timeout=10)
+        if not result.ok:
+            raise RuntimeError(result.stderr.strip() or "could not show the notification")
