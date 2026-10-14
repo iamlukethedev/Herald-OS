@@ -92,6 +92,7 @@ function normalizeContinuity(value: Partial<ContinuityPrefs> | undefined): Conti
 
 export function writePrefs(patch: PrefsPatch): HeraldOSPrefs {
   const current = readPrefs()
+  const notify = { ...storedNotify(), ...explicitNotify(patch.notify) }
   // Nested objects are patched field by field by their callers; merge instead of replacing.
   const next = {
     ...current,
@@ -99,40 +100,42 @@ export function writePrefs(patch: PrefsPatch): HeraldOSPrefs {
     voice: normalizeVoicePrefs({ ...current.voice, ...(patch.voice ?? {}) }),
     continuity: normalizeContinuity({ ...current.continuity, ...(patch.continuity ?? {}) }),
     crashHelp: normalizeCrashHelp({ ...current.crashHelp, ...(patch.crashHelp ?? {}) }),
-    notify: normalizeNotifyPrefs({ ...current.notify, ...(patch.notify ?? {}) }),
+    notify: normalizeNotifyPrefs(notify),
     pet: normalizePetPrefs({ ...current.pet, ...(patch.pet ?? {}) }),
     ...('commentName' in patch ? { commentName: normalizeCommentName(patch.commentName) || undefined } : {}),
     ...('language' in patch ? { language: languageSetting(patch.language) } : {}),
     ...(patch.menuBar ? { menuBar: normalizeMenuBar({ ...current.menuBar, ...patch.menuBar }) } : {})
   }
   fs.mkdirSync(heraldOsDataDir(), { recursive: true })
-  fs.writeFileSync(prefsFile(), JSON.stringify(next, null, 2))
+  // Only the switches someone set go to disk, so a later migration can tell them from the defaults.
+  fs.writeFileSync(prefsFile(), JSON.stringify({ ...next, notify }, null, 2))
 
   return next
 }
 
-/** The Alerts switches as saved on disk, before defaults fill the gaps. */
-function savedNotifyKeys(): Set<string> {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) as { notify?: Record<string, unknown> }
+/** The known Alerts switches in `value` that hold a boolean; everything else is dropped. */
+function explicitNotify(value: unknown): Partial<NotifyPrefs> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
 
-    return new Set(Object.entries(parsed.notify ?? {}).filter(([, value]) => typeof value === 'boolean').map(([key]) => key))
+  return Object.fromEntries(Object.entries(value).filter(([key, flag]) => Object.hasOwn(NOTIFY_DEFAULTS, key) && typeof flag === 'boolean'))
+}
+
+/** The Alerts switches as saved on disk, before defaults fill the gaps; none when the file is missing or unreadable. */
+function storedNotify(): Partial<NotifyPrefs> {
+  try {
+    return explicitNotify((JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) as { notify?: unknown } | null)?.notify)
   } catch {
-    return new Set()
+    return {}
   }
 }
 
 /** Switches a window kept in localStorage: each one is saved only when prefs.json has no value for it yet. */
 export function adoptLegacyNotify(flags: unknown): HeraldOSPrefs {
-  // Comes over IPC: anything but a plain object of known switches is ignored.
-  if (!flags || typeof flags !== 'object' || Array.isArray(flags)) {
-    return readPrefs()
-  }
-
-  const saved = savedNotifyKeys()
-  const missing: Partial<NotifyPrefs> = Object.fromEntries(
-    Object.entries(flags).filter(([key, value]) => Object.hasOwn(NOTIFY_DEFAULTS, key) && typeof value === 'boolean' && !saved.has(key))
-  )
+  // Comes over IPC: only known switches holding a boolean count.
+  const saved = storedNotify()
+  const missing = Object.fromEntries(Object.entries(explicitNotify(flags)).filter(([key]) => !Object.hasOwn(saved, key)))
 
   return Object.keys(missing).length ? writePrefs({ notify: missing }) : readPrefs()
 }

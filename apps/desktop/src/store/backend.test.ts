@@ -88,4 +88,28 @@ describe('loading the prefs', () => {
     expect($prefsLoaded.get()).toBe(true)
     expect(errors).toHaveLength(1)
   })
+
+  it('opens the gate when the migration cannot be saved either, and keeps the old key for the next start', async () => {
+    $prefsLoaded.set(false)
+    bridge.prefsGet = deferred<HeraldOSPrefs>()
+    bridge.adopt = deferred<HeraldOSPrefs>()
+    storage.set('herald-os.notify.task-updates', 'false')
+    const error = console.error
+    console.error = () => undefined
+
+    try {
+      bindBackendStores()
+      bridge.prefsGet.resolve($prefs.get())
+      await settle()
+      expect($prefsLoaded.get()).toBe(false)
+
+      bridge.adopt.reject(new Error('disk full'))
+      await settle()
+    } finally {
+      console.error = error
+    }
+
+    expect($prefsLoaded.get()).toBe(true)
+    expect(storage.get('herald-os.notify.task-updates')).toBe('false')
+  })
 })
