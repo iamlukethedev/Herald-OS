@@ -44,6 +44,9 @@ copy /b herald-os-%VERSION%-x86_64.iso.part0 + herald-os-%VERSION%-x86_64.iso.pa
 certutil -hashfile herald-os-%VERSION%-x86_64.iso SHA256
 ```
 
+If there are more parts, add `+ herald-os-%VERSION%-x86_64.iso.part2` (and so on) in order. To list them, run
+`dir herald-os-%VERSION%-x86_64.iso.part*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+
 ## 2. Write the USB stick
 
 Write the joined ISO with [Fedora Media Writer](https://fedoraproject.org/workstation/download) or

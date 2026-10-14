@@ -408,7 +408,9 @@ def test_the_manuals_command_blocks_paste_as_they_are(page):
         lines = block.splitlines()
         assert lines[:2] == ["rem replace with the version you downloaded", lines[1]]
         assert re.fullmatch(r"set (?:\"VERSION=\S+\"|VERSION=\S+)", lines[1])
-        assert all("herald-os-%VERSION%-" in line for line in lines[2:])
+        for line in lines[2:]:
+            names = re.findall(r"herald-os-\S*", line)
+            assert names and all(n.startswith("herald-os-%VERSION%-") for n in names), line
 
 
 def test_the_readme_names_the_files_the_release_carries():

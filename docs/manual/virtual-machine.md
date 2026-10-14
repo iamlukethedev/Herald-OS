@@ -99,6 +99,9 @@ copy /b herald-os-%VERSION%-x86_64.vhdx.zip.001 + herald-os-%VERSION%-x86_64.vhd
 certutil -hashfile herald-os-%VERSION%-x86_64.vhdx.zip SHA256
 ```
 
+If there are more parts, add `+ herald-os-%VERSION%-x86_64.vhdx.zip.003` (and so on) in order. To list them, run
+`dir herald-os-%VERSION%-x86_64.vhdx.zip.*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+
 On Windows, 7-Zip's right-click menu also has **CRC SHA > SHA-256** for a file.
 
 ## From the terminal on an Apple Silicon Mac
