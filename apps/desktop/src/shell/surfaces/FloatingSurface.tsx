@@ -27,7 +27,7 @@ function FloatingContent({ appId, payload }: { appId: FloatingAppId; payload: Re
     case 'system':
       return <SystemSurface />
     case 'chat-popout':
-      return <ChatPopout sessionId={typeof payload.sessionId === 'string' ? payload.sessionId : undefined} />
+      return <ChatPopout sessionId={typeof payload.sessionId === 'string' ? payload.sessionId : undefined} profile={typeof payload.profile === 'string' ? payload.profile : undefined} />
     case 'studio':
       // The compositor owns this window; the preview opens as its own window there.
       return <StudioWindow win={{ id: 'panel-studio', appId: 'studio', title: 'Studio', bounds: { x: 0, y: 0, width: 0, height: 0 }, z: 0, phase: 'open', maximized: true, payload }} />

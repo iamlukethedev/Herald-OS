@@ -14,6 +14,11 @@ signs you in to another account or takes an API key, and Preferred model picks t
 names a key variable (`key_env`), Model provider takes and replaces its key, and Hermes keeps it in
 `~/.hermes/.env`, which Herald OS, Hermes Desktop and the `hermes` CLI share.
 
+**Can I talk to my other Hermes bots?**
+Yes. Each Hermes profile is a bot with its own memory, skills and model, and the Hermes page and
+the Overview start a conversation with whichever you choose; see
+[Talking to your other bots](README.md#talking-to-your-other-bots).
+
 **What does it cost?**
 Herald OS is free and open source. The model is billed by its provider; Settings > Usage shows how
 much Hermes has used this week and this month, and what is left on a Nous Portal plan.

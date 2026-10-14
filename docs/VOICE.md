@@ -165,7 +165,7 @@ command grouped by area, the words to say, what it does, whether it asks first, 
 
 Command families: `page.open|back`, `window.focus|close|minimize|maximize|restore`, `text.type|newLine`,
 `key.press`, `edit.selectAll|select|deselect|copy|cut|paste|undo|redo|delete`, `view.scroll`,
-`overlay.*`, `sidebar.toggle`, `space.switch`, `help.commands`; `chat.new|open|stop|popout`; `mission.start|open|list|pause|markReviewed`;
+`overlay.*`, `sidebar.toggle`, `space.switch`, `help.commands`; `chat.new|open|stop|popout`, `bots.list|chat`; `mission.start|open|list|pause|markReviewed`;
 `memory.show|search|add|update|forget`; `file.open|openExternal`, `files.open|show|search|reveal|newFolder`; `automation.list|show|run|pause|resume|create|delete`;
 `connection.list|show|enable|disable`; `build.start`, `studio.open|preview|file|close`; `native.launch`, `web.open`; `settings.open`, `theme.set`, `accent.set`,
 `motion.reduce`, `dock.autoHide`, `voice.engine.set`, `voice.wake.set`; `agents.pauseAll`, `agents.toolSearch.set`;

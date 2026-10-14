@@ -44,7 +44,7 @@ function FloatingContent({ win }: { win: OSWindow }) {
     case 'system':
       return <SystemSurface />
     case 'chat-popout':
-      return <ChatPopout sessionId={typeof win.payload?.sessionId === 'string' ? win.payload.sessionId : undefined} />
+      return <ChatPopout sessionId={typeof win.payload?.sessionId === 'string' ? win.payload.sessionId : undefined} profile={typeof win.payload?.profile === 'string' ? win.payload.profile : undefined} />
     case 'web':
       return <WebWindow win={win} />
     case 'studio':

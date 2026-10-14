@@ -1,5 +1,6 @@
 import { defineCommands, type OsCommand } from '../store/os-commands.ts'
 import { automationCommands } from './automations.ts'
+import { botCommands } from './bots.ts'
 import { canvasCommands } from './canvas.ts'
 import { captureCommands } from './capture.ts'
 import { connectionCommands } from './connections.ts'
@@ -33,6 +34,7 @@ export const commandGroups: Record<string, readonly OsCommand[]> = {
   navigation: navigationCommands,
   edit: editCommands,
   hermes: hermesCommands,
+  bots: botCommands,
   memory: memoryCommands,
   files: filesCommands,
   automations: automationCommands,

@@ -1,9 +1,11 @@
 import { useStore } from '@nanostores/react'
 import { IconChevronRight, IconUser } from '@tabler/icons-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { HermesAvatar } from '../../components/app-icon.tsx'
+import { BotAvatar } from '../../components/bot-avatar.tsx'
+import { type Bot, botByProfile, isDefaultProfile } from '../../lib/bots.ts'
 import { cn } from '../../lib/cn.ts'
 import type { AssistantMessage, ChatMessage, ChatState, SystemMessage, ToolMessage, UserMessage } from '../../lib/chat-model.ts'
+import { $bots, $newChatBot, startConversation } from '../../store/bots.ts'
 import { interruptChat, runSlash, sendPrompt } from '../../store/chat.ts'
 import type { Artifact } from '../../store/missions.ts'
 import { $activeSpace } from '../../store/spaces.ts'
@@ -73,46 +75,62 @@ export function Conversation({ chat, online }: { chat: ChatState | null; online:
   const submit = async (text: string, attachments: string[]): Promise<void> => {
     await (text.startsWith('/') && attachments.length === 0 ? runSlash(text) : sendPrompt(text, { attachments }))
   }
+  const bots = useStore($bots)
+  const next = useStore($newChatBot)
+  const bot = chat ? botByProfile(bots, chat.profile) : next
+  // With no conversation open, the first message starts one with the bot shown above it.
+  const send: typeof submit = async (...args) => {
+    if (!chat) {
+      await startConversation()
+    }
+
+    await submit(...args)
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-3 border-b border-line px-5 py-3.5">
-        <HermesAvatar size={36} rounded={10} />
+        <BotAvatar bot={bot} size={36} rounded={10} />
         <div className="min-w-0">
-          <div className="truncate text-[15px] leading-tight font-semibold text-fg">Hermes</div>
+          <div className="truncate text-[15px] leading-tight font-semibold text-fg">{bot.name}</div>
           <div className="truncate text-[12px] text-fg-3">{chat?.title || `${space?.name ?? 'Personal'} workspace`}</div>
         </div>
       </div>
 
-      {chat ? <Transcript chat={chat} online={online} /> : <Hero online={online} />}
+      {chat ? <Transcript chat={chat} bot={bot} online={online} /> : <Hero bot={bot} online={online} />}
 
       <div className="shrink-0 px-4 pb-4 pt-2">
-        <HermesComposer autoFocus disabled={!online} streaming={chat?.streaming} placeholder={online ? 'Ask Hermes anything…' : 'Connecting to Hermes…'} onSubmit={submit} onInterrupt={() => void interruptChat()} />
+        <HermesComposer autoFocus disabled={!online} streaming={chat?.streaming} placeholder={online ? `Ask ${bot.name} anything…` : 'Connecting to Hermes…'} onSubmit={send} onInterrupt={() => void interruptChat()} />
       </div>
     </div>
   )
 }
 
-function Hero({ online }: { online: boolean }) {
+function Hero({ bot, online }: { bot: Bot; online: boolean }) {
+  // The suggestions need Herald's system tools, and Herald's setup gives those to Hermes alone.
+  const hermes = isDefaultProfile(bot.profile)
+
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-6 page-enter">
-      <HermesAvatar size={48} rounded={14} />
+      <BotAvatar bot={bot} size={48} rounded={14} />
       <div className="text-center">
-        <div className="text-[20px] font-semibold tracking-tight text-fg">Hermes</div>
-        <div className="mt-1 text-[13px] text-fg-3">Your computer, in conversation.</div>
+        <div className="text-[20px] font-semibold tracking-tight text-fg">{bot.name}</div>
+        <div className="mt-1 max-w-sm text-[13px] text-fg-3">{hermes ? 'Your computer, in conversation.' : bot.description || `${bot.name} answers here, with its own memory, skills and model.`}</div>
       </div>
-      <div className="stagger grid w-full max-w-md grid-cols-2 gap-2">
-        {HERO_SUGGESTIONS.map(text => (
-          <button key={text} type="button" onClick={() => void sendPrompt(text)} disabled={!online} className="glass-card glass-card-hover rounded-xl px-3.5 py-3 text-left text-[12.5px] text-fg-2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-40">
-            {text}
-          </button>
-        ))}
-      </div>
+      {hermes && (
+        <div className="stagger grid w-full max-w-md grid-cols-2 gap-2">
+          {HERO_SUGGESTIONS.map(text => (
+            <button key={text} type="button" onClick={() => void sendPrompt(text)} disabled={!online} className="glass-card glass-card-hover rounded-xl px-3.5 py-3 text-left text-[12.5px] text-fg-2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-40">
+              {text}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function Transcript({ chat, online }: { chat: ChatState; online: boolean }) {
+function Transcript({ chat, bot, online }: { chat: ChatState; bot: Bot; online: boolean }) {
   const artifacts = useStore($chatArtifacts)
   const selected = useStore($selectedArtifact)
   const scroller = useRef<HTMLDivElement>(null)
@@ -169,7 +187,7 @@ function Transcript({ chat, online }: { chat: ChatState; online: boolean }) {
               {divider && <DayDivider label={day} />}
               {turn.user && <UserBubble message={turn.user} />}
               {blocksOf(turn.items).map(block =>
-                block.kind === 'tools' ? <ToolSummaryRow key={block.id} tools={block.tools} /> : block.message.role === 'assistant' ? <AssistantBubble key={block.id} message={block.message} /> : <SystemRow key={block.id} message={block.message} />
+                block.kind === 'tools' ? <ToolSummaryRow key={block.id} tools={block.tools} /> : block.message.role === 'assistant' ? <AssistantBubble key={block.id} message={block.message} bot={bot} /> : <SystemRow key={block.id} message={block.message} />
               )}
               {finished && produced.map(artifact => <ArtifactCard key={artifact.path} artifact={artifact} selected={selected?.path === artifact.path} onSelect={() => selectArtifact(artifact.path)} />)}
               {isLast && lastComplete && <SuggestionChips hasArtifact={artifacts.some((a: Artifact) => a.kind === 'file')} disabled={!online} onPick={text => void sendPrompt(text)} />}
@@ -210,14 +228,14 @@ const UserBubble = memo(function UserBubble({ message }: { message: UserMessage 
   )
 })
 
-const AssistantBubble = memo(function AssistantBubble({ message }: { message: AssistantMessage }) {
+const AssistantBubble = memo(function AssistantBubble({ message, bot }: { message: AssistantMessage; bot: Bot }) {
   const [showReasoning, setShowReasoning] = useState(false)
   const hasReasoning = message.reasoning.trim().length > 0
   const text = message.text.replace(/^\s+/, '')
 
   return (
     <div className="flex items-start gap-3">
-      <HermesAvatar size={28} rounded={8} className={cn('mt-1', message.streaming && 'animate-pulse-soft')} />
+      <BotAvatar bot={bot} size={28} rounded={8} className={cn('mt-1', message.streaming && 'animate-pulse-soft')} />
       <div className="glass-card min-w-0 max-w-[85%] rounded-xl px-4 py-2.5">
         {hasReasoning && (
           <button type="button" onClick={() => setShowReasoning(v => !v)} className="mb-1 flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg-2">

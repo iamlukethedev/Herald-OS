@@ -258,6 +258,11 @@ abilities as a regular Hermes plugin, `herald-os-bridge`.
 
 - **Hermes at the centre.** Overview, Hermes, Missions, Memory, Files, Automations, Connections and
   Settings, plus a Terminal, a System monitor, and floating chat windows.
+- **Your other bots.** Each Hermes profile is a bot with its own memory, skills and model, shown
+  with the name and picture Hermes Desktop's Bot Mode gave it. Start a conversation with any of
+  them from the Hermes page or the Overview, or say "talk to Alfred"; each bot's conversations stay
+  in its own session list, and new conversations keep the bot chosen last. See
+  [the manual](docs/manual/README.md#talking-to-your-other-bots).
 - **Pick up where you left off.** When you open Herald OS or come back after a break, Hermes looks
   at your recent documents, project folders (with their git state), conversations and today's
   calendar, and puts up to three threads of work on the Overview. Continue reopens a thread's

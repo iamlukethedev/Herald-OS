@@ -1,14 +1,17 @@
 import { useStore } from '@nanostores/react'
-import { IconArrowUpRight, IconHistory, IconPencil, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
+import { IconArrowUpRight, IconHistory, IconPencil, IconTrash, IconX } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
-import { GlassButton, GlassCard, MoreButton } from '../../components/ui/glass.tsx'
-import { $activeChat, $activeChatId, $chats, createChat, forgetChat } from '../../store/chat.ts'
+import { GlassCard, MoreButton } from '../../components/ui/glass.tsx'
+import { botByProfile } from '../../lib/bots.ts'
+import { $bots } from '../../store/bots.ts'
+import { $activeChat, $activeChatId, $chats, forgetChat } from '../../store/chat.ts'
 import { $connection } from '../../store/gateway.ts'
 import { notify } from '../../store/notifications.ts'
 import { deleteSession } from '../../store/sessions.ts'
 import { openApp } from '../../store/windows.ts'
 import { SessionList } from '../chat/SessionList.tsx'
 import { ArtifactPane } from './ArtifactPane.tsx'
+import { NewConversationButton } from './BotPicker.tsx'
 import { Conversation } from './Conversation.tsx'
 import { MenuDivider, MenuItem, PopMenu } from './Menu.tsx'
 
@@ -75,7 +78,7 @@ export function HermesPage() {
     setBusy(true)
 
     try {
-      await deleteSession(chat.storedSessionId)
+      await deleteSession(chat.storedSessionId, chat.profile)
       forgetChat(chat.sessionId)
       notify({ title: 'Conversation deleted', body: chat.title || undefined, level: 'info', surface: 'hermes' })
     } catch (error) {
@@ -108,10 +111,7 @@ export function HermesPage() {
             className="glass-input h-9 w-72 rounded-lg px-3 text-[13px] outline-none placeholder:text-fg-4 animate-pop"
           />
         )}
-        <GlassButton onClick={() => void createChat()} disabled={!online} aria-label="New conversation">
-          <IconPlus />
-          New conversation
-        </GlassButton>
+        <NewConversationButton disabled={!online} />
         <PopMenu open={menuOpen} onClose={() => setMenuOpen(false)} trigger={<MoreButton aria-label="Conversation actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)} />}>
           <MenuItem icon={<IconPencil />} disabled={!chat} onClick={startRename}>
             Rename
@@ -123,7 +123,7 @@ export function HermesPage() {
               setMenuOpen(false)
 
               if (chat) {
-                openApp('chat-popout', { payload: { sessionId: chat.storedSessionId }, title: chat.title || 'Hermes' })
+                openApp('chat-popout', { payload: { sessionId: chat.storedSessionId, profile: chat.profile }, title: chat.title || botByProfile($bots.get(), chat.profile).name })
               }
             }}
           >

@@ -3,6 +3,7 @@ import { bindAgentEvents } from './agents.ts'
 import { bindRecording } from './capture.ts'
 import { bindEditTarget } from './edit-target.ts'
 import { bindBackendStores } from './backend.ts'
+import { refreshBots } from './bots.ts'
 import { bindChatEvents, resetChats } from './chat.ts'
 import { bindContinuity } from './continuity.ts'
 import { bindDictation } from './dictation.ts'
@@ -108,6 +109,7 @@ export function bootRenderer(): void {
 
     lastEpoch = epoch
     void refreshSessions()
+    void refreshBots()
   })
 
   if (import.meta.env.DEV) {

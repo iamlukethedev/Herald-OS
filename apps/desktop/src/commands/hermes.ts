@@ -1,7 +1,9 @@
 import { focusSettings } from '../features/settings/sections/shared.tsx'
+import { botByProfile } from '../lib/bots.ts'
 import { matchProvider } from '../lib/model-provider.ts'
 import { pauseAllAgents } from '../store/agents-control.ts'
-import { $activeChat, createChat, interruptChat, openStoredSession, sendPrompt } from '../store/chat.ts'
+import { $bots, startConversation } from '../store/bots.ts'
+import { $activeChat, interruptChat, openStoredSession, sendPrompt } from '../store/chat.ts'
 import { requestHermesLogin } from '../store/hermes-auth.ts'
 import { $activeMissions, $completedMissions, $missions, $reviewMissions, focusMissions, markReviewed, type Mission } from '../store/missions.ts'
 import { startMission } from '../store/missions-actions.ts'
@@ -38,15 +40,15 @@ export const hermesCommands: readonly OsCommand[] = [
   {
     id: 'chat.new',
     title: 'New chat',
-    description: 'Start a new Hermes session and show it.',
+    description: 'Start a new conversation and show it. It runs as the bot last chosen for new conversations: Hermes, unless bots.chat picked another.',
     tier: 'act',
     args: [{ name: 'title', type: 'string', description: 'Optional title' }],
     phrases: ['new chat', 'start a new chat', 'new conversation', 'new session'],
     run: async ({ title }) => {
-      const chat = await createChat({ title: title ? String(title) : undefined })
+      const chat = await startConversation(undefined, { title: title ? String(title) : undefined })
       showPage('hermes')
 
-      return ok('Started a new chat', { page: 'hermes', data: { sessionId: chat.sessionId } })
+      return ok(chat.profile ? `Started a new chat with ${botByProfile($bots.get(), chat.profile).name}` : 'Started a new chat', { page: 'hermes', data: { sessionId: chat.sessionId } })
     }
   },
   {
@@ -118,7 +120,7 @@ export const hermesCommands: readonly OsCommand[] = [
         return fail('No active session to pop out.')
       }
 
-      openApp('chat-popout', { payload: { sessionId: chat.sessionId }, title: chat.title || 'Hermes' })
+      openApp('chat-popout', { payload: { sessionId: chat.storedSessionId, profile: chat.profile }, title: chat.title || botByProfile($bots.get(), chat.profile).name })
 
       return ok('Popped out the chat')
     }

@@ -1,6 +1,7 @@
 import type { GatewayEvent, SessionCreateResult, SessionResumeResult } from '@herald-os/client'
 import { atom, computed, map } from 'nanostores'
 import { ELSEWHERE_NOTE } from '../lib/attachments.ts'
+import { isDefaultProfile, profileParam, sameProfile } from '../lib/bots.ts'
 import { appendSystem, appendUser, type ChatState, emptyChat, fromTranscript, reduceChatEvent } from '../lib/chat-model.ts'
 import { currentModelText } from '../lib/model-provider.ts'
 import { attachFiles, hermesReadsLocalFiles } from './attachments.ts'
@@ -37,12 +38,16 @@ const CHAT_EVENTS = new Set<GatewayEvent['type']>([
 /** Chats started in the background for a surface that shows their replies itself (an Office window's Ask Hermes bar). */
 const quietChats = new Set<string>()
 
-function adopt(result: SessionCreateResult | SessionResumeResult, fallbackStored?: string): ChatState {
+function adopt(result: SessionCreateResult | SessionResumeResult, fallbackStored?: string, profile?: string): ChatState {
   const stored = result.stored_session_id ?? fallbackStored ?? result.session_id
   const state = emptyChat(result.session_id, stored, result.info)
   state.messages = fromTranscript(result.messages ?? [])
   state.title = result.info?.title ?? state.title
   const inflight = 'inflight' in result ? result.inflight : null
+
+  if (!isDefaultProfile(profile)) {
+    state.profile = profile
+  }
 
   if (inflight?.assistant) {
     state.messages.push({ id: `inflight-${result.session_id}`, role: 'assistant', text: inflight.assistant, reasoning: '', streaming: Boolean(inflight.streaming), ts: Date.now() })
@@ -50,7 +55,7 @@ function adopt(result: SessionCreateResult | SessionResumeResult, fallbackStored
   }
 
   state.streaming = Boolean(result.info?.running || ('running' in result && result.running))
-  rememberRuntimeId(stored, result.session_id)
+  rememberRuntimeId(stored, result.session_id, profile)
 
   return state
 }
@@ -80,19 +85,19 @@ export function bindChatEvents(): () => void {
     }
 
     if (event.type === 'session.title') {
-      void refreshSessions()
+      void refreshSessions(next.profile)
     }
   })
 }
 
 /** A new chat; it becomes the one the Hermes window shows unless `activate` is false, and then its turns end without a notification. */
-export async function createChat(options: { cwd?: string; title?: string; activate?: boolean } = {}): Promise<ChatState> {
+export async function createChat(options: { cwd?: string; title?: string; activate?: boolean; profile?: string } = {}): Promise<ChatState> {
   const local = hermesReadsLocalFiles()
   // A Hermes that cannot read this computer's files works in its own folders, and knows the person's files are elsewhere.
   const cwd = options.cwd ?? (local ? ($prefs.get().defaultCwd ?? $env.get()?.homeDir ?? null) : null)
   const seed = local ? {} : { messages: [{ role: 'user', content: ELSEWHERE_NOTE, display_kind: 'hidden' }] }
-  const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null, ...seed })
-  const state = adopt(result)
+  const result = await gatewayRequest('session.create', { source: SESSION_SOURCE, cwd, title: options.title ?? null, ...seed, ...profileParam(options.profile) })
+  const state = adopt(result, undefined, options.profile)
   $chats.setKey(state.sessionId, state)
 
   if (options.activate !== false) {
@@ -101,13 +106,14 @@ export async function createChat(options: { cwd?: string; title?: string; activa
     quietChats.add(state.sessionId)
   }
 
-  void refreshSessions()
+  void refreshSessions(options.profile)
 
   return state
 }
 
-export async function openStoredSession(storedId: string): Promise<ChatState> {
-  const existing = Object.values($chats.get()).find(chat => chat.storedSessionId === storedId)
+/** Reopen a stored session; a bot's needs its `profile`, since each profile keeps its own sessions. */
+export async function openStoredSession(storedId: string, profile?: string): Promise<ChatState> {
+  const existing = Object.values($chats.get()).find(chat => chat.storedSessionId === storedId && sameProfile(chat.profile, profile))
 
   if (existing) {
     $activeChatId.set(existing.sessionId)
@@ -115,8 +121,8 @@ export async function openStoredSession(storedId: string): Promise<ChatState> {
     return existing
   }
 
-  const result = await gatewayRequest('session.resume', { session_id: storedId, source: SESSION_SOURCE })
-  const state = adopt(result, storedId)
+  const result = await gatewayRequest('session.resume', { session_id: storedId, source: SESSION_SOURCE, ...profileParam(profile) })
+  const state = adopt(result, storedId, profile)
   $chats.setKey(state.sessionId, state)
   $activeChatId.set(state.sessionId)
 

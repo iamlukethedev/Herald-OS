@@ -34,6 +34,31 @@ This manual is for using Herald OS day to day. The [README](../../README.md) cov
 5. **Look at what Hermes did.** Settings > Privacy has the audit log of every system action, and
    Settings > Usage shows how much your model plan has used.
 
+## Talking to your other bots
+
+Every Hermes profile is a bot: it has its own memory, skills, model and conversations, and Hermes
+Desktop's Bot Mode gives it a name and a picture. Hermes itself is the default profile. Once you
+have more than one, you choose who a conversation is with.
+
+- **Start a conversation with a bot.** On the Hermes page, the bot's picture beside New
+  conversation opens the list of your bots, Hermes first; on the Overview, the bot's name in front
+  of Plan my day does the same. Choosing one starts a new conversation with it (the Bot Chat it
+  has in Hermes Desktop stays in its session list), and New conversation keeps that bot until you
+  choose another. "Talk to Alfred", typed in the command bar or said, does the same, and "which
+  bots do I have" lists them.
+- **See who you are talking to.** The conversation shows the bot's name and picture, and the
+  message box says who it asks.
+- **Each bot keeps its own conversations.** Sessions… on the Hermes page lists those of the bot on
+  screen, and its name at the top of the list switches to another bot's.
+- **What stays with Hermes.** The chats Herald OS starts for its own features run as Hermes: the
+  desktop pet, Ask Hermes in Herald Office, missions, Studio and crash help. Buttons elsewhere that
+  ask Hermes something (Plan my day, Find files, the command bar's Ask Hermes, voice) go to the
+  conversation on screen, whoever it is with, and start one with Hermes when none is open.
+  Missions and the command bar's recent sessions show Hermes's conversations only.
+- **Not yet.** Herald OS sets its system tools (files, apps, settings) up for Hermes, so a bot has
+  them only when its profile has the `herald-os-bridge` plugin. Voice speaks a bot's replies in
+  Hermes's voice.
+
 ## Installing software
 
 Settings > Software (or Install in the `Super+M` menu on Linux, or just "install Steam") lists what

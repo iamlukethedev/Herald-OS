@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from 'react'
 import { EmptyGlass, LinkAction, Section, StatusDot } from '../../components/ui/glass.tsx'
 import { cn } from '../../lib/cn.ts'
 import { greetingFor } from '../../lib/format.ts'
-import { createChat, runSlash, sendPrompt } from '../../store/chat.ts'
+import { startConversation } from '../../store/bots.ts'
+import { $activeChat, createChat, runSlash, sendPrompt } from '../../store/chat.ts'
 import { $threads } from '../../store/continuity.ts'
 import { $connection } from '../../store/gateway.ts'
 import { $activeMissions, $reviewMissions } from '../../store/missions.ts'
 import { useSystemInfo } from '../../store/system.ts'
 import { showPage } from '../../store/windows.ts'
+import { BotChip } from '../hermes/BotPicker.tsx'
 import { MissionCard } from './MissionCard.tsx'
 import { OverviewComposer } from './OverviewComposer.tsx'
 import { PickUp } from './PickUp.tsx'
@@ -64,6 +66,15 @@ export function OverviewPage() {
     await createChat()
   }
 
+  // With no conversation open, the composer starts one with the bot beside it.
+  const ask: typeof submit = async (...args) => {
+    if (!$activeChat.get()) {
+      await startConversation()
+    }
+
+    await submit(...args)
+  }
+
   return (
     <div ref={rootRef} className="h-full overflow-y-auto">
       <div className={cn('flex min-h-full gap-6 px-6 pt-6 pb-8', narrow && 'flex-col gap-7')}>
@@ -77,8 +88,9 @@ export function OverviewPage() {
               <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-fg">{greeting}</h1>
               <div className="mt-1 text-[16px] text-fg-2">{threads.length > 0 ? 'Welcome back. Here is where you left off.' : 'Your day, already in motion.'}</div>
             </div>
-            <OverviewComposer disabled={!online} placeholder={online ? 'What would you like to make happen?' : 'Starting Hermes…'} onSubmit={submit} draft={draft} />
+            <OverviewComposer disabled={!online} placeholder={online ? 'What would you like to make happen?' : 'Starting Hermes…'} onSubmit={ask} draft={draft} />
             <div className="flex flex-wrap items-center gap-2">
+              <BotChip disabled={!online} />
               <QuickAction icon={<IconSunHigh />} label="Plan my day" disabled={!online} onClick={() => void submit(PLAN_MY_DAY_PROMPT)} />
               <QuickAction icon={<IconTargetArrow />} label="Start a mission" disabled={!online} onClick={() => void startMission()} />
               <QuickAction icon={<IconPalette />} label="Make a theme" disabled={!online} onClick={() => setDraft({ text: MAKE_THEME_DRAFT, id: Date.now() })} />

@@ -1,12 +1,15 @@
 import { IconChevronRight } from '@tabler/icons-react'
 import { memo, useEffect, useRef, useState } from 'react'
+import { BotAvatar } from '../../components/bot-avatar.tsx'
 import { HermesMark } from '../../components/hermes-mark.tsx'
+import type { Bot } from '../../lib/bots.ts'
 import { cn } from '../../lib/cn.ts'
 import type { AssistantMessage, ChatMessage, ChatState } from '../../lib/chat-model.ts'
 import { Markdown } from './Markdown.tsx'
 import { ToolRow } from './ToolRow.tsx'
 
-export function Transcript({ chat }: { chat: ChatState }) {
+/** `bot` is the bot the chat runs as, when it is not Hermes. */
+export function Transcript({ chat, bot }: { chat: ChatState; bot?: Bot }) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
@@ -38,7 +41,7 @@ export function Transcript({ chat }: { chat: ChatState }) {
     <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         {chat.messages.map(message => (
-          <Message key={message.id} message={message} />
+          <Message key={message.id} message={message} bot={bot} />
         ))}
         {chat.streaming && chat.status && (
           <div className="flex items-center gap-2 px-1 text-[12px] text-fg-3 animate-fade-in">
@@ -57,7 +60,7 @@ export function Transcript({ chat }: { chat: ChatState }) {
   )
 }
 
-const Message = memo(function Message({ message }: { message: ChatMessage }) {
+const Message = memo(function Message({ message, bot }: { message: ChatMessage; bot?: Bot }) {
   switch (message.role) {
     case 'user':
       return (
@@ -66,7 +69,7 @@ const Message = memo(function Message({ message }: { message: ChatMessage }) {
         </div>
       )
     case 'assistant':
-      return <Assistant message={message} />
+      return <Assistant message={message} bot={bot} />
     case 'tool':
       return <ToolRow tool={message} />
     case 'system':
@@ -78,14 +81,14 @@ const Message = memo(function Message({ message }: { message: ChatMessage }) {
   }
 })
 
-function Assistant({ message }: { message: AssistantMessage }) {
+function Assistant({ message, bot }: { message: AssistantMessage; bot?: Bot }) {
   const [showReasoning, setShowReasoning] = useState(false)
   const hasReasoning = message.reasoning.trim().length > 0
 
   return (
     <div className="flex gap-3">
       <div className="mt-1.5 flex size-5 shrink-0 items-center justify-center">
-        <HermesMark size={14} className={cn(message.streaming && 'animate-pulse-soft')} />
+        {bot ? <BotAvatar bot={bot} size={20} rounded={6} className={cn(message.streaming && 'animate-pulse-soft')} /> : <HermesMark size={14} className={cn(message.streaming && 'animate-pulse-soft')} />}
       </div>
       <div className="min-w-0 flex-1">
         {hasReasoning && (

@@ -327,8 +327,9 @@ export const $missions = computed([$chats, $sessions, $runtimeIds, $todos, $arti
     missions.push(buildMission(row.id, runtimeId, chat, row.title, row.preview, row.started_at, row.message_count, row.source, todos, artifacts, agents, pending, reviewed))
   }
 
+  // A mission reopens by stored id alone, so a bot's conversations stay in its own session list.
   for (const chat of Object.values(chats)) {
-    if (!seenRuntime.has(chat.sessionId)) {
+    if (!seenRuntime.has(chat.sessionId) && !chat.profile) {
       missions.push(buildMission(chat.storedSessionId, chat.sessionId, chat, chat.title, undefined, undefined, chat.messages.length, SESSION_SOURCE, todos, artifacts, agents, pending, reviewed))
     }
   }

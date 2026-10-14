@@ -539,6 +539,8 @@ export interface HeraldOSPrefs {
   /** Absolute path or file:// URL of a custom wallpaper image. */
   wallpaper?: string
   defaultCwd?: string
+  /** The bot new conversations run as: the name of the Hermes profile last chosen (`default`, or unset, is Hermes itself). */
+  conversationBot?: string
   /** Where "build …" creates project folders (default ~/Projects). */
   projectsRoot?: string
   spaces: SpaceDef[]

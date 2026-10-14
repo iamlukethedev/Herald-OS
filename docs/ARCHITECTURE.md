@@ -85,6 +85,15 @@ Sessions are created with `source: "herald_os"`. Upstream only folds Desktop-onl
 sessions whose source is `desktop`, so a Herald OS session never receives tools whose client half
 lives in Hermes Desktop.
 
+A conversation can also run as another Hermes profile, a bot (`src/store/bots.ts`; the roster is
+`profiles.list`, a bot's picture `profiles.get_asset`). Each profile keeps its sessions in its own
+`state.db`, so `session.create`, `session.list`, `session.resume` and `session.delete` carry the
+bot's `profile`: the gateway opens that profile's store and home (an unknown profile is error
+4064), and a resume without it looks in the launch profile's store and finds nothing. The live
+session keeps its profile, so `prompt.submit` and the other calls by runtime id need none, and
+Hermes's own sessions still go without `profile`. Stored ids can repeat across profiles, so the
+renderer keys a bot's sessions by profile and id.
+
 Server-to-client requests the shell answers: `approval`, `clarify`, `sudo`, `secret`. Anything else
 is declined with `-32601` so the backend treats it as unanswered rather than hanging.
 

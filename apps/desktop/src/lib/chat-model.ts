@@ -56,6 +56,8 @@ export type ChatMessage = UserMessage | AssistantMessage | ToolMessage | SystemM
 export interface ChatState {
   sessionId: string
   storedSessionId: string
+  /** The bot the session runs as (a Hermes profile); unset for Hermes itself. */
+  profile?: string
   title: string
   messages: ChatMessage[]
   streaming: boolean
