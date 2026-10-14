@@ -930,3 +930,40 @@ keeps clear of the pointer but cannot see text fields in other windows, and an O
 Ask Hermes sessions do not reach the pet's brain. The automations in the background count are an
 estimate (the latest run of the six most recently run enabled jobs, checked every 2 minutes and on
 cron changes), and so is a tile's position on niri.
+
+## ADR-023: Herald OS translates its own text, with catalogs of its own
+
+Every string in the shell was English, so someone whose Mac is in Chinese saw English everywhere,
+the menus included (#93). Herald now keeps its text in one catalog per language
+(`apps/desktop/shared/locales/`), keyed by message and shared by Electron main, for the menus it
+builds, and the renderer. English is the source of every message and what shows for any a language
+has not translated; Simplified Chinese is the first translation.
+
+- **No i18n dependency.** What Herald needs is `{name}` slots, plural forms chosen by
+  `Intl.PluralRules`, the English fallback and types, which `shared/i18n.ts` does in about 160
+  lines. The keys and each message's values are typed from the English catalog, so a wrong key or
+  a missing value fails the type check; i18next or FormatJS would add a runtime and a message
+  syntax for no more than that.
+- **Text with slots, not functions.** Hermes Desktop's catalogs hold functions for messages with
+  values. Herald's hold text, which a translator can edit without writing code and a test can check:
+  every translation keeps the slots English has and uses only its language's plural categories.
+- **Following the system unless the person chooses.** The setting (Settings > General, or
+  `language.set`) defaults to the system: the first of the OS's preferred languages Herald has, as
+  `app.getPreferredSystemLanguages()` reports them to main and `EnvInfo` passes them on. Traditional
+  Chinese means English until it has a translation of its own. A change applies at once in every
+  window; dates follow a chosen language and keep the system's format while Herald follows it.
+- **A surface at a time.** Main's menus, the menu bar, the Overview, the command bar, the
+  notifications panel and Settings' navigation, section titles and General section came first; the
+  rest moves into the catalogs as it is worked on. Command titles, voice phrases and the app
+  registry's names stay English, since Hermes and the voice matcher read them.
+
+Alternatives considered:
+
+- **Rejected: upstream's i18n helpers (`@hermes/shared/i18n`).** They serve catalogs of functions
+  and a React context Herald does not use, and would tie Herald's strings to the upstream snapshot.
+- **Rejected: Chromium's `--lang` switch, so everything follows the setting.** It takes a restart,
+  and it also changes the spell checker's languages and the languages web pages are asked for.
+
+**Known limits.** The macOS app menu is Electron's default, whose items Electron names in English;
+translating it needs Herald's own application menu. The items macOS adds to menus, and Chromium's own
+text, follow the system's language rather than Herald's.

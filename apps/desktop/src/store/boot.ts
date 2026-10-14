@@ -12,6 +12,7 @@ import { bindPlugins } from './plugins.ts'
 import { $connectionEpoch, bindGatewayToBackend } from './gateway.ts'
 import { bindFollow } from './follow.ts'
 import { bindHermesAuth } from './hermes-auth.ts'
+import { bindLanguage } from './i18n.ts'
 import { bindMissionEvents } from './missions.ts'
 import { bindSidebarPrefs } from './sidebar.ts'
 import { bindNotificationEvents, bindNotificationHistory } from './notifications.ts'
@@ -49,6 +50,7 @@ export function bootRenderer(): void {
   if (surface === 'pet') {
     bindShell()
     bindBackendStores()
+    bindLanguage()
     bindBranding()
     bindPetInfo()
     bindPetSheet()
@@ -61,6 +63,7 @@ export function bootRenderer(): void {
   bindEditTarget()
   bindShell()
   bindBackendStores()
+  bindLanguage()
   bindGatewayToBackend()
   bindChatEvents()
   bindServerRequests()

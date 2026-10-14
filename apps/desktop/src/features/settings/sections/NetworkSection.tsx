@@ -8,6 +8,7 @@ import { useBackendData } from '../../../lib/use-async.ts'
 import { $backend } from '../../../store/backend.ts'
 import { $connection } from '../../../store/gateway.ts'
 import { notify } from '../../../store/notifications.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 interface McpServerRow {
@@ -22,12 +23,13 @@ interface McpServerRow {
 const phaseTone = (phase: string): PillTone => (phase === 'ready' ? 'ok' : phase === 'failed' ? 'danger' : phase === 'stopped' || phase === 'idle' ? 'muted' : 'warn')
 
 export function NetworkSection() {
+  const t = useT()
   const backend = useStore($backend)
   const connection = useStore($connection)
 
   return (
     <>
-      <SectionTitle title="Network" subtitle="The Hermes runtime this shell talks to, and what Hermes itself is connected to." />
+      <SectionTitle title={t('settings.section.network')} subtitle={t('settings.network.subtitle')} />
 
       <SettingsGroup title="Hermes runtime">
         <SettingsRow icon={<IconServer />} label="Backend" description={<span className="selectable font-mono text-[11.5px]">{backend.baseUrl ?? 'not running'}</span>} keywords="hermes runtime server status">

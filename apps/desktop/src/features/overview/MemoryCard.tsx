@@ -3,6 +3,7 @@ import { IconChevronRight, IconShieldCheck } from '@tabler/icons-react'
 import { useEffect } from 'react'
 import { GlassCard } from '../../components/ui/glass.tsx'
 import { $env } from '../../store/backend.ts'
+import { useT } from '../../store/i18n.ts'
 import { showPage } from '../../store/windows.ts'
 import { $memory, loadMemory } from '../memory/memory-store.ts'
 import { useMemoryToolset } from '../memory/use-memory-toolset.ts'
@@ -11,6 +12,7 @@ import { IconTile, Shimmer } from './shared.tsx'
 
 /** One-line memory health: the entries the Memory page lists, and whether memory is paused. */
 export function MemoryCard() {
+  useT()
   const hermesHome = useStore($env)?.hermesHome ?? null
   const memory = useStore($memory)
   const toolset = useMemoryToolset()

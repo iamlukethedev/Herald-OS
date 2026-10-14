@@ -1,3 +1,4 @@
+import { t } from '../../store/i18n.ts'
 import type { MemoryState } from '../memory/memory-store.ts'
 
 export interface MemorySummary {
@@ -15,8 +16,7 @@ export function memorySummary(memory: Pick<MemoryState, 'entries' | 'loaded' | '
   }
 
   const count = memory.entries.length
-  const entries = `${count} ${count === 1 ? 'entry' : 'entries'}`
-  const detail = memory.error ? 'Could not read memory' : count === 0 ? 'Nothing remembered yet' : paused ? `${entries} still in use` : `${entries} remembered`
+  const detail = memory.error ? t('overview.memory.unreadable') : count === 0 ? t('overview.memory.empty') : paused ? t('overview.memory.inUse', { count }) : t('overview.memory.remembered', { count })
 
-  return { label: paused ? 'Memory paused' : 'Memory on', detail }
+  return { label: paused ? t('overview.memory.paused') : t('overview.memory.on'), detail }
 }

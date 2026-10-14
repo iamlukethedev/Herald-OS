@@ -7,9 +7,11 @@ import { useBackendData, useLocalData } from '../../../lib/use-async.ts'
 import { $backend, $env } from '../../../store/backend.ts'
 import { openApp } from '../../../store/windows.ts'
 import { AboutIdentity, BrandingSettings } from './BrandingSettings.tsx'
+import { useT } from '../../../store/i18n.ts'
 import { LogView, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 export function AboutSection() {
+  const t = useT()
   const env = useStore($env)
   const backend = useStore($backend)
   const status = useBackendData(() => rest.get<HermesStatusPayload>('/api/status'))
@@ -18,7 +20,7 @@ export function AboutSection() {
 
   return (
     <>
-      <SectionTitle title="About" subtitle="Versions, the runtime underneath, your branding, and where to look when something is off." />
+      <SectionTitle title={t('settings.section.about')} subtitle={t('settings.about.subtitle')} />
 
       <AboutIdentity />
 

@@ -9,6 +9,7 @@ import { notify } from '../../../store/notifications.ts'
 import { $plugins } from '../../../store/plugins.ts'
 import { openAsk } from '../../../store/surface.ts'
 import { openApp } from '../../../store/windows.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 const MAKE_A_WIDGET = 'Make me a Herald OS widget that '
@@ -19,6 +20,7 @@ const MAKE_A_WIDGET = 'Make me a Herald OS widget that '
  * arrive turned off.
  */
 export function PluginsSection() {
+  const t = useT()
   const plugins = useStore($plugins)
   const [url, setUrl] = useState('')
   const [adding, setAdding] = useState(false)
@@ -39,7 +41,7 @@ export function PluginsSection() {
 
   return (
     <>
-      <SectionTitle title="Plugins" subtitle="Widgets for the menu bar, the Overview and their own windows. Each runs in a sandbox and gets only what you allow." />
+      <SectionTitle title={t('settings.section.plugins')} subtitle={t('settings.plugins.subtitle')} />
 
       <SettingsGroup title="Installed">
         {plugins.length === 0 && <SettingsRow icon={<IconPuzzle />} label="No plugins yet" description="Add one from git below, or ask Hermes to make one." />}

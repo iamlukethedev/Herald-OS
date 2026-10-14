@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { type EventAutomation, isEventName } from '../shared/events.ts'
+import { languageSetting } from '../shared/i18n.ts'
 import type { ContinuityPrefs, CrashHelpPrefs, HeraldOSPrefs } from '../shared/ipc.ts'
 import { normalizeMenuBar } from '../shared/menu-bar.ts'
 import { normalizeCommentName } from '../shared/office/comment-name.ts'
@@ -43,6 +44,7 @@ export function readPrefs(): HeraldOSPrefs {
     return {
       ...DEFAULTS,
       ...parsed,
+      language: languageSetting(parsed.language),
       accent: (accent as HeraldOSPrefs['accent']) ?? DEFAULTS.accent,
       spaces: parsed.spaces?.length ? parsed.spaces : DEFAULTS.spaces,
       voice: normalizeVoicePrefs(parsed.voice),
@@ -96,6 +98,7 @@ export function writePrefs(patch: Partial<HeraldOSPrefs>): HeraldOSPrefs {
     crashHelp: normalizeCrashHelp({ ...current.crashHelp, ...(patch.crashHelp ?? {}) }),
     pet: normalizePetPrefs({ ...current.pet, ...(patch.pet ?? {}) }),
     ...('commentName' in patch ? { commentName: normalizeCommentName(patch.commentName) || undefined } : {}),
+    ...('language' in patch ? { language: languageSetting(patch.language) } : {}),
     ...(patch.menuBar ? { menuBar: normalizeMenuBar({ ...current.menuBar, ...patch.menuBar }) } : {})
   }
   fs.mkdirSync(heraldOsDataDir(), { recursive: true })

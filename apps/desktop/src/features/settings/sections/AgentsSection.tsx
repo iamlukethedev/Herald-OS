@@ -14,6 +14,7 @@ import { $providerChanges, type ModelChange, setHermesModel } from '../../../sto
 import { notify } from '../../../store/notifications.ts'
 import { readTier, withTier } from './policy.ts'
 import { ModelConfirm, ModelProviderRow } from './ProviderRow.tsx'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, MenuDropdown, RadioCard, SectionTitle, SettingsBlock, SettingsGroup, SettingsRow, Stepper, useDismiss } from './shared.tsx'
 import { ToolSearchRow } from './ToolSearchRow.tsx'
 
@@ -30,12 +31,13 @@ import { ToolSearchRow } from './ToolSearchRow.tsx'
  */
 
 export function AgentsSection() {
+  const t = useT()
   const connection = useStore($connection)
   const ready = connection === 'open'
 
   return (
     <>
-      <SectionTitle title="Hermes & agents" subtitle="Choose how Hermes works with you." />
+      <SectionTitle title={t('settings.section.agents')} subtitle={t('settings.agents.subtitle')} />
 
       <SettingsBlock label="Hermes" description="Personal agent" keywords="status identity ready connecting">
         <GlassCard className="flex items-center gap-3.5 px-4 py-3">

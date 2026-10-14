@@ -8,6 +8,7 @@ import { $env } from '../../../store/backend.ts'
 import { $continuity, forgetThreads, setContinuityEnabled, setExclusions } from '../../../store/continuity.ts'
 import { notify } from '../../../store/notifications.ts'
 import { AuditRow } from './AgentsSection.tsx'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, markSaved, SectionTitle, SettingsBlock, SettingsGroup, SettingsRow } from './shared.tsx'
 
 /*
@@ -102,6 +103,7 @@ function ContinuitySettings() {
 }
 
 export function PrivacySection() {
+  const t = useT()
   const policy = useLocalData(() => window.heraldOS.bridge.readPolicy())
   const [draft, setDraft] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -131,7 +133,7 @@ export function PrivacySection() {
 
   return (
     <>
-      <SectionTitle title="Privacy" subtitle={`What Hermes may look at and do on this ${deviceNoun()}, and the record of what it did.`} />
+      <SectionTitle title={t('settings.section.privacy')} subtitle={t('settings.privacy.subtitle', { device: deviceNoun() })} />
 
       <ContinuitySettings />
 

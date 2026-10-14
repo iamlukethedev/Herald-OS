@@ -22,6 +22,7 @@ import { PET_DEFAULT_SCALE, type PetMoodKind, type PetNoteKind, type PetReaction
 import { GlassButton, Toggle } from '../../components/ui/glass.tsx'
 import { cn } from '../../lib/cn.ts'
 import { $connection, gatewayRequest } from '../../store/gateway.ts'
+import { useT } from '../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from '../settings/sections/shared.tsx'
 import { $petPrefs, petShortcutLabel, selectPet, setPetEnabled, setPetPrefs, setPetScale } from './actions.ts'
 import { $petInfo } from './info.ts'
@@ -250,6 +251,7 @@ function useScaleDraft(scale: number, commit: (value: number) => void): [number,
 }
 
 export function PetSection() {
+  const t = useT()
   const info = useStore($petInfo)
   const prefs = useStore($petPrefs)
   const [busy, setBusy] = useState<string | null>(null)
@@ -279,10 +281,7 @@ export function PetSection() {
 
   return (
     <>
-      <SectionTitle
-        title="Pet"
-        subtitle="Hermes's petdex mascot on the desktop: it shows what Hermes is doing, holds up approvals, takes questions and files, and stays out of the way. Which pet, its size and on or off are Hermes's own settings, the same in the Hermes CLI, the TUI and Hermes's desktop app."
-      />
+      <SectionTitle title={t('settings.section.pet')} subtitle={t('settings.pet.subtitle')} />
 
       <SettingsGroup title="The pet">
         <SettingsRow

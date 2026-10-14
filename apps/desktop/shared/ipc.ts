@@ -2,6 +2,7 @@
 // Everything the renderer can ask the machine to do is declared here; nothing else is exposed.
 
 import type { EventAutomation } from './events.ts'
+import type { LanguageSetting } from './i18n.ts'
 import type { MenuBarLayout } from './menu-bar.ts'
 import type { OfficeApp } from './office/files.ts'
 import type { PetPrefs } from './pet.ts'
@@ -507,6 +508,8 @@ export interface OsControlReply {
 export type AudioWsKind = 'speak-stream'
 
 export interface HeraldOSPrefs {
+  /** The language Herald OS is shown in; unset follows the system's languages. */
+  language?: LanguageSetting
   fullscreenOnLaunch: boolean
   reduceMotion: boolean
   accent: 'blue' | 'ice' | 'violet'
@@ -749,6 +752,8 @@ export interface EnvInfo {
   version: string
   isDev: boolean
   shellMode: ShellMode
+  /** The system's preferred languages, most preferred first (`app.getPreferredSystemLanguages()`). */
+  languages?: string[]
 }
 
 /** Channel names, table-driven so preload and main cannot drift. */

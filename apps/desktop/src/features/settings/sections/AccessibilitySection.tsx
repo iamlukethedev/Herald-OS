@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Chips, Toggle } from '../../../components/ui/glass.tsx'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, markSaved, readLocalFlag, SectionTitle, SettingsGroup, SettingsRow, writeLocal } from './shared.tsx'
 
 /*
@@ -53,6 +54,7 @@ export function applyAccessibility(): void {
 }
 
 export function AccessibilitySection() {
+  const t = useT()
   const prefs = useStore($prefs)
   const [textSize, setTextSize] = useState<TextSize>(readTextSize)
   const [contrast, setContrast] = useState(() => readLocalFlag(CONTRAST_KEY, false))
@@ -82,7 +84,7 @@ export function AccessibilitySection() {
 
   return (
     <>
-      <SectionTitle title="Accessibility" subtitle="Make Herald OS easier to read and calmer to watch." />
+      <SectionTitle title={t('settings.section.accessibility')} subtitle={t('settings.accessibility.subtitle')} />
 
       <SettingsGroup title="Vision">
         <SettingsRow icon={<IconTextSize />} label="Text size" description="Scales the whole interface." keywords="font zoom bigger smaller">

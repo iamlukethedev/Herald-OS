@@ -4,6 +4,7 @@ import type React from 'react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Dropdown, GlassCard } from '../../../components/ui/glass.tsx'
 import { cn } from '../../../lib/cn.ts'
+import { useT } from '../../../store/i18n.ts'
 
 /*
  * Building blocks shared by every Settings section: the row/group vocabulary from the mockup,
@@ -230,16 +231,17 @@ export function MenuDropdown<T extends string>({ label, items, value, onSelect, 
 
 /** −/+ numeric stepper matching the mockup. */
 export function Stepper({ value, onChange, min = 1, max = 99, disabled, label }: { value: number | null; onChange: (next: number) => void; min?: number; max?: number; disabled?: boolean; label: string }) {
+  const t = useT()
   const current = value ?? min
   const step = (delta: number) => onChange(Math.max(min, Math.min(max, current + delta)))
 
   return (
     <div className={cn('inline-flex h-8 items-stretch overflow-hidden rounded-lg border border-line bg-white/6', disabled && 'opacity-50')} role="group" aria-label={label}>
-      <button type="button" aria-label={`Decrease ${label}`} disabled={disabled || current <= min} onClick={() => step(-1)} className="flex w-8 items-center justify-center text-fg-2 hover:bg-white/10 hover:text-fg disabled:opacity-40">
+      <button type="button" aria-label={t('settings.decrease', { name: label })} disabled={disabled || current <= min} onClick={() => step(-1)} className="flex w-8 items-center justify-center text-fg-2 hover:bg-white/10 hover:text-fg disabled:opacity-40">
         <IconMinus size={14} />
       </button>
       <span className="flex min-w-9 items-center justify-center border-x border-line px-2 text-[12.5px] font-medium tabular-nums text-fg">{value ?? '—'}</span>
-      <button type="button" aria-label={`Increase ${label}`} disabled={disabled || current >= max} onClick={() => step(1)} className="flex w-8 items-center justify-center text-fg-2 hover:bg-white/10 hover:text-fg disabled:opacity-40">
+      <button type="button" aria-label={t('settings.increase', { name: label })} disabled={disabled || current >= max} onClick={() => step(1)} className="flex w-8 items-center justify-center text-fg-2 hover:bg-white/10 hover:text-fg disabled:opacity-40">
         <IconPlus size={14} />
       </button>
     </div>

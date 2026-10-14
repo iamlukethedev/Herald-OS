@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WmWorkspace } from '../../../shared/ipc.ts'
 import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { cn } from '../../lib/cn.ts'
+import { useT } from '../../store/i18n.ts'
 import { $wm, onShellCommand, openSurface, relayToMain, wmAction } from '../../store/shell.ts'
-import { $activeSpace, $spaces, setActiveSpace } from '../../store/spaces.ts'
+import { $activeSpace, $spaces, setActiveSpace, spaceLabel } from '../../store/spaces.ts'
 import { BackendBadge, MenuBarStatus } from '../MenuBar.tsx'
 import { OUR_MAIN_TITLE, windowLabel } from './shell-utils.ts'
 
@@ -78,6 +79,7 @@ function readUpdateAvailable(): UpdateAvailable | null {
 
 /** A circular-arrows glyph with an accent dot while an update is pending; clicking runs `herald-os update` through the control menu. */
 function UpdateIndicator() {
+  const t = useT()
   const [update, setUpdate] = useState<UpdateAvailable | null>(() => readUpdateAvailable())
 
   useEffect(() => {
@@ -99,7 +101,7 @@ function UpdateIndicator() {
       const pending = Number(command.args?.[0] ?? 0)
 
       if (pending > 0) {
-        localStorage.setItem(UPDATE_KEY, JSON.stringify({ summary: command.args?.[1] || `${pending} updates`, checkedAt: Date.now() }))
+        localStorage.setItem(UPDATE_KEY, JSON.stringify({ summary: command.args?.[1] || t('menuBar.updates', { count: pending }), checkedAt: Date.now() }))
       } else {
         localStorage.removeItem(UPDATE_KEY)
       }
@@ -121,8 +123,8 @@ function UpdateIndicator() {
   return (
     <button
       type="button"
-      aria-label={`Updates available: ${update.summary}`}
-      title={`Updates available: ${update.summary}`}
+      aria-label={t('menuBar.updatesAvailable', { summary: update.summary })}
+      title={t('menuBar.updatesAvailable', { summary: update.summary })}
       onClick={() => openSurface('command', { type: 'menu', args: ['update-herald-os'] })}
       className="relative flex size-6 items-center justify-center rounded-md hover:bg-white/10"
     >
@@ -139,6 +141,7 @@ const capitalize = (value: string) => (value ? value[0].toUpperCase() + value.sl
  * sidebar and session filters follow the compositor; unnamed ones show their index.
  */
 function SpacesSwitcher({ workspaces, available }: { workspaces: WmWorkspace[]; available: boolean }) {
+  const t = useT()
   const spaces = useStore($spaces)
   const activeSpace = useStore($activeSpace)
   const [menu, setMenu] = useState(false)
@@ -172,7 +175,11 @@ function SpacesSwitcher({ workspaces, available }: { workspaces: WmWorkspace[]; 
   }, [menu])
 
   const colorFor = (ws: WmWorkspace) => spaces.find(s => s.id === ws.name)?.color ?? 'var(--color-accent-strong)'
-  const labelFor = (ws: WmWorkspace) => spaces.find(s => s.id === ws.name)?.name ?? (ws.name ? capitalize(ws.name) : `Space ${ws.idx}`)
+  const labelFor = (ws: WmWorkspace) => {
+    const space = spaces.find(s => s.id === ws.name)
+
+    return space ? spaceLabel(space) : ws.name ? capitalize(ws.name) : t('space.numbered', { index: ws.idx })
+  }
 
   const focusWorkspace = (ws: WmWorkspace) => {
     void wmAction({ type: 'focus-workspace', ref: ws.name ?? ws.idx })
@@ -189,7 +196,7 @@ function SpacesSwitcher({ workspaces, available }: { workspaces: WmWorkspace[]; 
           className="flex h-6 items-center gap-1.5 rounded-full border border-line-strong bg-accent/35 px-3 text-[12px] font-medium text-fg shadow-[0_2px_10px_rgba(47,125,255,.35)] hover:bg-accent/50"
         >
           <span className="size-1.5 rounded-full" style={{ background: activeSpace?.color }} />
-          {activeSpace?.name ?? 'Personal'}
+          {activeSpace ? spaceLabel(activeSpace) : t('space.personal')}
           <IconChevronDown size={13} className="text-fg-2" />
         </button>
         {menu && (
@@ -205,7 +212,7 @@ function SpacesSwitcher({ workspaces, available }: { workspaces: WmWorkspace[]; 
                 className={cn('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] hover:bg-white/8', s.id === activeSpace?.id ? 'text-fg' : 'text-fg-2')}
               >
                 <span className="size-2 rounded-full" style={{ background: s.color }} />
-                <span className="flex-1 text-left">{s.name}</span>
+                <span className="flex-1 text-left">{spaceLabel(s)}</span>
                 {s.id === activeSpace?.id && <IconCheck size={14} className="text-accent-strong" />}
               </button>
             ))}
@@ -216,7 +223,7 @@ function SpacesSwitcher({ workspaces, available }: { workspaces: WmWorkspace[]; 
   }
 
   return (
-    <div className="flex h-6 items-center gap-0.5 rounded-full border border-line-strong bg-accent/25 p-0.5 shadow-[0_2px_10px_rgba(47,125,255,.3)]" role="tablist" aria-label="Spaces">
+    <div className="flex h-6 items-center gap-0.5 rounded-full border border-line-strong bg-accent/25 p-0.5 shadow-[0_2px_10px_rgba(47,125,255,.3)]" role="tablist" aria-label={t('menuBar.spaces')}>
       {ordered.map(ws => {
         const active = ws.focused
 

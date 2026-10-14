@@ -6,6 +6,7 @@ import { deviceNoun, voiceKeyLabel } from '../../../lib/platform-labels.ts'
 import { $prefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { type CommandPhrase, type CommandSummary, listCommands, runCommand } from '../../../store/os-commands.ts'
+import { useT } from '../../../store/i18n.ts'
 import { SectionTitle, SettingsFilterContext } from './shared.tsx'
 
 /*
@@ -89,6 +90,7 @@ export function exampleFor(command: CommandSummary): string | null {
 }
 
 export function VoiceCommandsSection() {
+  const t = useT()
   const query = useContext(SettingsFilterContext).trim().toLowerCase()
   const commands = useMemo(() => listCommands({ includeHidden: true }), [])
   const voiceKey = voiceKeyLabel(useStore($prefs).voice.hotkey)
@@ -109,8 +111,8 @@ export function VoiceCommandsSection() {
   return (
     <>
       <SectionTitle
-        title="Voice commands"
-        subtitle={`${commands.length} things Herald OS can do. ${voiceKey ? `Press ${voiceKey} (or say "hey hermes")` : 'Say "hey hermes"'} and say one of these; anything else goes to Hermes, who can use every command too.`}
+        title={t('settings.section.commands')}
+        subtitle={voiceKey ? t('settings.commands.subtitleKey', { count: commands.length, key: voiceKey }) : t('settings.commands.subtitle', { count: commands.length })}
       />
 
       <GlassCard className="settings-item flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 text-[12px] text-fg-2">

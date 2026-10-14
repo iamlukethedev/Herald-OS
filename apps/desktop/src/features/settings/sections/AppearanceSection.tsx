@@ -8,6 +8,7 @@ import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $themes, applyTheme, generateTheme, installThemes, loadThemes } from '../../../store/themes.ts'
 import { MenuBarSettings } from './MenuBarSettings.tsx'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, Filterable, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 const ACCENTS: { id: 'blue' | 'ice' | 'violet'; label: string; color: string }[] = [
@@ -17,6 +18,7 @@ const ACCENTS: { id: 'blue' | 'ice' | 'violet'; label: string; color: string }[]
 ]
 
 export function AppearanceSection() {
+  const t = useT()
   const prefs = useStore($prefs)
 
   const save = async (patch: Parameters<typeof updatePrefs>[0]) => {
@@ -44,7 +46,7 @@ export function AppearanceSection() {
 
   return (
     <>
-      <SectionTitle title="Appearance" subtitle="Theme, accent, wallpaper, fonts and the menu bar." />
+      <SectionTitle title={t('settings.section.appearance')} subtitle={t('settings.appearance.subtitle')} />
 
       <ThemeGallery />
       <ThemeTools />

@@ -1,5 +1,7 @@
 import type { ComponentType } from 'react'
+import type { TextKey } from '../../shared/i18n.ts'
 import type { InstalledApp } from '../../shared/ipc.ts'
+import { t } from '../store/i18n.ts'
 
 /** Pages inside the main Hermes window (sidebar navigation). */
 export type PageId = 'overview' | 'hermes' | 'missions' | 'memory' | 'files' | 'automations' | 'connections' | 'settings'
@@ -82,6 +84,32 @@ export const LAUNCHABLE_APPS: readonly HermesAppDef[] = [...PAGES, ...FLOATING_A
 export const HERMES_APPS: readonly HermesAppDef[] = [...PAGES, ...FLOATING_APPS]
 
 export const appById = (id: HermesAppId): HermesAppDef => HERMES_APPS.find(a => a.id === id) ?? PAGES[0]
+
+const APP_NAMES: Record<HermesAppId, TextKey> = {
+  overview: 'app.overview',
+  hermes: 'app.hermes',
+  missions: 'app.missions',
+  memory: 'app.memory',
+  files: 'app.files',
+  automations: 'app.automations',
+  connections: 'app.connections',
+  settings: 'app.settings',
+  terminal: 'app.terminal',
+  system: 'app.system',
+  'chat-popout': 'app.chatPopout',
+  web: 'app.web',
+  studio: 'app.studio',
+  'capture-editor': 'app.captureEditor',
+  camera: 'app.camera',
+  widget: 'app.widget',
+  canvas: 'app.canvas',
+  docs: 'app.docs',
+  sheets: 'app.sheets',
+  slides: 'app.slides'
+}
+
+/** An app's name in the language Herald shows; `name` stays English, which commands, voice and the Dock match on. */
+export const appName = (app: Pick<HermesAppDef, 'id'>): string => t(APP_NAMES[app.id])
 
 /** Native macOS apps the launcher and dock feature by name; matched against the installed list. */
 export interface NativeAppAlias {

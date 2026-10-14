@@ -1,12 +1,14 @@
+import { useStore } from '@nanostores/react'
 import { IconCalendarEvent, IconClock, IconMapPin, IconRepeat, IconVideo } from '@tabler/icons-react'
 import { useMemo } from 'react'
 import { GlassButton, GlassCard } from '../../components/ui/glass.tsx'
 import { cn } from '../../lib/cn.ts'
-import { formatDate } from '../../lib/format.ts'
+import { formatDate, formatSpan } from '../../lib/format.ts'
 import { type CronJob, rest } from '../../lib/rest.ts'
 import { deviceNoun } from '../../lib/platform-labels.ts'
 import { useBackendData, useLocalData } from '../../lib/use-async.ts'
-import { formatHourMinute, formatSpan, isToday, Quiet, Shimmer, toMs } from './shared.tsx'
+import { $language, useT } from '../../store/i18n.ts'
+import { formatHourMinute, isToday, Quiet, Shimmer, toMs } from './shared.tsx'
 
 /*
  * Today's timeline: macOS Calendar events (through the bridge, which owns the permission prompt)
@@ -48,6 +50,8 @@ function firstLine(text: string | undefined): string {
 }
 
 export function YourDay({ now }: { now: Date }) {
+  const t = useT()
+  const language = useStore($language)
   const calendar = useLocalData(() => window.heraldOS.calendar.today(), [])
   const jobs = useBackendData(() => rest.get<CronJob[]>('/api/cron/jobs'))
   const status = calendar.data?.status
@@ -73,7 +77,7 @@ export function YourDay({ now }: { now: Date }) {
         chips.push({ icon: <IconMapPin size={11} />, label: firstLine(event.location) })
       }
 
-      out.push({ id: `ev-${event.id}`, at: start, end, allDay: event.allDay, title: event.title || 'Untitled event', detail: firstLine(event.notes) || (app ? firstLine(event.location) : '') || event.calendar, kind: 'event', chips })
+      out.push({ id: `ev-${event.id}`, at: start, end, allDay: event.allDay, title: event.title || t('overview.day.untitledEvent'), detail: firstLine(event.notes) || (app ? firstLine(event.location) : '') || event.calendar, kind: 'event', chips })
     }
 
     for (const job of jobs.data ?? []) {
@@ -86,20 +90,20 @@ export function YourDay({ now }: { now: Date }) {
       out.push({
         id: `cron-${job.id}`,
         at,
-        title: job.name || firstLine(job.prompt) || 'Automation',
+        title: job.name || firstLine(job.prompt) || t('overview.day.automation'),
         detail: job.name ? firstLine(job.prompt) : undefined,
         kind: 'automation',
-        chips: [{ icon: <IconRepeat size={11} />, label: job.schedule_display ?? job.schedule?.display ?? 'Automation' }]
+        chips: [{ icon: <IconRepeat size={11} />, label: job.schedule_display ?? job.schedule?.display ?? t('overview.day.automation') }]
       })
     }
 
     return out.sort((a, b) => Number(Boolean(b.allDay)) - Number(Boolean(a.allDay)) || a.at - b.at)
-  }, [calendar.data, jobs.data, now])
+  }, [calendar.data, jobs.data, now, language])
 
   return (
-    <section className="flex flex-col gap-3" aria-label="Your day">
+    <section className="flex flex-col gap-3" aria-label={t('overview.yourDay')}>
       <div>
-        <h2 className="text-[16px] font-semibold text-fg">Your day</h2>
+        <h2 className="text-[16px] font-semibold text-fg">{t('overview.yourDay')}</h2>
         <div className="text-[12.5px] text-fg-3">{formatDate(now)}</div>
       </div>
 
@@ -114,27 +118,27 @@ export function YourDay({ now }: { now: Date }) {
             <span className="icon-tile flex size-8 shrink-0 items-center justify-center rounded-lg" aria-hidden="true">
               <IconCalendarEvent size={16} />
             </span>
-            <div className="text-[13px] font-medium text-fg">Calendar access needed</div>
+            <div className="text-[13px] font-medium text-fg">{t('overview.day.calendarNeeded')}</div>
           </div>
-          <div className="text-[12px] text-fg-3">{status === 'not-determined' ? 'Let Hermes read today\u2019s events to plan around them.' : 'Enable Calendars for Herald OS in System Settings > Privacy & Security, then try again.'}</div>
+          <div className="text-[12px] text-fg-3">{status === 'not-determined' ? t('overview.day.calendarAsk') : t('overview.day.calendarDenied')}</div>
           <GlassButton size="sm" variant="primary" className="self-start" onClick={() => calendar.reload()}>
-            Grant access
+            {t('overview.day.grantAccess')}
           </GlassButton>
         </GlassCard>
       ) : status === 'unavailable' && entries.length === 0 ? (
-        <Quiet>{calendar.data?.error || `Calendar is unavailable on this ${deviceNoun()}.`}</Quiet>
+        <Quiet>{calendar.data?.error || t('overview.day.calendarUnavailable', { device: deviceNoun() })}</Quiet>
       ) : entries.length === 0 ? (
-        <Quiet>Nothing on the calendar today.</Quiet>
+        <Quiet>{t('overview.day.nothing')}</Quiet>
       ) : (
-        <ol className="stagger relative flex flex-col" aria-label="Today's timeline">
+        <ol className="stagger relative flex flex-col" aria-label={t('overview.day.timeline')}>
           <span aria-hidden="true" className="absolute top-2 bottom-2 left-[3px] w-px bg-line" />
           {entries.map(entry => (
             <li key={entry.id} className="relative flex gap-3 py-2 pl-4">
               <span aria-hidden="true" className={cn('absolute top-[13px] left-0 size-[7px] rounded-full ring-2 ring-bg', entry.kind === 'automation' ? 'bg-progress' : 'bg-accent-strong')} />
-              <div className="w-[38px] shrink-0 pt-px text-[12px] tabular-nums text-fg-2">{entry.allDay ? 'All day' : formatHourMinute(entry.at)}</div>
+              <div className="w-[38px] shrink-0 pt-px text-[12px] tabular-nums text-fg-2">{entry.allDay ? t('overview.day.allDay') : formatHourMinute(entry.at)}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
-                  {entry.kind === 'automation' && <IconRepeat size={12} className="shrink-0 text-progress" aria-label="Automation" />}
+                  {entry.kind === 'automation' && <IconRepeat size={12} className="shrink-0 text-progress" aria-label={t('overview.day.automation')} />}
                   <span className="truncate" title={entry.title}>
                     {entry.title}
                   </span>

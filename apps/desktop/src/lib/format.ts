@@ -1,3 +1,5 @@
+import { $locale, t } from '../store/i18n.ts'
+
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
 
 export function formatBytes(bytes: number, digits = 1): string {
@@ -58,34 +60,49 @@ export function formatRelative(epochMsOrSeconds: number | undefined | null): str
   const minutes = Math.round(delta / 60_000)
 
   if (minutes < 1) {
-    return 'just now'
+    return t('time.justNow')
   }
 
   if (minutes < 60) {
-    return `${minutes}m ago`
+    return t('time.minutesAgo', { count: minutes })
   }
 
   const hours = Math.round(minutes / 60)
 
   if (hours < 24) {
-    return `${hours}h ago`
+    return t('time.hoursAgo', { count: hours })
   }
 
   const days = Math.round(hours / 24)
 
   if (days < 7) {
-    return `${days}d ago`
+    return t('time.daysAgo', { count: days })
   }
 
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return new Date(ms).toLocaleDateString($locale.get(), { month: 'short', day: 'numeric' })
 }
 
 export function formatClock(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString($locale.get(), { hour: '2-digit', minute: '2-digit' })
 }
 
 export function formatDate(date: Date): string {
-  return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+  return date.toLocaleDateString($locale.get(), { weekday: 'long', month: 'long', day: 'numeric' })
+}
+
+export function formatSpan(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return ''
+  }
+
+  if (minutes < 60) {
+    return t('time.minutes', { minutes: Math.round(minutes) })
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const rest = Math.round(minutes % 60)
+
+  return rest === 0 ? t('time.hours', { hours }) : t('time.hoursMinutes', { hours, minutes: rest })
 }
 
 export function truncate(text: string, max: number): string {
@@ -96,16 +113,16 @@ export function greetingFor(date: Date): string {
   const hour = date.getHours()
 
   if (hour < 5) {
-    return 'Good night'
+    return t('overview.greeting.night')
   }
 
   if (hour < 12) {
-    return 'Good morning'
+    return t('overview.greeting.morning')
   }
 
   if (hour < 18) {
-    return 'Good afternoon'
+    return t('overview.greeting.afternoon')
   }
 
-  return 'Good evening'
+  return t('overview.greeting.evening')
 }

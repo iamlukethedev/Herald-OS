@@ -8,6 +8,7 @@ import { startConversation } from '../../store/bots.ts'
 import { $activeChat, createChat, runSlash, sendPrompt } from '../../store/chat.ts'
 import { $threads } from '../../store/continuity.ts'
 import { $connection } from '../../store/gateway.ts'
+import { useT } from '../../store/i18n.ts'
 import { $activeMissions, $reviewMissions } from '../../store/missions.ts'
 import { useSystemInfo } from '../../store/system.ts'
 import { showPage } from '../../store/windows.ts'
@@ -21,12 +22,9 @@ import { TodayPanel } from './TodayPanel.tsx'
 
 const MISSIONS_SHOWN = 3
 
-const PLAN_MY_DAY_PROMPT = "Plan my day. Look at today's calendar events and my open tasks and missions, then propose a realistic schedule with priorities, time blocks and anything I should prepare for. Keep it short and actionable."
-/** Left for the person to finish; the herald-os-tailor skill tells Hermes how to make it. */
-const MAKE_THEME_DRAFT = 'Make me a Herald OS theme that feels like '
-
 /** Home of the main window: greeting, prompt, what is in motion and what needs the user. */
 export function OverviewPage() {
+  const t = useT()
   const connection = useStore($connection)
   const active = useStore($activeMissions)
   const review = useStore($reviewMissions)
@@ -45,7 +43,7 @@ export function OverviewPage() {
 
   const online = connection === 'open'
   const firstName = titleCase((info?.fullName || info?.userName || '').trim().split(/[\s._-]+/)[0] ?? '')
-  const greeting = `${greetingFor(now)}${firstName ? `, ${firstName}` : ''}.`
+  const greeting = firstName ? t('overview.greeting.named', { greeting: greetingFor(now), name: firstName }) : t('overview.greeting.plain', { greeting: greetingFor(now) })
   const missions = [...active, ...review].slice(0, MISSIONS_SHOWN)
 
   const submit = async (text: string, attachments: string[] = []) => {
@@ -82,26 +80,26 @@ export function OverviewPage() {
           <div className="flex flex-col gap-5">
             <div className="flex items-center gap-2 text-[10.5px] font-medium tracking-[0.14em] text-fg-3 uppercase">
               <StatusDot tone={online ? 'ok' : 'warn'} pulse={!online} />
-              {online ? 'Hermes is ready' : 'Connecting to Hermes'}
+              {online ? t('overview.ready') : t('overview.connecting')}
             </div>
             <div>
               <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-fg">{greeting}</h1>
-              <div className="mt-1 text-[16px] text-fg-2">{threads.length > 0 ? 'Welcome back. Here is where you left off.' : 'Your day, already in motion.'}</div>
+              <div className="mt-1 text-[16px] text-fg-2">{threads.length > 0 ? t('overview.welcomeBack') : t('overview.tagline')}</div>
             </div>
-            <OverviewComposer disabled={!online} placeholder={online ? 'What would you like to make happen?' : 'Starting Hermes…'} onSubmit={ask} draft={draft} />
+            <OverviewComposer disabled={!online} placeholder={online ? t('overview.composerPlaceholder') : t('overview.composerStarting')} onSubmit={ask} draft={draft} />
             <div className="flex flex-wrap items-center gap-2">
               <BotChip disabled={!online} />
-              <QuickAction icon={<IconSunHigh />} label="Plan my day" disabled={!online} onClick={() => void submit(PLAN_MY_DAY_PROMPT)} />
-              <QuickAction icon={<IconTargetArrow />} label="Start a mission" disabled={!online} onClick={() => void startMission()} />
-              <QuickAction icon={<IconPalette />} label="Make a theme" disabled={!online} onClick={() => setDraft({ text: MAKE_THEME_DRAFT, id: Date.now() })} />
+              <QuickAction icon={<IconSunHigh />} label={t('overview.planMyDay')} disabled={!online} onClick={() => void submit(t('overview.planMyDayPrompt'))} />
+              <QuickAction icon={<IconTargetArrow />} label={t('overview.startMission')} disabled={!online} onClick={() => void startMission()} />
+              <QuickAction icon={<IconPalette />} label={t('overview.makeTheme')} disabled={!online} onClick={() => setDraft({ text: t('overview.makeThemeDraft'), id: Date.now() })} />
             </div>
           </div>
 
           <PickUp />
 
-          <Section title="Active missions" action={<LinkAction onClick={() => showPage('missions')}>See all</LinkAction>}>
+          <Section title={t('overview.activeMissions')} action={<LinkAction onClick={() => showPage('missions')}>{t('overview.seeAll')}</LinkAction>}>
             {missions.length === 0 ? (
-              <EmptyGlass title="No missions yet" description="Ask Hermes for something and it becomes a mission." />
+              <EmptyGlass title={t('overview.noMissions')} description={t('overview.noMissionsHint')} />
             ) : (
               <div className="stagger flex flex-col gap-3">
                 {missions.map(mission => (

@@ -8,12 +8,13 @@ import { cn } from '../lib/cn.ts'
 import { planPercent } from '../lib/usage.ts'
 import { $backend, $prefs } from '../store/backend.ts'
 import { $connection } from '../store/gateway.ts'
+import { $locale, useT } from '../store/i18n.ts'
 import { $notifications, $notificationsOpen } from '../store/notifications.ts'
 import { runCommand } from '../store/os-commands.ts'
 import { $usage, loadUsage } from '../store/usage.ts'
-import { $activeSpace, $spaces, setActiveSpace } from '../store/spaces.ts'
+import { $activeSpace, $spaces, setActiveSpace, spaceLabel } from '../store/spaces.ts'
 import { $statusPanel, openStatusPanel } from '../store/status-panel.ts'
-import { $switches, setSwitch, SWITCH_LABELS } from '../store/switches.ts'
+import { $switches, setSwitch, switchLabel } from '../store/switches.ts'
 import { $recording } from '../store/capture.ts'
 import { $dictation, toggleDictation } from '../store/dictation.ts'
 import { MenuBarWidgets } from '../features/plugins/PluginSlots.tsx'
@@ -45,23 +46,27 @@ export const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { weekday: '
  * Shared with the panels-mode menu bar.
  */
 export function MenuBarStatus({ onSearch, onBell, bellActive }: { onSearch: () => void; onBell: () => void; bellActive?: boolean }) {
+  const t = useT()
   const prefs = useStore($prefs)
   const notifications = useStore($notifications)
   const stats = useStore($systemStats)
   const network = useNetworkStatus()
   const openPanel = useStore($statusPanel)
+  const locale = useStore($locale)
   const layout = normalizeMenuBar(prefs.menuBar)
   const now = useClock(layout.clock.seconds ? 1000 : 10_000)
   useSystemStats()
 
   const unread = notifications.filter(n => !n.read).length
   const battery = stats?.battery
-  const clock = clockText(now, layout.clock)
+  const clock = clockText(now, layout.clock, locale)
   const iconButton = (panel: StatusPanelId) => cn('flex h-6 items-center justify-center gap-1.5 rounded-md px-1 hover:bg-white/10', openPanel === panel && 'bg-white/10')
+  const ssid = network?.wifi?.ssid
+  const wifiTitle = network?.wifi?.connected ? (ssid ? t('menuBar.wifiNetwork', { network: ssid }) : t('menuBar.wifi')) : network?.online ? t('menuBar.wired') : t('menuBar.offline')
 
   const items: Record<MenuBarItem, ReactNode> = {
     search: (
-      <button type="button" aria-label="Search" onClick={onSearch} className="flex size-6 items-center justify-center rounded-md hover:bg-white/10">
+      <button type="button" aria-label={t('menuBar.search')} onClick={onSearch} className="flex size-6 items-center justify-center rounded-md hover:bg-white/10">
         <IconSearch size={15} />
       </button>
     ),
@@ -71,34 +76,34 @@ export function MenuBarStatus({ onSearch, onBell, bellActive }: { onSearch: () =
     indicators: <SwitchIndicators />,
     usage: <UsageMeter />,
     wifi: (
-      <button type="button" aria-label="Wi-Fi" title={network?.wifi?.connected ? `Wi-Fi ${network.wifi.ssid ?? ''}`.trim() : network?.online ? 'Wired' : 'Offline'} onClick={() => openStatusPanel('wifi')} className={iconButton('wifi')}>
+      <button type="button" aria-label={t('menuBar.wifi')} title={wifiTitle} onClick={() => openStatusPanel('wifi')} className={iconButton('wifi')}>
         {network?.online === false ? <IconWifiOff size={15} className="text-fg-3" /> : <IconWifi size={15} />}
       </button>
     ),
     bluetooth: (
-      <button type="button" aria-label="Bluetooth" onClick={() => openStatusPanel('bluetooth')} className={iconButton('bluetooth')}>
+      <button type="button" aria-label={t('menuBar.bluetooth')} onClick={() => openStatusPanel('bluetooth')} className={iconButton('bluetooth')}>
         <IconBluetooth size={15} />
       </button>
     ),
     sound: (
-      <button type="button" aria-label="Sound" onClick={() => openStatusPanel('audio')} className={iconButton('audio')}>
+      <button type="button" aria-label={t('menuBar.sound')} onClick={() => openStatusPanel('audio')} className={iconButton('audio')}>
         <IconVolume size={15} />
       </button>
     ),
     battery: battery?.present ? (
-      <button type="button" aria-label={`Battery ${battery.percent ?? ''}%`} onClick={() => openStatusPanel('power')} className={cn(iconButton('power'), 'tabular-nums')}>
+      <button type="button" aria-label={t('menuBar.battery', { percent: battery.percent ?? '' })} onClick={() => openStatusPanel('power')} className={cn(iconButton('power'), 'tabular-nums')}>
         {battery.charging ? <IconBatteryCharging size={17} /> : (battery.percent ?? 0) > 80 ? <IconBattery4 size={17} /> : (battery.percent ?? 0) > 55 ? <IconBattery3 size={17} /> : (battery.percent ?? 0) > 30 ? <IconBattery2 size={17} /> : (battery.percent ?? 0) > 10 ? <IconBattery1 size={17} /> : <IconBattery size={17} />}
         <span className="text-[12px]">{battery.percent}%</span>
       </button>
     ) : null,
     notifications: (
-      <button type="button" aria-label="Notifications" onClick={onBell} className={cn('relative flex size-6 items-center justify-center rounded-md hover:bg-white/10', bellActive && 'bg-white/10')}>
+      <button type="button" aria-label={t('menuBar.notifications')} onClick={onBell} className={cn('relative flex size-6 items-center justify-center rounded-md hover:bg-white/10', bellActive && 'bg-white/10')}>
         <IconBell size={15} />
         {unread > 0 && <span className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-accent-strong" />}
       </button>
     ),
     clock: (
-      <button type="button" aria-label="Calendar" onClick={() => openStatusPanel('clock')} className={cn(iconButton('clock'), 'gap-2 tabular-nums')}>
+      <button type="button" aria-label={t('menuBar.calendar')} onClick={() => openStatusPanel('clock')} className={cn(iconButton('clock'), 'gap-2 tabular-nums')}>
         {clock.date && <span>{clock.date}</span>}
         <span className="font-medium">{clock.time}</span>
       </button>
@@ -116,6 +121,7 @@ export function MenuBarStatus({ onSearch, onBell, bellActive }: { onSearch: () =
 
 /** Small icons while a switch is on (do not disturb, staying awake, night light); clicking turns it off. */
 function SwitchIndicators() {
+  const t = useT()
   const switches = useStore($switches)
   const recording = useStore($recording)
   const dictation = useStore($dictation)
@@ -128,19 +134,19 @@ function SwitchIndicators() {
   return (
     <>
       {dictation.phase !== 'idle' && (
-        <button type="button" aria-label="Stop dictating" title="Dictating into the focused app: click (or the dictation key) to stop" onClick={() => (isMainSurface ? toggleDictation() : relayToMain({ type: 'dictate' }))} className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-accent-strong hover:bg-white/10">
+        <button type="button" aria-label={t('menuBar.stopDictating')} title={t('menuBar.dictatingHint')} onClick={() => (isMainSurface ? toggleDictation() : relayToMain({ type: 'dictate' }))} className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-accent-strong hover:bg-white/10">
           <span className={cn('size-2 rounded-full bg-accent-strong', dictation.phase === 'listening' && 'animate-pulse-soft')} />
-          {dictation.phase === 'listening' ? 'Dictating' : 'Typing…'}
+          {dictation.phase === 'listening' ? t('menuBar.dictating') : t('menuBar.typing')}
         </button>
       )}
       {recording.recording && (
-        <button type="button" aria-label="Stop recording" title="Recording the screen: click to stop" onClick={() => void window.heraldOS.capture.record('stop').catch(() => undefined)} className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-danger hover:bg-white/10">
+        <button type="button" aria-label={t('menuBar.stopRecording')} title={t('menuBar.recordingHint')} onClick={() => void window.heraldOS.capture.record('stop').catch(() => undefined)} className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-danger hover:bg-white/10">
           <span className="size-2 animate-pulse-soft rounded-full bg-danger" />
-          Recording
+          {t('menuBar.recording')}
         </button>
       )}
       {items.map(item => (
-        <button key={item.name} type="button" aria-label={`Turn off ${SWITCH_LABELS[item.name].toLowerCase()}`} title={`${SWITCH_LABELS[item.name]} is on`} onClick={() => void setSwitch(item.name, false).catch(() => undefined)} className="flex size-6 items-center justify-center rounded-md text-accent-strong hover:bg-white/10">
+        <button key={item.name} type="button" aria-label={t('menuBar.turnOff', { name: switchLabel(item.name) })} title={t('menuBar.switchOn', { name: switchLabel(item.name) })} onClick={() => void setSwitch(item.name, false).catch(() => undefined)} className="flex size-6 items-center justify-center rounded-md text-accent-strong hover:bg-white/10">
           {item.icon}
         </button>
       ))}
@@ -150,6 +156,7 @@ function SwitchIndicators() {
 
 /** The model plan's usage, when the person turned it on and the plan reports a limit. */
 function UsageMeter() {
+  const t = useT()
   const prefs = useStore($prefs)
   const usage = useStore($usage)
   const connection = useStore($connection)
@@ -174,7 +181,7 @@ function UsageMeter() {
   }
 
   return (
-    <button type="button" aria-label={`Plan usage ${Math.round(pct)}%`} title={`${usage?.plan?.plan_name ?? 'Plan'}: ${Math.round(pct)}% used`} onClick={() => void runCommand('usage.show', {}, { source: 'ui' })} className={cn('flex items-center gap-1 rounded-md px-1 text-[12px] tabular-nums hover:bg-white/10', pct >= 90 && 'text-warn')}>
+    <button type="button" aria-label={t('menuBar.planUsage', { percent: Math.round(pct) })} title={t('menuBar.planUsed', { plan: usage?.plan?.plan_name ?? t('menuBar.plan'), percent: Math.round(pct) })} onClick={() => void runCommand('usage.show', {}, { source: 'ui' })} className={cn('flex items-center gap-1 rounded-md px-1 text-[12px] tabular-nums hover:bg-white/10', pct >= 90 && 'text-warn')}>
       <IconGauge size={15} />
       {Math.round(pct)}%
     </button>
@@ -183,6 +190,7 @@ function UsageMeter() {
 
 /** Backend/gateway health badge shown next to the brand while Hermes is not reachable. */
 export function BackendBadge() {
+  const t = useT()
   const backend = useStore($backend)
   const connection = useStore($connection)
   const online = backend.phase === 'ready' && connection === 'open'
@@ -191,10 +199,11 @@ export function BackendBadge() {
     return null
   }
 
-  return <span className="ml-2 rounded-full bg-warn/20 px-2 py-0.5 text-[11px] text-warn">{backend.phase === 'failed' ? 'Hermes offline' : backend.phase === 'waiting' ? 'Waiting for Hermes' : 'Starting Hermes'}</span>
+  return <span className="ml-2 rounded-full bg-warn/20 px-2 py-0.5 text-[11px] text-warn">{backend.phase === 'failed' ? t('menuBar.hermesOffline') : backend.phase === 'waiting' ? t('menuBar.waitingForHermes') : t('menuBar.startingHermes')}</span>
 }
 
 export function MenuBar() {
+  useT()
   const title = useStore($focusedTitle)
   const space = useStore($activeSpace)
   const spaces = useStore($spaces)
@@ -238,7 +247,7 @@ export function MenuBar() {
           className="flex h-6 items-center gap-1.5 rounded-full border border-line-strong bg-accent/35 px-3 text-[12px] font-medium text-fg shadow-[0_2px_10px_rgba(47,125,255,.35)] hover:bg-accent/50"
         >
           <span className="size-1.5 rounded-full" style={{ background: space.color }} />
-          {space.name}
+          {spaceLabel(space)}
           <IconChevronDown size={13} className="text-fg-2" />
         </button>
         {spaceMenu && (
@@ -254,7 +263,7 @@ export function MenuBar() {
                 className={cn('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] hover:bg-white/8', s.id === space.id ? 'text-fg' : 'text-fg-2')}
               >
                 <span className="size-2 rounded-full" style={{ background: s.color }} />
-                <span className="flex-1 text-left">{s.name}</span>
+                <span className="flex-1 text-left">{spaceLabel(s)}</span>
                 {s.id === space.id && <IconCheck size={14} className="text-accent-strong" />}
               </button>
             ))}

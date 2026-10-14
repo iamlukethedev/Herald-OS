@@ -1,5 +1,7 @@
+import { LANGUAGES, type LanguageSetting } from '../../shared/i18n.ts'
 import type { HeraldOSPrefs, VoiceEngine } from '../../shared/ipc.ts'
 import { $prefs, updatePrefs } from '../store/backend.ts'
+import { $language, setLanguage } from '../store/i18n.ts'
 import { $nativeApps, loadNativeApps } from '../store/native-apps.ts'
 import { delegate, fail, ok, type OsCommand } from '../store/os-commands.ts'
 import { looksLikeFileNotUrl } from './files.ts'
@@ -19,6 +21,7 @@ const SECTION_ALIASES: Record<string, string> = {
   model: 'agents',
   provider: 'agents',
   account: 'agents',
+  language: 'general',
   look: 'appearance',
   theme: 'appearance',
   wallpaper: 'appearance',
@@ -153,6 +156,30 @@ export const systemCommands: readonly OsCommand[] = [
       focusSettings({ section: id ?? undefined, query: query ? String(query) : undefined })
 
       return ok(id ? `Opened ${id} settings` : 'Opened Settings', { page: 'settings', highlight: id ? { kind: 'setting', id } : undefined })
+    }
+  },
+  {
+    id: 'language.set',
+    title: 'Set the language',
+    description: 'Show Herald OS in English or in Simplified Chinese (简体中文), or follow the system languages again (the default).',
+    tier: 'mutate',
+    args: [{ name: 'language', type: 'string', description: 'system, en (English) or zh-CN (Simplified Chinese)', required: true, enum: ['system', 'en', 'zh-CN'] }],
+    phrases: [
+      { phrase: 'switch to english', args: { language: 'en' } },
+      { phrase: 'use english', args: { language: 'en' } },
+      { phrase: 'set the language to english', args: { language: 'en' } },
+      { phrase: 'switch to chinese', args: { language: 'zh-CN' } },
+      { phrase: 'use chinese', args: { language: 'zh-CN' } },
+      { phrase: 'set the language to chinese', args: { language: 'zh-CN' } },
+      { phrase: 'use the system language', args: { language: 'system' } },
+      { phrase: 'follow the system language', args: { language: 'system' } }
+    ],
+    run: async ({ language }) => {
+      const setting = language as LanguageSetting
+      await setLanguage(setting)
+      const shown = LANGUAGES.find(entry => entry.id === $language.get())?.name
+
+      return ok(setting === 'system' ? `Herald OS follows the system language: ${shown}` : `Herald OS is in ${shown}`, { highlight: { kind: 'setting', id: 'general' } })
     }
   },
   {

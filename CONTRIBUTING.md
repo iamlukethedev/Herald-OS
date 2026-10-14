@@ -58,6 +58,9 @@ secrets. For UI changes, run the shell and add a screenshot to the pull request.
   [DESIGN.md](apps/desktop/DESIGN.md) has the layout model and the rules for pages.
 - Every user-visible action registers an `OsCommand`, so the command bar, voice and Hermes can all
   reach it.
+- Text people read comes from the translation catalogs in `apps/desktop/shared/locales/`, English
+  first. [docs/TRANSLATING.md](docs/TRANSLATING.md) says how, and how to translate Herald OS into
+  your language.
 - The renderer never touches Node or spawns processes. Native work goes through a `HostPlatform`
   method, an IPC handler and the preload bridge.
 - Herald OS does not patch Hermes Agent. When the shell needs something upstream lacks, use its

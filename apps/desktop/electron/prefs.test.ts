@@ -63,6 +63,30 @@ describe('the name on comments in the prefs', () => {
   })
 })
 
+describe('the language in the prefs', () => {
+  it('reads a language Herald has, or following the system, and leaves out anything else', () => {
+    expect(readPrefs().language).toBeUndefined()
+
+    store({ language: 'zh-CN' })
+    expect(readPrefs().language).toBe('zh-CN')
+
+    store({ language: 'system' })
+    expect(readPrefs().language).toBe('system')
+
+    store({ language: 'fr' })
+    expect(readPrefs().language).toBeUndefined()
+  })
+
+  it('writes it the same way and keeps it through other changes', () => {
+    expect(writePrefs({ language: 'zh-CN' }).language).toBe('zh-CN')
+    writePrefs({ theme: 'graphite' })
+    expect(onDisk()).toMatchObject({ language: 'zh-CN', theme: 'graphite' })
+
+    expect(writePrefs({ language: 'zh' as never }).language).toBeUndefined()
+    expect(onDisk()).not.toHaveProperty('language')
+  })
+})
+
 describe('the pet in the prefs', () => {
   it('reads the defaults when there is nothing stored, or no prefs file at all', () => {
     expect(readPrefs().pet).toEqual(PET_PREFS_DEFAULTS)

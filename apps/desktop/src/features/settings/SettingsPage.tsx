@@ -1,10 +1,12 @@
 import { useStore } from '@nanostores/react'
 import { IconAccessible, IconApps, IconBell, IconCircleCheckFilled, IconPuzzle, IconDatabase, IconGauge, IconInfoCircle, IconListDetails, IconMicrophone, IconPalette, IconPaw, IconPlayerPause, IconRobot, IconSettings, IconShield, IconWifi } from '@tabler/icons-react'
 import { type ComponentType, useEffect, useState } from 'react'
+import type { TextKey } from '../../../shared/i18n.ts'
 import { GlassButton, PageHeader, SearchField } from '../../components/ui/glass.tsx'
 import { cn } from '../../lib/cn.ts'
 import { pauseAllAgents } from '../../store/agents-control.ts'
 import { $chats } from '../../store/chat.ts'
+import { useT } from '../../store/i18n.ts'
 import { AboutSection } from './sections/AboutSection.tsx'
 import { AccessibilitySection, applyAccessibility } from './sections/AccessibilitySection.tsx'
 import { AgentsSection } from './sections/AgentsSection.tsx'
@@ -28,27 +30,28 @@ import { VoiceSection } from './sections/VoiceSection.tsx'
  * collapse through `:has()`, so the result reads as "matching rows grouped by section".
  */
 
-const SECTIONS: { id: SectionId; label: string; icon: ComponentType<{ size?: number; stroke?: number }>; view: ComponentType }[] = [
-  { id: 'general', label: 'General', icon: IconSettings, view: GeneralSection },
-  { id: 'appearance', label: 'Appearance', icon: IconPalette, view: AppearanceSection },
-  { id: 'pet', label: 'Pet', icon: IconPaw, view: PetSection },
-  { id: 'software', label: 'Software', icon: IconApps, view: SoftwareSection },
-  { id: 'plugins', label: 'Plugins', icon: IconPuzzle, view: PluginsSection },
-  { id: 'agents', label: 'Hermes & agents', icon: IconRobot, view: AgentsSection },
-  { id: 'usage', label: 'Usage', icon: IconGauge, view: UsageSection },
-  { id: 'voice', label: 'Voice', icon: IconMicrophone, view: VoiceSection },
-  { id: 'commands', label: 'Voice commands', icon: IconListDetails, view: VoiceCommandsSection },
-  { id: 'privacy', label: 'Privacy', icon: IconShield, view: PrivacySection },
-  { id: 'notifications', label: 'Notifications', icon: IconBell, view: NotificationsSection },
-  { id: 'network', label: 'Network', icon: IconWifi, view: NetworkSection },
-  { id: 'storage', label: 'Storage', icon: IconDatabase, view: StorageSection },
-  { id: 'accessibility', label: 'Accessibility', icon: IconAccessible, view: AccessibilitySection },
-  { id: 'about', label: 'About', icon: IconInfoCircle, view: AboutSection }
+const SECTIONS: { id: SectionId; label: TextKey; icon: ComponentType<{ size?: number; stroke?: number }>; view: ComponentType }[] = [
+  { id: 'general', label: 'settings.section.general', icon: IconSettings, view: GeneralSection },
+  { id: 'appearance', label: 'settings.section.appearance', icon: IconPalette, view: AppearanceSection },
+  { id: 'pet', label: 'settings.section.pet', icon: IconPaw, view: PetSection },
+  { id: 'software', label: 'settings.section.software', icon: IconApps, view: SoftwareSection },
+  { id: 'plugins', label: 'settings.section.plugins', icon: IconPuzzle, view: PluginsSection },
+  { id: 'agents', label: 'settings.section.agents', icon: IconRobot, view: AgentsSection },
+  { id: 'usage', label: 'settings.section.usage', icon: IconGauge, view: UsageSection },
+  { id: 'voice', label: 'settings.section.voice', icon: IconMicrophone, view: VoiceSection },
+  { id: 'commands', label: 'settings.section.commands', icon: IconListDetails, view: VoiceCommandsSection },
+  { id: 'privacy', label: 'settings.section.privacy', icon: IconShield, view: PrivacySection },
+  { id: 'notifications', label: 'settings.section.notifications', icon: IconBell, view: NotificationsSection },
+  { id: 'network', label: 'settings.section.network', icon: IconWifi, view: NetworkSection },
+  { id: 'storage', label: 'settings.section.storage', icon: IconDatabase, view: StorageSection },
+  { id: 'accessibility', label: 'settings.section.accessibility', icon: IconAccessible, view: AccessibilitySection },
+  { id: 'about', label: 'settings.section.about', icon: IconInfoCircle, view: AboutSection }
 ]
 
 const SAVED_VISIBLE_MS = 2500
 
 export function SettingsPage() {
+  const t = useT()
   const [section, setSection] = useState<SectionId>('agents')
   const [query, setQuery] = useState('')
   const searching = query.trim().length > 0
@@ -75,10 +78,10 @@ export function SettingsPage() {
 
   return (
     <div className="page-enter flex h-full flex-col">
-      <PageHeader icon="settings" title="Settings" actions={<SearchField value={query} onChange={setQuery} placeholder="Search settings" className="w-[300px]" />} />
+      <PageHeader icon="settings" title={t('app.settings')} actions={<SearchField value={query} onChange={setQuery} placeholder={t('settings.search')} className="w-[300px]" />} />
 
       <div className="flex min-h-0 flex-1 gap-4 px-6 pb-4">
-        <nav className="flex w-[170px] shrink-0 flex-col gap-0.5" aria-label="Settings sections">
+        <nav className="flex w-[170px] shrink-0 flex-col gap-0.5" aria-label={t('settings.sections')}>
           {SECTIONS.map(item => {
             const active = !searching && item.id === section
             const Icon = item.icon
@@ -95,7 +98,7 @@ export function SettingsPage() {
                 className={cn('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-150', active ? 'bg-accent text-accent-fg shadow-[0_4px_16px_rgba(47,125,255,.35)]' : 'text-fg-2 hover:bg-white/6 hover:text-fg')}
               >
                 <Icon size={17} stroke={1.7} />
-                <span className="truncate">{item.label}</span>
+                <span className="truncate">{t(item.label)}</span>
               </button>
             )
           })}
@@ -116,8 +119,8 @@ export function SettingsPage() {
                     )
                   })}
                   <div data-empty="" className="hidden flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-line px-6 py-10 text-center">
-                    <div className="text-[13px] text-fg-2">No settings match “{query.trim()}”</div>
-                    <div className="text-[12px] text-fg-3">Try a different word, or browse the sections on the left.</div>
+                    <div className="text-[13px] text-fg-2">{t('settings.noMatch', { query: query.trim() })}</div>
+                    <div className="text-[12px] text-fg-3">{t('settings.noMatchHint')}</div>
                   </div>
                 </div>
               ) : (
@@ -142,6 +145,7 @@ function ActiveSection({ id }: { id: SectionId }) {
 }
 
 function Footer() {
+  const t = useT()
   const savedAt = useStore($settingsSavedAt)
   const [showSaved, setShowSaved] = useState(false)
 
@@ -160,7 +164,7 @@ function Footer() {
     <div className="flex h-11 shrink-0 items-center justify-between gap-3 pt-2">
       <div className={cn('flex items-center gap-1.5 text-[12px] text-fg-2 transition-opacity duration-300', showSaved ? 'opacity-100' : 'opacity-0')} aria-live="polite">
         <IconCircleCheckFilled size={16} className="text-ok" />
-        Changes saved
+        {t('settings.saved')}
       </div>
       <PauseAllAgents />
     </div>
@@ -168,6 +172,7 @@ function Footer() {
 }
 
 function PauseAllAgents() {
+  const t = useT()
   const chats = useStore($chats)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -187,21 +192,21 @@ function PauseAllAgents() {
   if (confirming) {
     return (
       <div className="animate-pop flex items-center gap-2 text-[12px] text-fg-2">
-        <span>Interrupt {streaming.length} running {streaming.length === 1 ? 'session' : 'sessions'} and pause every scheduled task?</span>
+        <span>{t('settings.pauseConfirm', { count: streaming.length })}</span>
         <GlassButton size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-          Cancel
+          {t('settings.cancel')}
         </GlassButton>
-        <GlassButton size="sm" variant="danger" onClick={() => void pauseAll()} aria-label="Confirm pause all agents">
-          Pause everything
+        <GlassButton size="sm" variant="danger" onClick={() => void pauseAll()} aria-label={t('settings.pauseConfirmLabel')}>
+          {t('settings.pauseEverything')}
         </GlassButton>
       </div>
     )
   }
 
   return (
-    <GlassButton size="sm" onClick={() => setConfirming(true)} disabled={busy} aria-label="Pause all agents">
+    <GlassButton size="sm" onClick={() => setConfirming(true)} disabled={busy} aria-label={t('settings.pauseAll')}>
       <IconPlayerPause />
-      {busy ? 'Pausing…' : 'Pause all agents'}
+      {busy ? t('settings.pausing') : t('settings.pauseAll')}
     </GlassButton>
   )
 }

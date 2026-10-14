@@ -17,7 +17,8 @@ electron/              Electron main: owns the machine
   shell/               shell modes, panels-mode windows, control socket, notification daemon
   wm/                  niri compositor IPC (Linux panels mode)
 preload/index.ts       the `window.heraldOS` bridge, the renderer's only way to reach main
-shared/                types shared by main, preload and renderer (IPC contract, voice settings)
+shared/                types shared by main, preload and renderer (IPC contract, voice settings),
+                       and the translations (i18n.ts, locales/)
 src/                   React renderer
   main.tsx             entry
   shell/               the desktop: ShellRoot, app registry, menu bar, dock, command bar, boot screen
@@ -53,6 +54,8 @@ Run them here, or from the repository root (`npm run dev`, `npm run build`, `npm
   `src/features/<name>/`, mount pages in `src/shell/MainWindow.tsx`.
 - **An action users or Hermes can trigger.** Register an `OsCommand` in `src/commands/<area>.ts`.
   The command bar, the voice fast path and the agent's `os_ui` tool all pick it up.
+- **Text people read.** Add it to `shared/locales/en.ts` and show it with `t` from `useT()`
+  (`src/store/i18n.ts`); [docs/TRANSLATING.md](../../docs/TRANSLATING.md) has the details.
 - **A native capability.** Add it to `HostPlatform` (`electron/platform/types.ts`), implement it in
   each platform file, handle it in `electron/ipc/`, expose it in `preload/index.ts` and type it in
   `shared/ipc.ts`.

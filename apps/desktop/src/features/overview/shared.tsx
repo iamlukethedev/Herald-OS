@@ -51,7 +51,7 @@ export function Avatar({ label, size = 28, className }: { label: string; size?: 
   )
 }
 
-export function AvatarStack({ labels, max = 3, size = 26 }: { labels: string[]; max?: number; size?: number }) {
+export function AvatarStack({ labels, label, max = 3, size = 26 }: { labels: string[]; label: string; max?: number; size?: number }) {
   const shown = labels.slice(0, max)
   const extra = labels.length - shown.length
 
@@ -60,7 +60,7 @@ export function AvatarStack({ labels, max = 3, size = 26 }: { labels: string[]; 
   }
 
   return (
-    <div className="flex items-center" aria-label={`${labels.length} agents`}>
+    <div className="flex items-center" aria-label={label}>
       {shown.map((label, index) => (
         <Avatar key={`${label}-${index}`} label={label} size={size} className={cn('ring-2 ring-bg', index > 0 && '-ml-2')} />
       ))}
@@ -171,23 +171,4 @@ export function formatHourMinute(ms: number): string {
   const date = new Date(ms)
 
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-export function formatSpan(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return ''
-  }
-
-  if (minutes < 60) {
-    return `${Math.round(minutes)} min`
-  }
-
-  const hours = Math.floor(minutes / 60)
-  const rest = Math.round(minutes % 60)
-
-  if (rest === 0) {
-    return `${hours} hr`
-  }
-
-  return `${hours} hr ${rest} min`
 }

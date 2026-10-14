@@ -88,6 +88,7 @@ Stores (nanostores; subscribe with `useStore`):
 - `store/web-windows.ts`: `$webWindows`, `openWebWindow(url, { title, bounds })`, `closeWebWindow`, `focusWebWindow`, `$webViewsCovered` (overlays that hide the native views).
 - `store/continuity.ts`: `$threads`, `$catchUp`, `refreshThreads`, `continueThread`, `startNextStep`, `dismissThread`, `setExclusions` (Pick up where you left off; pure evidence and parsing in `lib/continuity.ts`, see `docs/ARCHITECTURE.md`).
 - `store/voice.ts`: `$voice` (state, engine, captions, live meter), `$voiceActive`, `startVoice`, `endConversation`, `toggleVoice`, `toggleMute`; `store/wake.ts`: `$wake`, `setWakeWordEnabled`. Voice UI lives in `src/features/voice/` (`VoiceOrb`, `MicButton`, `VoiceIndicator`); see `docs/VOICE.md`.
+- `store/i18n.ts`: `$language` (what every window shows: the Language setting, or the system's languages from `$env`), `t` and `useT()` for strings from the catalogs in `shared/locales/`, `$locale` for dates and numbers, `setLanguage`. Main builds its menus with `translate(menuLanguage(), key)` (`electron/i18n.ts`); see `docs/TRANSLATING.md`.
 - `features/pet/`: `$petInfo` (Hermes's pet, as main reads it), `$petSnapshot` (what the pet shows), `$petPrefs` (Herald's own pet preferences), `$petChat`, `showPet`, `hidePet`, `selectPet`, `setPetScale`, `setPetEnabled`. The brain (`brain.ts`) runs in the Hermes window and publishes the snapshot; the pet commands are in `src/commands/pet.ts`; see `docs/ARCHITECTURE.md`.
 
 Electron bridge `window.heraldOS` (typed in `preload/index.ts`):
@@ -116,6 +117,11 @@ memories in `$HERMES_HOME/memories/MEMORY.md` and `USER.md`, entries separated b
 - Reduced motion (`prefers-reduced-motion` or the pref) must collapse all animation.
 - Keep pages self-contained under their directory; call out shared changes (stores, IPC,
   primitives) in the pull request description rather than slipping them in.
+- Text a person reads in a translated surface (the menu bar, Overview, command bar, notifications
+  panel, Settings' navigation and General section, main's menus) comes from the catalogs: English
+  first in `shared/locales/en.ts`, shown with `t` from `useT()`, dates and numbers in `$locale`.
+  Other surfaces move over the same way (`docs/TRANSLATING.md`). Command titles, voice phrases and
+  the app registry's `name` stay English; show `appName(app)`.
 - Every new user-visible action registers an `OsCommand` (`src/commands/<area>.ts`, see
   `store/os-commands.ts`) with a tier and a spoken-friendly `summary`; list items it can point at
   carry `data-os-target="<kind>:<id>"`. That is what makes it reachable by voice, by Hermes (`os_ui`)

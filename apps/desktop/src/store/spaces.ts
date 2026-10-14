@@ -1,9 +1,25 @@
 import { computed } from 'nanostores'
+import type { TextKey } from '../../shared/i18n.ts'
 import type { SpaceDef } from '../../shared/ipc.ts'
 import { $prefs, updatePrefs } from './backend.ts'
+import { t } from './i18n.ts'
 
 export const $spaces = computed($prefs, prefs => prefs.spaces)
 export const $activeSpace = computed($prefs, prefs => prefs.spaces.find(s => s.id === prefs.activeSpace) ?? prefs.spaces[0])
+
+/** The Spaces Herald OS starts with, as main stores them. */
+const STARTING_SPACES = new Map<string, { name: string; key: TextKey }>([
+  ['personal', { name: 'Personal', key: 'space.personal' }],
+  ['work', { name: 'Work', key: 'space.work' }],
+  ['ideas', { name: 'Ideas', key: 'space.ideas' }]
+])
+
+/** A Space's name as shown: the ones Herald starts with are in the language shown until renamed. */
+export function spaceLabel(space: Pick<SpaceDef, 'id' | 'name'>): string {
+  const starting = STARTING_SPACES.get(space.id)
+
+  return starting?.name === space.name ? t(starting.key) : space.name
+}
 
 export function setActiveSpace(id: string): void {
   void updatePrefs({ activeSpace: id })

@@ -8,6 +8,7 @@ import { cn } from '../lib/cn.ts'
 import { shortcutLabel } from '../lib/platform-labels.ts'
 import { matchIntent } from '../lib/voice/intents.ts'
 import { openStoredSession, runSlash, sendPrompt } from '../store/chat.ts'
+import { useT } from '../store/i18n.ts'
 import { useNativeApps } from '../store/native-apps.ts'
 import { notify } from '../store/notifications.ts'
 import { listCommands, runCommand } from '../store/os-commands.ts'
@@ -15,7 +16,7 @@ import { $sessions } from '../store/sessions.ts'
 import { openSurface, relayToMain } from '../store/shell.ts'
 import { $applicationsOpen, $commandBarOpen, toggleCommandBar } from '../store/surface.ts'
 import { openApp, showPage } from '../store/windows.ts'
-import { LAUNCHABLE_APPS } from './apps.ts'
+import { appName, LAUNCHABLE_APPS } from './apps.ts'
 import { useSlashCatalog } from '../features/chat/use-slash-catalog.ts'
 
 /**
@@ -52,6 +53,7 @@ export interface CommandPaletteProps {
 
 /** The palette itself, without backdrop: shared by the in-window command bar and the panels-mode overlay. */
 export function CommandPalette({ onClose, standalone = false, onApplications, className }: CommandPaletteProps) {
+  const t = useT()
   const [query, setQuery] = useState('')
   const sessions = useStore($sessions)
   const slash = useSlashCatalog()
@@ -106,7 +108,8 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
   const isSlash = trimmed.startsWith('/')
   const needle = trimmed.toLowerCase()
   const matches = (label: string) => !needle || label.toLowerCase().includes(needle)
-  const filteredApps = useMemo(() => (isSlash ? [] : LAUNCHABLE_APPS.filter(app => matches(app.name))), [isSlash, needle])
+  // English names match too, so "settings" still finds Settings in any language.
+  const filteredApps = useMemo(() => (isSlash ? [] : LAUNCHABLE_APPS.filter(app => matches(app.name) || matches(appName(app)))), [isSlash, needle])
   const filteredSessions = useMemo(() => (isSlash ? [] : sessions.filter(session => matches(session.title ?? session.preview ?? '')).slice(0, 8)), [isSlash, needle, sessions])
   const filteredSlash = useMemo(() => {
     if (!isSlash) {
@@ -150,13 +153,13 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
     const result = await runCommand(id, args, { source: 'palette' })
 
     if (!result.ok) {
-      notify({ title: 'Could not do that', body: result.error ?? result.summary, level: 'warn' })
+      notify({ title: t('commandBar.failed'), body: result.error ?? result.summary, level: 'warn' })
     }
   }
 
   return (
     <Command
-      label="Hermes command bar"
+      label={t('commandBar.label')}
       shouldFilter={false}
       className={cn('float overflow-hidden rounded-2xl', className)}
       onMouseDown={event => event.stopPropagation()}
@@ -168,21 +171,21 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
     >
       <div className="flex items-center gap-3 px-4 py-3">
         <HermesAvatar size={22} rounded={6} />
-        <Command.Input autoFocus value={query} onValueChange={setQuery} placeholder="Ask Hermes anything, or type / for commands" className="h-7 flex-1 bg-transparent text-[15px] text-fg placeholder:text-fg-4 outline-none" />
+        <Command.Input autoFocus value={query} onValueChange={setQuery} placeholder={t('commandBar.placeholder')} className="h-7 flex-1 bg-transparent text-[15px] text-fg placeholder:text-fg-4 outline-none" />
         <Kbd>esc</Kbd>
       </div>
       <div className="h-px bg-line" />
       <Command.List className="max-h-[420px] overflow-y-auto p-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:text-fg-3 [&_[cmdk-group-heading]]:uppercase">
         {trimmed && (
-          <Command.Group heading="Hermes">
+          <Command.Group heading={t('app.hermes')}>
             <Item value={`ask:${trimmed}`} onSelect={() => void ask(trimmed)} icon={<IconMessage size={15} />} hint="↵">
-              {isSlash ? `Run ${trimmed}` : `Ask Hermes: “${trimmed}”`}
+              {isSlash ? t('commandBar.run', { command: trimmed }) : t('commandBar.ask', { text: trimmed })}
             </Item>
           </Command.Group>
         )}
 
         {(intent || filteredCommands.length > 0) && (
-          <Command.Group heading="Do">
+          <Command.Group heading={t('commandBar.do')}>
             {intent && (
               <Item value={`intent:${intent.command}`} onSelect={() => void runRegistry(intent.command, intent.args)} icon={<IconBolt size={15} />} hint={intent.command}>
                 {intent.title}
@@ -199,7 +202,7 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
         )}
 
         {isSlash && filteredSlash.length > 0 && (
-          <Command.Group heading="Commands">
+          <Command.Group heading={t('commandBar.commands')}>
             {filteredSlash.map(entry => (
               <Item key={entry.name} value={`slash:${entry.name}`} onSelect={() => void ask(`/${entry.name}`)} icon={<IconSlash size={15} />} hint={entry.description}>
                 /{entry.name}
@@ -209,7 +212,7 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
         )}
 
         {filteredNative.length > 0 && (
-          <Command.Group heading="Open app">
+          <Command.Group heading={t('commandBar.openApp')}>
             {filteredNative.map(app => (
               <Item
                 key={app.path}
@@ -219,7 +222,7 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
                   close()
                 }}
                 icon={<IconArrowRight size={15} />}
-                hint="Launch"
+                hint={t('commandBar.launch')}
               >
                 {app.name}
               </Item>
@@ -228,7 +231,7 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
         )}
 
         {filteredApps.length > 0 && (
-          <Command.Group heading="Go to">
+          <Command.Group heading={t('commandBar.goTo')}>
             {filteredApps.map(app => (
               <Item
                 key={app.id}
@@ -240,20 +243,20 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
                 icon={<AppGlyph id={app.icon} size={15} />}
                 hint={app.shortcut ? shortcutLabel(app.shortcut) : undefined}
               >
-                {app.name}
+                {appName(app)}
               </Item>
             ))}
             <Item value="page:applications" onSelect={applications} icon={<AppGlyph id="grid" size={15} />} hint={shortcutLabel('A', { shift: true })}>
-              Applications
+              {t('app.applications')}
             </Item>
           </Command.Group>
         )}
 
         {filteredSessions.length > 0 && (
-          <Command.Group heading="Recent sessions">
+          <Command.Group heading={t('commandBar.recentSessions')}>
             {filteredSessions.map(session => (
               <Item key={session.id} value={`session:${session.title ?? session.preview ?? session.id}`} onSelect={() => openSession(session.id)} icon={<IconMessage size={15} />}>
-                {session.title || session.preview || 'Untitled session'}
+                {session.title || session.preview || t('commandBar.untitledSession')}
               </Item>
             ))}
           </Command.Group>

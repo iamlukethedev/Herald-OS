@@ -6,6 +6,7 @@ import { formatDollars, formatTokens, planPercent, type UsageSummary } from '../
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { $usage, loadUsage } from '../../../store/usage.ts'
 import { openWebWindow } from '../../../store/web-windows.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 /*
@@ -14,6 +15,7 @@ import { errorText, InlineNote, markSaved, SectionTitle, SettingsGroup, Settings
  */
 
 export function UsageSection() {
+  const t = useT()
   const usage = useStore($usage)
   const prefs = useStore($prefs)
   const [loading, setLoading] = useState(false)
@@ -42,7 +44,7 @@ export function UsageSection() {
 
   return (
     <>
-      <SectionTitle title="Usage" subtitle="How much Hermes has used, and what is left on your plan." />
+      <SectionTitle title={t('settings.section.usage')} subtitle={t('settings.usage.subtitle')} />
 
       <SettingsGroup title="Plan">
         {plan?.available ? (

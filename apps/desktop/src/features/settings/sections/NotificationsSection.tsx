@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Toggle } from '../../../components/ui/glass.tsx'
 import { $prefs } from '../../../store/backend.ts'
 import { setCrashHelpEnabled, setCrashMuted } from '../../../store/crashes.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, readLocalFlag, SectionTitle, SettingsGroup, SettingsRow, writeLocal } from './shared.tsx'
 
 /*
@@ -28,6 +29,7 @@ const ROWS: { key: NotifyKey; label: string; description: string; icon: React.Re
 ]
 
 export function NotificationsSection() {
+  const t = useT()
   const [flags, setFlags] = useState<Record<NotifyKey, boolean>>(() => ({
     toolCompletions: readLocalFlag(NOTIFY_KEYS.toolCompletions, true),
     approvals: readLocalFlag(NOTIFY_KEYS.approvals, true),
@@ -43,7 +45,7 @@ export function NotificationsSection() {
 
   return (
     <>
-      <SectionTitle title="Notifications" subtitle="These are Herald OS shell preferences. They shape what the shell surfaces; Hermes itself keeps working either way." />
+      <SectionTitle title={t('settings.section.notifications')} subtitle={t('settings.notifications.subtitle')} />
 
       <SettingsGroup title="Alerts">
         {ROWS.map(row => (

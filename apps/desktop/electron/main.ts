@@ -30,6 +30,7 @@ import { registerThemeIpc, syncHermesSkin } from './ipc/theme.ts'
 import { applyVoiceHotkey, registerVoiceIpc } from './ipc/voice.ts'
 import { registerEditIpc } from './ipc/edit.ts'
 import { registerWebIpc } from './ipc/web.ts'
+import { systemLanguages } from './i18n.ts'
 import { log, logTail } from './log.ts'
 import { migrateLegacyData } from './migrate.ts'
 import { registerNotificationHistoryIpc } from './notifications-history.ts'
@@ -277,7 +278,7 @@ function registerCoreIpc(): void {
 
   ipcMain.handle(
     IPC.envInfo,
-    (): EnvInfo => ({ platform: process.platform, hermesHome: hermesHome(), homeDir: os.homedir(), version: app.getVersion(), isDev, shellMode: mode })
+    (): EnvInfo => ({ platform: process.platform, hermesHome: hermesHome(), homeDir: os.homedir(), version: app.getVersion(), isDev, shellMode: mode, languages: systemLanguages() })
   )
 
   registerFsIpc(() => mainWindow)

@@ -8,6 +8,7 @@ import { hostPlatform } from '../../../lib/platform-labels.ts'
 import { $catalog, loadCatalog, runCatalog, useWithHermes } from '../../../store/catalog.ts'
 import { notify } from '../../../store/notifications.ts'
 import { openTerminalProgram } from '../../../store/terminal.ts'
+import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, MenuDropdown, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 const GROUP_ICONS: Record<string, ComponentType<{ size?: number }>> = {
@@ -27,6 +28,7 @@ const GROUP_ICONS: Record<string, ComponentType<{ size?: number }>> = {
  * (Flatpak, the package manager, npm or mise in ~/.local, a web app), or says why it cannot.
  */
 export function SoftwareSection() {
+  const t = useT()
   const catalog = useStore($catalog)
   const [refreshing, setRefreshing] = useState(false)
   const linux = hostPlatform() === 'linux'
@@ -42,7 +44,7 @@ export function SoftwareSection() {
 
   return (
     <>
-      <SectionTitle title="Software" subtitle={linux ? 'Tools, languages, apps and games, installed the right way for this machine.' : 'Coding agents and local model apps for this Mac.'} />
+      <SectionTitle title={t('settings.section.software')} subtitle={linux ? t('settings.software.subtitleLinux') : t('settings.software.subtitleMac')} />
 
       {catalog.error && <InlineNote tone="danger">{catalog.error}</InlineNote>}
       {!catalog.loaded && (

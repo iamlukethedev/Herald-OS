@@ -8,9 +8,11 @@ import { $env } from '../../../store/backend.ts'
 import { sendPrompt } from '../../../store/chat.ts'
 import { useSystemStats } from '../../../store/system.ts'
 import { showPage } from '../../../store/windows.ts'
+import { useT } from '../../../store/i18n.ts'
 import { SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
 
 export function StorageSection() {
+  const t = useT()
   const stats = useSystemStats()
   const env = useStore($env)
   const hermesHome = env?.hermesHome ?? null
@@ -23,7 +25,7 @@ export function StorageSection() {
 
   return (
     <>
-      <SectionTitle title="Storage" subtitle={`Disks on this ${deviceNoun()} and the space Hermes keeps for itself.`} />
+      <SectionTitle title={t('settings.section.storage')} subtitle={t('settings.storage.subtitle', { device: deviceNoun() })} />
 
       <SettingsGroup title="Disks">
         {(stats?.disks ?? []).length === 0 && <SettingsRow icon={<IconDeviceFloppy />} label="Disks" description="Reading disk usage…" keywords="volume mount" />}
