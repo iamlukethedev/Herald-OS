@@ -24,6 +24,12 @@ for arg in "$@"; do
   esac
 done
 
+# The effective user ID, from id rather than $EUID, which the tests cannot change.
+if [[ "$(id -u 2>/dev/null)" != 0 ]]; then
+  echo "provision.sh: run it as root, with sudo. Nothing has been changed." >&2
+  exit 1
+fi
+
 # The NoCloud seed's label is matched in any case: make-seed.sh writes cidata, other tools CIDATA.
 seed_attached() {
   local label

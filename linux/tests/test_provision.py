@@ -23,7 +23,7 @@ def executable(path: Path, body: str) -> None:
 
 
 def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[str, ...] | None = None,
-              env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+              uid: int = 0, env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
     """Runs provision.sh; `labels` are the filesystem labels blkid reports (cidata when `seed`, plus
     the root disk's)."""
     payload = tmp_path / "payload"
@@ -35,6 +35,7 @@ def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[st
     labels = ("fedora", *(labels if labels is not None else ("cidata",) if seed else ()))
     executable(bin_dir / "systemd-detect-virt", f'echo "systemd-detect-virt $*" >>"$CALLS"; [ "$*" = "--quiet --vm" ] && exit {0 if vm else 1}; exit 2')
     executable(bin_dir / "blkid", f'echo "blkid $*" >>"$CALLS"; [ "$*" = "-s LABEL -o value" ] && {{ printf "%s\\n" {" ".join(labels)}; exit 0; }}; exit 2')
+    executable(bin_dir / "id", f'echo "id $*" >>"$CALLS"; [ "$*" = -u ] && echo {uid}')
     for name in ("mkdir", "getent"):
         executable(bin_dir / name, f'echo "{name} $*" >>"$CALLS"')
     executable(bin_dir / "tee", 'echo "tee $*" >>"$CALLS"; exec cat')
@@ -51,7 +52,7 @@ def provision(tmp_path: Path, *args: str, vm: bool, seed: bool, labels: tuple[st
 
 
 def changes(calls: list[str]) -> list[str]:
-    return [call for call in calls if not call.startswith(("systemd-detect-virt ", "blkid "))]
+    return [call for call in calls if not call.startswith(("systemd-detect-virt ", "blkid ", "id "))]
 
 
 @pytest.mark.parametrize("vm, seed", [(False, False), (False, True), (True, False)], ids=["bare metal", "seed but no vm", "vm without the seed"])
@@ -113,6 +114,14 @@ def test_dev_vm_provisions_without_looking(tmp_path):
     assert "packages.sh --dev" in calls
     assert not any(call.startswith(("systemd-detect-virt ", "blkid ")) for call in calls)
     assert "Nothing has been changed" not in result.stderr
+
+
+@pytest.mark.parametrize("args", [(), ("--dev-vm",)], ids=["looking", "--dev-vm"])
+def test_without_root_it_stops_first_and_says_so(tmp_path, args):
+    result, calls = provision(tmp_path, *args, vm=True, seed=True, uid=1000)
+    assert result.returncode == 1
+    assert result.stderr == "provision.sh: run it as root, with sudo. Nothing has been changed.\n"
+    assert calls == ["id -u"]
 
 
 @pytest.mark.parametrize("arg", ["--dev", "--dev-vm=1", "now"])
