@@ -287,7 +287,9 @@ not on the computer you work on. What happens on its first start:
 
 - **A login screen, and your account stays.** The first boot sees the accounts your system already
   has, so greetd does not sign anyone in by itself. It shows a text login screen on the first
-  console (agreety) instead. Sign in with your own account and its password, and you get the
+  console (agreety) instead, as long as one of those accounts can sign in there: a local account
+  with a shell and a password, a systemd-homed account, or an SSSD or LDAP account with a folder in
+  `/home`. Sign in with your own account and its password, and you get the
   Herald OS desktop. Herald OS's first-start setup then asks only for your name, Wi-Fi and Hermes's
   sign-in. Your password stays as it is (`herald-os password` changes it). The first boot installs
   Hermes Agent only for `hermes`, so run `herald-os setup` in a terminal once in your own account
@@ -307,6 +309,13 @@ not on the computer you work on. What happens on its first start:
   systemd-homed ones (60001 to 60513), and folders in `/home` that belong to someone other than
   `hermes`, which accounts from SSSD or LDAP have too. When the account list cannot be read, the
   system counts as switched.
+- **When no account can sign in.** If none of those accounts has a shell and a password (and none is
+  a systemd-homed, SSSD or LDAP account), a login screen would have no one to let in. Herald OS
+  then does what an install from the image does: `hermes` starts with no password and signs in by
+  itself, and the first-start setup asks for its password at once. `journalctl -u herald-os-login`
+  and `journalctl -u herald-os-firstboot` say so with a warning. If one of your accounts gets a
+  password later, the next start switches to the login screen and locks `hermes`. A login screen
+  is never switched back to signing `hermes` in, even when its last account goes.
 - **The first start takes a while.** It installs Hermes Agent, which needs the network, before the
   login screen appears. Without a network the login screen comes up first, and Hermes installs once
   you are online.
@@ -331,6 +340,29 @@ systemctl reboot
 If `bootc` is missing or refuses, `sudo rpm-ostree rebase
 ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable` switches through rpm-ostree instead
 (`unverified`: without a signature check, as above).
+
+**When there is no login screen.** greetd waits for `herald-os-login.service`, so if that fails, the
+first console stays empty. Press Ctrl+Alt+F2 for a text console (Herald OS keeps `getty@tty2` on),
+sign in with your own account and see why:
+
+```bash
+sudo journalctl -b -u herald-os-login     # what went wrong
+sudo systemctl restart herald-os-login    # once it is fixed
+sudo systemctl start greetd
+```
+
+**When no account can sign in at all** (for example, the account you used was removed or its
+password was locked after the login screen took over), start the rescue shell. In the boot menu,
+press `e`, add `systemd.unit=rescue.target systemd.setenv=SYSTEMD_SULOGIN_FORCE=1` to the line that
+starts with `linux`, and press Ctrl+X. The second setting gives a root shell even though Herald OS
+installs lock the root account. There, give an account a password and a shell, then carry on
+booting:
+
+```bash
+passwd hermes                          # or your own account
+usermod -s /bin/bash hermes
+systemctl default
+```
 
 **Going back.** The system you switched from stays in the boot menu: `sudo bootc rollback` (on Herald
 OS, `herald-os rollback`) makes it the default again, and the next restart starts it as it was. Once
