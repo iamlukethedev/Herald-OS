@@ -1342,14 +1342,12 @@
     "full": true
   },
   {
-    "note": "15 digits that pass Luhn",
+    "note": "15 digits that pass Luhn but start with 1, as no card does",
     "text": "123456789012347",
-    "kind": "secret",
+    "kind": "text",
     "caption": "QR code copied",
-    "description": "something that looks like a password, key or recovery phrase",
-    "hidden": [
-      "123456789012347"
-    ]
+    "description": "text",
+    "full": true
   },
   {
     "note": "an Amex-style number in groups, passing Luhn",
@@ -1390,14 +1388,12 @@
     "full": true
   },
   {
-    "note": "13 digits that pass Luhn and are not an EAN-13",
+    "note": "13 digits that pass Luhn but start with 1, as no card does",
     "text": "1234567890136",
-    "kind": "secret",
+    "kind": "text",
     "caption": "QR code copied",
-    "description": "something that looks like a password, key or recovery phrase",
-    "hidden": [
-      "1234567890136"
-    ]
+    "description": "text",
+    "full": true
   },
   {
     "note": "12 digits pass Luhn but are below the minimum",
@@ -1825,5 +1821,67 @@
     "hidden": [
       "eyJabcde"
     ]
+  },
+  {
+    "note": "12 digits that start like a card and pass Luhn are below the minimum",
+    "text": "234567890129",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "13 digits that start with 2 and pass Luhn",
+    "text": "2345678901239",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "2345678901239"
+    ]
+  },
+  {
+    "note": "13 digits that start with 6 and pass Luhn",
+    "text": "6345678901235",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "6345678901235"
+    ]
+  },
+  {
+    "note": "13 digits that pass Luhn but start with 7, as no card does",
+    "text": "7345678901234",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a millisecond timestamp that passes Luhn",
+    "text": "1712345678907",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "15 digits that start with 2 and pass Luhn",
+    "text": "234567890123454",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "234567890123454"
+    ]
+  },
+  {
+    "note": "15 digits that pass Luhn but start with 9",
+    "text": "934567890123457",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
   }
 ]

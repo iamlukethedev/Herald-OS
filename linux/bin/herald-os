@@ -804,6 +804,7 @@ QR_SECRET_NAME_WORDS = {"token", "key", "apikey", "secret", "pass", "passcode", 
 QR_DIGIT_RUN = re.compile(r"(?<![A-Za-z0-9_-])[0-9](?:[ -]?[0-9])*(?![A-Za-z0-9_-])")
 QR_LONG_DIGITS_MIN = 16
 QR_LUHN_DIGITS_MIN = 13
+QR_CARD_LEAD = re.compile(r"[2-6]")
 QR_KNOWN_TOKEN = re.compile(r"^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}")
 QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 QR_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
@@ -966,12 +967,12 @@ def qr_ean13(digits: str) -> bool:
 
 
 def qr_digits_look_secret(text: str) -> bool:
-    """16+ digits in a row or grouped, or 13 to 15 that pass Luhn; an unbroken valid EAN-13 is a barcode."""
+    """16+ digits in a row or grouped, or 13 to 15 that start like a card (2 to 6) and pass Luhn; an unbroken valid EAN-13 is a barcode."""
     for run in QR_DIGIT_RUN.findall(text):
         digits = re.sub(r"[ -]", "", run)
         if len(digits) >= QR_LONG_DIGITS_MIN:
             return True
-        if len(digits) >= QR_LUHN_DIGITS_MIN and qr_luhn(digits) and not (run == digits and qr_ean13(digits)):
+        if len(digits) >= QR_LUHN_DIGITS_MIN and QR_CARD_LEAD.match(digits) and qr_luhn(digits) and not (run == digits and qr_ean13(digits)):
             return True
     return False
 

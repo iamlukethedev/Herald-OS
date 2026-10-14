@@ -73,8 +73,9 @@ export const KEY_GROUPS_MIN = 3
 export const KEY_GROUP_MIN = 3
 /** Digits from this many in a run (or grouped) are secret, whatever they are: card numbers, account numbers. */
 export const LONG_DIGITS_MIN = 16
-/** Shorter runs from this many digits are secret when they pass the Luhn check, as card numbers do. */
+/** Shorter runs from this many digits are secret when they start like a card (2 to 6) and pass the Luhn check. */
 export const LUHN_DIGITS_MIN = 13
+const CARD_LEAD = /^[2-6]/
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -286,8 +287,9 @@ export function ean13(digits: string): boolean {
 
 /**
  * A card or account number: 16 or more digits, in a row or grouped (1234-5678-9012-3456-7890), or
- * 13 to 15 that pass Luhn. An unbroken valid EAN-13 is a product barcode and stays text. Phone
- * numbers (15 digits at most) and short order numbers only count when they happen to pass Luhn.
+ * 13 to 15 that start with 2 to 6, as cards do, and pass Luhn. An unbroken valid EAN-13 is a
+ * product barcode and stays text. Phone numbers (15 digits at most) and short order numbers only
+ * count when they happen to start that way and pass Luhn.
  */
 export function digitsLookSecret(text: string): boolean {
   for (const run of text.match(DIGIT_RUN) ?? []) {
@@ -297,7 +299,7 @@ export function digitsLookSecret(text: string): boolean {
       return true
     }
 
-    if (digits.length >= LUHN_DIGITS_MIN && luhn(digits) && !(run === digits && ean13(digits))) {
+    if (digits.length >= LUHN_DIGITS_MIN && CARD_LEAD.test(digits) && luhn(digits) && !(run === digits && ean13(digits))) {
       return true
     }
   }
