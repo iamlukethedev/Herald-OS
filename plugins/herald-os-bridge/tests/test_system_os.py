@@ -66,8 +66,8 @@ CASES = {
     "ocr": ({}, ["ocr"], "act"),
     "lock": ({}, ["lock"], "act"),
     "suspend": ({}, ["suspend"], "destructive"),
-    "restart": ({"device": "sound"}, ["restart", "sound"], "act"),
-    "restart_touchpad": ({"action": "restart", "device": "Touchpad"}, ["restart", "touchpad"], "act"),
+    "restart": ({"device": "sound"}, ["restart", "sound"], "mutate"),
+    "restart_touchpad": ({"action": "restart", "device": "Touchpad"}, ["restart", "touchpad"], "mutate"),
     "theme_list": ({}, ["theme", "list"], "read"),
     "theme_set": ({"name": "midnight"}, ["theme", "set", "midnight"], "act"),
     "theme_current": ({}, ["theme", "current"], "read"),
@@ -162,6 +162,42 @@ def test_plugins_cannot_be_turned_on_by_hermes(plugin):
     assert "plugin_enable" not in actions
     with pytest.raises(ValueError):
         tools.plan_system_os({"action": "plugin_enable", "id": "weather-strip"})
+
+
+@pytest.mark.parametrize(("device", "interrupts"), [
+    ("wifi", "network drops"),
+    ("bluetooth", "headsets drop"),
+    ("sound", "including calls"),
+    ("touchpad", "password"),
+])
+def test_every_restart_asks_first_and_says_what_it_interrupts(plugin, linux, device, interrupts):
+    tools = _mod(plugin, "tools")
+    result = json.loads(tools.system_os_handler({"action": "restart", "device": device}))
+    assert result["success"], result
+    assert linux.tier.value == "mutate" and linux.action == "restart"
+    assert interrupts in linux.summary
+    assert linux.argv == ["herald-os", "restart", device]
+
+
+@pytest.mark.parametrize("device", ["wifi", "bluetooth", "sound", "touchpad"])
+def test_a_restart_the_user_turns_down_does_not_run(plugin, linux, monkeypatch, device):
+    tools = _mod(plugin, "tools")
+    asked = []
+
+    def decline(tool, tier, action, summary, *, paths=()):
+        asked.append(tier.value)
+        return linux.perm.Decision(False, "denied", "no")
+
+    monkeypatch.setattr(tools, "authorize", decline)
+    result = json.loads(tools.system_os_handler({"action": "restart", "device": device}))
+    assert not result["success"] and result["decision"] == "denied"
+    assert asked == ["mutate"] and linux.argv is None
+
+
+def test_mutate_asks_under_the_default_policy(plugin):
+    perm = _mod(plugin, "permissions")
+    tools = _mod(plugin, "tools")
+    assert perm.DEFAULT_TIER_MODES[tools.SYSTEM_OS_TIERS["restart"]] == "confirm"
 
 
 def test_install_and_update_get_the_long_timeout(plugin, linux):

@@ -219,9 +219,10 @@ the tool is tiered, audited, and returns the CLI's output. It is unavailable on 
 | "Go to my Work space" | `system_os` action=focus_workspace name=work |
 | "Close this window" | `system_os` action=close_focused_window |
 
-- `install_app`, `install_webapp`, `remove_app`, `remove_webapp`, `reminders_clear`, `update` and
-  `suspend` ask the user for confirmation before running; tell the user that is expected and do not
-  try to route around a denial.
+- `install_app`, `install_webapp`, `remove_app`, `remove_webapp`, `reminders_clear`, `update`,
+  `restart` and `suspend` ask the user for confirmation before running; tell the user that is
+  expected and do not try to route around a denial. A sound restart cuts audio for a moment, a call's
+  too, so say so when offering it.
 - Installs and updates can take minutes; report the CLI output (what was installed, or the error).
 - When Wi-Fi, Bluetooth, sound or the touchpad "just stopped working", restarting that one part
   (action=restart) comes before suggesting a reboot. The touchpad needs administrator rights: if

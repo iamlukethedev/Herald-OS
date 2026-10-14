@@ -1047,6 +1047,13 @@ def handle_system_logs(args: dict[str, Any], **_: Any) -> str:
 # ---------------------------------------------------------------------------------------------
 
 RESTART_DEVICES = ("wifi", "bluetooth", "sound", "touchpad")
+# What the approval card says each restart interrupts.
+RESTART_SUMMARIES = {
+    "wifi": "restart Wi-Fi (the network drops for a moment)",
+    "bluetooth": "restart Bluetooth (connected devices such as headsets drop for a moment)",
+    "sound": "restart the sound services (all audio stops for a moment, including calls)",
+    "touchpad": "restart the touchpad (it stops for a moment; asks for your password)",
+}
 
 SYSTEM_OS_SCHEMA = _schema(
     "system_os",
@@ -1061,7 +1068,7 @@ SYSTEM_OS_SCHEMA = _schema(
     "lock locks the session; suspend puts the computer to sleep. "
     "restart (device=wifi|bluetooth|sound|touchpad) restarts one that stopped working, before suggesting a reboot: Wi-Fi that will not connect, a Bluetooth headset that will not reconnect, sound that vanished, a touchpad dead after waking; the touchpad asks the user for their password. Themes: theme_list, theme_set (name), theme_current. update updates Herald OS. "
     "Hermes shell: show_page (page: overview, hermes, missions, memory, files, automations, connections, settings), open_window (window=terminal|system|chat-popout), launch (name: an installed app), notify (title, body?). "
-    "Spaces: focus_workspace (name), close_focused_window. install/remove/update and suspend ask the user to confirm. "
+    "Spaces: focus_workspace (name), close_focused_window. install/remove/update, restart and suspend ask the user to confirm. "
     "Only available on Herald OS Linux; on macOS this tool is unavailable (use system_open / system_control instead).",
     {
         "action": _enum(
@@ -1108,8 +1115,10 @@ SYSTEM_OS_TIERS: dict[str, Tier] = {
     "plugin_list": Tier.READ, "plugin_disable": Tier.ACT, "plugin_add": Tier.MUTATE, "plugin_update": Tier.MUTATE, "plugin_remove": Tier.DESTRUCTIVE,
     "show_page": Tier.READ, "open_window": Tier.READ, "focus_workspace": Tier.READ,
     "launch": Tier.ACT, "notify": Tier.ACT, "screenshot": Tier.ACT, "ocr": Tier.ACT, "lock": Tier.ACT,
-    "reminder": Tier.ACT, "theme_set": Tier.ACT, "close_focused_window": Tier.ACT, "restart": Tier.ACT,
+    "reminder": Tier.ACT, "theme_set": Tier.ACT, "close_focused_window": Tier.ACT,
     "install_app": Tier.MUTATE, "install_webapp": Tier.MUTATE, "remove_webapp": Tier.MUTATE, "reminders_clear": Tier.MUTATE, "update": Tier.MUTATE,
+    # Every restart drops what the device is doing (a call's audio, a Bluetooth headset, the network), so it asks first.
+    "restart": Tier.MUTATE,
     "remove_app": Tier.DESTRUCTIVE, "suspend": Tier.DESTRUCTIVE,
 }
 
@@ -1230,7 +1239,7 @@ def plan_system_os(args: dict[str, Any]) -> tuple[list[str], str]:
         device = str(args.get("device") or "").strip().lower()
         if device not in RESTART_DEVICES:
             raise ValueError(f"device must be one of {', '.join(RESTART_DEVICES)}")
-        return ["restart", device], f"restart {device}"
+        return ["restart", device], RESTART_SUMMARIES[device]
     if action == "theme_list":
         return ["theme", "list"], "list themes"
     if action == "theme_set":
