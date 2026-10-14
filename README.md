@@ -89,7 +89,9 @@ for each of these the first time a feature needs it:
   after switching it on.
 - **Accessibility and Automation**: typing an emoji or dictation into another app (through System
   Events), and Hermes listing or quitting apps, locking the screen, switching dark mode and moving
-  files to the Trash (through Finder).
+  files to the Trash (through Finder). The first time you type an emoji or dictation into another
+  app, Herald OS explains these two before macOS asks; until both are allowed, the text stays on the
+  clipboard and Herald OS says which one is missing.
 - **Calendars**: today's events on the Overview.
 - **Local Network**: Hermes reaching a model server or another device on your network, such as a
   custom endpoint at a `192.168…` address. Hermes runs inside Herald OS, so this is Herald OS's to
