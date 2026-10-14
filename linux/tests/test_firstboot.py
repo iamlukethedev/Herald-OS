@@ -259,11 +259,13 @@ class Accounts:
         )
         executable(bin_dir / "stat", 'for path; do :; done; cat "$path/.owner"')
         executable(bin_dir / "date", "echo 2026-10-14T08:00:00+00:00")
+        executable(bin_dir / "loginctl", 'echo "loginctl $*" >>"$CALLS"')
         executable(bin_dir / "install", 'echo "install $*" >>"$CALLS"; exec /usr/bin/install "$@"')
         # useradd: the next free UID from 1000, and a password no one can sign in with, as shadow-utils does.
         executable(
             bin_dir / "useradd",
-            'echo "useradd $*" >>"$CALLS"; shell=/bin/bash; for arg; do [ "$prev" = -s ] && shell="$arg"; prev="$arg"; name="$arg"; done\n'
+            '[ "$1" = -D ] && { echo GROUP=100; echo SHELL=/bin/zsh; exit 0; }\n'
+            'echo "useradd $*" >>"$CALLS"; shell=/bin/zsh; for arg; do [ "$prev" = -s ] && shell="$arg"; prev="$arg"; name="$arg"; done\n'
             'uid=$(awk -F: \'$3 >= 1000 && $3 < 60000 && $3 >= n { n = $3 + 1 } END { print n ? n : 1000 }\' n=1000 "$WORLD/passwd")\n'
             'echo "$name:x:$uid:$uid::/home/$name:$shell" >>"$WORLD/passwd"; echo "$name:!:::::::" >>"$WORLD/shadow"',
         )
@@ -284,10 +286,11 @@ class Accounts:
             "set -euo pipefail\n"
             f"HERMES_USER=hermes STATE={quote(str(self.state))} SWITCHED={quote(str(self.state / 'switched'))}\n"
             f"LOGIN_SCREEN={quote(str(self.state / 'login-screen'))} PASSWD={quote(str(self.passwd))}\n"
+            f"IMAGE_INSTALL={quote(str(self.state / 'image-install'))} SAVED_SHELL={quote(str(self.state / 'hermes-shell'))}\n"
             f"GREETD={quote(str(self.greetd))} LOGIN_DEFS={quote(str(self.root / 'login.defs'))} SHARE={quote(str(ROOT / 'linux'))}\n"
             f"NOLOGIN={NOLOGIN} HOMES=({quote(str(self.homes))}/*)\n"
             + 'LOGIN_SCREEN_DUE=""\n'
-            + functions("earlier_accounts", "switched", "has_password", "sign_in_accounts", "login_screen_due", "session_account", "login_screen", "login_phase", "greeter")
+            + functions("earlier_accounts", "switched", "has_password", "sign_in_accounts", "login_screen_due", "session_account", "login_screen", "locked_linger", "login_phase", "greeter")
             + call
             + "\n"
         )
@@ -318,9 +321,15 @@ class Accounts:
 
 def first_boot(accounts: Accounts) -> subprocess.CompletedProcess:
     """What system_phase does about the account and greetd."""
-    result = accounts.run("session_account\ngreeter")
+    result = accounts.run("session_account\ngreeter\nlocked_linger")
     assert result.returncode == 0, result.stderr
     return result
+
+
+def reset(accounts: Accounts) -> None:
+    """reset-helper apply: the session user's account goes; the state folder's markers stay."""
+    for file in (accounts.passwd, accounts.shadow):
+        file.write_text("".join(line + "\n" for line in file.read_text().splitlines() if not line.startswith("hermes:")))
 
 
 def assert_switched_and_closed(accounts: Accounts) -> None:
@@ -334,7 +343,7 @@ def test_an_install_from_the_image_signs_its_new_account_in_and_setup_asks_for_a
     accounts = Accounts(tmp_path)
     first_boot(accounts)
     assert "useradd -m -G wheel hermes" in accounts.calls.read_text()
-    assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/bash"
+    assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/zsh"
     assert not accounts.switched() and not accounts.login_screen()
     assert accounts.greetd.read_text() == AUTOLOGIN
     # The boot unit, which runs on every boot, changes nothing on such a system.
@@ -408,8 +417,11 @@ def test_a_session_user_given_a_password_gets_its_shell_back(tmp_path):
     shadow = accounts.shadow.read_text().replace("hermes:!!", "hermes:$y$theirs").replace("hermes:!", "hermes:$y$theirs")
     accounts.shadow.write_text(shadow)
     result = accounts.boot()
-    assert accounts.shell("hermes") == "/bin/bash" and accounts.password("hermes") == "$y$theirs"
-    assert "has a password now, and its shell back" in result.stdout
+    # The shell useradd would have given it, saved when it was locked.
+    assert accounts.shell("hermes") == "/bin/zsh" and accounts.password("hermes") == "$y$theirs"
+    assert "has a password now, and its shell back (/bin/zsh)" in result.stdout
+    assert "loginctl enable-linger hermes" in accounts.calls.read_text()
+    assert not (accounts.state / "hermes-shell").exists()
     assert accounts.greetd.read_text() == LOGIN_SCREEN
 
 
@@ -487,8 +499,9 @@ def fallback(accounts: Accounts) -> subprocess.CompletedProcess:
     result = first_boot(accounts)
     assert "WARNING: switched from another system, but none of its accounts can sign in" in result.stdout
     assert accounts.switched() and not accounts.login_screen()
-    assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/bash"
+    assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/zsh"
     assert accounts.greetd.read_text() == AUTOLOGIN
+    assert "disable-linger" not in accounts.calls.read_text()
     return result
 
 
@@ -535,3 +548,69 @@ def test_a_login_screen_stays_even_when_its_last_account_goes(tmp_path):
 def test_a_text_console_is_there_when_greetd_is_not():
     packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
     assert re.search(r"^systemctl enable .*getty@tty2\.service", packages, re.M)
+
+
+def test_a_locked_session_user_has_no_user_manager_until_it_has_a_password(tmp_path):
+    accounts = Accounts(tmp_path, passwd="me:x:1000:1000::/var/home/me:/bin/bash\n", shadow="me:$y$secret:::::::\n")
+    first_boot(accounts)
+    assert "loginctl disable-linger hermes" in accounts.calls.read_text()
+    accounts.calls.write_text("")
+    accounts.boot()
+    assert "loginctl disable-linger hermes" in accounts.calls.read_text()
+
+
+def test_a_session_user_locked_by_the_repair_gets_its_own_shell_back(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/usr/bin/fish\n",
+        shadow="me:$y$secret:::::::\nhermes::::::::\n",
+    )
+    accounts.boot()
+    assert accounts.shell("hermes") == NOLOGIN and (accounts.state / "hermes-shell").read_text().strip() == "/usr/bin/fish"
+    # A second boot before the password does not save nologin over it.
+    accounts.boot()
+    assert (accounts.state / "hermes-shell").read_text().strip() == "/usr/bin/fish"
+    accounts.shadow.write_text(accounts.shadow.read_text().replace("hermes:!:", "hermes:$y$theirs:"))
+    accounts.boot()
+    assert accounts.shell("hermes") == "/usr/bin/fish"
+
+
+def test_a_reset_after_adding_an_account_to_an_image_install_keeps_it_one(tmp_path):
+    accounts = Accounts(tmp_path)
+    first_boot(accounts)
+    assert (accounts.state / "image-install").exists()
+    # Someone adds an account with a password and a home, then runs herald-os reset.
+    accounts.passwd.write_text(accounts.passwd.read_text() + "friend:x:1001:1001::/var/home/friend:/bin/bash\n")
+    accounts.shadow.write_text(accounts.shadow.read_text() + "friend:$y$friend:::::::\n")
+    (accounts.homes / "friend").mkdir()
+    (accounts.homes / "friend" / ".owner").write_text("friend")
+    reset(accounts)
+    accounts.calls.write_text("")
+    result = first_boot(accounts)
+    assert "switched" not in result.stdout and "WARNING" not in result.stdout
+    assert not accounts.switched() and not accounts.login_screen()
+    assert accounts.password("hermes") == "" and accounts.greetd.read_text() == AUTOLOGIN
+    assert "disable-linger" not in accounts.calls.read_text()
+
+
+def test_a_stray_folder_in_home_is_no_one_s_account(tmp_path):
+    # A folder root (or another system account) owns, like one left by a script or an image.
+    accounts = Accounts(tmp_path, homes={"backup": "root", "share": "greetd"})
+    result = first_boot(accounts)
+    assert "WARNING" not in result.stdout
+    assert not accounts.switched() and not accounts.login_screen()
+    assert accounts.password("hermes") == "" and accounts.greetd.read_text() == AUTOLOGIN
+    # Nor at a later boot.
+    accounts.boot()
+    assert not accounts.switched() and accounts.greetd.read_text() == AUTOLOGIN
+
+
+def test_a_stray_folder_on_a_switched_system_does_not_stand_in_for_an_account_that_can_sign_in(tmp_path):
+    accounts = Accounts(tmp_path, passwd=f"svc:x:1000:1000::/var/home/svc:{NOLOGIN}\n", homes={"backup": "root", "svc": "svc"})
+    fallback(accounts)
+
+
+def test_the_image_has_cmp():
+    packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
+    assert "diffutils" in packages
+    assert "cmp -s" in FIRSTBOOT.read_text()

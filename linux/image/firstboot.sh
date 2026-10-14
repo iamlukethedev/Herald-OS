@@ -21,6 +21,11 @@ STATE=/var/lib/herald-os
 # There on a system switched to Herald OS from another bootc system, which brought accounts of its
 # own; written the first time it is seen, so it stays so through `herald-os reset`.
 SWITCHED="$STATE/switched"
+# There once the first boot found an install from the image: accounts added since (and folders in
+# /home) do not make it a switched system, through `herald-os reset` either.
+IMAGE_INSTALL="$STATE/image-install"
+# The session user's shell from before it was locked, which it gets back with a password.
+SAVED_SHELL="$STATE/hermes-shell"
 # There while greetd shows a login screen instead of signing the session user in, which is when the
 # session user never has an empty password. The shell's setup reads it too: whoever got past the
 # login screen has a password already.
@@ -61,12 +66,12 @@ done
 # What a system switched to Herald OS brought along, one line each; an install from the image has
 # none, since the session user is the first account it gets. Accounts in login.defs's UID range or
 # systemd-homed's that are older than the session user (all of them while it does not exist yet),
-# and folders in /home that are not the session user's: accounts getent does not list (SSSD, LDAP)
-# have those too. When the accounts cannot be read, that is a line as well: in doubt, the system
+# and folders in /home that are not the session user's or a system account's (root's stray folders
+# are no one's home): accounts getent does not list (SSSD, LDAP) have those too. When the accounts cannot be read, that is a line as well: in doubt, the system
 # counts as switched. Whether that brings a login screen is login_screen_due's: only when an account
 # can sign in there.
 earlier_accounts() {
-  local min max mine entries home owner
+  local min max mine entries home owner uid
   min="$(awk '$1 == "UID_MIN" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
   max="$(awk '$1 == "UID_MAX" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
   mine="$(id -u "$HERMES_USER" 2>/dev/null || echo 4294967295)"
@@ -78,16 +83,24 @@ earlier_accounts() {
   for home in "${HOMES[@]}"; do
     [[ -d "$home" && "${home##*/}" != "$HERMES_USER" && "${home##*/}" != lost+found ]] || continue
     owner="$(stat -c %U "$home" 2>/dev/null || echo "an unknown owner")"
-    [[ "$owner" == "$HERMES_USER" ]] || echo "$home ($owner)"
+    [[ "$owner" != "$HERMES_USER" ]] || continue
+    uid="$(id -u "$owner" 2>/dev/null || true)"
+    [[ "$uid" =~ ^[0-9]+$ ]] && (( uid < ${min:-1000} )) && continue
+    echo "$home ($owner)"
   done
 }
 
-# Whether this system was switched to Herald OS from another one.
+# Whether this system was switched to Herald OS from another one. Worked out once and written down
+# either way, so it holds through `herald-os reset` and accounts added later.
 switched() {
   [[ -f "$SWITCHED" ]] && return 0
+  [[ -f "$IMAGE_INSTALL" ]] && return 1
   local accounts
   accounts="$(earlier_accounts | sort -u | tr '\n' ' ')"
-  [[ -n "$accounts" ]] || return 1
+  if [[ -z "$accounts" ]]; then
+    date -Is >"$IMAGE_INSTALL"
+    return 1
+  fi
   echo "switched from another system, which has these accounts: $accounts"
   date -Is >"$SWITCHED"
 }
@@ -156,6 +169,7 @@ login_screen_due() {
 session_account() {
   id "$HERMES_USER" >/dev/null 2>&1 && return 0
   if login_screen_due; then
+    useradd -D 2>/dev/null | awk -F= '$1 == "SHELL" { print $2 }' >"$SAVED_SHELL" || true
     useradd -m -G wheel -s "$NOLOGIN" "$HERMES_USER"
     usermod -L "$HERMES_USER"
   else
@@ -168,17 +182,24 @@ session_account() {
 # locked before greetd's config changes, and herald-os-login.service holds greetd back until both are
 # done (greetd.service.d/herald-os-login.conf): until then greetd could still be the stock one, which
 # signs the session user in without asking. A session user an earlier first boot left with an empty
-# password is locked and loses its shell; once someone gives it a password, its shell comes back.
+# password is locked and loses its shell; once someone gives it a password, the shell it had comes
+# back, and its user manager with it.
 # Never undone at a later boot: a login screen that has no one left to sign in is rescue.target's
 # (docs/LINUX.md), not a passwordless administrator's.
 login_screen() {
   if id "$HERMES_USER" >/dev/null 2>&1; then
+    local shell
+    shell="$(getent passwd "$HERMES_USER" | cut -d: -f7)"
     if [[ -z "$(getent shadow "$HERMES_USER" | cut -d: -f2)" ]]; then
+      [[ "$shell" == "$NOLOGIN" ]] || echo "$shell" >"$SAVED_SHELL"
       usermod -L -s "$NOLOGIN" "$HERMES_USER"
       echo "$HERMES_USER had no password: locked until someone gives it one (sudo passwd $HERMES_USER)"
-    elif has_password && [[ "$(getent passwd "$HERMES_USER" | cut -d: -f7)" == "$NOLOGIN" ]]; then
-      usermod -s /bin/bash "$HERMES_USER"
-      echo "$HERMES_USER has a password now, and its shell back"
+    elif has_password && [[ "$shell" == "$NOLOGIN" ]]; then
+      shell="$(cat "$SAVED_SHELL" 2>/dev/null || true)"
+      usermod -s "${shell:-/bin/bash}" "$HERMES_USER"
+      rm -f "$SAVED_SHELL"
+      loginctl enable-linger "$HERMES_USER" || true
+      echo "$HERMES_USER has a password now, and its shell back (${shell:-/bin/bash})"
     fi
   fi
   if ! cmp -s "$SHARE/session/greetd-login.toml" "$GREETD"; then
@@ -188,10 +209,19 @@ login_screen() {
   [[ -f "$LOGIN_SCREEN" ]] || date -Is >"$LOGIN_SCREEN"
 }
 
+# No user manager (pipewire, portals, the update timer) for a session user locked behind the login
+# screen: nothing runs as it until someone gives it a password.
+locked_linger() {
+  if [[ -f "$LOGIN_SCREEN" ]] && id "$HERMES_USER" >/dev/null 2>&1 && ! has_password; then
+    loginctl disable-linger "$HERMES_USER" || true
+  fi
+}
+
 # herald-os-login.service, every boot: the login screen once it is due, and kept once it is there.
 login_phase() {
   if login_screen_due || [[ -f "$LOGIN_SCREEN" ]]; then
     login_screen
+    locked_linger
   fi
 }
 
@@ -215,7 +245,8 @@ system_phase() {
   if getent group seat >/dev/null; then
     usermod -aG seat "$HERMES_USER" || true
   fi
-  # The user's systemd instance (pipewire, portals) keeps running when no one is logged in.
+  # The user's systemd instance (pipewire, portals) keeps running when no one is logged in. The home
+  # folder's setup below needs it; a session user locked behind the login screen loses it at the end.
   loginctl enable-linger "$HERMES_USER" || true
 
   step "The login screen"
@@ -240,6 +271,7 @@ system_phase() {
   else
     hermes_later
   fi
+  locked_linger
   date -Is >"$STATE/firstboot-done"
 }
 
