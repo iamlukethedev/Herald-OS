@@ -50,8 +50,8 @@ export function resetScreenRecordingCheck(): void {
  * reads `denied` until macOS has asked, and it asks only when a capture is attempted, so the first
  * refusal in a launch takes one silent capture (then deletes it) to bring up macOS's prompt and put
  * Herald OS in the pane's list. A change to the switch applies only after Herald OS reopens.
- * `restricted` means a device-management profile decides: macOS will not ask and the switch is
- * locked, so the person is told that instead.
+ * `restricted` means something other than the person decides (a device-management profile, Screen
+ * Time or parental controls): macOS will not ask, so the person is told that instead.
  */
 export async function ensureScreenRecording(): Promise<void> {
   if (process.platform !== 'darwin') {

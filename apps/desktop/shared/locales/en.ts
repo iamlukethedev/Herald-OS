@@ -18,8 +18,8 @@ export const en = {
   'permission.screen.open': 'Open System Settings',
   'permission.screen.reopen': 'Quit & Reopen',
   'permission.screen.notNow': 'Not Now',
-  'permission.screen.restrictedTitle': 'Screen Recording is managed on this Mac',
-  'permission.screen.restrictedDetail': 'A device-management profile decides whether Herald OS may record the screen, so the switch in System Settings is locked. Ask whoever manages this Mac to allow Screen Recording for Herald OS.',
+  'permission.screen.restrictedTitle': 'Screen Recording is restricted on this Mac',
+  'permission.screen.restrictedDetail': 'A restriction on this Mac, such as a device-management profile, Screen Time or parental controls, decides whether Herald OS may record the screen, so the switch in System Settings may be locked. Ask whoever set the restriction to allow Screen Recording for Herald OS.',
   'permission.screen.ok': 'OK',
 
   'app.overview': 'Overview',

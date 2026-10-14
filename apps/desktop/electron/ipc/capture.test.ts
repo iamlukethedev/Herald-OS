@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const electron = vi.hoisted(() => ({
   status: 'denied',
+  language: 'en',
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   showMessageBox: vi.fn(async (_options: Record<string, unknown>) => ({ response: 1 })),
   openExternal: vi.fn(async () => undefined),
@@ -30,7 +31,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../platform/exec.ts', () => ({ run }))
 vi.mock('../platform/mac-tools.ts', () => ({ pickColourMac: vi.fn(), readImageMac }))
-vi.mock('../i18n.ts', () => ({ menuLanguage: () => 'en' }))
+vi.mock('../i18n.ts', () => ({ menuLanguage: () => electron.language }))
 vi.mock('../attachments.ts', () => ({ allowAttachments: vi.fn() }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 
@@ -46,6 +47,7 @@ const probes = () => run.mock.calls.filter(([command, args]) => command === 'scr
 beforeEach(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' })
   electron.status = 'denied'
+  electron.language = 'en'
   run.mockClear()
   readImageMac.mockClear()
   electron.showMessageBox.mockClear()
@@ -120,19 +122,31 @@ describe('the Screen Recording check on macOS', () => {
     expect(electron.relaunch).not.toHaveBeenCalled()
   })
 
-  it('when a device-management profile restricts it, says the switch is locked, without asking macOS', async () => {
+  it('when a restriction (device management, Screen Time, parental controls) decides, says so, without asking macOS', async () => {
     electron.status = 'restricted'
     electron.showMessageBox.mockResolvedValueOnce({ response: 0 })
     await expect(captureRegion()).rejects.toThrow(
-      'Screen Recording is managed on this Mac. A device-management profile decides whether Herald OS may record the screen, so the switch in System Settings is locked. Ask whoever manages this Mac to allow Screen Recording for Herald OS.'
+      'Screen Recording is restricted on this Mac. A restriction on this Mac, such as a device-management profile, Screen Time or parental controls, decides whether Herald OS may record the screen, so the switch in System Settings may be locked. Ask whoever set the restriction to allow Screen Recording for Herald OS.'
     )
     await flush()
 
     expect(probes()).toHaveLength(0)
     expect(interactive()).toHaveLength(0)
-    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Screen Recording is managed on this Mac', buttons: ['OK'], cancelId: 0 })
+    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: 'Screen Recording is restricted on this Mac', buttons: ['OK'], cancelId: 0 })
     expect(electron.openExternal).not.toHaveBeenCalled()
     expect(electron.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('says the same in Simplified Chinese', async () => {
+    electron.language = 'zh-CN'
+    electron.status = 'restricted'
+    await expect(captureRegion()).rejects.toThrow(/^这台 Mac 限制了“屏幕录制”\. .*设备管理描述文件、“屏幕使用时间”或家长控制/)
+    expect(electron.showMessageBox.mock.calls[0][0]).toMatchObject({ message: '这台 Mac 限制了“屏幕录制”', buttons: ['好'] })
+
+    resetScreenRecordingCheck()
+    electron.status = 'denied'
+    await expect(captureRegion()).rejects.toThrow(/^Herald OS 需要“屏幕录制”权限/)
+    expect(electron.showMessageBox.mock.calls[1][0]).toMatchObject({ buttons: ['打开系统设置', '退出并重新打开', '以后再说'] })
   })
 
   it('a probe that fails or times out still ends in the permission message', async () => {
