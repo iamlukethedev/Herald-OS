@@ -399,7 +399,7 @@ def test_the_manuals_command_blocks_paste_as_they_are(page):
         assert "<version>" not in block and "%VERSION%" not in block
         if "herald-os-" not in block:
             continue
-        version_set = version_set or re.search(r"^VERSION=\S+ +# replace with the version you downloaded$", block, re.M)
+        version_set = version_set or re.search(r"^VERSION=\S+ +# replace with the version you downloaded\b.*$", block, re.M)
         assert version_set, f"$VERSION used before it is set:\n{block}"
         assert not re.search(r"(?<![\"/])herald-os-\$VERSION", block), f"$VERSION outside quotes:\n{block}"
         assert subprocess.run(["bash", "-n"], input=block, text=True, check=False).returncode == 0
@@ -407,7 +407,7 @@ def test_the_manuals_command_blocks_paste_as_they_are(page):
         assert "<version>" not in block and "$VERSION" not in block
         lines = block.splitlines()
         assert lines[:2] == ["rem replace with the version you downloaded", lines[1]]
-        assert re.fullmatch(r"set VERSION=\S+", lines[1])
+        assert re.fullmatch(r"set (?:\"VERSION=\S+\"|VERSION=\S+)", lines[1])
         assert all("herald-os-%VERSION%-" in line for line in lines[2:])
 
 

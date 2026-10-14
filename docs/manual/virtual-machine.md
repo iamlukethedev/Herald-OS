@@ -73,7 +73,7 @@ Every file has a `.sha256` beside it for the whole file, and a file in parts als
 and check the result:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded
+VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
 shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256sums"    # each part; sha256sum -c on Linux
 cat "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9] > "herald-os-$VERSION-x86_64.vhdx.zip"
 shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256"          # the joined file
@@ -83,7 +83,7 @@ The `.utm.zip` joins the same way. The `.part0`, `.part1` files, here the Apple 
 with `.part*` instead:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded
+VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
 shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256sums"    # sha256sum -c on Linux
 cat "herald-os-$VERSION-aarch64.qcow2.zst.part"* > "herald-os-$VERSION-aarch64.qcow2.zst"
 shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256"
@@ -94,7 +94,7 @@ On Windows, in a Command Prompt, join the parts with a `+` between each, then co
 
 ```bat
 rem replace with the version you downloaded
-set VERSION=0.1.0-alpha.5
+set "VERSION=0.1.0-alpha.5"
 copy /b herald-os-%VERSION%-x86_64.vhdx.zip.001 + herald-os-%VERSION%-x86_64.vhdx.zip.002 herald-os-%VERSION%-x86_64.vhdx.zip
 certutil -hashfile herald-os-%VERSION%-x86_64.vhdx.zip SHA256
 ```

@@ -39,7 +39,7 @@ in the `.sha256`:
 
 ```bat
 rem replace with the version you downloaded
-set VERSION=0.1.0-alpha.4
+set "VERSION=0.1.0-alpha.4"
 copy /b herald-os-%VERSION%-x86_64.iso.part0 + herald-os-%VERSION%-x86_64.iso.part1 herald-os-%VERSION%-x86_64.iso
 certutil -hashfile herald-os-%VERSION%-x86_64.iso SHA256
 ```
