@@ -250,10 +250,56 @@ describe('typing into another app on macOS', () => {
     expect(electron.showMessageBox).toHaveBeenCalledTimes(1)
   })
 
+  it('shows a different explanation once the first has closed', async () => {
+    await type('one')
+    await flush()
+    electron.trusted = true
+    run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: AUTOMATION_REFUSED })
+    await type('two')
+
+    expect(dialogs().map(options => options.message)).toEqual(['Allow Herald OS to type into other apps', 'Herald OS needs Automation permission'])
+  })
+
+  it('gives the clipboard its old text back after a paste, not the pasted text', async () => {
+    vi.useFakeTimers()
+
+    try {
+      electron.trusted = true
+      await type('hello')
+
+      expect(electron.clipboard).toBe('hello')
+      await vi.advanceTimersByTimeAsync(700)
+      expect(electron.clipboard).toBe('before')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('says the same in Simplified Chinese', async () => {
     electron.language = 'zh-CN'
     await type('hello')
 
     expect(dialogs()[0]).toMatchObject({ message: '允许 Herald OS 在其他应用中输入', buttons: ['继续', '以后再说'] })
+  })
+})
+
+describe.each(['linux', 'win32'])('typing into another app on %s', os => {
+  it('never runs osascript nor asks about macOS permissions', async () => {
+    Object.defineProperty(process, 'platform', { value: os })
+
+    await type('hello')
+    await type('line one\nline two', { submit: true })
+    await flush()
+
+    expect(run.mock.calls.filter(([command]) => command === 'osascript')).toEqual([])
+    expect(electron.isTrustedAccessibilityClient).not.toHaveBeenCalled()
+    expect(electron.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it(os === 'linux' ? 'types with wtype' : 'leaves the text on the clipboard', async () => {
+    Object.defineProperty(process, 'platform', { value: os })
+
+    expect(await type('hello')).toEqual(os === 'linux' ? { typed: true, copied: false } : { typed: false, copied: true })
+    expect(run.mock.calls.map(([command]) => command)).toEqual(os === 'linux' ? ['wtype'] : [])
   })
 })
