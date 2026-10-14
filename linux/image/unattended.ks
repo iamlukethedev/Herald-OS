@@ -20,8 +20,9 @@ reboot
 
 %pre --interpreter=/usr/bin/bash --erroronfail --log=/tmp/herald-os-disk.log
 # The disk to erase: a name from lsblk (nvme0n1, sda, vda) or /dev/disk/by-id/<id> for an exact
-# device. Empty uses the internal disk (not USB, removable or read-only, and not the one the
-# installer started from) when there is exactly one; with none or several, it erases nothing.
+# device. It must be a whole disk that is writable and not the one the installer started from.
+# Empty uses the internal disk (not USB, removable, read-only, a multipath or BIOS RAID member, or
+# the installer's) when there is exactly one; with none or several, it erases nothing.
 DISK=""
 
 # --log takes stdout and stderr, so the console gets its own copy.
@@ -30,16 +31,37 @@ say() {
   { echo "herald-os: $*" >>/dev/console; } 2>/dev/null || true
 }
 
-# The disks under the installer's own files (a USB stick, a disk holding the ISO).
+refuse() {
+  local line
+  for line in "$@"; do say "$line"; done
+  exit 1
+}
+
+# Natural order, so nvme2n1 comes before nvme10n1.
+by_name() {
+  LC_ALL=C sort -V
+}
+
+# The devices under the installer's own files (a USB stick, a disk holding the ISO), down to the
+# disks: lsblk -s walks from a partition, LVM volume, RAID or LUKS device to every disk below it.
 installer_disks() {
-  local mount source parent
+  local mount source
   for mount in /run/install/repo /run/install/source /run/install/isodir; do
     source="$(findmnt -no SOURCE "$mount" 2>/dev/null)" || continue
     source="${source%%[*}"
     [[ "$source" == /dev/* ]] || continue
-    parent="$(lsblk -ndo PKNAME "$source" 2>/dev/null)"
-    echo "${parent:-${source#/dev/}}"
+    lsblk -nsro NAME "$source" 2>/dev/null
   done
+}
+
+# A path to a multipath device, or a member of a BIOS (firmware) or md RAID set: erasing the one
+# disk would break the set, so such disks are never counted.
+in_a_set() {
+  local type fstype
+  while read -r type fstype; do
+    [[ "$type" == mpath || "$type" == dmraid || "$type" == raid* || "$fstype" == mpath_member || "$fstype" == *_raid_member ]] && return 0
+  done < <(lsblk -nro TYPE,FSTYPE "/dev/$1" 2>/dev/null)
+  return 1
 }
 
 internal_disks() {
@@ -48,27 +70,52 @@ internal_disks() {
   while read -r name type rm ro tran; do
     [[ "$type" == disk && "$rm" == 0 && "$ro" == 0 && "$tran" != usb ]] || continue
     [[ "$name" == zram* || "$skip" == *" $name "* ]] && continue
+    in_a_set "$name" && continue
     echo "$name"
-  done < <(lsblk -dnro NAME,TYPE,RM,RO,TRAN)
+  done < <(lsblk -dnro NAME,TYPE,RM,RO,TRAN | by_name)
 }
 
-if [[ -z "$DISK" ]]; then
+# DISK as a kernel name, after checking it is a writable whole disk other than the installer's.
+# It goes into ignoredisk and clearpart --drives, so spaces, commas (a list of drives) and a
+# leading dash (an option) are refused before anything looks it up. lsblk refuses anything that
+# is not a block device.
+checked_disk() {
+  local path name type ro
+  [[ "$DISK" =~ ^[A-Za-z0-9/._:@+-]+$ && "$DISK" != -* && "$DISK" != */-* ]] ||
+    refuse "DISK=\"$DISK\" is not a disk name, so nothing was erased." \
+      "Set DISK= in the kickstart's %pre to a disk lsblk lists, or /dev/disk/by-id/<id>, with nothing else."
+  [[ "$DISK" == /* ]] && path="$DISK" || path="/dev/$DISK"
+  path="$(readlink -f "$path")"
+  type="$(lsblk -ndo TYPE "$path" 2>/dev/null)" ||
+    refuse "DISK=\"$DISK\" is not a block device, so nothing was erased." \
+      "Set DISK= in the kickstart's %pre to a disk lsblk lists, or /dev/disk/by-id/<id>."
+  read -r name ro < <(lsblk -ndro NAME,RO "$path" 2>/dev/null) ||
+    refuse "DISK=\"$DISK\" is not a block device, so nothing was erased."
+  [[ "$type" == disk ]] ||
+    refuse "DISK=\"$DISK\" is $path, a $type and not a whole disk, so nothing was erased." \
+      "Set DISK= in the kickstart's %pre to a whole disk (nvme0n1, not nvme0n1p1)."
+  [[ "$ro" == 0 ]] ||
+    refuse "DISK=\"$DISK\" is $path, which is read-only, so nothing was erased."
+  [[ " $(installer_disks | tr '\n' ' ') " != *" $name "* ]] ||
+    refuse "DISK=\"$DISK\" is $path, the disk the installer started from, so nothing was erased."
+  echo "$name"
+}
+
+if [[ -n "$DISK" ]]; then
+  disk="$(checked_disk)" || exit 1
+else
   mapfile -t disks < <(internal_disks)
-  if (( ${#disks[@]} == 0 )); then
-    say "no internal disk to install to, so nothing was erased."
-    say "Set DISK= in the kickstart's %pre to the disk to erase (a name lsblk lists, or /dev/disk/by-id/<id>)."
-    exit 1
-  fi
-  if (( ${#disks[@]} > 1 )); then
-    say "found ${#disks[@]} internal disks (${disks[*]}), so nothing was erased."
-    say "Set DISK= in the kickstart's %pre to the one disk to erase: one of those names, or /dev/disk/by-id/<id>."
-    exit 1
-  fi
-  DISK="${disks[0]}"
+  (( ${#disks[@]} > 0 )) ||
+    refuse "no internal disk to install to, so nothing was erased." \
+      "Set DISK= in the kickstart's %pre to the disk to erase (a name lsblk lists, or /dev/disk/by-id/<id>)."
+  (( ${#disks[@]} == 1 )) ||
+    refuse "found ${#disks[@]} internal disks (${disks[*]}), so nothing was erased." \
+      "Set DISK= in the kickstart's %pre to the one disk to erase: one of those names, or /dev/disk/by-id/<id>."
+  disk="${disks[0]}"
 fi
-say "erasing $DISK, and only $DISK"
+say "erasing $disk, and only $disk"
 {
-  echo "ignoredisk --only-use=$DISK"
-  echo "clearpart --all --drives=$DISK --initlabel --disklabel=gpt"
+  echo "ignoredisk --only-use=$disk"
+  echo "clearpart --all --drives=$disk --initlabel --disklabel=gpt"
 } >/tmp/herald-os-disk.ks
 %end
