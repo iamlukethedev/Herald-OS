@@ -40,15 +40,32 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 const JWT = /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/
 const SEED_WORD = /^[a-z]{3,8}$/
 
-/** A word in plain text this long (or longer) that mixes letters and digits is a token. */
+/** A word in plain text shorter than this is never a token (known prefixes aside). */
 export const TEXT_TOKEN_MIN = 12
 /** The same for a path segment or a parameter value, where tokens are shorter. */
 export const URL_TOKEN_MIN = 8
 /** Base32 (letters only, too) and hex with no digits are tokens from this length. */
 export const ENCODED_TOKEN_MIN = 16
-/** Letters switching case this often ("abcDEFghiJKLmnoP") make a token, from MIXED_CASE_MIN characters. */
+/**
+ * Words are judged chunk by chunk (the letters and digits between separators), and a chunk only
+ * counts as random from this length.
+ */
+export const RANDOM_CHUNK_MIN = 8
+/** Letters and digits switching this often, with no CamelCase word in the chunk, are random ("abc123SECRET"). */
+export const LETTER_DIGIT_SWITCHES_MIN = 2
+/** This many irregular switches in a row are random ("aZbYcX", "4eC39H"). */
+export const IRREGULAR_SWITCHES_MIN = 3
+/**
+ * Acronym-like runs glued to lowercase ("DEFghi") this often in one chunk, with CASE_SWITCHES_MIN
+ * case switches and MIXED_CASE_MIN characters, are random ("abcDEFghiJKLmnoP"). CamelCase names
+ * have at most one ("PostgreSQLMySQLiteDB": SQLite).
+ */
+export const ACRONYM_RUNS_MIN = 2
 export const CASE_SWITCHES_MIN = 4
 export const MIXED_CASE_MIN = 16
+/** Groups of letters and digits ("A1B2-C3D4-E5F6"), each at least KEY_GROUP_MIN long, make a key. */
+export const KEY_GROUPS_MIN = 3
+export const KEY_GROUP_MIN = 3
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -131,11 +148,76 @@ export function caseSwitches(value: string): number {
   return switches
 }
 
+type CharClass = 'upper' | 'lower' | 'digit'
+
+/** A chunk as runs of upper case, lower case and digits: "iPhone15" is i, P, hone, 15. */
+function runs(chunk: string): { kind: CharClass; length: number }[] {
+  const out: { kind: CharClass; length: number }[] = []
+
+  for (const char of chunk) {
+    const kind: CharClass = /[A-Z]/.test(char) ? 'upper' : /[a-z]/.test(char) ? 'lower' : 'digit'
+    const last = out[out.length - 1]
+
+    if (last && last.kind === kind) {
+      last.length++
+    } else {
+      out.push({ kind, length: 1 })
+    }
+  }
+
+  return out
+}
+
 /**
- * A random-looking token: a known key format, a JWT, base32, hex, letters switching case back and
- * forth, or letters and digits switching back and forth
- * ("4eC39HqL…", "abc123SECRET"). Words and numbers joined up ("ORDER-2026-000123456",
- * "correct-horse-battery-staple-99") switch at most once and are left alone.
+ * The longest stretch of irregular switches: leaving a run of one character ("aZbY", "M3"). A
+ * capital starting a CamelCase word ("Phone") is not counted and does not break the stretch;
+ * leaving a longer run does.
+ */
+export function irregularSwitches(chunk: string): number {
+  const parts = runs(chunk)
+  let current = 0
+  let longest = 0
+
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (parts[i].kind === 'upper' && parts[i].length === 1 && parts[i + 1].kind === 'lower') {
+      continue
+    }
+
+    current = parts[i].length === 1 ? current + 1 : 0
+    longest = Math.max(longest, current)
+  }
+
+  return longest
+}
+
+/** Upper-case runs of 2+ glued to 2+ lower-case letters ("DEFghi"). */
+export function acronymRuns(chunk: string): number {
+  const parts = runs(chunk)
+
+  return parts.filter((part, i) => part.kind === 'upper' && part.length >= 2 && parts[i + 1]?.kind === 'lower' && parts[i + 1].length >= 2).length
+}
+
+/** A CamelCase word: a capital and two or more lower-case letters ("Phone", "Pro"). */
+const CAMEL_WORD = /[A-Z][a-z]{2,}/
+
+function randomChunk(chunk: string): boolean {
+  if (chunk.length >= RANDOM_CHUNK_MIN) {
+    if (letterDigitSwitches(chunk) >= LETTER_DIGIT_SWITCHES_MIN && !CAMEL_WORD.test(chunk)) {
+      return true
+    }
+
+    if (irregularSwitches(chunk) >= IRREGULAR_SWITCHES_MIN) {
+      return true
+    }
+  }
+
+  return chunk.length >= MIXED_CASE_MIN && caseSwitches(chunk) >= CASE_SWITCHES_MIN && acronymRuns(chunk) >= ACRONYM_RUNS_MIN
+}
+
+/**
+ * A random-looking token: a known key format, a JWT, base32, hex, grouped key, or a chunk that
+ * looks random (see randomChunk). Names stay text: "iPhone15ProMax", "NETGEAR-5G-Guest",
+ * "TheQuickBrownFoxJumps", "ORDER-2026-000123456", "correct-horse-battery-staple-99".
  */
 export function looksLikeToken(value: string, min: number): boolean {
   if (KNOWN_TOKEN.test(value)) {
@@ -154,11 +236,10 @@ export function looksLikeToken(value: string, min: number): boolean {
     return true
   }
 
-  if (value.length >= MIXED_CASE_MIN && caseSwitches(value) >= CASE_SWITCHES_MIN) {
-    return true
-  }
+  const chunks = value.split(/[^A-Za-z0-9]+/).filter(Boolean)
+  const keyGroups = chunks.length >= KEY_GROUPS_MIN && chunks.every(chunk => chunk.length >= KEY_GROUP_MIN && /[A-Za-z]/.test(chunk) && /[0-9]/.test(chunk))
 
-  return letterDigitSwitches(value) >= 2
+  return keyGroups || chunks.some(randomChunk)
 }
 
 interface UriParts {

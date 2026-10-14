@@ -809,8 +809,15 @@ QR_SEED_WORD = re.compile(r"[a-z]{3,8}")
 QR_TEXT_TOKEN_MIN = 12
 QR_URL_TOKEN_MIN = 8
 QR_ENCODED_TOKEN_MIN = 16
+QR_RANDOM_CHUNK_MIN = 8
+QR_LETTER_DIGIT_SWITCHES_MIN = 2
+QR_IRREGULAR_SWITCHES_MIN = 3
+QR_ACRONYM_RUNS_MIN = 2
 QR_CASE_SWITCHES_MIN = 4
 QR_MIXED_CASE_MIN = 16
+QR_KEY_GROUPS_MIN = 3
+QR_KEY_GROUP_MIN = 3
+QR_CAMEL_WORD = re.compile(r"[A-Z][a-z]{2,}")
 QR_RECOVERY_WORDS = (11, 24)
 
 
@@ -872,8 +879,46 @@ def qr_case_switches(value: str) -> int:
     return switches
 
 
+def qr_runs(chunk: str) -> list[list]:
+    """A chunk as [kind, length] runs of upper case, lower case and digits: "iPhone15" is i, P, hone, 15."""
+    out: list[list] = []
+    for char in chunk:
+        kind = "upper" if re.fullmatch(r"[A-Z]", char) else "lower" if re.fullmatch(r"[a-z]", char) else "digit"
+        if out and out[-1][0] == kind:
+            out[-1][1] += 1
+        else:
+            out.append([kind, 1])
+    return out
+
+
+def qr_irregular_switches(chunk: str) -> int:
+    """The longest stretch of switches out of one-character runs; a capital starting a CamelCase word is skipped."""
+    parts, current, longest = qr_runs(chunk), 0, 0
+    for here, after in zip(parts, parts[1:]):
+        if here == ["upper", 1] and after[0] == "lower":
+            continue
+        current = current + 1 if here[1] == 1 else 0
+        longest = max(longest, current)
+    return longest
+
+
+def qr_acronym_runs(chunk: str) -> int:
+    """Upper-case runs of 2+ glued to 2+ lower-case letters ("DEFghi")."""
+    parts = qr_runs(chunk)
+    return sum(1 for here, after in zip(parts, parts[1:]) if here[0] == "upper" and here[1] >= 2 and after[0] == "lower" and after[1] >= 2)
+
+
+def qr_random_chunk(chunk: str) -> bool:
+    if len(chunk) >= QR_RANDOM_CHUNK_MIN:
+        if qr_switches(chunk) >= QR_LETTER_DIGIT_SWITCHES_MIN and not QR_CAMEL_WORD.search(chunk):
+            return True
+        if qr_irregular_switches(chunk) >= QR_IRREGULAR_SWITCHES_MIN:
+            return True
+    return len(chunk) >= QR_MIXED_CASE_MIN and qr_case_switches(chunk) >= QR_CASE_SWITCHES_MIN and qr_acronym_runs(chunk) >= QR_ACRONYM_RUNS_MIN
+
+
 def qr_looks_like_token(value: str, minimum: int) -> bool:
-    """A known key format, a JWT, base32, hex, letters switching case, or letters and digits switching back and forth."""
+    """A known key format, a JWT, base32, hex, a grouped key, or a chunk that looks random (qr_random_chunk)."""
     if QR_KNOWN_TOKEN.match(value):
         return True
     if len(value) < minimum:
@@ -882,9 +927,9 @@ def qr_looks_like_token(value: str, minimum: int) -> bool:
         return True
     if len(value) >= QR_ENCODED_TOKEN_MIN and (re.fullmatch(r"[A-Z2-7]+=*", value) or (re.fullmatch(r"[0-9a-fA-F]+", value) and re.search(r"[a-fA-F]", value))):
         return True
-    if len(value) >= QR_MIXED_CASE_MIN and qr_case_switches(value) >= QR_CASE_SWITCHES_MIN:
-        return True
-    return qr_switches(value) >= 2
+    chunks = [chunk for chunk in re.split(r"[^A-Za-z0-9]+", value) if chunk]
+    key_groups = len(chunks) >= QR_KEY_GROUPS_MIN and all(len(chunk) >= QR_KEY_GROUP_MIN and re.search(r"[A-Za-z]", chunk) and re.search(r"[0-9]", chunk) for chunk in chunks)
+    return key_groups or any(qr_random_chunk(chunk) for chunk in chunks)
 
 
 def qr_uri_parts(uri: str) -> tuple[str | None, str, str, str]:

@@ -964,5 +964,299 @@
     "hidden": [
       "eyJabcde"
     ]
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "McDonaldsFreeWiFi",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "eBayAuctionWinner",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "TheQuickBrownFoxJumps",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "PostgreSQLMySQLiteDB",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "iPhone15ProMax",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "MacBookProM3Max",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "PlayStation5DigitalEdition",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "NETGEAR-5G-Guest",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "TP-Link_5GHz_A1B2",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name (QA round 3)",
+    "text": "SkyNet-HomeWiFi-5G",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "GalaxyS24Ultra",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "JavaScriptRuntime",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "Xbox-Series-X",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "LivingRoomTV2",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "ASUS_RT-AX88U_5G",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "BT-Hub6-2.4GHz",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "an ordinary name",
+    "text": "Vodafone-A1B2C3",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "names in a sentence leave the sentence alone",
+    "text": "Connect to McDonaldsFreeWiFi from your iPhone15ProMax or MacBookProM3Max",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random chunk: 7 characters is below the minimum",
+    "text": "ab12cd3-wxyz",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "random chunk: 8 characters is the minimum",
+    "text": "ab12cd34-wxyz",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ab12cd34-wxyz"
+    ]
+  },
+  {
+    "note": "letters and digits with a CamelCase word are a name",
+    "text": "ab12Cde34ef5",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a capital with one lower-case letter is not a CamelCase word",
+    "text": "ab12Cd34ef56",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ab12Cd34ef56"
+    ]
+  },
+  {
+    "note": "two irregular switches in a row are not random",
+    "text": "aZbYqwertyui",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "three irregular switches in a row are",
+    "text": "aZbYcXqwerty",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "aZbYcXqwerty"
+    ]
+  },
+  {
+    "note": "random mixed case with digits",
+    "text": "kQ9xLm2PzR7tWv4N",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "kQ9xLm2PzR7tWv4N"
+    ]
+  },
+  {
+    "note": "acronym runs: two, but only three case switches",
+    "text": "DEFghiJKLmnopqrs",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a key in three groups",
+    "text": "A1B2-C3D4-E5F6",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "A1B2-C3D4-E5F6"
+    ]
+  },
+  {
+    "note": "a key in four groups",
+    "text": "a1b2-c3d4-e5f6-g7h8",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "a1b2-c3d4-e5f6-g7h8"
+    ]
+  },
+  {
+    "note": "two groups are not a key",
+    "text": "A1B2C3-D4E5F6",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "key groups of three characters",
+    "text": "A1B-C2D-E3F4",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "A1B-C2D-E3F4"
+    ]
+  },
+  {
+    "note": "a group of two characters is not a key group",
+    "text": "A1-B2C-D3E-F4G",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "key groups must each mix letters and digits",
+    "text": "ABCD-EFGH-IJK1",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a phone number is not a key: groups must contain letters",
+    "text": "555-123-4567",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a phone number in a sentence",
+    "text": "Call 555-123-4567 for table 4",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a longer run breaks a stretch of irregular switches",
+    "text": "aZbYqwertyuiXcV",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
   }
 ]
