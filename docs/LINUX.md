@@ -248,11 +248,10 @@ On the image, apps install through Flatpak or into `~/.local` (the catalog picks
 there); the system itself changes only by a whole new image.
 
 **Updates you can undo.** `herald-os update` runs `bootc upgrade` (the image tag of the channel:
-`stable` for releases, `edge` for every push to main that changes the image; `herald-os channel edge` switches with
-`bootc switch`), then
-Flatpaks and `hermes update`. The new image starts on the next restart and the previous one stays in
-the boot menu; `herald-os rollback` (or Update > Go back to the previous version) makes it the
-default again.
+`stable` follows releases, `edge` follows main (rebuilt when image files change);
+`herald-os channel edge` switches with `bootc switch`), then Flatpaks and `hermes update`. The new
+image starts on the next restart and the previous one stays in the boot menu; `herald-os rollback`
+(or Update > Go back to the previous version) makes it the default again.
 
 **Setup and reset.** The first boot makes the account and installs Hermes; then the shell's setup
 asks who the computer is for. For yourself: a name, a password (set with `passwd` as you, so the
