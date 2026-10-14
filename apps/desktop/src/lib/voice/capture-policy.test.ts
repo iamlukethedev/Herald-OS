@@ -73,6 +73,23 @@ describe('reduceCapture', () => {
     expect(state.attempts).toHaveLength(MAX_REOPENS)
   })
 
+  it('never counts a person\'s picks toward the guard', () => {
+    let state = open(initialCaptureState(), 'default', 'g-airpods')
+    const picks: CaptureTarget[] = [TONOR, SYSTEM, TONOR, SYSTEM, TONOR]
+    const actions = []
+
+    for (const [i, target] of picks.entries()) {
+      const result = reduceCapture(state, { kind: 'chosen', target }, 100 + i * 100)
+      actions.push(result.action.kind)
+      state = open(result.state, target.deviceId ?? 'default', target.groupId ?? '')
+    }
+
+    expect(actions).toEqual(['reopen', 'reopen', 'reopen', 'reopen', 'reopen'])
+    expect(state.attempts).toEqual([])
+    // The system's own changes still have the whole budget after a burst of picks.
+    expect(reduceCapture(state, { kind: 'devices', target: SYSTEM }, 700).action.kind).toBe('reopen')
+  })
+
   it('allows reopening again once the window has passed', () => {
     let state = open(initialCaptureState(), 'default', 'g-airpods')
 

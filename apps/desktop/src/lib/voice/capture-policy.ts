@@ -23,7 +23,10 @@ export interface CaptureState {
   binding: CaptureBinding | null
   /** True while a conversation is listening: a system change waits, a person's choice does not. */
   conversing: boolean
-  /** When the recent reopen attempts happened, for the guard against a reopen loop. */
+  /**
+   * When the recent reopens the system caused happened, for the guard against a reopen loop. A
+   * person's pick is never counted: picking four microphones in a row is not a device flapping.
+   */
   attempts: number[]
 }
 
@@ -65,8 +68,9 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent, now: num
       return { action: { kind: 'none' }, state: { ...state, conversing: event.conversing } }
 
     case 'chosen':
-      // A person asked for this device, so it applies even in the middle of a conversation.
-      return sameDevice(state.binding, event.target) ? { action: { kind: 'none' }, state } : attemptReopen(state, event.target.deviceId, 'chosen', now)
+      // A person asked for this device, so it applies even in the middle of a conversation, and
+      // outside the guard.
+      return sameDevice(state.binding, event.target) ? { action: { kind: 'none' }, state } : { action: { kind: 'reopen', deviceId: event.target.deviceId, because: 'chosen' }, state: { ...state, binding: null } }
 
     case 'devices':
       if (sameDevice(state.binding, event.target) || event.target.reason === 'unavailable') {
@@ -86,7 +90,7 @@ export function recentAttempts(attempts: readonly number[], now: number): number
   return attempts.filter(at => now - at < REOPEN_WINDOW_MS)
 }
 
-function attemptReopen(state: CaptureState, deviceId: string | null, because: 'lost' | 'chosen' | 'devices', now: number): { action: CaptureAction; state: CaptureState } {
+function attemptReopen(state: CaptureState, deviceId: string | null, because: 'lost' | 'devices', now: number): { action: CaptureAction; state: CaptureState } {
   const attempts = recentAttempts(state.attempts, now)
 
   if (attempts.length >= MAX_REOPENS) {
