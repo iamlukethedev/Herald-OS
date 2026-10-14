@@ -25,8 +25,13 @@ export interface CaptureFrame {
 
 type FrameListener = (frame: CaptureFrame) => void
 
-/** Told the new track whenever the stream is reopened on another device, so it can swap it in. */
-type TrackListener = (track: MediaStreamTrack) => void
+/** What a raw-stream consumer is told when the graph reopens under it. */
+export interface MicrophoneHolder {
+  /** The stream was reopened (another device, or the system default after a failure): swap this in. */
+  onTrack: (track: MediaStreamTrack) => void
+  /** Nothing could be reopened, not even the system default: the old track is stopped for good. */
+  onFailed: (error: MicrophoneUnavailableError) => void
+}
 
 /** A consumer of the raw stream (the WebRTC sender) and the way to let go of it. */
 export interface MicrophoneHold {
@@ -73,7 +78,8 @@ let deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
 /** Kept here rather than on the tracks, so a reopened stream comes back as muted as the old one. */
 let muted = false
 const listeners = new Set<FrameListener>()
-const holders = new Set<TrackListener>()
+const holders = new Set<MicrophoneHolder>()
+let unsubscribeChoice: (() => void) | null = null
 
 async function open(): Promise<void> {
   if (context && stream) {
@@ -83,6 +89,8 @@ async function open(): Promise<void> {
   if (opening) {
     return opening
   }
+
+  watchChoice()
 
   opening = (async () => {
     const permission = await window.heraldOS.voice.microphoneStatus().catch(() => 'unknown' as const)
@@ -172,28 +180,38 @@ async function openStream(): Promise<{ media: MediaStream; device: AudioDeviceOp
   try {
     return { media: await requestStream(wanted?.id ?? null), device: wanted ?? choice.device }
   } catch (error) {
-    const name = error instanceof Error ? error.name : ''
-
-    if (name === 'OverconstrainedError') {
-      if (wanted) {
-        console.warn(`[voice] ${wanted.label} could not be opened; using the system microphone`, error)
-
-        return { media: await requestStream(null), device: list.devices.find(device => device.isSystem) ?? null }
-      }
-
-      throw new MicrophoneUnavailableError('no-device', 'No microphone was found.')
+    if (!wanted) {
+      throw unavailable(error)
     }
 
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
-      throw new MicrophoneUnavailableError('denied', 'Microphone access was denied.')
-    }
+    // Whatever went wrong with the chosen device (away, busy, a driver error), the system default
+    // may still work; a revoked permission fails here too and is reported as such.
+    console.warn(`[voice] ${wanted.label} could not be opened; using the system microphone`, error)
 
-    if (name === 'NotFoundError') {
-      throw new MicrophoneUnavailableError('no-device', 'No microphone was found.')
+    try {
+      return { media: await requestStream(null), device: list.devices.find(device => device.isSystem) ?? null }
+    } catch (fallbackError) {
+      throw unavailable(fallbackError)
     }
-
-    throw new MicrophoneUnavailableError('failed', error instanceof Error ? error.message : String(error))
   }
+}
+
+function unavailable(error: unknown): MicrophoneUnavailableError {
+  if (error instanceof MicrophoneUnavailableError) {
+    return error
+  }
+
+  const name = error instanceof Error ? error.name : ''
+
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return new MicrophoneUnavailableError('denied', 'Microphone access was denied.')
+  }
+
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return new MicrophoneUnavailableError('no-device', 'No microphone was found.')
+  }
+
+  return new MicrophoneUnavailableError('failed', error instanceof Error ? error.message : String(error))
 }
 
 async function requestStream(deviceId: string | null): Promise<MediaStream> {
@@ -255,23 +273,31 @@ function watchDevices(media: MediaStream, device: AudioDeviceOption | null): voi
 
   navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
 
-  const unsubscribePrefs = $prefs.subscribe((prefs, previous) => {
-    // Subscribe fires once with the current value and no previous one; there is nothing to apply then.
-    if (previous && prefs.voice.inputDevice !== previous.voice.inputDevice) {
-      void examine('chosen')
-    }
-  })
-
   stopWatching = () => {
     track?.removeEventListener('ended', onEnded)
     navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
-    unsubscribePrefs()
 
     if (deviceChangeTimer) {
       clearTimeout(deviceChangeTimer)
       deviceChangeTimer = null
     }
   }
+}
+
+/**
+ * Apply a new choice. Watched for the module's lifetime rather than per stream: a pick made while
+ * the stream is being reopened would otherwise land between two subscriptions and be lost.
+ */
+function watchChoice(): void {
+  if (unsubscribeChoice) {
+    return
+  }
+
+  unsubscribeChoice = $prefs.listen((prefs, previous) => {
+    if (prefs.voice.inputDevice !== previous.voice.inputDevice && (stream || opening || reopening)) {
+      void examine('chosen')
+    }
+  })
 }
 
 let examining: Promise<void> = Promise.resolve()
@@ -284,6 +310,9 @@ async function examine(trigger: 'lost' | 'chosen' | 'devices'): Promise<void> {
 }
 
 async function examineNow(trigger: 'lost' | 'chosen' | 'devices'): Promise<void> {
+  // A pick made while the mic was still opening is examined against the stream it ends up with.
+  await opening?.catch(() => undefined)
+
   // Queued behind an earlier examine, the mic may have been closed since; never reopen an idle one.
   if (!stream || !inUse()) {
     return
@@ -328,7 +357,7 @@ async function apply(action: CaptureAction): Promise<void> {
 
     if (track) {
       for (const holder of holders) {
-        holder(track)
+        holder.onTrack(track)
       }
     }
   })()
@@ -336,8 +365,15 @@ async function apply(action: CaptureAction): Promise<void> {
   try {
     await reopening
   } catch (error) {
+    // open() already fell back to the system default; this is neither working. A holder's track is
+    // stopped, so it is told rather than left sending silence.
+    const failure = unavailable(error)
     console.warn('[voice] The microphone could not be reopened', error)
-    $captureNotice.set({ key: 'voice.input-reopen-failed', message: `The microphone could not be reopened: ${error instanceof Error ? error.message : String(error)}` })
+    $captureNotice.set({ key: 'voice.input-reopen-failed', message: `The microphone could not be reopened: ${failure.message}` })
+
+    for (const holder of [...holders]) {
+      holder.onFailed(failure)
+    }
   } finally {
     reopening = null
   }
@@ -440,23 +476,23 @@ function closeIfUnused(): void {
 
 /**
  * The raw MediaStream for consumers that need a track (WebRTC). Opens the mic if needed and keeps it
- * open until `release`. Reopening on another device stops the old tracks, so `onTrack` is handed the
- * new one (a sender's `replaceTrack`); without it a Live session would be left on a dead track.
+ * open until `release`. Reopening stops the old tracks, so `onTrack` is handed the new one (a
+ * sender's `replaceTrack`), or `onFailed` is called when nothing could be opened in its place.
  */
-export async function holdMicrophoneStream(onTrack: TrackListener): Promise<MicrophoneHold> {
-  holders.add(onTrack)
+export async function holdMicrophoneStream(holder: MicrophoneHolder): Promise<MicrophoneHold> {
+  holders.add(holder)
 
   try {
     await open()
   } catch (error) {
-    holders.delete(onTrack)
+    holders.delete(holder)
     closeIfUnused()
 
     throw error
   }
 
   if (!stream) {
-    holders.delete(onTrack)
+    holders.delete(holder)
     closeIfUnused()
 
     throw new MicrophoneUnavailableError('failed', 'Microphone stream unavailable.')
@@ -477,7 +513,7 @@ export async function holdMicrophoneStream(onTrack: TrackListener): Promise<Micr
       }
 
       held = false
-      holders.delete(onTrack)
+      holders.delete(holder)
       closeIfUnused()
     }
   }

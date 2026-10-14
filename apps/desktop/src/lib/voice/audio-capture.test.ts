@@ -151,6 +151,21 @@ async function settle() {
   await vi.advanceTimersByTimeAsync(0)
 }
 
+const idleHolder = () => ({ onTrack: () => undefined, onFailed: () => undefined })
+
+/** Make getUserMedia fail for one device (or every request, with `all`), the way Chromium does. */
+function failRequests(name: string, which: { deviceId?: string; all?: boolean }) {
+  userMedia.mockImplementation(constraints => {
+    const wanted = constraints.audio.deviceId?.exact
+
+    if (which.all || wanted === which.deviceId) {
+      return Promise.reject(Object.assign(new Error(name), { name }))
+    }
+
+    return getUserMedia(constraints)
+  })
+}
+
 const TONOR: FakeDevice = { deviceId: 'i-tonor', groupId: 'g-tonor', label: 'Tonor (USB)' }
 const BUILT_IN: FakeDevice = { deviceId: 'i-built-in', groupId: 'g-built-in', label: 'MacBook Pro Microphone (Built-in)' }
 
@@ -184,6 +199,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  userMedia.mockImplementation(getUserMedia)
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -192,7 +208,7 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
   it('hands the holder the new track when a new microphone is chosen, and stops the old one', async () => {
     const capture = await loadCapture()
     const onTrack = vi.fn()
-    const hold = await capture.holdMicrophoneStream(onTrack)
+    const hold = await capture.holdMicrophoneStream({ onTrack, onFailed: vi.fn() })
     const first = tracks[0]
 
     setChoice({ id: TONOR.deviceId, label: TONOR.label })
@@ -209,7 +225,7 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
     setChoice({ id: TONOR.deviceId, label: TONOR.label })
     const capture = await loadCapture()
     const onTrack = vi.fn()
-    await capture.holdMicrophoneStream(onTrack)
+    await capture.holdMicrophoneStream({ onTrack, onFailed: vi.fn() })
 
     devices = [BUILT_IN]
     tracks[0].end()
@@ -221,7 +237,7 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
 
   it('keeps the microphone open for a holder after the last frame subscriber leaves', async () => {
     const capture = await loadCapture()
-    const hold = await capture.holdMicrophoneStream(() => undefined)
+    const hold = await capture.holdMicrophoneStream(idleHolder())
     const unsubscribe = await capture.subscribeMicrophone(() => undefined)
 
     unsubscribe()
@@ -235,7 +251,7 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
 
   it('does not reopen an idle microphone for a change that arrives after everyone let go', async () => {
     const capture = await loadCapture()
-    const hold = await capture.holdMicrophoneStream(() => undefined)
+    const hold = await capture.holdMicrophoneStream(idleHolder())
 
     tracks[0].end()
     hold.release()
@@ -246,10 +262,134 @@ describe('audio-capture with a raw-stream holder (Live)', () => {
   })
 })
 
+describe('audio-capture reopen guard', () => {
+  const YETI: FakeDevice = { deviceId: 'i-yeti', groupId: 'g-yeti', label: 'Yeti (USB)' }
+  const AIRPODS: FakeDevice = { deviceId: 'i-airpods', groupId: 'g-airpods', label: 'AirPods (Bluetooth)' }
+
+  it('does not count four quick picks as a device that keeps changing', async () => {
+    devices = [BUILT_IN, TONOR, YETI, AIRPODS]
+    const capture = await loadCapture()
+    const onTrack = vi.fn()
+    await capture.holdMicrophoneStream({ onTrack, onFailed: vi.fn() })
+    const frames = vi.fn()
+    await capture.subscribeMicrophone(frames)
+
+    for (const device of [TONOR, YETI, AIRPODS, TONOR]) {
+      setChoice({ id: device.deviceId, label: device.label })
+      await settle()
+    }
+
+    const open = tracks.filter(track => !track.stopped)
+    expect(open).toHaveLength(1)
+    expect(open[0].deviceId).toBe(TONOR.deviceId)
+    expect(capture.$micDevice.get()?.id).toBe(TONOR.deviceId)
+    expect(onTrack).toHaveBeenLastCalledWith(open[0])
+    expect(capture.$captureNotice.get()).toBeNull()
+  })
+
+  it('applies a pick made while the stream is being reopened for the previous one', async () => {
+    devices = [BUILT_IN, TONOR, YETI, AIRPODS]
+    const capture = await loadCapture()
+    await capture.subscribeMicrophone(() => undefined)
+
+    let resume: () => void = () => undefined
+    userMedia.mockImplementationOnce(constraints => new Promise(resolve => (resume = () => resolve(getUserMedia(constraints)))))
+
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    await settle()
+    expect(capture.isMicrophoneOpen()).toBe(false)
+
+    // The Tonor is still being opened when the person picks the Yeti.
+    setChoice({ id: YETI.deviceId, label: YETI.label })
+    resume()
+    await settle()
+    await settle()
+
+    const open = tracks.filter(track => !track.stopped)
+    expect(open).toHaveLength(1)
+    expect(open[0].deviceId).toBe(YETI.deviceId)
+    expect(capture.$captureNotice.get()).toBeNull()
+  })
+})
+
+describe('audio-capture reopen failures', () => {
+  it('falls back to the system microphone and hands Live its track when the chosen device errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const capture = await loadCapture()
+    const holder = { onTrack: vi.fn(), onFailed: vi.fn() }
+    await capture.holdMicrophoneStream(holder)
+
+    failRequests('NotReadableError', { deviceId: TONOR.deviceId })
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    await settle()
+
+    const open = tracks.filter(track => !track.stopped)
+    expect(open).toHaveLength(1)
+    expect(open[0].deviceId).toBe(BUILT_IN.deviceId)
+    expect(holder.onTrack).toHaveBeenCalledWith(open[0])
+    expect(holder.onFailed).not.toHaveBeenCalled()
+    expect(capture.isMicrophoneOpen()).toBe(true)
+    expect(backend.prefs.get().voice.inputDevice?.id).toBe(TONOR.deviceId)
+    warn.mockRestore()
+  })
+
+  it('falls back to the system microphone when the chosen device is lost and fails to reopen', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    const capture = await loadCapture()
+    const holder = { onTrack: vi.fn(), onFailed: vi.fn() }
+    await capture.holdMicrophoneStream(holder)
+
+    failRequests('AbortError', { deviceId: TONOR.deviceId })
+    tracks[0].end()
+    await settle()
+
+    expect(holder.onTrack).toHaveBeenCalledWith(tracks[tracks.length - 1])
+    expect(tracks[tracks.length - 1].deviceId).toBe(BUILT_IN.deviceId)
+    expect(holder.onFailed).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('tells the holders, and posts a notice, when permission is revoked and nothing can be opened', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    const capture = await loadCapture()
+    const holder = { onTrack: vi.fn(), onFailed: vi.fn() }
+    await capture.holdMicrophoneStream(holder)
+
+    failRequests('NotAllowedError', { all: true })
+    tracks[0].end()
+    await settle()
+
+    expect(holder.onTrack).not.toHaveBeenCalled()
+    expect(holder.onFailed).toHaveBeenCalledTimes(1)
+    expect(holder.onFailed.mock.calls[0][0]).toMatchObject({ name: 'MicrophoneUnavailableError', reason: 'denied' })
+    expect(capture.$captureNotice.get()?.key).toBe('voice.input-reopen-failed')
+    expect(capture.isMicrophoneOpen()).toBe(false)
+    expect(tracks.every(track => track.stopped)).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('tells the holders when the system default fails too after a device error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const capture = await loadCapture()
+    const holder = { onTrack: vi.fn(), onFailed: vi.fn() }
+    await capture.holdMicrophoneStream(holder)
+
+    failRequests('NotReadableError', { all: true })
+    setChoice({ id: TONOR.deviceId, label: TONOR.label })
+    await settle()
+
+    expect(holder.onFailed).toHaveBeenCalledTimes(1)
+    expect(holder.onFailed.mock.calls[0][0]).toMatchObject({ reason: 'failed' })
+    warn.mockRestore()
+  })
+})
+
 describe('audio-capture hold', () => {
   it('reads the current track and stream, not the ones it was taken with', async () => {
     const capture = await loadCapture()
-    const hold = await capture.holdMicrophoneStream(() => undefined)
+    const hold = await capture.holdMicrophoneStream(idleHolder())
     const first = hold.track
 
     expect(first).toBe(tracks[0])
