@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { describeQr, parseQrReading, wifiFields } from './qr.ts'
+import { describeQr, parseQrReading, SHOWN_LINK_MAX, wifiFields } from './qr.ts'
 
 interface QrCase {
   text: string
@@ -39,6 +39,21 @@ describe('describeQr', () => {
 
   it('reads Wi-Fi fields with their escapes', () => {
     expect(Object.fromEntries(wifiFields('WIFI:S:a\\;b\\:c;P:p\\\\w;;'))).toEqual({ S: 'a;b:c', P: 'p\\w' })
+  })
+
+  it('keeps captions short and the link whole', () => {
+    const long = `https://example.com/${'x'.repeat(1980)}`
+    const shown = describeQr(long)
+
+    expect(long).toHaveLength(2000)
+    expect(shown.caption).toBe(`Link copied: ${long.slice(0, SHOWN_LINK_MAX - 1)}…`)
+    expect(shown.caption.length).toBeLessThanOrEqual(13 + SHOWN_LINK_MAX)
+    expect(shown.text).toBe(long)
+
+    const cut = describeQr(`${long}?token=abc`)
+
+    expect(cut.caption).toBe(shown.caption)
+    expect(cut.link).toBe(long)
   })
 
   it('keeps names short and printable', () => {

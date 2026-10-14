@@ -2305,5 +2305,73 @@
     "caption": "Link copied: https://shop.example.com/p?utm_source=newsletter&utm_medium=email&utm_campaign=Spring2026Sale",
     "description": "a link to shop.example.com",
     "full": true
+  },
+  {
+    "note": "a link of 100 characters is shown whole",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "a link of 101 characters is cut to 99 and …",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "links are cut by characters, not UTF-16 units",
+    "text": "https://example.com/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "a long link is cut after its secret parts are taken out; link keeps it whole",
+    "text": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?token=abc",
+    "kind": "link",
+    "caption": "Link copied: https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+    "description": "a link to example.com, with the parts that looked secret removed",
+    "link": "https://example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "hidden": [
+      "token",
+      "abc"
+    ]
+  },
+  {
+    "note": "a long user name before the host leaves only the host and …",
+    "text": "https://uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu@example.com/menu",
+    "kind": "link",
+    "caption": "Link copied: example.com…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "scheme://user@host of exactly 100 characters is not cut either",
+    "text": "https://uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu@example.com/menu",
+    "kind": "link",
+    "caption": "Link copied: example.com…",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "a host of 99 characters is shown, with …",
+    "text": "https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.com/",
+    "kind": "link",
+    "caption": "Link copied: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.com…",
+    "description": "a link to xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.com",
+    "full": true
+  },
+  {
+    "note": "a host of 100 characters is not treated as a link",
+    "text": "https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.com/",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
   }
 ]

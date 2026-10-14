@@ -13,7 +13,7 @@ export type QrKind = 'otp' | 'wifi' | 'link' | 'secret' | 'text'
 
 export interface QrReading {
   kind: QrKind
-  /** For captions, notifications and the voice: never the contents, only a link's host. */
+  /** For captions, notifications and the voice: never a secret; at most a link, shortened (see shownLink). */
   caption: string
   /** What it is, for Hermes ("a 2FA setup code for GitHub"). */
   description: string
@@ -96,6 +96,11 @@ export const LONG_DIGITS_MIN = 16
 /** Shorter runs from this many digits are secret when they start like a card (2 to 6) and pass the Luhn check. */
 export const LUHN_DIGITS_MIN = 13
 const CARD_LEAD = /^[2-6]/
+/**
+ * Captions show this many characters of a link at most, cut with … but never inside scheme://host;
+ * a host this long or longer is not treated as one.
+ */
+export const SHOWN_LINK_MAX = 100
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -438,11 +443,11 @@ function uriParts(uri: string): UriParts {
   }
 }
 
-/** The host of scheme://[user@]host[:port]/…, lower case; '' when it is not a plain host name. */
+/** The host of scheme://[user@]host[:port]/…, lower case; '' when it is not a plain host name short enough to show. */
 function hostOf(authority: string | null): string {
   const host = (authority ?? '').split('@').pop()!.replace(/:\d*$/, '').toLowerCase()
 
-  return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) ? host : ''
+  return /^[a-z0-9.-]+$/.test(host) && /[a-z0-9]/.test(host) && host.length < SHOWN_LINK_MAX ? host : ''
 }
 
 export interface LinkCheck {
@@ -578,8 +583,29 @@ function describeWifi(text: string): QrReading {
 }
 
 /**
+ * A link for the caption: at most SHOWN_LINK_MAX characters (code points, as in Python), cut with …
+ * after scheme://host at the earliest; the host alone and … when even that is too long.
+ */
+export function shownLink(link: string, host: string): string {
+  const chars = Array.from(link)
+
+  if (chars.length <= SHOWN_LINK_MAX) {
+    return link
+  }
+
+  const authority = link.match(/^[^:]*:\/\/[^/?#]*/)
+
+  if (authority && Array.from(authority[0]).length >= SHOWN_LINK_MAX) {
+    return `${host}…`
+  }
+
+  return `${chars.slice(0, SHOWN_LINK_MAX - 1).join('')}…`
+}
+
+/**
  * Ordinary links are shown in full. A link that carries a secret is shown without it when it can be
- * cut out (credentials, a parameter, the fragment), and as its host alone when it cannot.
+ * cut out (credentials, a parameter, the fragment), and as its host alone when it cannot. Captions
+ * shorten long links (see shownLink); `text` and `link` keep them whole.
  */
 function describeLink(text: string): QrReading | null {
   const host = /^https?:\/\/\S+$/i.test(text) ? hostOf(uriParts(text).authority) : ''
@@ -595,8 +621,8 @@ function describeLink(text: string): QrReading | null {
   }
 
   return removed
-    ? { kind: 'link', caption: `Link copied: ${link}`, description: `a link to ${host}, with the parts that looked secret removed`, link }
-    : { kind: 'link', caption: `Link copied: ${text}`, description: `a link to ${host}`, text }
+    ? { kind: 'link', caption: `Link copied: ${shownLink(link, host)}`, description: `a link to ${host}, with the parts that looked secret removed`, link }
+    : { kind: 'link', caption: `Link copied: ${shownLink(text, host)}`, description: `a link to ${host}`, text }
 }
 
 /** A code with several lines is hidden whole when any line, or the whole, would be. */

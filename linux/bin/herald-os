@@ -829,6 +829,7 @@ QR_KEY_GROUPS_MIN = 2
 QR_KEY_GROUP_MIN = 3
 QR_CAMEL_WORD = re.compile(r"[A-Z][a-z]{2,}")
 QR_RECOVERY_WORDS = (11, 24)
+QR_SHOWN_LINK_MAX = 100
 
 
 def qr_label(value: str) -> str:
@@ -1044,8 +1045,9 @@ def qr_strong_secret(value: str) -> bool:
 
 
 def qr_host_of(authority: str | None) -> str:
+    """The host of scheme://[user@]host[:port]/…, lower case; '' when it is not a plain host name short enough to show."""
     host = re.sub(r":\d*$", "", (authority or "").split("@")[-1]).lower()
-    return host if re.fullmatch(r"[a-z0-9.-]+", host) and re.search(r"[a-z0-9]", host) else ""
+    return host if re.fullmatch(r"[a-z0-9.-]+", host) and re.search(r"[a-z0-9]", host) and len(host) < QR_SHOWN_LINK_MAX else ""
 
 
 def qr_check_link(uri: str, depth: int = 0) -> dict:
@@ -1138,8 +1140,18 @@ def qr_describe_otp(text: str) -> dict:
     return {"kind": "otp", "caption": "2FA setup code copied", "description": f"a 2FA setup code for {issuer}" if issuer else "a 2FA setup code"}
 
 
+def qr_shown_link(link: str, host: str) -> str:
+    """A link for the caption: at most QR_SHOWN_LINK_MAX characters, cut with … after scheme://host at the earliest."""
+    if len(link) <= QR_SHOWN_LINK_MAX:
+        return link
+    authority = re.match(r"[^:]*://[^/?#]*", link)
+    if authority and len(authority.group(0)) >= QR_SHOWN_LINK_MAX:
+        return f"{host}…"
+    return f"{link[:QR_SHOWN_LINK_MAX - 1]}…"
+
+
 def qr_link(text: str) -> dict | None:
-    """Ordinary links in full; a secret cut out when it can be, else the host alone."""
+    """Ordinary links in full; a secret cut out when it can be, else the host alone. Captions stay short."""
     host = qr_host_of(qr_uri_parts(text)[0]) if re.fullmatch(r"https?://\S+", text, re.I) else ""
     if not host:
         return None
@@ -1147,8 +1159,8 @@ def qr_link(text: str) -> dict | None:
     if check["host_only"]:
         return {"kind": "link", "caption": f"Link copied: {host}", "description": f"a link to {host} that carries what looks like a password, key or sign-in token"}
     if check["removed"]:
-        return {"kind": "link", "caption": f"Link copied: {check['link']}", "description": f"a link to {host}, with the parts that looked secret removed", "link": check["link"]}
-    return {"kind": "link", "caption": f"Link copied: {text}", "description": f"a link to {host}", "text": text}
+        return {"kind": "link", "caption": f"Link copied: {qr_shown_link(check['link'], host)}", "description": f"a link to {host}, with the parts that looked secret removed", "link": check["link"]}
+    return {"kind": "link", "caption": f"Link copied: {qr_shown_link(text, host)}", "description": f"a link to {host}", "text": text}
 
 
 def qr_describe_lines(text: str) -> dict:

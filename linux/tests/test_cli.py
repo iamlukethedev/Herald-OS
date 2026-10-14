@@ -921,6 +921,21 @@ def test_qr_link_is_shown_in_full(monkeypatch, capsys):
     assert capsys.readouterr().out == "Link copied: https://example.com/menu?table=4\n"
 
 
+def test_qr_long_link_is_cut_in_the_caption_and_kept_whole_for_hermes(monkeypatch, capsys):
+    long = "https://example.com/" + "x" * 1980
+    caption = f"Link copied: {long[:cli.QR_SHOWN_LINK_MAX - 1]}…"
+    assert len(long) == 2000 and len(caption) <= 13 + cli.QR_SHOWN_LINK_MAX
+    copies, notes = qr_scan(monkeypatch, long)
+    assert cli.capture_qr(["--json"]) == 0
+    assert notes == [(caption, "")]
+    assert json.loads(capsys.readouterr().out) == {"kind": "link", "caption": caption, "description": "a link to example.com", "text": long}
+    assert copies == [(["wl-copy", "--sensitive"], long.encode())]
+
+    reading = cli.describe_qr(f"{long}?token=abc")
+    assert reading["caption"] == caption
+    assert reading["link"] == long
+
+
 def test_qr_link_with_a_secret_is_shown_without_it_and_never_copied_plainly(monkeypatch, capsys):
     link = "https://us02web.zoom.us/j/85512345678?pwd=dGhpc2lzZmFrZTEyMw.1"
     copies, notes = qr_scan(monkeypatch, link)
