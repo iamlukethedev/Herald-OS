@@ -41,11 +41,17 @@ class FakeMac:
         self.protected: set[int] = set()
         self.after_listing = lambda: None
         self.ps_fails: dict[str, tuple[int, str]] = {}
+        # (checks that succeed, then the exit code and stderr of every later `ps -p`).
+        self.ps_pid_fails_after: tuple[int, int, str] | None = None
 
     def __call__(self, argv, **_):
         self.calls.append(list(argv))
         if argv[0] == "ps":
             kind = "pid" if "-p" in argv else "user" if "-U" in argv else "all"
+            if kind == "pid" and self.ps_pid_fails_after is not None:
+                ok_checks, code, stderr = self.ps_pid_fails_after
+                if len([call for call in self.calls if call[0] == "ps" and "-p" in call]) > ok_checks:
+                    return self.util.ExecResult(code, "", stderr)
             if kind in self.ps_fails:
                 return self.util.ExecResult(self.ps_fails[kind][0], "", self.ps_fails[kind][1])
             if kind == "all":
@@ -338,6 +344,29 @@ def test_ps_failing_before_a_signal_stops_the_force_quit(mac):
     assert not result["success"]
     assert result["error"] == "could not read the process list (ps: timed out after 10s)"
     assert not machine.signals
+
+
+def test_ps_failing_partway_names_the_signals_already_sent(mac):
+    _, tools, fake = mac
+    machine = fake()
+    machine.procs[504] = (ME, f"{TEXTEDIT}/Contents/MacOS/TextEdit")
+    machine.ps_pid_fails_after = (1, 124, "timed out after 10s")
+    result = quit_app(tools, "TextEdit", force=True)
+    assert not result["success"]
+    assert result["error"] == "could not read the process list (ps: timed out after 10s) while force quitting TextEdit, after sending TERM to process 501"
+    assert machine.signals == [(501, signal.SIGTERM)]
+    assert 504 in machine.procs
+
+
+def test_ps_failing_while_waiting_for_term_names_it_and_sends_no_kill(mac):
+    _, tools, fake = mac
+    machine = fake()
+    machine.ignores_term.add(502)
+    machine.ps_pid_fails_after = (1, 1, "ps: sysctl: Operation not permitted")
+    result = quit_app(tools, "Visual Studio Code", force=True)
+    assert not result["success"]
+    assert result["error"] == "could not read the process list (ps: ps: sysctl: Operation not permitted) while force quitting Visual Studio Code, after sending TERM to process 502"
+    assert machine.signals == [(502, signal.SIGTERM)]
 
 
 def test_process_lists_report_a_failing_ps(mac):

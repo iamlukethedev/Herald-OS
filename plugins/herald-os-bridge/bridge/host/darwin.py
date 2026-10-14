@@ -558,8 +558,8 @@ class DarwinHost(HostAdapter):
         that fails raises rather than reading as "not running"."""
         argv = ["ps", "-o", "pid=,uid=,comm="] + (["-p", str(pid)] if pid is not None else ["-U", str(os.getuid())])
         result = run(argv, timeout=10)
-        # `ps -p` exits 1 with no output when the process has gone.
-        if not result.ok and not (pid is not None and result.code == 1 and not result.stdout.strip()):
+        # `ps -p` exits 1 with no output at all when the process has gone.
+        if not result.ok and not (pid is not None and result.code == 1 and not result.stdout.strip() and not result.stderr.strip()):
             raise ps_error(result)
         rows = parse_pid_uid_comm(result.stdout)
         excluded = {0, 1, os.getpid(), os.getppid()}
@@ -567,8 +567,10 @@ class DarwinHost(HostAdapter):
 
     def _terminate(self, label: str, bundles: tuple[str, ...], pids: list[int]) -> None:
         """TERM, up to ``FORCE_QUIT_GRACE`` seconds to exit, then KILL; each process is checked
-        again right before each signal, so a reused pid is never hit."""
+        again right before each signal, so a reused pid is never hit. If ``ps`` fails partway, the
+        error names the signals already sent, since the app may be half stopped."""
         denied: set[int] = set()
+        sent: list[str] = []
 
         def send(sig: signal.Signals, targets: list[int]) -> None:
             for pid in targets:
@@ -580,14 +582,21 @@ class DarwinHost(HostAdapter):
                     continue
                 except PermissionError:
                     denied.add(pid)
+                    continue
+                sent.append(f"{sig.name.removeprefix('SIG')} to process {pid}")
 
-        send(signal.SIGTERM, pids)
-        deadline = time.monotonic() + FORCE_QUIT_GRACE
-        remaining = [p for p in pids if p not in denied]
-        while remaining and time.monotonic() < deadline:
-            time.sleep(0.2)
-            remaining = [p for p in remaining if self._own_app_processes(bundles, p)]
-        send(signal.SIGKILL, remaining)
+        try:
+            send(signal.SIGTERM, pids)
+            deadline = time.monotonic() + FORCE_QUIT_GRACE
+            remaining = [p for p in pids if p not in denied]
+            while remaining and time.monotonic() < deadline:
+                time.sleep(0.2)
+                remaining = [p for p in remaining if self._own_app_processes(bundles, p)]
+            send(signal.SIGKILL, remaining)
+        except RuntimeError as exc:
+            if not sent:
+                raise
+            raise RuntimeError(f"{exc} while force quitting {label}, after sending {', '.join(sent)}") from exc
         if denied:
             raise RuntimeError(f"macOS did not let Herald OS stop {label} (process {', '.join(str(p) for p in sorted(denied))})")
 
