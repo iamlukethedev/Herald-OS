@@ -76,7 +76,7 @@ const bridge = vi.hoisted(() => {
   return state
 })
 
-const { $prefs, $windowState, migrateLegacyNotifyFlags } = await import('./backend.ts')
+const { $prefs, $prefsLoaded, $windowState, migrateLegacyNotifyFlags } = await import('./backend.ts')
 const { $notifications, $toasts, bindNotificationEvents, notify, setNotifySwitch } = await import('./notifications.ts')
 const { $pendingRequests, bindServerRequests } = await import('./requests.ts')
 const { $activeChatId, $chats, bindChatEvents } = await import('./chat.ts')
@@ -110,6 +110,7 @@ beforeEach(() => {
   bridge.saved.length = 0
   bridge.adopted.length = 0
   bridge.failWrite = false
+  $prefsLoaded.set(true)
   alerts({})
 })
 
@@ -175,6 +176,24 @@ describe('notify and the Alerts switches', () => {
     expect(bridge.native).toEqual([])
     expect($toasts.get().map(t => t.title)).toEqual(['Focused'])
     expect($notifications.get()).toHaveLength(2)
+  })
+})
+
+describe('alerts before the prefs are in', () => {
+  it('keeps everything in the bell, without toasts or native notifications, until the prefs have loaded', () => {
+    $prefsLoaded.set(false)
+
+    notify({ title: 'Early', native: true, category: 'approval' })
+    notify({ title: 'Untagged', native: true })
+
+    expect($notifications.get()).toHaveLength(2)
+    expect($toasts.get()).toEqual([])
+    expect(bridge.native).toEqual([])
+
+    $prefsLoaded.set(true)
+    notify({ title: 'Later', native: true, category: 'approval' })
+    expect($toasts.get().map(t => t.title)).toEqual(['Later'])
+    expect(bridge.native.map(n => n.title)).toEqual(['Later'])
   })
 })
 

@@ -2,7 +2,7 @@ import { atom } from 'nanostores'
 import type { IncomingNotification, NotifyPrefs } from '../../shared/ipc.ts'
 import { logFailure } from '../lib/report.ts'
 import type { SurfaceId } from './surface.ts'
-import { $prefs, $windowState, updatePrefs } from './backend.ts'
+import { $prefs, $prefsLoaded, $windowState, updatePrefs } from './backend.ts'
 import { onGatewayEvent } from './gateway.ts'
 
 export type NotificationLevel = 'info' | 'success' | 'warn' | 'error'
@@ -95,9 +95,9 @@ export function notify(input: NotifyInput): HermesNotification {
   }
   const rest = $notifications.get().filter(n => n.id !== item.id)
   $notifications.set([item, ...rest].slice(0, MAX))
-  // Do not disturb, or this kind's Alerts switch off: the bell still collects everything, nothing pops up or makes a sound.
+  // Do not disturb, this kind's Alerts switch off, or the switches not known yet: the bell still collects everything, nothing pops up or makes a sound.
   const prefs = $prefs.get()
-  const quiet = Boolean(prefs.doNotDisturb) || (input.category !== undefined && !prefs.notify[CATEGORY_SWITCH[input.category]])
+  const quiet = !$prefsLoaded.get() || Boolean(prefs.doNotDisturb) || (input.category !== undefined && !prefs.notify[CATEGORY_SWITCH[input.category]])
 
   if (input.toast !== false && !quiet) {
     $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))

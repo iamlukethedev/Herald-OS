@@ -23,6 +23,8 @@ export const $prefs = atom<HeraldOSPrefs>({
   crashHelp: { enabled: true, muted: [] },
   notify: NOTIFY_DEFAULTS
 })
+/** Set once the saved prefs are in and old localStorage switches are migrated; alerts wait for it. */
+export const $prefsLoaded = atom(false)
 
 /** A font family as a CSS value (quoted unless it is a generic family). */
 const cssFamily = (family: string) => (/^(serif|sans-serif|monospace|system-ui|ui-[a-z-]+)$/.test(family) ? family : JSON.stringify(family.trim()))
@@ -101,6 +103,8 @@ export function bindBackendStores(): () => void {
       }
     })
     .catch(logFailure('prefs.get'))
+    // Even without saved prefs, alerts follow the defaults rather than staying quiet for good.
+    .finally(() => $prefsLoaded.set(true))
   // Preferences changed by another surface window or by the `herald-os` CLI (theme, wallpaper).
   const offPrefs = window.heraldOS.prefs.onChanged?.(prefs => {
     $prefs.set(prefs)
