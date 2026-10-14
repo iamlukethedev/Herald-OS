@@ -670,5 +670,299 @@
     "hidden": [
       "%256Ftpauth"
     ]
+  },
+  {
+    "note": "known token prefix xoxb-, with no letter-digit switches",
+    "text": "xoxb-abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "xoxb-abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix xoxp-, with no letter-digit switches",
+    "text": "xoxp-abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "xoxp-abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix xoxa-, with no letter-digit switches",
+    "text": "xoxa-abc-defgh",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "xoxa-abc-defgh"
+    ]
+  },
+  {
+    "note": "known token prefix glpat-, with no letter-digit switches",
+    "text": "glpat-abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "glpat-abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix sk_live_, with no letter-digit switches",
+    "text": "sk_live_abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "sk_live_abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix sk_test_, with no letter-digit switches",
+    "text": "sk_test_abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "sk_test_abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix ghp_, with no letter-digit switches",
+    "text": "ghp_abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ghp_abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix gho_, with no letter-digit switches",
+    "text": "gho_abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "gho_abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix github_pat_, with no letter-digit switches",
+    "text": "github_pat_abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "github_pat_abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix sk-, with no letter-digit switches",
+    "text": "sk-abcdefghi",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "sk-abcdefghi"
+    ]
+  },
+  {
+    "note": "known token prefix AKIA, too short and too plain for any other rule",
+    "text": "AKIAABCDEFGH",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "AKIAABCDEFGH"
+    ]
+  },
+  {
+    "note": "a known prefix needs 8 characters after it: 7",
+    "text": "ghp_abcdefg",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a known prefix needs 8 characters after it: 8",
+    "text": "ghp_abcdefgh",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ghp_abcdefgh"
+    ]
+  },
+  {
+    "note": "a known prefix only counts at the start",
+    "text": "mask-abcdefghi",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "xoxc- is not one of the Slack token prefixes",
+    "text": "xoxc-abcdefghi",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a known token in a link value",
+    "text": "https://example.com/?x=sk-abcdefghi",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "sk-abcdefghi"
+    ]
+  },
+  {
+    "note": "mixed case: 16 characters switching case 5 times",
+    "text": "abcDEFghiJKLmnoP",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abcDEFghiJKLmnoP"
+    ]
+  },
+  {
+    "note": "mixed case: 15 characters is below the minimum",
+    "text": "abcDEFghiJKLmno",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "mixed case: 4 case switches is the minimum",
+    "text": "abcdEFGHijklMNop",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "abcdEFGHijklMNop"
+    ]
+  },
+  {
+    "note": "mixed case: 3 case switches is not enough",
+    "text": "abcdEFGHijklMNOP",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "credentials with a URL-encoded colon",
+    "text": "https://user%3Apw@example.com/",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "user%3Apw"
+    ]
+  },
+  {
+    "note": "credentials with a doubly encoded colon",
+    "text": "https://user%253Apw@example.com/",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "user%253Apw"
+    ]
+  },
+  {
+    "note": "encoded credentials in an ftp link",
+    "text": "ftp://user%3Apw@ftp.example.com/",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "user%3Apw"
+    ]
+  },
+  {
+    "note": "a user name alone is not a credential",
+    "text": "https://user@example.com/",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com",
+    "full": true
+  },
+  {
+    "note": "base32 with = padding",
+    "text": "JBSWYDPEHPKPXPQQ====",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "JBSWYDPEHPKPXPQQ"
+    ]
+  },
+  {
+    "note": "base32 without padding, with digits but one switch",
+    "text": "ABCDEFGHIJKLMN23",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "ABCDEFGHIJKLMN23"
+    ]
+  },
+  {
+    "note": "base32 without padding below 16 characters",
+    "text": "ABCDEFGHIJKLMN2",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "otpauth that needs three decodes",
+    "text": "https://example.com/?q=%25256Ftpauth",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "%25256Ftpauth"
+    ]
+  },
+  {
+    "note": "otpauth in text that needs three decodes",
+    "text": "Scan %25256Ftpauth",
+    "kind": "secret",
+    "caption": "QR code copied",
+    "description": "something that looks like a password, key or recovery phrase",
+    "hidden": [
+      "%25256Ftpauth"
+    ]
+  },
+  {
+    "note": "four levels of encoding are past the three-decode limit",
+    "text": "Scan %2525256Ftpauth",
+    "kind": "text",
+    "caption": "QR code copied",
+    "description": "text",
+    "full": true
+  },
+  {
+    "note": "a short JWT that only the JWT rule catches",
+    "text": "https://example.com/s/eyJabcde.fghij",
+    "kind": "link",
+    "caption": "Link copied: example.com",
+    "description": "a link to example.com that carries what looks like a password, key or sign-in token",
+    "hidden": [
+      "eyJabcde"
+    ]
   }
 ]

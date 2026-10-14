@@ -34,8 +34,8 @@ const SECRET_LABELS = /\b(pass|pin|key|seed|code|otp)\b\s*[:=]/i
 const SECRET_PARAM = /token|key|secret|pass|pwd|auth|code|sig|session|otp|credential/i
 /** Path segments that make a link personal (an invitation, a reset, a sign-in). */
 const SECRET_PATH = /invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem/i
-/** scheme://user:password@… for any scheme. */
-const CREDENTIALS = /^[a-z][a-z0-9+.-]*:\/\/[^/?#\s@]*:[^/?#\s@]*@/i
+/** Token formats that are secret however they look: Slack, GitLab, Stripe, GitHub, OpenAI-style and AWS keys. */
+const KNOWN_TOKEN = /^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}/
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 const JWT = /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/
 const SEED_WORD = /^[a-z]{3,8}$/
@@ -46,6 +46,9 @@ export const TEXT_TOKEN_MIN = 12
 export const URL_TOKEN_MIN = 8
 /** Base32 (letters only, too) and hex with no digits are tokens from this length. */
 export const ENCODED_TOKEN_MIN = 16
+/** Letters switching case this often ("abcDEFghiJKLmnoP") make a token, from MIXED_CASE_MIN characters. */
+export const CASE_SWITCHES_MIN = 4
+export const MIXED_CASE_MIN = 16
 /** Recovery phrases: 12 to 24 words; 11 still hides a phrase missing a word. */
 export const RECOVERY_WORDS = { min: 11, max: 24 } as const
 
@@ -111,12 +114,34 @@ export function letterDigitSwitches(value: string): number {
   return switches
 }
 
+/** How often the letters in a string switch between upper and lower case. */
+export function caseSwitches(value: string): number {
+  let last = ''
+  let switches = 0
+
+  for (const char of value) {
+    const kind = /[A-Z]/.test(char) ? 'upper' : /[a-z]/.test(char) ? 'lower' : ''
+
+    if (kind) {
+      switches += last && kind !== last ? 1 : 0
+      last = kind
+    }
+  }
+
+  return switches
+}
+
 /**
- * A random-looking token: a JWT, base32, hex, or letters and digits switching back and forth
+ * A random-looking token: a known key format, a JWT, base32, hex, letters switching case back and
+ * forth, or letters and digits switching back and forth
  * ("4eC39HqL…", "abc123SECRET"). Words and numbers joined up ("ORDER-2026-000123456",
  * "correct-horse-battery-staple-99") switch at most once and are left alone.
  */
 export function looksLikeToken(value: string, min: number): boolean {
+  if (KNOWN_TOKEN.test(value)) {
+    return true
+  }
+
   if (value.length < min) {
     return false
   }
@@ -126,6 +151,10 @@ export function looksLikeToken(value: string, min: number): boolean {
   }
 
   if (value.length >= ENCODED_TOKEN_MIN && (/^[A-Z2-7]+=*$/.test(value) || (/^[0-9a-f]+$/i.test(value) && /[a-f]/i.test(value)))) {
+    return true
+  }
+
+  if (value.length >= MIXED_CASE_MIN && caseSwitches(value) >= CASE_SWITCHES_MIN) {
     return true
   }
 
@@ -172,11 +201,13 @@ function uriHost(uri: string): string {
 
 /** Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code. */
 export function uriLooksSecret(uri: string, depth = 0): boolean {
-  if (CREDENTIALS.test(uri) || /otpauth/i.test(decodeDeep(uri))) {
+  const { authority, path, query, fragment } = uriParts(uri)
+  const at = authority === null ? -1 : authority.lastIndexOf('@')
+
+  // user:password@, with the colon written out or URL-encoded.
+  if ((at >= 0 && decodeDeep(authority!.slice(0, at)).includes(':')) || /otpauth/i.test(decodeDeep(uri))) {
     return true
   }
-
-  const { path, query, fragment } = uriParts(uri)
   const segments = [...path.split('/'), ...(fragment.includes('=') ? [] : fragment.split('/'))].map(detect).filter(Boolean)
 
   if (segments.some(segment => SECRET_PATH.test(segment) || looksLikeToken(segment, URL_TOKEN_MIN))) {

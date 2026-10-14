@@ -802,13 +802,15 @@ QR_SECRET_WORDS = re.compile(r"\b(pass(word|wd|code|phrase)s?|pwd|secret|token|a
 QR_SECRET_LABELS = re.compile(r"\b(pass|pin|key|seed|code|otp)\b\s*[:=]", re.I | re.A)
 QR_SECRET_PARAM = re.compile(r"token|key|secret|pass|pwd|auth|code|sig|session|otp|credential", re.I)
 QR_SECRET_PATH = re.compile(r"invite|invitation|reset|verify|confirm|activate|magic|login|signin|sign-in|token|password|unsubscribe|redeem", re.I)
-QR_CREDENTIALS = re.compile(r"^[a-z][a-z0-9+.-]*://[^/?#\s@]*:[^/?#\s@]*@", re.I)
+QR_KNOWN_TOKEN = re.compile(r"^(xox[bpa]-|glpat-|sk_(live|test)_|gh[po]_|github_pat_|sk-|AKIA)[A-Za-z0-9_-]{8,}")
 QR_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 QR_JWT = re.compile(r"^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
 QR_SEED_WORD = re.compile(r"[a-z]{3,8}")
 QR_TEXT_TOKEN_MIN = 12
 QR_URL_TOKEN_MIN = 8
 QR_ENCODED_TOKEN_MIN = 16
+QR_CASE_SWITCHES_MIN = 4
+QR_MIXED_CASE_MIN = 16
 QR_RECOVERY_WORDS = (11, 24)
 
 
@@ -859,13 +861,28 @@ def qr_switches(value: str) -> int:
     return switches
 
 
+def qr_case_switches(value: str) -> int:
+    """How often the letters in a string switch between upper and lower case."""
+    last, switches = "", 0
+    for char in value:
+        kind = "upper" if re.fullmatch(r"[A-Z]", char) else "lower" if re.fullmatch(r"[a-z]", char) else ""
+        if kind:
+            switches += 1 if last and kind != last else 0
+            last = kind
+    return switches
+
+
 def qr_looks_like_token(value: str, minimum: int) -> bool:
-    """A JWT, base32, hex, or letters and digits switching back and forth."""
+    """A known key format, a JWT, base32, hex, letters switching case, or letters and digits switching back and forth."""
+    if QR_KNOWN_TOKEN.match(value):
+        return True
     if len(value) < minimum:
         return False
     if QR_JWT.match(value):
         return True
     if len(value) >= QR_ENCODED_TOKEN_MIN and (re.fullmatch(r"[A-Z2-7]+=*", value) or (re.fullmatch(r"[0-9a-fA-F]+", value) and re.search(r"[a-fA-F]", value))):
+        return True
+    if len(value) >= QR_MIXED_CASE_MIN and qr_case_switches(value) >= QR_CASE_SWITCHES_MIN:
         return True
     return qr_switches(value) >= 2
 
@@ -890,9 +907,11 @@ def qr_uri_host(uri: str) -> str:
 
 def qr_uri_looks_secret(uri: str, depth: int = 0) -> bool:
     """Whether a link (any scheme) carries something personal: credentials, a token, a 2FA code."""
-    if QR_CREDENTIALS.match(uri) or re.search(r"otpauth", qr_decode_deep(uri), re.I):
+    authority, path, query, fragment = qr_uri_parts(uri)
+    userinfo, at, _ = (authority or "").rpartition("@")
+    # user:password@, with the colon written out or URL-encoded.
+    if (at and ":" in qr_decode_deep(userinfo)) or re.search(r"otpauth", qr_decode_deep(uri), re.I):
         return True
-    _, path, query, fragment = qr_uri_parts(uri)
     segments = [qr_detect(part) for part in [*path.split("/"), *([] if "=" in fragment else fragment.split("/"))]]
     if any(QR_SECRET_PATH.search(segment) or qr_looks_like_token(segment, QR_URL_TOKEN_MIN) for segment in segments if segment):
         return True
