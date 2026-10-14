@@ -52,6 +52,28 @@ describe('mayOpenExternally', () => {
     expect(mayOpenExternally('x-apple.systempreferences:com.apple.settings.privacysecurity.extension?Privacy_Camera', 'darwin')).toBe(false)
   })
 
+  it('takes the dots in the pane URL literally', () => {
+    expect(mayOpenExternally('x-appleXsystempreferences:com.apple.settings.PrivacySecurity.extension', 'darwin')).toBe(false)
+
+    for (const url of [
+      'x-appleXsystempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Camera',
+      'x-apple.systempreferences:comXappleXsettingsXPrivacySecurityXextension?Privacy_Camera',
+      'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Camera'.replace('.extension', '-extension')
+    ]) {
+      expect(mayOpenExternally(url, 'darwin'), url).toBe(false)
+    }
+  })
+
+  it('needs http(s) at the very start of a web URL', () => {
+    expect(mayOpenExternally('javascript:alert(1)//https://x', 'darwin')).toBe(false)
+    expect(mayOpenExternally('javascript:alert(1)//https://x', 'linux')).toBe(false)
+
+    for (const url of ['javascript:alert(1)//https://x', 'file:///tmp/a?https://x', ' https://example.com', 'x-https://example.com']) {
+      expect(mayOpenExternally(url, 'darwin'), url).toBe(false)
+      expect(mayOpenExternally(url, 'linux'), url).toBe(false)
+    }
+  })
+
   it('refuses a query parameter after the anchor', () => {
     expect(mayOpenExternally(`${PRIVACY}?Privacy_Camera&x=1`, 'darwin')).toBe(false)
   })
