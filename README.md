@@ -39,13 +39,13 @@ Pick the way that matches your machine:
 
 | Your machine | What to install |
 | --- | --- |
-| A Mac with Apple Silicon | [Herald OS for macOS](#macos) |
-| An Intel Mac | [Herald OS Linux in a virtual machine, or the Mac app from source](#on-an-intel-mac) |
+| A Mac, Apple Silicon or Intel | [Herald OS for macOS](#macos) |
 | A PC you can give to Herald OS | [The Herald OS Linux installer](#herald-os-linux-on-a-pc) |
 | Arch Linux | [The Arch package](#arch-linux) |
 | Omarchy | [The Arch package, then one command](#omarchy) |
 | Another Linux | [The tarball](#another-linux) |
 | An Apple Silicon Mac, to try the whole OS | [The virtual machine in UTM](#on-a-mac-with-utm) |
+| An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) |
 | A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) |
 
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
@@ -56,7 +56,7 @@ included.
 
 ### macOS
 
-You need macOS 13 (Ventura) or later on Apple Silicon.
+You need macOS 13 (Ventura) or later, on Apple Silicon or Intel ([On an Intel Mac](#on-an-intel-mac)).
 
 **1. Install Hermes Agent** and choose a model, if you don't have it yet:
 
@@ -66,9 +66,11 @@ source ~/.zshrc
 hermes setup
 ```
 
-**2. Install Herald OS.** Download `HeraldOS-<version>-mac-arm64.dmg` from the
+**2. Install Herald OS.** Download `HeraldOS-<version>-mac-arm64.dmg` (Apple Silicon) or
+`HeraldOS-<version>-mac-x64.dmg` (Intel) from the
 [releases page](https://github.com/iamlukethedev/Herald-OS/releases), open it and drag Herald OS to
-Applications.
+Applications. Apple menu > About This Mac says which you have: "Chip: Apple M…" is Apple Silicon,
+"Processor: … Intel …" is Intel.
 
 **3. Let it open.** This build is not notarized by Apple yet, so macOS stops it the first time.
 Run this once, then open Herald OS from Applications:
@@ -101,18 +103,16 @@ for each of these the first time a feature needs it:
 
 #### On an Intel Mac
 
-There is no Intel build of the Mac app (`npm run dist:mac` builds for Apple Silicon only), and the
-ready-made virtual machine (`linux/vm/try.sh`) needs Apple Silicon too. Instead:
+Download `HeraldOS-<version>-mac-x64.dmg` and follow the steps above. The Intel build is the same
+app built for x86_64, with node-pty's Intel binaries for the Terminal, but it is new and has not
+been tried on an Intel Mac yet: please [open an issue](https://github.com/iamlukethedev/Herald-OS/issues)
+if something does not work.
 
-- **Herald OS Linux in a virtual machine.** Open the ready-made x86_64 disk in
-  [UTM](https://mac.getutm.app), as in
-  [On Linux or an Intel Mac](#on-linux-or-an-intel-mac), or install the x86_64 installer ISO from
-  [Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs it in
-  QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
-  ([installer-test.yml](.github/workflows/installer-test.yml)).
-- **The Mac app from source** on macOS 13 or later, as in
-  [Herald OS on macOS from source](#herald-os-on-macos-from-source). It is untested on Intel, though
-  node-pty, its native terminal module, ships Intel binaries.
+To try the whole OS instead, open the ready-made x86_64 disk in [UTM](https://mac.getutm.app), as in
+[On Linux or an Intel Mac](#on-linux-or-an-intel-mac), or install the x86_64 installer ISO from
+[Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs it in
+QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
+([installer-test.yml](.github/workflows/installer-test.yml)).
 
 ### Herald OS Linux on a PC
 
@@ -463,7 +463,7 @@ Retina screens, the session model and the dev loop.
 You need:
 
 - **macOS 13 (Ventura) or later on Apple Silicon.** Intel Macs are untested. Herald OS is
-  developed on macOS 26.
+  developed on macOS 26. `npm run dist:mac` builds both the Apple Silicon and the Intel app.
 - **Node.js 22.12 or later** ([nodejs.org](https://nodejs.org), or `brew install node`).
 - **Git**, and the Xcode Command Line Tools (`xcode-select --install`) for native modules.
 - **Hermes Agent 0.21.3 or later**, with a model provider set up (step 1 below).
@@ -615,7 +615,10 @@ To undo it on Linux, run `herald-os setup --undo`. On macOS, the steps are in
 npm run dist:mac
 ```
 
-This writes an Apple Silicon DMG and zip to `apps/desktop/release/`. Before installing, know that:
+This writes a DMG and zip for Apple Silicon (`-mac-arm64`) and for Intel (`-mac-x64`) to
+`apps/desktop/release/`, with the apps in `release/mac-arm64/` and `release/mac/`.
+`node apps/desktop/scripts/check-mac-builds.mjs` checks that each app is built for its architecture
+and carries node-pty's binaries for it. Before installing, know that:
 
 - **A local build is not notarized.** electron-builder signs it with a code-signing identity from
   your keychain if it finds one, and leaves it unsigned otherwise. A copy that was downloaded or sent
