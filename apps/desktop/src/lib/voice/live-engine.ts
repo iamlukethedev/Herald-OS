@@ -7,7 +7,7 @@
 // opens it only for a conversation, closes it after `liveIdleSeconds` of silence, and refuses to
 // open when today's cap is spent. The OpenAI key stays on the backend (`/api/audio/voice-live/*`).
 import { rest } from '../rest.ts'
-import { microphoneStream, MicrophoneUnavailableError, setMicrophoneMuted } from './audio-capture.ts'
+import { holdMicrophoneStream, type MicrophoneHold, MicrophoneUnavailableError, setMicrophoneMuted } from './audio-capture.ts'
 import { earcons } from './earcons.ts'
 import { type ConversationEngine, describeTurnError, silentTurnLine, type VoiceHost } from './engine.ts'
 import { $speakLevel } from './speak-stream.ts'
@@ -145,6 +145,7 @@ export class LiveEngine implements ConversationEngine {
   readonly kind = 'live' as const
 
   private peer: RTCPeerConnection | null = null
+  private microphone: MicrophoneHold | null = null
   private events: RTCDataChannel | null = null
   private readonly audio: HTMLAudioElement
   private analyser: AnalyserNode | null = null
@@ -191,18 +192,41 @@ export class LiveEngine implements ConversationEngine {
       }
     })
 
-    let microphone: MediaStream
+    const senders: RTCRtpSender[] = []
 
     try {
-      microphone = await microphoneStream()
+      // A reopen on another device (a new choice, a lost device) stops the old track; the sender
+      // swaps in the new one without renegotiating.
+      this.microphone = await holdMicrophoneStream(track => {
+        for (const sender of senders) {
+          void sender.replaceTrack(track).catch(error => console.warn('[voice] Live could not switch microphone track', error))
+        }
+      })
     } catch (error) {
       connection.close()
       this.peer = null
       throw error instanceof MicrophoneUnavailableError ? error : new Error(`Microphone failed: ${error instanceof Error ? error.message : String(error)}`)
     }
 
+    try {
+      await this.connect(connection, senders)
+    } catch (error) {
+      this.releaseMicrophone()
+      connection.close()
+      this.peer = null
+      throw error
+    }
+  }
+
+  private async connect(connection: RTCPeerConnection, senders: RTCRtpSender[]): Promise<void> {
+    const microphone = this.microphone?.stream
+
+    if (!microphone) {
+      throw new MicrophoneUnavailableError('failed', 'Microphone stream unavailable.')
+    }
+
     for (const track of microphone.getAudioTracks()) {
-      connection.addTrack(track, microphone)
+      senders.push(connection.addTrack(track, microphone))
     }
 
     // Register the data channel before the offer so its m-line is negotiated.
@@ -229,14 +253,10 @@ export class LiveEngine implements ConversationEngine {
     try {
       response = await rest.post('/api/audio/voice-live/session', { sdp, history: this.seedHistory() })
     } catch (error) {
-      connection.close()
-      this.peer = null
       throw new Error(`GPT-Live session could not be created: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     if (!response?.transport?.sdp) {
-      connection.close()
-      this.peer = null
       throw new Error('GPT-Live session creation returned no answer')
     }
 
@@ -247,6 +267,11 @@ export class LiveEngine implements ConversationEngine {
     this.ticker = setInterval(() => this.tick(), TICK_MS)
     this.host.setState('listening')
     earcons.listen()
+  }
+
+  private releaseMicrophone(): void {
+    this.microphone?.release()
+    this.microphone = null
   }
 
   async stop(): Promise<void> {
@@ -679,6 +704,7 @@ export class LiveEngine implements ConversationEngine {
     void this.audioContext?.close().catch(() => undefined)
     this.events?.close()
     this.peer?.close()
+    this.releaseMicrophone()
     this.audio.srcObject = null
     this.audio.pause()
     $speakLevel.set(0)

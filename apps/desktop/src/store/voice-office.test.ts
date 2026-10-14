@@ -76,7 +76,7 @@ vi.mock('../lib/voice/audio-capture.ts', async () => {
     MicrophoneUnavailableError: class extends Error {},
     setMicrophoneMuted: () => undefined,
     isMicrophoneOpen: () => true,
-    microphoneStream: async () => ({}),
+    holdMicrophoneStream: async () => ({ stream: {}, release: () => undefined }),
     subscribeMicrophone: async (listener: (frame: { pcm: Int16Array; level: number; ms: number }) => void) => {
       edges.microphone = listener
 

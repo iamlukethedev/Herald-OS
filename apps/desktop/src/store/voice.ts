@@ -491,6 +491,8 @@ export async function endConversation(reason: ConversationEndReason = 'user', de
   }
 
   const error = reason === 'error' || reason === 'connection-lost' ? (detail ?? 'The conversation ended unexpectedly.') : null
+  // The wake word keeps the microphone open after a conversation, and must not inherit its mute.
+  setMicrophoneMuted(false)
   patch({ state: idleState(), engine: null, muted: false, error, startedBy: null })
 
   if (error) {

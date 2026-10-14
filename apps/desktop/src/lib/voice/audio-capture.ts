@@ -10,7 +10,7 @@
 import { atom } from 'nanostores'
 import type { AudioDevicePref } from '../../../shared/ipc.ts'
 import { listAudioDevices, resolveAudioDevice, type AudioDeviceList, type AudioDeviceOption } from '../audio-devices.ts'
-import { $prefs } from '../../store/backend.ts'
+import { $prefs, updatePrefs } from '../../store/backend.ts'
 import { initialCaptureState, reduceCapture, type CaptureAction, type CaptureState, type CaptureTarget } from './capture-policy.ts'
 import { floatToInt16, resampleLinear, rms, TARGET_SAMPLE_RATE } from './pcm.ts'
 
@@ -24,6 +24,15 @@ export interface CaptureFrame {
 }
 
 type FrameListener = (frame: CaptureFrame) => void
+
+/** Told the new track whenever the stream is reopened on another device, so it can swap it in. */
+type TrackListener = (track: MediaStreamTrack) => void
+
+/** A consumer of the raw stream (the WebRTC sender) and the way to let go of it. */
+export interface MicrophoneHold {
+  stream: MediaStream
+  release: () => void
+}
 
 /** True while the microphone is open (drives the menu-bar indicator). */
 export const $micOpen = atom(false)
@@ -58,7 +67,10 @@ let reopening: Promise<void> | null = null
 let policy: CaptureState = initialCaptureState()
 let stopWatching: (() => void) | null = null
 let deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
+/** Kept here rather than on the tracks, so a reopened stream comes back as muted as the old one. */
+let muted = false
 const listeners = new Set<FrameListener>()
+const holders = new Set<TrackListener>()
 
 async function open(): Promise<void> {
   if (context && stream) {
@@ -87,6 +99,9 @@ async function open(): Promise<void> {
     }
 
     const { media, device } = await openStream()
+    media.getAudioTracks().forEach(track => {
+      track.enabled = !muted
+    })
     const ctx = new AudioContext({ latencyHint: 'interactive' })
 
     try {
@@ -119,7 +134,7 @@ async function open(): Promise<void> {
     source = src
     $micOpen.set(true)
     $micDevice.set(device)
-    watchDevices(media)
+    watchDevices(media, device)
   })()
 
   try {
@@ -132,8 +147,8 @@ async function open(): Promise<void> {
 /**
  * Ask for the chosen device, and fall back to the system default when it cannot be opened. `exact`
  * rather than `ideal`, so a device that is away fails here where it is noticed, instead of Chromium
- * quietly handing back a different one; the fallback itself stays quiet — the panel's line names
- * the device in use, and the picker's list notes that a chosen device comes back on its own.
+ * quietly handing back a different one. The fallback posts no notice, the same as a chosen device
+ * that is not connected: the panel's line names the device in use, and the choice is kept.
  */
 async function openStream(): Promise<{ media: MediaStream; device: AudioDeviceOption | null }> {
   const list = await refreshInputDevices()
@@ -147,9 +162,9 @@ async function openStream(): Promise<{ media: MediaStream; device: AudioDeviceOp
 
     if (name === 'OverconstrainedError') {
       if (wanted) {
-        $captureNotice.set({ key: 'voice.input-unusable', message: `${wanted.label} could not be opened, so the system microphone is used.` })
+        console.warn(`[voice] ${wanted.label} could not be opened; using the system microphone`, error)
 
-        return { media: await requestStream(null), device: null }
+        return { media: await requestStream(null), device: list.devices.find(device => device.isSystem) ?? null }
       }
 
       throw new MicrophoneUnavailableError('no-device', 'No microphone was found.')
@@ -195,14 +210,19 @@ function close(): void {
 /**
  * Watch the open stream: the track ending means the device was lost (a deliberate `track.stop()`
  * never fires it), and a device list change means the choice may resolve to somewhere else now.
+ *
+ * The binding takes what the track reports, and the device it was opened for where the track says
+ * less: a stream opened without a constraint reports `default`, and some devices report no group.
  */
-function watchDevices(media: MediaStream): void {
+function watchDevices(media: MediaStream, device: AudioDeviceOption | null): void {
   const track = media.getAudioTracks()[0]
   const settings = track?.getSettings() ?? {}
-  const deviceId = typeof settings.deviceId === 'string' ? settings.deviceId : 'default'
-  const groupId = typeof settings.groupId === 'string' ? settings.groupId : ''
+  const reportedId = typeof settings.deviceId === 'string' && settings.deviceId && settings.deviceId !== 'default' ? settings.deviceId : null
+  const reportedGroup = typeof settings.groupId === 'string' ? settings.groupId : ''
+  const deviceId = reportedId ?? device?.id ?? 'default'
+  const groupId = reportedGroup || device?.groupId || ''
 
-  policy = reduceCapture(policy, { kind: 'opened', deviceId, groupId: groupId || null }, Date.now()).state
+  policy = reduceCapture(policy, { kind: 'opened', deviceId, groupId }, Date.now()).state
 
   const onEnded = () => void examine('lost')
 
@@ -240,16 +260,21 @@ function watchDevices(media: MediaStream): void {
   }
 }
 
+let examining: Promise<void> = Promise.resolve()
+
 /** Re-resolve the choice and let the policy decide whether that means reopening the stream. */
 async function examine(trigger: 'lost' | 'chosen' | 'devices'): Promise<void> {
-  examining = examining.then(() => examineNow(trigger)).catch(() => undefined)
+  examining = examining.then(() => examineNow(trigger)).catch(error => console.warn(`[voice] Could not re-check the microphone (${trigger})`, error))
 
   return examining
 }
 
-let examining: Promise<void> = Promise.resolve()
-
 async function examineNow(trigger: 'lost' | 'chosen' | 'devices'): Promise<void> {
+  // Queued behind an earlier examine, the mic may have been closed since; never reopen an idle one.
+  if (!stream || !inUse()) {
+    return
+  }
+
   const list = await refreshInputDevices()
   const choice = resolveAudioDevice($prefs.get().voice.inputDevice, list)
   const target: CaptureTarget = { deviceId: choice.device?.id ?? null, groupId: choice.device?.groupId ?? null, reason: choice.reason }
@@ -277,12 +302,28 @@ async function apply(action: CaptureAction): Promise<void> {
   reopening = (async () => {
     close()
     await open()
+
+    // Everyone may have let go while the device was being reopened.
+    if (!inUse()) {
+      close()
+
+      return
+    }
+
+    const track = stream?.getAudioTracks()[0]
+
+    if (track) {
+      for (const holder of holders) {
+        holder(track)
+      }
+    }
   })()
 
   try {
     await reopening
-  } catch {
-    // The subscription that opened the mic reports a device that cannot be opened; nothing to add.
+  } catch (error) {
+    console.warn('[voice] The microphone could not be reopened', error)
+    $captureNotice.set({ key: 'voice.input-reopen-failed', message: `The microphone could not be reopened: ${error instanceof Error ? error.message : String(error)}` })
   } finally {
     reopening = null
   }
@@ -296,8 +337,31 @@ export async function refreshInputDevices(): Promise<AudioDeviceList> {
 
   const list = listAudioDevices(await navigator.mediaDevices.enumerateDevices(), 'input')
   $inputDevices.set(list)
+  rebindChoice(list)
 
   return list
+}
+
+let rebinding: string | null = null
+
+/**
+ * A stored choice found by its name under a new id (a cache clear, a dev build against a packaged
+ * one) is rewritten to that id, so the pickers mark it as chosen and the next lookup is by id.
+ */
+function rebindChoice(list: AudioDeviceList): void {
+  const choice = resolveAudioDevice($prefs.get().voice.inputDevice, list)
+
+  if (!choice.rebind || !choice.device || rebinding === choice.device.id) {
+    return
+  }
+
+  const device = choice.device
+  rebinding = device.id
+  void updatePrefs({ voice: { ...$prefs.get().voice, inputDevice: { id: device.id, label: device.label } } })
+    .catch(error => console.warn('[voice] Could not remember the microphone under its new id', error))
+    .finally(() => {
+      rebinding = null
+    })
 }
 
 /**
@@ -332,10 +396,7 @@ export async function subscribeMicrophone(listener: FrameListener): Promise<() =
     await open()
   } catch (error) {
     listeners.delete(listener)
-
-    if (listeners.size === 0) {
-      close()
-    }
+    closeIfUnused()
 
     throw error
   }
@@ -349,31 +410,65 @@ export async function subscribeMicrophone(listener: FrameListener): Promise<() =
 
     active = false
     listeners.delete(listener)
+    closeIfUnused()
+  }
+}
 
-    if (listeners.size === 0) {
-      close()
-    }
+function inUse(): boolean {
+  return listeners.size > 0 || holders.size > 0
+}
+
+function closeIfUnused(): void {
+  if (!inUse()) {
+    close()
   }
 }
 
 /**
- * The raw MediaStream for consumers that need a track (WebRTC). Opens the mic if needed. A consumer
- * holding one keeps it for as long as it runs: a change of device applies to the next stream.
+ * The raw MediaStream for consumers that need a track (WebRTC). Opens the mic if needed and keeps it
+ * open until `release`. Reopening on another device stops the old tracks, so `onTrack` is handed the
+ * new one (a sender's `replaceTrack`); without it a Live session would be left on a dead track.
  */
-export async function microphoneStream(): Promise<MediaStream> {
-  await open()
+export async function holdMicrophoneStream(onTrack: TrackListener): Promise<MicrophoneHold> {
+  holders.add(onTrack)
+
+  try {
+    await open()
+  } catch (error) {
+    holders.delete(onTrack)
+    closeIfUnused()
+
+    throw error
+  }
 
   if (!stream) {
+    holders.delete(onTrack)
+    closeIfUnused()
+
     throw new MicrophoneUnavailableError('failed', 'Microphone stream unavailable.')
   }
 
-  return stream
+  let held = true
+
+  return {
+    stream,
+    release: () => {
+      if (!held) {
+        return
+      }
+
+      held = false
+      holders.delete(onTrack)
+      closeIfUnused()
+    }
+  }
 }
 
-/** Mute at the track level so every consumer (including a WebRTC sender) goes silent. */
-export function setMicrophoneMuted(muted: boolean): void {
+/** Mute at the track level so every consumer (including a WebRTC sender) goes silent, reopened or not. */
+export function setMicrophoneMuted(next: boolean): void {
+  muted = next
   stream?.getAudioTracks().forEach(track => {
-    track.enabled = !muted
+    track.enabled = !next
   })
 }
 
