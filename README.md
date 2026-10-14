@@ -617,8 +617,8 @@ npm run dist:mac
 
 This writes a DMG and zip for Apple Silicon (`-mac-arm64`) and for Intel (`-mac-x64`) to
 `apps/desktop/release/`, with the apps in `release/mac-arm64/` and `release/mac/`.
-`node apps/desktop/scripts/check-mac-builds.mjs` checks that each app is built for its architecture
-and carries node-pty's binaries for it. Before installing, know that:
+`node apps/desktop/scripts/check-mac-builds.mjs` checks that every Mach-O file in each app is built
+for that app's architecture alone, and that the DMGs and zips carry `package.json`'s version. Before installing, know that:
 
 - **A local build is not notarized.** electron-builder signs it with a code-signing identity from
   your keychain if it finds one, and leaves it unsigned otherwise. A copy that was downloaded or sent

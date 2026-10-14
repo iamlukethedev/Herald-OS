@@ -166,9 +166,11 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
      notarization off. The app keeps the linker's ad-hoc signature.
 4. **Check the Apple Silicon and Intel builds.** Runs on unsigned builds too.
    `apps/desktop/scripts/check-mac-builds.mjs` reads the Mach-O headers and fails the job unless
-   `release/` has exactly one app per architecture, each app's main binary and node-pty `pty.node`
-   are built for that architecture, its `spawn-helper` is there, and each architecture has a DMG
-   and a zip.
+   `release/` has exactly one app per architecture, and every Mach-O in each app (frameworks,
+   helper apps, every `.node` and `spawn-helper`) is thin and built for that architecture. Files in
+   node-pty's `prebuilds/darwin-<arch>/` must match `<arch>`. Each architecture also needs
+   `HeraldOS-<version>-mac-<arch>.dmg` and `.zip` with `package.json`'s version, and no other DMG
+   or zip may be there.
 5. **Notarize and staple the DMGs** (signed builds only). The step submits each DMG with
    `xcrun notarytool submit --wait`, then staples the ticket. If Apple returns any status other
    than `Accepted`, the step prints the notarization log and fails.
