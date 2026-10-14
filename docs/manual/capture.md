@@ -44,6 +44,10 @@ folder, and opens LocalSend, when it is installed, to send it to another device 
 - **Copy text from the screen:** say "copy the text on screen", or `herald-os capture text`. Select
   the area; the text it reads is copied. On Linux it is read by tesseract on this computer.
 - **Read a QR code:** say "read this QR code", or `herald-os capture qr`. Select the code; what it
-  says is copied.
+  says is copied, and nowhere else: QR codes often carry secrets, such as the code behind a 2FA
+  setup or a Wi-Fi password. The notification says what kind of thing it was ("2FA setup code
+  copied"; for a web link, "Link copied: example.com", so you can see where it points), clipboard
+  history leaves it out, and Hermes only learns the contents of ordinary links and text. Pasting
+  works as usual. In scripts, `herald-os capture qr --print` prints the contents.
 
 On a Mac these use macOS's own eyedropper and text recognition.
