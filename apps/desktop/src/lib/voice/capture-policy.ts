@@ -2,7 +2,10 @@
 // a table of cases, and audio-capture.ts stays thin enough to be read at a glance. See docs/VOICE.md.
 import type { DeviceChoiceReason } from '../audio-devices.ts'
 
-/** The device the open stream is on. Chromium answers `default` for the id when no device was asked for. */
+/**
+ * The device the open stream is on. `groupId` is `''` when the platform reports none (some virtual
+ * and Linux devices), and the device id is then what identifies it.
+ */
 export interface CaptureBinding {
   deviceId: string
   groupId: string
@@ -25,7 +28,7 @@ export interface CaptureState {
 }
 
 export type CaptureEvent =
-  | { kind: 'opened'; deviceId: string | null; groupId: string | null }
+  | { kind: 'opened'; deviceId: string | null; groupId: string }
   | { kind: 'closed' }
   | { kind: 'conversation'; conversing: boolean }
   | { kind: 'lost'; target: CaptureTarget }
@@ -94,17 +97,22 @@ function attemptReopen(state: CaptureState, deviceId: string | null, because: 'l
 }
 
 /**
- * Same device, judged by the group a track reports. The id cannot be used: a stream opened without a
- * device constraint reports `default`, while the resolved device keeps its real id.
+ * Same device, judged by the group when both sides report one, and by the id otherwise. The shell
+ * binds a stream opened without a device constraint (whose track reports `default`) to the id of
+ * the device it resolved to, so the ids compare like with like.
  */
 function sameDevice(binding: CaptureBinding | null, target: CaptureTarget): boolean {
-  if (!binding || !target.groupId) {
+  if (!binding) {
     return false
   }
 
-  return binding.groupId === target.groupId || (binding.groupId === '' && binding.deviceId === target.deviceId)
+  if (binding.groupId && target.groupId) {
+    return binding.groupId === target.groupId
+  }
+
+  return target.deviceId !== null && binding.deviceId === target.deviceId
 }
 
-function deviceIdIn(event: { deviceId: string | null; groupId: string | null }): CaptureBinding | null {
-  return event.deviceId && event.groupId !== null ? { deviceId: event.deviceId, groupId: event.groupId } : null
+function deviceIdIn(event: { deviceId: string | null; groupId: string }): CaptureBinding | null {
+  return event.deviceId ? { deviceId: event.deviceId, groupId: event.groupId } : null
 }

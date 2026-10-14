@@ -16,7 +16,7 @@ describe('reduceCapture', () => {
 
   it('leaves the binding empty when no device was opened', () => {
     expect(open(initialCaptureState(), 'default', 'g').binding).not.toBeNull()
-    expect(reduceCapture(initialCaptureState(), { kind: 'opened', deviceId: null, groupId: null }, 0).state.binding).toBeNull()
+    expect(reduceCapture(initialCaptureState(), { kind: 'opened', deviceId: null, groupId: '' }, 0).state.binding).toBeNull()
   })
 
   it('does nothing when the system change resolves to the device already open', () => {
@@ -85,6 +85,40 @@ describe('reduceCapture', () => {
     const late = reduceCapture(state, { kind: 'devices', target: TONOR }, 1_000 + MAX_REOPENS * 1_000 + REOPEN_WINDOW_MS)
     expect(late.action.kind).toBe('reopen')
     expect(late.state.attempts).toHaveLength(1)
+  })
+
+  it('binds a device that reports no group, and knows it by its id', () => {
+    const bound = open(initialCaptureState(), 'i-blackhole', '')
+    expect(bound.binding).toEqual({ deviceId: 'i-blackhole', groupId: '' })
+
+    const same: CaptureTarget = { deviceId: 'i-blackhole', groupId: '', reason: 'chosen' }
+    expect(reduceCapture(bound, { kind: 'devices', target: same }, 10).action).toEqual({ kind: 'none' })
+  })
+
+  it('does not reopen on every device change when no group is reported (no reopen loop)', () => {
+    let state = open(initialCaptureState(), 'i-blackhole', '')
+    const same: CaptureTarget = { deviceId: 'i-blackhole', groupId: '', reason: 'automatic' }
+    const actions = []
+
+    for (let i = 0; i < MAX_REOPENS + 2; i++) {
+      const result = reduceCapture(state, { kind: 'devices', target: same }, 100 + i * 100)
+      actions.push(result.action.kind)
+      state = result.state
+    }
+
+    expect(actions.every(kind => kind === 'none')).toBe(true)
+    expect(state.attempts).toEqual([])
+  })
+
+  it('still reopens a group-less device when the choice moves to another one', () => {
+    const state = open(initialCaptureState(), 'i-blackhole', '')
+    expect(reduceCapture(state, { kind: 'devices', target: TONOR }, 10).action).toEqual({ kind: 'reopen', deviceId: 'i-tonor', because: 'devices' })
+    expect(reduceCapture(state, { kind: 'chosen', target: { deviceId: 'i-other', groupId: '', reason: 'chosen' } }, 10).action.kind).toBe('reopen')
+  })
+
+  it('compares by id when only one side reports a group', () => {
+    const state = open(initialCaptureState(), 'i-tonor', '')
+    expect(reduceCapture(state, { kind: 'devices', target: TONOR }, 10).action).toEqual({ kind: 'none' })
   })
 
   it('forgets an attempt made outside the window', () => {
