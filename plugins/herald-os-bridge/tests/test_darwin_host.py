@@ -484,3 +484,15 @@ def test_dark_mode_and_trash_name_the_automation_switch(mac, tmp_path):
     fake({"osascript": (1, "", REFUSED.format(target="Finder"))})
     with pytest.raises(RuntimeError, match="control Finder.*Automation"):
         darwin.DarwinHost().trash([tmp_path / "old.txt"])
+
+
+@pytest.mark.parametrize(
+    ("pane", "anchor"),
+    [("microphone", "Privacy_Microphone"), ("camera", "Privacy_Camera"), ("calendars", "Privacy_Calendars"), ("Calendar", "Privacy_Calendars")],
+)
+def test_open_settings_reaches_the_permission_lists_herald_asks_for(mac, pane, anchor):
+    _, tools, fake = mac
+    machine = fake()
+    result = json.loads(tools.handle_system_open({"target": "settings", "pane": pane}))
+    assert result["success"], result
+    assert machine.ran("open") == [["open", f"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?{anchor}"]]
