@@ -1,0 +1,15 @@
+[Unit]
+Description=Herald OS: the login screen on a system switched from another bootc system
+# Every boot after the first, which does this itself. It puts right a system switched to Herald OS
+# with an image whose first boot left it signing a passwordless administrator in; elsewhere it
+# changes nothing.
+ConditionPathExists=/var/lib/herald-os/firstboot-done
+After=herald-os-reset.service herald-os-firstboot.service
+Before=greetd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/herald-os/firstboot.sh login
+
+[Install]
+WantedBy=multi-user.target

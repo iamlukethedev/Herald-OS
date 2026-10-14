@@ -206,3 +206,163 @@ def test_the_note_is_one_path_for_firstboot_the_service_the_cli_and_the_shell():
     assert "/usr/lib/systemd/system/herald-os-hermes.service" in packages
     assert re.search(r"^  systemctl enable .*herald-os-hermes\.service", packages, re.M)
     assert '"$STATE/hermes-pending"' in (ROOT / "linux" / "image" / "reset-helper").read_text()
+
+
+# The session account and the login screen: an install from the image, and a system switched to
+# Herald OS from another bootc system (Silverblue, Bazzite), which brings accounts of its own.
+SYSTEM_ACCOUNTS = "root:x:0:0:root:/root:/bin/bash\ngreetd:x:976:976::/var/lib/greetd:/sbin/nologin\nnobody:x:65534:65534::/:/sbin/nologin\n"
+AUTOLOGIN = (ROOT / "linux" / "session" / "greetd-config.toml").read_text()
+LOGIN_SCREEN = (ROOT / "linux" / "session" / "greetd-login.toml").read_text()
+
+
+class Accounts:
+    """/etc/passwd, /etc/shadow, login.defs and greetd's config in a temporary directory, with stand-ins
+    for the tools that change accounts."""
+
+    def __init__(self, tmp_path: Path, passwd: str = "", shadow: str = "", greetd: str = AUTOLOGIN):
+        self.root = tmp_path
+        self.passwd = tmp_path / "passwd"
+        self.shadow = tmp_path / "shadow"
+        self.greetd = tmp_path / "greetd.toml"
+        self.state = tmp_path / "state"
+        self.calls = tmp_path / "calls"
+        self.state.mkdir()
+        self.passwd.write_text(SYSTEM_ACCOUNTS + passwd)
+        self.shadow.write_text("".join(f"{line.split(':')[0]}:*:::::::\n" for line in SYSTEM_ACCOUNTS.splitlines()) + shadow)
+        self.greetd.write_text(greetd)
+        (tmp_path / "login.defs").write_text("UID_MIN                  1000\nUID_MAX                 60000\n")
+        self.calls.write_text("")
+        bin_dir = tmp_path / "bin"
+        executable(
+            bin_dir / "getent",
+            'case "$1" in\n'
+            '  passwd) if [ -n "$2" ]; then grep "^$2:" "$WORLD/passwd"; else cat "$WORLD/passwd"; fi ;;\n'
+            '  shadow) grep "^$2:" "$WORLD/shadow" ;;\n'
+            "esac",
+        )
+        executable(
+            bin_dir / "id",
+            'if [ "$1" = -u ]; then line=$(grep "^$2:" "$WORLD/passwd") || exit 1; echo "$line" | cut -d: -f3; else grep -q "^$1:" "$WORLD/passwd"; fi',
+        )
+        # useradd: the next free UID from 1000, and a password no one can sign in with, as shadow-utils does.
+        executable(
+            bin_dir / "useradd",
+            'echo "useradd $*" >>"$CALLS"; for name; do :; done\n'
+            'uid=$(awk -F: \'$3 >= 1000 && $3 < 60000 && $3 >= n { n = $3 + 1 } END { print n ? n : 1000 }\' n=1000 "$WORLD/passwd")\n'
+            'echo "$name:x:$uid:$uid::/home/$name:/bin/bash" >>"$WORLD/passwd"; echo "$name:!:::::::" >>"$WORLD/shadow"',
+        )
+        executable(bin_dir / "usermod", 'echo "usermod $*" >>"$CALLS"; [ "$1" = -L ] && sed -i "s/^$2:/$2:!/" "$WORLD/shadow"; exit 0')
+        executable(bin_dir / "passwd", 'echo "passwd $*" >>"$CALLS"; [ "$1" = -d ] && sed -i "s/^$2:[^:]*:/$2::/" "$WORLD/shadow"; exit 0')
+        self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "WORLD": str(tmp_path), "CALLS": str(self.calls)}
+
+    def run(self, call: str) -> subprocess.CompletedProcess:
+        quote = shlex.quote
+        script = (
+            "set -euo pipefail\n"
+            f"HERMES_USER=hermes STATE={quote(str(self.state))} SWITCHED={quote(str(self.state / 'login-screen'))}\n"
+            f"GREETD={quote(str(self.greetd))} LOGIN_DEFS={quote(str(self.root / 'login.defs'))} SHARE={quote(str(ROOT / 'linux'))}\n"
+            + functions("earlier_accounts", "switched", "session_account", "login_screen", "greeter")
+            + call
+            + "\n"
+        )
+        return subprocess.run(["bash", "-c", script], env=self.env, capture_output=True, text=True, timeout=60, check=False)
+
+    def password(self, user: str) -> str:
+        return next(line.split(":")[1] for line in self.shadow.read_text().splitlines() if line.startswith(f"{user}:"))
+
+    def switched(self) -> bool:
+        return (self.state / "login-screen").exists()
+
+
+def first_boot(accounts: Accounts) -> subprocess.CompletedProcess:
+    """What system_phase does about the account and greetd."""
+    result = accounts.run("session_account\ngreeter")
+    assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_an_install_from_the_image_signs_its_new_account_in_and_setup_asks_for_a_password(tmp_path):
+    accounts = Accounts(tmp_path)
+    first_boot(accounts)
+    assert "useradd -m -G wheel hermes" in accounts.calls.read_text()
+    assert accounts.password("hermes") == ""
+    assert not accounts.switched()
+    assert accounts.greetd.read_text() == AUTOLOGIN
+    # Only the run after next would differ; the boot unit changes nothing on such a system.
+    assert accounts.run("if switched; then login_screen; fi").returncode == 0
+    assert accounts.greetd.read_text() == AUTOLOGIN and accounts.password("hermes") == ""
+
+
+def test_a_switched_system_gets_a_locked_administrator_and_a_login_screen(tmp_path):
+    accounts = Accounts(tmp_path, passwd="me:x:1000:1000::/var/home/me:/bin/bash\n", shadow="me:$y$secret:::::::\n")
+    result = first_boot(accounts)
+    assert "switched from another system, which has these accounts: me" in result.stdout
+    assert "passwd -d" not in accounts.calls.read_text()
+    assert accounts.password("hermes").startswith("!")
+    assert accounts.password("me") == "$y$secret"
+    assert accounts.switched()
+    assert accounts.greetd.read_text() == LOGIN_SCREEN
+    assert 'command = "herald-os-compositor"' not in accounts.greetd.read_text()
+
+
+def test_a_system_switched_by_an_earlier_image_is_put_right_at_the_next_boot(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:$y$secret:::::::\nhermes::::::::\n",
+    )
+    result = accounts.run("if switched; then login_screen; fi")
+    assert result.returncode == 0, result.stderr
+    assert accounts.password("hermes").startswith("!") and accounts.switched()
+    assert accounts.greetd.read_text() == LOGIN_SCREEN
+    assert "locked until someone gives it one (sudo passwd hermes)" in result.stdout
+
+
+def test_a_session_user_that_has_a_password_keeps_it_and_meets_the_login_screen(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:$y$secret:::::::\nhermes:$y$theirs:::::::\n",
+    )
+    assert accounts.run("if switched; then login_screen; fi").returncode == 0
+    assert accounts.password("hermes") == "$y$theirs"
+    assert "usermod" not in accounts.calls.read_text()
+    assert accounts.greetd.read_text() == LOGIN_SCREEN
+
+
+def test_an_account_added_after_an_image_install_does_not_make_it_a_switched_system(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="hermes:x:1000:1000::/var/home/hermes:/bin/bash\nfriend:x:1001:1001::/var/home/friend:/bin/bash\n",
+        shadow="hermes::::::::\nfriend:$y$friend:::::::\n",
+    )
+    assert accounts.run("if switched; then login_screen; fi").returncode == 0
+    assert not accounts.switched() and accounts.greetd.read_text() == AUTOLOGIN
+
+
+def test_accounts_outside_login_defs_s_range_are_not_people(tmp_path):
+    accounts = Accounts(tmp_path, passwd="container:x:70000:70000::/:/sbin/nologin\n")
+    first_boot(accounts)
+    assert not accounts.switched() and accounts.password("hermes") == ""
+
+
+def test_a_reset_on_a_switched_system_makes_the_account_locked_again(tmp_path):
+    accounts = Accounts(tmp_path)
+    (accounts.state / "login-screen").write_text("2026-10-14T08:00:00+00:00\n")
+    first_boot(accounts)
+    assert accounts.password("hermes").startswith("!")
+    assert accounts.greetd.read_text() == LOGIN_SCREEN
+
+
+def test_the_login_screen_is_greetd_s_own_and_wired_into_the_image():
+    assert 'command = "agreety --cmd herald-os-compositor"' in LOGIN_SCREEN and 'user = "greetd"' in LOGIN_SCREEN
+    assert "agreety" not in AUTOLOGIN
+    unit = (ROOT / "linux" / "image" / "herald-os-login.service").read_text()
+    assert "ExecStart=/usr/libexec/herald-os/firstboot.sh login" in unit
+    assert "ConditionPathExists=/var/lib/herald-os/firstboot-done" in unit and "Before=greetd.service" in unit
+    packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
+    assert "/usr/lib/systemd/system/herald-os-login.service" in packages
+    assert re.search(r"^  systemctl enable .*herald-os-login\.service", packages, re.M)
+    script = FIRSTBOOT.read_text()
+    assert 'SWITCHED="$STATE/login-screen"' in script and '"$SHARE/session/greetd-login.toml"' in script
+    assert "LOGIN_SCREEN = '/var/lib/herald-os/login-screen'" in (ROOT / "apps" / "desktop" / "electron" / "ipc" / "setup.ts").read_text()

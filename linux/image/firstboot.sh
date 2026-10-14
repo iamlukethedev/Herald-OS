@@ -9,12 +9,21 @@
 #                         the network, then installs and sets it up (herald-os-hermes.service)
 #   firstboot.sh apps     the omakase Flatpaks, after the login screen is up
 #                         (herald-os-firstboot-apps.service)
+#   firstboot.sh login    on a system switched from another bootc system, the login screen and no
+#                         session user without a password: every later boot (herald-os-login.service)
 #   firstboot.sh          system and apps, in order (the development VM's provisioner)
 set -euo pipefail
 
 PHASE="${1:-all}"
 HERMES_USER="${HERMES_USER:-hermes}"
 STATE=/var/lib/herald-os
+# There on a system switched to Herald OS from another bootc system, which brought accounts of its
+# own: greetd shows a login screen instead of signing the session user in, and the session user never
+# has an empty password. The shell's setup reads it too: whoever got past the login screen has a
+# password already.
+SWITCHED="$STATE/login-screen"
+GREETD=/etc/greetd/config.toml
+LOGIN_DEFS=/etc/login.defs
 # There while Hermes Agent waits to be installed: one word for how it goes (offline, installing,
 # retrying), which the shell's boot screen shows; herald-os-hermes.service runs while it is there.
 PENDING="$STATE/hermes-pending"
@@ -43,13 +52,69 @@ for candidate in /usr/share/herald-os /usr/local/share/herald-os-linux "$(cd "$(
 done
 [[ -n "$SHARE" ]] || { echo "firstboot: the Herald OS files are missing (run packages.sh first)" >&2; exit 1; }
 
-system_phase() {
-  step "The session user ($HERMES_USER)"
-  if ! id "$HERMES_USER" >/dev/null 2>&1; then
-    # No password yet: the lock screen refuses until one is set (first-boot setup or herald-os password).
-    useradd -m -G wheel "$HERMES_USER"
+# Accounts people sign in to (login.defs's UID range) that are older than the session user, or all of
+# them while it does not exist yet: what a system switched to Herald OS brought along. An install from
+# the image has none, since the session user is the first account it gets.
+earlier_accounts() {
+  local min max mine
+  min="$(awk '$1 == "UID_MIN" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
+  max="$(awk '$1 == "UID_MAX" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
+  mine="$(id -u "$HERMES_USER" 2>/dev/null || echo 4294967295)"
+  getent passwd | awk -F: -v min="${min:-1000}" -v max="${max:-60000}" -v mine="$mine" -v me="$HERMES_USER" \
+    '$1 != me && $3 + 0 >= min + 0 && $3 + 0 <= max + 0 && $3 + 0 < mine + 0 { print $1 }'
+}
+
+# Whether this system was switched to Herald OS from another one. The first time it is seen, it is
+# written down, so it stays so through `herald-os reset`.
+switched() {
+  [[ -f "$SWITCHED" ]] && return 0
+  local accounts
+  accounts="$(earlier_accounts | tr '\n' ' ')"
+  [[ -n "$accounts" ]] || return 1
+  echo "switched from another system, which has these accounts: $accounts"
+  date -Is >"$SWITCHED"
+}
+
+# The session user, made unless it is there. From the image it starts with no password: the shell's
+# setup asks for one at once (and the lock screen refuses until there is one). On a switched system
+# it starts locked: no one can sign in to it, or use its administrator rights, until someone with an
+# account gives it a password (sudo passwd hermes).
+session_account() {
+  id "$HERMES_USER" >/dev/null 2>&1 && return 0
+  useradd -m -G wheel "$HERMES_USER"
+  if switched; then
+    usermod -L "$HERMES_USER"
+  else
     passwd -d "$HERMES_USER" >/dev/null
   fi
+}
+
+# A switched system's login screen: greetd asks who signs in instead of signing the session user in,
+# and a session user an earlier first boot left with an empty password is locked.
+login_screen() {
+  if id "$HERMES_USER" >/dev/null 2>&1 && [[ -z "$(getent shadow "$HERMES_USER" | cut -d: -f2)" ]]; then
+    usermod -L "$HERMES_USER"
+    echo "$HERMES_USER had no password: locked until someone gives it one (sudo passwd $HERMES_USER)"
+  fi
+  if grep -q '^command = "herald-os-compositor"' "$GREETD"; then
+    install -m 0644 "$SHARE/session/greetd-login.toml" "$GREETD"
+    echo "greetd shows a login screen: sign in to your own account, or to $HERMES_USER once it has a password"
+  fi
+}
+
+# greetd on the first boot: from the image it signs the session user in, on a switched system it
+# shows the login screen.
+greeter() {
+  if switched; then
+    login_screen
+  else
+    sed -i "s/^user = .*/user = \"$HERMES_USER\"/" "$GREETD"
+  fi
+}
+
+system_phase() {
+  step "The session user ($HERMES_USER)"
+  session_account
   HOME_DIR="$(getent passwd "$HERMES_USER" | cut -d: -f6)"
   usermod -aG video,input,render,audio "$HERMES_USER" 2>/dev/null || true
   if getent group seat >/dev/null; then
@@ -57,9 +122,9 @@ system_phase() {
   fi
   # The user's systemd instance (pipewire, portals) keeps running when no one is logged in.
   loginctl enable-linger "$HERMES_USER" || true
-  sed -i "s/^user = .*/user = \"$HERMES_USER\"/" /etc/greetd/config.toml
 
   step "The login screen"
+  greeter
   # Anaconda picks multi-user.target unless its kickstart says otherwise, because greetd provides
   # no service(graphical-login); only graphical.target starts greetd and so the session.
   if [[ "$(systemctl get-default)" != "graphical.target" ]]; then
@@ -174,7 +239,9 @@ case "$PHASE" in
   system) system_phase ;;
   hermes) hermes_phase ;;
   apps) apps_phase ;;
+  # A system switched before first boots told switched systems apart is put right here.
+  login) if switched; then login_screen; fi ;;
   all) system_phase; apps_phase ;;
-  *) echo "usage: $0 [system|hermes|apps]" >&2; exit 2 ;;
+  *) echo "usage: $0 [system|hermes|apps|login]" >&2; exit 2 ;;
 esac
 echo "==> first boot ($PHASE) done"
