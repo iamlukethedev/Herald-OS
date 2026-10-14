@@ -669,6 +669,23 @@ def test_the_image_has_cmp():
     assert "cmp -s" in FIRSTBOOT.read_text()
 
 
+def test_the_image_has_intel_wi_fi_firmware_and_exfat():
+    # Fedora ships Intel CNVi firmware apart from linux-firmware; without it most laptops have no Wi-Fi,
+    # and first boot needs the network for Hermes.
+    packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
+    assert "iwlwifi-mvm-firmware" in packages and "NetworkManager-wifi" in packages
+    assert "exfatprogs" in packages
+
+
+def test_first_boot_fetches_hermes_agent_and_nothing_else():
+    # Third-party code is never fetched and run by default at first boot: no other sources, and no
+    # installer piped from the network into a shell.
+    script = FIRSTBOOT.read_text()
+    urls = set(re.findall(r"https?://[^\s'\";)]+", script))
+    assert urls == {"https://github.com/NousResearch/hermes-agent"}
+    assert not re.search(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z)?sh\b", script)
+
+
 def test_a_switched_system_where_no_one_can_sign_in_never_has_a_passwordless_hermes_in_wheel(tmp_path):
     # Key-only, smartcard or fingerprint accounts: a locked password, so no login screen for them.
     accounts = Accounts(
