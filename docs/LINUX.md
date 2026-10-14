@@ -296,10 +296,12 @@ not on the computer you work on. What happens on its first start:
   to install Hermes there too.
 - **A locked `hermes` account.** The first boot also creates `hermes`, an administrator (in `wheel`)
   that Herald OS sets Hermes Agent up for. It is locked and has no shell (`/usr/sbin/nologin`), so
-  no one can sign in to it, with a password or an SSH key, or use its administrator rights. To use
-  it, give it a password from your own account with `sudo passwd hermes`. Herald OS gives it its
-  shell back at the next start, or at once with `sudo usermod -s /bin/bash hermes`. After that,
-  `hermes` can sign in at the login screen too.
+  no one can sign in to it, with a password or an SSH key, or use its administrator rights. Its
+  user manager (PipeWire, portals, the update timer) does not run either (`loginctl
+  disable-linger`). To use it, give it a password from your own account with `sudo passwd hermes`.
+  At the next start Herald OS gives back the shell it had before it was locked
+  (`/var/lib/herald-os/hermes-shell`) and turns its user manager back on. To do it at once, run
+  `sudo usermod -s /bin/bash hermes`. After that, `hermes` can sign in at the login screen too.
 - **Checked at every start.** `herald-os-login.service` runs before greetd at every start, and greetd
   waits for it to succeed: if it fails, there is no login screen rather than one that signs someone
   in. Any other greetd config is replaced with the login screen. A system switched with an earlier
@@ -307,8 +309,10 @@ not on the computer you work on. What happens on its first start:
   start, and a `hermes` without a password is locked.
 - **What counts as switched.** Accounts from before Herald OS: local ones (UIDs 1000 to 60000),
   systemd-homed ones (60001 to 60513), and folders in `/home` that belong to someone other than
-  `hermes`, which accounts from SSSD or LDAP have too. When the account list cannot be read, the
-  system counts as switched.
+  `hermes`, which accounts from SSSD or LDAP have too. Folders that root or another system account
+  owns are not counted. When the account list cannot be read, the system counts as switched. The
+  first boot decides this once and records the answer (`/var/lib/herald-os/switched` or
+  `/var/lib/herald-os/image-install`). Accounts added later, and `herald-os reset`, do not change it.
 - **When no account can sign in.** If none of those accounts has a shell and a password (and none is
   a systemd-homed, SSSD or LDAP account), a login screen would have no one to let in. Herald OS
   then does what an install from the image does: `hermes` starts with no password and signs in by
