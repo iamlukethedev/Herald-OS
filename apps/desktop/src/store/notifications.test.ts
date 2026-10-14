@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HeraldOSPrefs, NotifyPrefs } from '../../shared/ipc.ts'
+import type { HeraldOSPrefs, NotifyPrefs, PrefsPatch } from '../../shared/ipc.ts'
 import { LEGACY_NOTIFY_KEYS, NOTIFY_DEFAULTS } from '../../shared/notify-prefs.ts'
 import { emptyChat } from '../lib/chat-model.ts'
 
@@ -30,12 +30,19 @@ vi.mock('./gateway.ts', () => ({
   }
 }))
 
+// The preload bridge, faked: prefs writes are recorded and merged switch by switch, as main does.
 const bridge = vi.hoisted(() => {
   const state = {
     native: [] as { title: string; body: string }[],
-    saved: [] as Partial<HeraldOSPrefs>[],
+    saved: [] as PrefsPatch[],
+    adopted: [] as Partial<NotifyPrefs>[],
     failWrite: false,
     prefs: null as HeraldOSPrefs | null
+  }
+  const merge = (patch: PrefsPatch): HeraldOSPrefs => {
+    state.prefs = { ...state.prefs!, ...patch, notify: { ...state.prefs!.notify, ...patch.notify } }
+
+    return state.prefs
   }
   const heraldOS = {
     notifications: {
@@ -44,14 +51,23 @@ const bridge = vi.hoisted(() => {
       }
     },
     prefs: {
-      set: async (patch: Partial<HeraldOSPrefs>) => {
+      set: async (patch: PrefsPatch) => {
         if (state.failWrite) {
           throw new Error('disk full')
         }
 
         state.saved.push(patch)
 
-        return { ...state.prefs!, ...patch }
+        return merge(patch)
+      },
+      adoptLegacyNotify: async (flags: Partial<NotifyPrefs>) => {
+        if (state.failWrite) {
+          throw new Error('disk full')
+        }
+
+        state.adopted.push(flags)
+
+        return merge({ notify: flags })
       }
     }
   }
@@ -92,6 +108,7 @@ beforeEach(() => {
   $windowState.set({ fullscreen: false, focused: false })
   bridge.native.length = 0
   bridge.saved.length = 0
+  bridge.adopted.length = 0
   bridge.failWrite = false
   alerts({})
 })
@@ -213,29 +230,37 @@ describe('the callers tagged with a category', () => {
 })
 
 describe('saving the switches', () => {
-  it('writes one switch into prefs.json and keeps the others', async () => {
-    alerts({ taskUpdates: false })
+  it('sends only the switch that changed, so a stale window cannot undo another window\'s switch', async () => {
+    // Another window turned Task updates off; this window has not heard yet.
+    bridge.prefs = { ...$prefs.get(), notify: { ...NOTIFY_DEFAULTS, taskUpdates: false } }
 
     await setNotifySwitch('approvals', false)
 
-    expect(bridge.saved).toEqual([{ notify: { ...NOTIFY_DEFAULTS, taskUpdates: false, approvals: false } }])
+    expect(bridge.saved).toEqual([{ notify: { approvals: false } }])
     expect($prefs.get().notify).toEqual({ ...NOTIFY_DEFAULTS, taskUpdates: false, approvals: false })
   })
 
-  it('moves switches saved in localStorage into the prefs once, then drops them', async () => {
-    const storage = memoryStorage({ [LEGACY_NOTIFY_KEYS.approvals]: 'false', [LEGACY_NOTIFY_KEYS.nativeWhenUnfocused]: 'true', 'herald-os.other': 'kept' })
+  it('hands every switch found in localStorage to main, takes its answer, and drops all four old keys', async () => {
+    const storage = memoryStorage({
+      [LEGACY_NOTIFY_KEYS.toolCompletions]: 'false',
+      [LEGACY_NOTIFY_KEYS.approvals]: 'false',
+      [LEGACY_NOTIFY_KEYS.taskUpdates]: 'true',
+      [LEGACY_NOTIFY_KEYS.nativeWhenUnfocused]: 'false',
+      'herald-os.other': 'kept'
+    })
 
     await migrateLegacyNotifyFlags(storage)
 
-    expect(bridge.saved).toEqual([{ notify: { ...NOTIFY_DEFAULTS, approvals: false } }])
-    expect($prefs.get().notify.approvals).toBe(false)
+    expect(bridge.adopted).toEqual([{ toolCompletions: false, approvals: false, taskUpdates: true, nativeWhenUnfocused: false }])
+    expect(bridge.saved).toEqual([])
+    expect($prefs.get().notify).toEqual({ toolCompletions: false, approvals: false, taskUpdates: true, nativeWhenUnfocused: false })
     expect([...storage.map.keys()]).toEqual(['herald-os.other'])
 
     await migrateLegacyNotifyFlags(storage)
-    expect(bridge.saved).toHaveLength(1)
+    expect(bridge.adopted).toHaveLength(1)
   })
 
-  it('keeps the localStorage switches for the next start when the prefs cannot be written', async () => {
+  it('keeps the localStorage switches for the next start when main cannot save them', async () => {
     const storage = memoryStorage({ [LEGACY_NOTIFY_KEYS.toolCompletions]: 'false' })
     bridge.failWrite = true
 
@@ -245,4 +270,3 @@ describe('saving the switches', () => {
     expect($prefs.get().notify).toEqual(NOTIFY_DEFAULTS)
   })
 })
-

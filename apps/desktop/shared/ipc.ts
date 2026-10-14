@@ -597,6 +597,9 @@ export interface HeraldOSPrefs {
   notify: NotifyPrefs
 }
 
+/** A prefs write: top-level fields replace what is saved; `notify` is merged switch by switch in main. */
+export type PrefsPatch = Partial<Omit<HeraldOSPrefs, 'notify'>> & { notify?: Partial<NotifyPrefs> }
+
 export type ScreenshotMode = 'region' | 'window' | 'screen'
 
 /** macOS capture tools (Herald OS Linux runs its own through the CLI). */
@@ -953,6 +956,7 @@ export const IPC = {
   prefsGet: 'herald-os:prefs:get',
   prefsSet: 'herald-os:prefs:set',
   prefsChanged: 'herald-os:prefs:changed',
+  prefsAdoptLegacyNotify: 'herald-os:prefs:adopt-legacy-notify',
 
   bridgePolicyRead: 'herald-os:bridge:policy-read',
   bridgePolicyWrite: 'herald-os:bridge:policy-write',

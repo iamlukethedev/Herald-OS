@@ -1,7 +1,7 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
 import os from 'node:os'
 import path from 'node:path'
-import { type EnvInfo, type HeraldOSPrefs, IPC, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
+import { type EnvInfo, type HeraldOSPrefs, IPC, type NotifyPrefs, type PrefsPatch, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
 import { BackendManager } from './backend/manager.ts'
 import { forgetInheritedSession } from './backend/session-env.ts'
 import { CrashWatcher } from './crash/watch.ts'
@@ -38,7 +38,7 @@ import { registerPetIpc } from './pet/ipc.ts'
 import { PetWindow } from './pet/window.ts'
 import { SwitchService } from './switches.ts'
 import { hermesHome, heraldOsDataDir, isDev } from './paths.ts'
-import { readPrefs, writePrefs } from './prefs.ts'
+import { adoptLegacyNotify, readPrefs, writePrefs } from './prefs.ts'
 import { forwardRendererConsole } from './renderer-console.ts'
 import { isOmarchy, readOmarchyTheme } from './theme/omarchy.ts'
 import { prefsForTheme } from './theme/themes.ts'
@@ -242,7 +242,7 @@ function registerCoreIpc(): void {
   })
 
   ipcMain.handle(IPC.prefsGet, () => readPrefs())
-  ipcMain.handle(IPC.prefsSet, (_event, patch: Partial<HeraldOSPrefs>) => {
+  ipcMain.handle(IPC.prefsSet, (_event, patch: PrefsPatch) => {
     const next = writePrefs(patch)
 
     if ('wallpaper' in patch) {
@@ -267,6 +267,17 @@ function registerCoreIpc(): void {
     }
 
     // Every surface window sees the same preferences.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.webContents !== _event.sender) {
+        win.webContents.send(IPC.prefsChanged, next)
+      }
+    }
+
+    return next
+  })
+  ipcMain.handle(IPC.prefsAdoptLegacyNotify, (_event, flags: Partial<NotifyPrefs>) => {
+    const next = adoptLegacyNotify(flags)
+
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.webContents !== _event.sender) {
         win.webContents.send(IPC.prefsChanged, next)

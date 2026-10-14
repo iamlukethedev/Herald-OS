@@ -1,5 +1,5 @@
 import { atom } from 'nanostores'
-import type { BackendState, EnvInfo, HeraldOSPrefs, WindowState } from '../../shared/ipc.ts'
+import type { BackendState, EnvInfo, HeraldOSPrefs, PrefsPatch, WindowState } from '../../shared/ipc.ts'
 import { LEGACY_NOTIFY_KEYS, NOTIFY_DEFAULTS, readLegacyNotifyFlags } from '../../shared/notify-prefs.ts'
 import { PALETTE_PROPERTIES, paletteVars, schemeOf } from '../../shared/theme.ts'
 import { VOICE_DEFAULTS } from '../../shared/voice-prefs.ts'
@@ -60,7 +60,7 @@ export function applyPrefsToDocument(prefs: HeraldOSPrefs): void {
   }
 }
 
-export async function updatePrefs(patch: Partial<HeraldOSPrefs>): Promise<void> {
+export async function updatePrefs(patch: PrefsPatch): Promise<void> {
   const next = await window.heraldOS.prefs.set(patch)
   $prefs.set(next)
   applyPrefsToDocument(next)
@@ -74,7 +74,9 @@ export async function migrateLegacyNotifyFlags(storage: Pick<Storage, 'getItem' 
     return
   }
 
-  await updatePrefs({ notify: { ...$prefs.get().notify, ...legacy } })
+  const next = await window.heraldOS.prefs.adoptLegacyNotify(legacy)
+  $prefs.set(next)
+  applyPrefsToDocument(next)
 
   // Only once they are saved, so a failed write tries again at the next start.
   for (const key of Object.values(LEGACY_NOTIFY_KEYS)) {
@@ -90,12 +92,12 @@ export function bindBackendStores(): () => void {
   void window.heraldOS.env().then(info => $env.set(info)).catch(logFailure('env'))
   void window.heraldOS.prefs
     .get()
-    .then(prefs => {
+    .then(async prefs => {
       $prefs.set(prefs)
       applyPrefsToDocument(prefs)
 
       if (typeof localStorage !== 'undefined') {
-        void migrateLegacyNotifyFlags(localStorage).catch(logFailure('prefs.notify.migrate'))
+        await migrateLegacyNotifyFlags(localStorage).catch(logFailure('prefs.notify.migrate'))
       }
     })
     .catch(logFailure('prefs.get'))

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { type EventAutomation, isEventName } from '../shared/events.ts'
 import { languageSetting } from '../shared/i18n.ts'
-import type { ContinuityPrefs, CrashHelpPrefs, HeraldOSPrefs } from '../shared/ipc.ts'
+import type { ContinuityPrefs, CrashHelpPrefs, HeraldOSPrefs, NotifyPrefs, PrefsPatch } from '../shared/ipc.ts'
 import { normalizeMenuBar } from '../shared/menu-bar.ts'
 import { NOTIFY_DEFAULTS, normalizeNotifyPrefs } from '../shared/notify-prefs.ts'
 import { normalizeCommentName } from '../shared/office/comment-name.ts'
@@ -90,7 +90,7 @@ function normalizeContinuity(value: Partial<ContinuityPrefs> | undefined): Conti
   return { ...CONTINUITY_DEFAULTS, ...value, enabled, exclude }
 }
 
-export function writePrefs(patch: Partial<HeraldOSPrefs>): HeraldOSPrefs {
+export function writePrefs(patch: PrefsPatch): HeraldOSPrefs {
   const current = readPrefs()
   // Nested objects are patched field by field by their callers; merge instead of replacing.
   const next = {
@@ -109,4 +109,23 @@ export function writePrefs(patch: Partial<HeraldOSPrefs>): HeraldOSPrefs {
   fs.writeFileSync(prefsFile(), JSON.stringify(next, null, 2))
 
   return next
+}
+
+/** The Alerts switches as saved on disk, before defaults fill the gaps. */
+function savedNotifyKeys(): Set<string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) as { notify?: Record<string, unknown> }
+
+    return new Set(Object.entries(parsed.notify ?? {}).filter(([, value]) => typeof value === 'boolean').map(([key]) => key))
+  } catch {
+    return new Set()
+  }
+}
+
+/** Switches a window kept in localStorage: each one is saved only when prefs.json has no value for it yet. */
+export function adoptLegacyNotify(flags: Partial<NotifyPrefs>): HeraldOSPrefs {
+  const saved = savedNotifyKeys()
+  const missing = Object.fromEntries(Object.entries(flags).filter(([key, value]) => key in NOTIFY_DEFAULTS && typeof value === 'boolean' && !saved.has(key)))
+
+  return Object.keys(missing).length ? writePrefs({ notify: missing }) : readPrefs()
 }

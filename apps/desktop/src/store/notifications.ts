@@ -58,7 +58,8 @@ const CATEGORY_SWITCH: Record<NotifyCategory, keyof NotifyPrefs> = {
 
 /** Turn one Alerts switch on or off; saved in prefs.json, so every window follows it. */
 export async function setNotifySwitch(key: keyof NotifyPrefs, enabled: boolean): Promise<void> {
-  await updatePrefs({ notify: { ...$prefs.get().notify, [key]: enabled } })
+  // Only this switch: main merges it into what is saved, so another window's change is kept.
+  await updatePrefs({ notify: { [key]: enabled } })
 }
 
 export interface NotifyInput {

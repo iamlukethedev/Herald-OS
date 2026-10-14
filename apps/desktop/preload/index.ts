@@ -37,6 +37,7 @@ import {
   IPC,
   type MicPermission,
   type NetworkStatus,
+  type NotifyPrefs,
   type OfficeChangedEvent,
   type OfficeFileData,
   type OfficePdfRequest,
@@ -51,6 +52,7 @@ import {
   type OfficeWriteResult,
   type OsControlReply,
   type OsControlRequest,
+  type PrefsPatch,
   type ProcessInfo,
   type RecentFile,
   type RecordingState,
@@ -463,7 +465,9 @@ const api = {
   },
   prefs: {
     get: (): Promise<HeraldOSPrefs> => ipcRenderer.invoke(IPC.prefsGet),
-    set: (patch: Partial<HeraldOSPrefs>): Promise<HeraldOSPrefs> => ipcRenderer.invoke(IPC.prefsSet, patch),
+    set: (patch: PrefsPatch): Promise<HeraldOSPrefs> => ipcRenderer.invoke(IPC.prefsSet, patch),
+    /** Alerts switches from this window's localStorage, saved only where prefs.json has none yet. */
+    adoptLegacyNotify: (flags: Partial<NotifyPrefs>): Promise<HeraldOSPrefs> => ipcRenderer.invoke(IPC.prefsAdoptLegacyNotify, flags),
     /** Preferences changed from another surface window. */
     onChanged: (listener: (prefs: HeraldOSPrefs) => void): Unsubscribe => subscribe(IPC.prefsChanged, listener)
   },
