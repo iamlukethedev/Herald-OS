@@ -8,7 +8,6 @@ import os
 import plistlib
 import re
 import signal
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Sequence
@@ -445,7 +444,7 @@ class DarwinHost(HostAdapter):
         script = 'tell application "System Events" to get {name, unix id} of (every application process whose background only is false)'
         result = run(["osascript", "-e", script], timeout=10)
         if not result.ok:
-            return []
+            raise osascript_error(result, "System Events", "could not list the running apps")
         # Output: "Finder, Safari, ..., 123, 456, ..." (names then pids).
         parts = [p.strip() for p in result.stdout.strip().split(",")]
         half = len(parts) // 2
@@ -502,15 +501,29 @@ class DarwinHost(HostAdapter):
         if not result.ok:
             raise RuntimeError(result.stderr.strip() or f"could not reveal {path}")
 
+    def _app_pids(self, app: AppInfo | None, label: str) -> list[int]:
+        """The app's main processes, found with ``ps`` so the check needs no Automation permission:
+        the executable inside its bundle, or a process named exactly like the app."""
+        bundle = f"{app.path.rstrip('/')}/Contents/MacOS/" if app and app.path else None
+        pids = {r.pid for r in self._ps() if (bundle and r.command.startswith(bundle)) or r.name == label}
+        return sorted(pids - {0, 1, os.getpid(), os.getppid()})
+
     def quit_app(self, name: str, force: bool) -> None:
         app = self.resolve_app(name)
         label = app.name if app else name
+        pids = self._app_pids(app, label)
+        if not pids:
+            raise RuntimeError(f"{label} is not running")
         if force:
-            result = run(["pkill", "-x", label], timeout=10)
-        else:
-            result = run(["osascript", "-e", f'tell application "{_applescript_string(label)}" to quit'], timeout=20)
-        if not result.ok and result.code != 1:
-            raise RuntimeError(result.stderr.strip() or f"could not quit {label}")
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    continue
+            return
+        result = run(["osascript", "-e", f'tell application "{_applescript_string(label)}" to quit'], timeout=20)
+        if not result.ok:
+            raise osascript_error(result, label, f"could not quit {label}")
 
     # --- system state (read) -----------------------------------------------------------------
     def network_status(self) -> dict[str, Any]:
@@ -601,7 +614,7 @@ class DarwinHost(HostAdapter):
     def set_dark_mode(self, enabled: bool) -> None:
         result = run(["osascript", "-e", f'tell application "System Events" to tell appearance preferences to set dark mode to {"true" if enabled else "false"}'], timeout=15)
         if not result.ok:
-            raise RuntimeError(result.stderr.strip() or "could not change appearance (grant Automation permission to Herald OS for System Events)")
+            raise osascript_error(result, "System Events", "could not change appearance")
 
     def open_settings(self, pane: str) -> str:
         key = pane.strip().lower().replace(" ", "_").replace("&", "and")
@@ -647,8 +660,10 @@ class DarwinHost(HostAdapter):
         script = f'tell application "Finder" to delete {{{items}}}'
         result = run(["osascript", "-e", script], timeout=30)
         if not result.ok:
-            raise RuntimeError(result.stderr.strip() or "Finder refused to move items to the Trash")
+            raise osascript_error(result, "Finder", "Finder refused to move items to the Trash")
 
     def notify(self, title: str, body: str) -> None:
         script = f'display notification "{_applescript_string(body)}" with title "{_applescript_string(title)}"'
-        subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = run(["osascript", "-e", script], timeout=10)
+        if not result.ok:
+            raise RuntimeError(result.stderr.strip() or "could not show the notification")
