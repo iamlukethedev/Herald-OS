@@ -15,7 +15,7 @@ from typing import Any, Literal, Sequence
 
 from ..crash import MAC_REPORT_DIRS, is_crash_header, resolve_mac_report, summarise_ips
 from ..documents import EMPTY_PAGE_CHARS, DocumentText, document_type
-from ..util import run
+from ..util import ExecResult, run
 from .base import AppInfo, FileSearch, FoundFile, HostAdapter, PortListener, ProcessRow
 from .posix import parse_du, parse_ps  # noqa: F401 - shared with Linux; re-exported for callers/tests.
 
@@ -38,6 +38,26 @@ _KIND_QUERIES: dict[str, str] = {
 def _applescript_string(value: str) -> str:
     """Escape for interpolation inside an AppleScript double-quoted literal."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# osascript exits 1 for every AppleScript error, so a refused Apple Event is only visible in stderr:
+# -1743 (the person refused, or turned the switch off) and -1744 (macOS would have to ask first).
+_APPLE_EVENTS_REFUSED = ("-1743", "-1744", "not authorized to send apple events", "not allowed to send apple events")
+
+
+def apple_events_refused(stderr: str) -> bool:
+    text = stderr.lower()
+    return any(marker in text for marker in _APPLE_EVENTS_REFUSED)
+
+
+def osascript_error(result: ExecResult, target: str, fallback: str) -> RuntimeError:
+    """The error for a failed ``osascript`` call, naming the Automation switch when macOS refused it."""
+    if apple_events_refused(result.stderr):
+        return RuntimeError(
+            f"macOS did not let Herald OS control {target}: turn on {target} under Herald OS in "
+            "System Settings > Privacy & Security > Automation, then try again"
+        )
+    return RuntimeError(result.stderr.strip() or fallback)
 
 
 def _mdfind_date(value: str, end_of_day: bool) -> str:
