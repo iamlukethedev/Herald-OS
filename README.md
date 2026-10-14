@@ -45,7 +45,8 @@ Pick the way that matches your machine:
 | Arch Linux | [The Arch package](#arch-linux) |
 | Omarchy | [The Arch package, then one command](#omarchy) |
 | Another Linux | [The tarball](#another-linux) |
-| An Apple Silicon Mac, to try the whole OS | [The virtual machine](#the-whole-os-in-a-virtual-machine) |
+| An Apple Silicon Mac, to try the whole OS | [The virtual machine in UTM](#on-a-mac-with-utm) |
+| A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) |
 
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
 account, or an API key for a provider Hermes supports (OpenRouter, OpenAI, Anthropic, a local model,
@@ -101,10 +102,12 @@ for each of these the first time a feature needs it:
 There is no Intel build of the Mac app (`npm run dist:mac` builds for Apple Silicon only), and the
 ready-made virtual machine (`linux/vm/try.sh`) needs Apple Silicon too. Instead:
 
-- **Herald OS Linux in a virtual machine.** Install the x86_64 installer ISO from
-  [Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI, such as
-  [UTM](https://mac.getutm.app). CI installs it in QEMU with UEFI, 4 cores, 6 GB of memory and a
-  40 GB disk ([installer-test.yml](.github/workflows/installer-test.yml)).
+- **Herald OS Linux in a virtual machine.** Open the ready-made x86_64 disk in
+  [UTM](https://mac.getutm.app), as in
+  [On Linux or an Intel Mac](#on-linux-or-an-intel-mac), or install the x86_64 installer ISO from
+  [Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs it in
+  QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
+  ([installer-test.yml](.github/workflows/installer-test.yml)).
 - **The Mac app from source** on macOS 13 or later, as in
   [Herald OS on macOS from source](#herald-os-on-macos-from-source). It is untested on Intel, though
   node-pty, its native terminal module, ships Intel binaries.
@@ -198,8 +201,61 @@ colour scheme and GTK theme. On a desktop you already use, try it from a second 
 
 ### The whole OS in a virtual machine
 
-On an Apple Silicon Mac, one command downloads the latest release's VM disk (about 2.7 GB) and
-boots it with Apple's virtualization, so the graphics are accelerated:
+Each release carries ready-made virtual machines of Herald OS Linux, so you can try the whole
+operating system without installing it. The first start sets itself up in a few minutes, Hermes
+Agent included, then Herald OS asks for your name and a password. Give the virtual machine 4 cores,
+6 GB of memory and 40 GB of disk space. The UTM bundle and the Hyper-V disk come with releases built
+after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`.
+
+GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The zips are split as
+`.001`, `.002` and so on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or
+[Keka](https://www.keka.io) on a Mac, which read the parts as one archive. Every file has a
+`.sha256` beside it, for the whole file.
+
+#### On a Mac with UTM
+
+For a Mac with Apple Silicon, without Homebrew or a terminal:
+
+1. Install [UTM](https://mac.getutm.app), a free app that runs virtual machines.
+2. Download `herald-os-<version>-aarch64.utm.zip` from the
+   [releases page](https://github.com/iamlukethedev/Herald-OS/releases) and open it. Finder unpacks
+   `Herald OS.utm`.
+3. Double-click `Herald OS.utm`. UTM adds it to its list; press the play button.
+
+The bundle runs on Apple's hypervisor with GPU-accelerated graphics, and asks UTM for sound, a
+shared clipboard and a screen that follows the window's size. How much of that Herald OS Linux uses
+inside UTM is still being tested ([#67](https://github.com/iamlukethedev/Herald-OS/issues/67)).
+UTM's settings for the machine change its cores and memory.
+
+#### On Windows with Hyper-V
+
+Hyper-V comes with Windows 11 Pro, Enterprise and Education (not Home):
+
+1. Turn it on: Start, type "Turn Windows features on or off", tick **Hyper-V** and restart.
+2. Download `herald-os-<version>-x86_64.vhdx.zip` from the
+   [releases page](https://github.com/iamlukethedev/Herald-OS/releases) and unpack it to a folder
+   with 40 GB free; the disk grows up to that as you use it. To check it, 7-Zip's right-click menu
+   has **CRC SHA > SHA-256**; compare with the `.sha256`.
+3. In Hyper-V Manager, **New > Virtual Machine**: generation 2, 6144 MB of memory, the **Default
+   Switch** network, and **Use an existing virtual hard disk** with the `.vhdx`.
+4. Before the first start, open the machine's **Settings**: under **Security** set the Secure Boot
+   template to **Microsoft UEFI Certificate Authority** (the Windows one refuses Linux), and under
+   **Processor** give it 4 virtual processors.
+5. **Connect**, then **Start**.
+
+Hyper-V gives Linux no 3D acceleration, so the processor draws the screen, and there is no sound or
+shared clipboard there yet.
+
+#### On Linux or an Intel Mac
+
+`herald-os-<version>-x86_64.qcow2.zst` (and `aarch64` for ARM machines) is the same disk for QEMU,
+virt-manager, GNOME Boxes or UTM on an Intel Mac. Unpack it with `zstd -d`, then create a machine
+that boots with UEFI from it as an existing disk.
+
+#### From the terminal on an Apple Silicon Mac
+
+One command downloads the latest release's disk (about 2.7 GB) and boots it with Apple's
+Virtualization framework through vfkit:
 
 ```bash
 brew install qemu zstd
@@ -207,10 +263,7 @@ git clone https://github.com/iamlukethedev/Herald-OS.git && cd Herald-OS
 bash linux/vm/try.sh
 ```
 
-The first start sets itself up in a few minutes, Hermes Agent included. The disk is also on the
-releases page in two parts, `herald-os-<version>-aarch64.qcow2.zst.part0` and `.part1`: join them
-with `cat`, unpack with `zstd -d`, and it imports into [UTM](https://mac.getutm.app). To build the VM
-from your checkout instead and work on Herald OS Linux, see
+To build the VM from your checkout instead and work on Herald OS Linux, see
 [Building from source](#herald-os-linux-in-a-virtual-machine).
 
 ## How Herald OS fits together

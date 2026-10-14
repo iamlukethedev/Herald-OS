@@ -237,10 +237,15 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
   `linux/image/unattended.ks` for an unattended install.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
-  release's disk and boots it in one command.
+  release's disk and boots it in one command. It also goes out as a UTM bundle
+  (`aarch64.utm.zip`, made by `linux/vm/make-utm.py`) that opens in UTM with a double-click.
+- **an x86_64 VM disk** from the same `disk.toml`: as a `qcow2.zst`, and as a Hyper-V VHDX
+  (`x86_64.vhdx.zip`) for a generation 2 machine on Windows.
 
-Both are bigger than the 2 GiB GitHub takes for one release file, so they go up in parts (`.part0`,
-`.part1`) that `cat` joins again; the `.sha256` is the joined file's. `try.sh` joins them itself.
+`linux/vm/package-disk.sh` names, compresses and checksums them. Files over the 2 GiB GitHub takes
+for one release file go up in parts: the ISO and the `qcow2.zst` as `.part0`, `.part1` that `cat`
+joins again, the zips as `.001`, `.002` that 7-Zip and Keka open as one archive; the `.sha256` is the
+joined file's. `try.sh` joins its parts itself.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
 unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start.
 
