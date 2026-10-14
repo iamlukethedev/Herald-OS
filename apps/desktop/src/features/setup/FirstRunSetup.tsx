@@ -19,6 +19,7 @@ type Step = 'welcome' | 'account' | 'wifi' | 'hermes' | 'done'
  */
 export function FirstRunSetup() {
   const [due, setDue] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
   const [step, setStep] = useState<Step>('welcome')
   const [forSomeoneElse, setForSomeoneElse] = useState(false)
   // Kept here: the Hermes step unmounts while the sign-in card is up.
@@ -29,7 +30,10 @@ export function FirstRunSetup() {
   useEffect(() => {
     void window.heraldOS.setup
       ?.state()
-      .then(state => setDue(state.needed))
+      .then(state => {
+        setDue(state.needed)
+        setSignedIn(state.signedIn)
+      })
       .catch(() => undefined)
   }, [])
 
@@ -72,13 +76,14 @@ export function FirstRunSetup() {
 
         {step === 'welcome' && (
           <Welcome
+            signedIn={signedIn}
             onChoose={someoneElse => {
               setForSomeoneElse(someoneElse)
               setStep(someoneElse ? 'wifi' : 'account')
             }}
           />
         )}
-        {step === 'account' && <Account onDone={next} />}
+        {step === 'account' && <Account onDone={next} signedIn={signedIn} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title="Get online" text="Pick a network; you can also plug in a cable. Skip it to stay offline for now." />
@@ -126,14 +131,14 @@ function Footer({ onNext, label, busy, disabled }: { onNext: () => void; label: 
   )
 }
 
-function Welcome({ onChoose }: { onChoose: (someoneElse: boolean) => void }) {
+function Welcome({ onChoose, signedIn }: { onChoose: (someoneElse: boolean) => void; signedIn: boolean }) {
   return (
     <div className="flex flex-col gap-4">
       <Heading icon={<IconUser size={18} />} title="Welcome to Herald OS" text="A computer you can talk to. A few questions and it is yours." />
       <div className="grid grid-cols-2 gap-3">
         <button type="button" onClick={() => onChoose(false)} className="glass-input flex flex-col items-start gap-1 rounded-xl p-4 text-left hover:border-line-strong">
           <span className="text-[14px] font-medium text-fg">It is for me</span>
-          <span className="text-[12px] text-fg-3">Choose your name, a password and sign in to Hermes.</span>
+          <span className="text-[12px] text-fg-3">{signedIn ? 'Choose your name and sign in to Hermes.' : 'Choose your name, a password and sign in to Hermes.'}</span>
         </button>
         <button type="button" onClick={() => onChoose(true)} className="glass-input flex flex-col items-start gap-1 rounded-xl p-4 text-left hover:border-line-strong">
           <span className="text-[14px] font-medium text-fg">For someone else</span>
@@ -144,7 +149,8 @@ function Welcome({ onChoose }: { onChoose: (someoneElse: boolean) => void }) {
   )
 }
 
-function Account({ onDone }: { onDone: () => void }) {
+/** The name, and the password unless the account signed in at a login screen with one of its own. */
+function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }) {
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
@@ -158,7 +164,7 @@ function Account({ onDone }: { onDone: () => void }) {
 
     try {
       await window.heraldOS.setup.name(name)
-      const result = await window.heraldOS.setup.password(password)
+      const result = signedIn ? { ok: true } : await window.heraldOS.setup.password(password)
 
       if (result.ok) {
         onDone()
@@ -178,21 +184,33 @@ function Account({ onDone }: { onDone: () => void }) {
         void save()
       }}
     >
-      <Heading icon={<IconLock size={18} />} title="Your name and password" text="Herald OS greets you by name. The password unlocks the screen and approves changes to the system." />
+      <Heading
+        icon={<IconLock size={18} />}
+        title={signedIn ? 'Your name' : 'Your name and password'}
+        text={
+          signedIn
+            ? 'Herald OS greets you by name. You signed in with your password, which also unlocks the screen and approves changes to the system; herald-os password changes it.'
+            : 'Herald OS greets you by name. The password unlocks the screen and approves changes to the system.'
+        }
+      />
       <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
         Name
         <input value={name} onChange={event => setName(event.target.value)} autoFocus autoComplete="name" className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none" />
       </label>
-      <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
-        Password (at least 8 characters)
-        <input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none" />
-      </label>
-      <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
-        The same password again
-        <input type="password" value={again} onChange={event => setAgain(event.target.value)} autoComplete="new-password" className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none" />
-      </label>
+      {!signedIn && (
+        <>
+          <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
+            Password (at least 8 characters)
+            <input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none" />
+          </label>
+          <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
+            The same password again
+            <input type="password" value={again} onChange={event => setAgain(event.target.value)} autoComplete="new-password" className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none" />
+          </label>
+        </>
+      )}
       {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? 'The passwords do not match.' : error}</p>}
-      <Footer onNext={() => void save()} label="Next" busy={busy} disabled={!name.trim() || password.length < 8 || password !== again} />
+      <Footer onNext={() => void save()} label="Next" busy={busy} disabled={!name.trim() || (!signedIn && (password.length < 8 || password !== again))} />
     </form>
   )
 }
