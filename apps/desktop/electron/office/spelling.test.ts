@@ -31,5 +31,6 @@ describe('spellingMenu', () => {
     const contents = {} as WebContents
 
     expect(spellingMenu(contents, params('', [])).map((item) => item.label ?? item.type)).toEqual(['Cut', 'Copy', 'Paste', 'separator', 'Select All'])
+    expect(spellingMenu(contents, params('qwzx', []), 'zh-CN').map((item) => item.label ?? item.type)).toEqual(['没有拼写建议', '添加到词典', 'separator', '剪切', '复制', '粘贴', 'separator', '全选'])
   })
 })

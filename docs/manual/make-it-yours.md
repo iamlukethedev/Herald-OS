@@ -57,6 +57,20 @@ Settings > Appearance > Fonts sets the interface font and the code font (the ter
 views); leave a field empty for the default. "Use the font Inter" works too. On Herald OS Linux,
 `herald-os font list` shows what is installed and `herald-os font set <family> [--mono]` sets it.
 
+## Language
+
+Settings > General > Language shows Herald OS in English or in Simplified Chinese (简体中文), each
+listed under its own name, and the change takes effect at once. Until you pick one it follows the
+system: the first of your preferred languages (on a Mac, System Settings > General > Language &
+Region) that Herald has. Traditional Chinese shows English for now. "Switch to Chinese", "use
+English" and "use the system language" work too.
+
+The menus Herald builds, the menu bar, the Overview, the command bar, the notifications panel and
+Settings' sections and General page are translated so far; the rest is still in English and follows
+as it is translated ([docs/TRANSLATING.md](../TRANSLATING.md) says how to help). Dates and times
+follow the language you pick. Hermes answers in the language you write to it in. The macOS menu
+bar's own menu (Herald OS, Edit, Window) stays in English for now.
+
 ## Widgets
 
 Widgets are small pages Herald OS shows in the menu bar, on the Overview or in a window of their

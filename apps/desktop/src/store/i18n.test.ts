@@ -36,7 +36,8 @@ describe('the language Herald shows', () => {
     expect(t('app.settings')).toBe('Settings')
 
     $prefs.set({ ...$prefs.get(), language: 'zh-CN' })
-    expect($language.get()).toBe('zh-CN')
+    expect(t('app.settings')).toBe('设置')
+    expect(t('overview.mission.files', { count: 2 })).toBe('2 个文件')
   })
 
   it('keeps <html lang> on it', () => {
