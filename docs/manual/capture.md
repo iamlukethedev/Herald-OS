@@ -47,11 +47,13 @@ folder, and opens LocalSend, when it is installed, to send it to another device 
   says is copied, and nowhere else when it looks secret: QR codes often carry secrets, such as the
   code behind a 2FA setup, a Wi-Fi password or a card number. The notification says what kind of
   thing it was ("2FA setup code copied"), clipboard history leaves it out, and Hermes only learns
-  what kind of thing it was. Web links are shown in full, to you and to Hermes. When a link carries
+  what kind of thing it was. Web links are shown in full, to you and to Hermes; the notification
+  shortens a long one to its first 100 characters or so, always keeping the site. When a link carries
   a secret (a password, a sign-in token, a Zoom passcode), that part is left out of what is shown;
   when it sits in the middle of the link, only the site is shown. Card and account numbers (16 or
-  more digits, or a number that passes the card checksum) count as secrets; product barcodes,
-  phone numbers and short order numbers do not. Pasting works as usual. Select one code at a time:
+  more digits, or 13 to 15 that start like a card and pass the card checksum) count as secrets, and
+  so do keys such as an AWS secret key or a short code like `A1B2-C3D4`; product barcodes, phone
+  numbers and short order numbers do not. Pasting works as usual. Select one code at a time:
   when the selection holds several, nothing is copied. If the clipboard cannot keep a secret out of
   its history (on Linux, wl-clipboard before 2.2), that code is not copied either and the
   notification says so; ordinary links and text are still copied. In scripts,
