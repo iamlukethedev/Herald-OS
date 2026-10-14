@@ -5,6 +5,8 @@ sleep, Hermes's installer and the parts of herald-os that change things; the rea
 Hermes."""
 
 import re
+
+import pytest
 import shlex
 import subprocess
 import sys
@@ -217,13 +219,19 @@ LOGIN_SCREEN = (ROOT / "linux" / "session" / "greetd-login.toml").read_text()
 NOLOGIN = "/usr/sbin/nologin"
 # Field $f of user $u's line in file $file becomes $v.
 SET_FIELD = 'awk -F: -v OFS=: -v u="$u" -v f="$f" -v v="$v" \'$1 == u { $f = v } { print }\' "$file" >"$file.new" && mv "$file.new" "$file"'
+# User $u joins (or, with del=1, leaves) group $g in $WORLD/group.
+MEMBER = (
+    'awk -F: -v OFS=: -v u="$u" -v g="$g" -v del="$del" \'$1 == g { n = split($4, m, ","); $4 = ""; '
+    'for (i = 1; i <= n; i++) if (m[i] != u && m[i] != "") $4 = $4 (length($4) ? "," : "") m[i]; '
+    'if (!del) $4 = $4 (length($4) ? "," : "") u } { print }\' "$WORLD/group" >"$WORLD/group.new" && mv "$WORLD/group.new" "$WORLD/group"'
+)
 
 
 class Accounts:
     """/etc/passwd, /etc/shadow, login.defs, /var/home and greetd's config in a temporary directory, with
     stand-ins for the tools that read and change accounts."""
 
-    def __init__(self, tmp_path: Path, passwd: str = "", shadow: str = "", greetd: str = AUTOLOGIN, homes: dict[str, str] | None = None, remote: str = ""):
+    def __init__(self, tmp_path: Path, passwd: str = "", shadow: str = "", greetd: str = AUTOLOGIN, homes: dict[str, str] | None = None, remote: str = "", wheel: str = "", files: tuple[str, ...] = ()):
         self.root = tmp_path
         self.passwd = tmp_path / "passwd"
         self.shadow = tmp_path / "shadow"
@@ -237,6 +245,10 @@ class Accounts:
         for name, owner in (homes or {}).items():
             (self.homes / name).mkdir()
             (self.homes / name / ".owner").write_text(owner)
+        # Files in /home, such as systemd-homed's LUKS images (<name>.home).
+        for name in files:
+            (self.homes / name).write_text("")
+        (tmp_path / "group").write_text(f"wheel:x:10:{wheel}\nvideo:x:39:\n")
         self.passwd.write_text(SYSTEM_ACCOUNTS + passwd)
         # Accounts getent finds by name but does not list, and /etc/passwd does not have (SSSD, LDAP).
         (tmp_path / "remote").write_text(remote)
@@ -247,10 +259,12 @@ class Accounts:
         bin_dir = tmp_path / "bin"
         executable(
             bin_dir / "getent",
-            '[ -f "$WORLD/getent-fails" ] && exit 2\n'
+            # getent-fails: listing every account fails (an NSS module that cannot enumerate); lookups work.
+            '[ -f "$WORLD/getent-fails" ] && [ "$1" = passwd ] && [ -z "$2" ] && exit 2\n'
             'case "$1" in\n'
             '  passwd) if [ -n "$2" ]; then grep "^$2:" "$WORLD/passwd" || grep "^$2:" "$WORLD/remote"; else cat "$WORLD/passwd"; fi ;;\n'
             '  shadow) grep "^$2:" "$WORLD/shadow" ;;\n'
+            '  group) grep "^$2:" "$WORLD/group" ;;\n'
             "esac",
         )
         executable(
@@ -267,38 +281,47 @@ class Accounts:
             '[ "$1" = -D ] && { echo GROUP=100; echo SHELL=/bin/zsh; exit 0; }\n'
             'echo "useradd $*" >>"$CALLS"; shell=/bin/zsh; for arg; do [ "$prev" = -s ] && shell="$arg"; prev="$arg"; name="$arg"; done\n'
             'uid=$(awk -F: \'$3 >= 1000 && $3 < 60000 && $3 >= n { n = $3 + 1 } END { print n ? n : 1000 }\' n=1000 "$WORLD/passwd")\n'
-            'echo "$name:x:$uid:$uid::/home/$name:$shell" >>"$WORLD/passwd"; echo "$name:!:::::::" >>"$WORLD/shadow"',
+            'echo "$name:x:$uid:$uid::/home/$name:$shell" >>"$WORLD/passwd"; echo "$name:!:::::::" >>"$WORLD/shadow"\n'
+            f'case " $* " in *" -G wheel "*) u="$name" g=wheel del=; {MEMBER} ;; esac',
         )
         # usermod -L (lock: a ! before the hash) and -s (the shell), together or alone; the user comes last.
         executable(
             bin_dir / "usermod",
-            'echo "usermod $*" >>"$CALLS"; lock=; shell=; for arg; do [ "$prev" = -s ] && shell="$arg"; [ "$arg" = -L ] && lock=1; prev="$arg"; u="$arg"; done\n'
+            'echo "usermod $*" >>"$CALLS"; lock=; shell=; groups=; for arg; do [ "$prev" = -s ] && shell="$arg"; [ "$prev" = -aG ] && groups="$arg"; [ "$arg" = -L ] && lock=1; prev="$arg"; u="$arg"; done\n'
+            f'case ",$groups," in *,wheel,*) g=wheel del=; {MEMBER} ;; esac\n'
             f'if [ -n "$lock" ]; then file="$WORLD/shadow" f=2 v="!$(grep "^$u:" "$WORLD/shadow" | cut -d: -f2)"; {SET_FIELD}; fi\n'
             f'if [ -n "$shell" ]; then file="$WORLD/passwd" f=7 v="$shell"; {SET_FIELD}; fi\n'
             "exit 0",
         )
+        executable(bin_dir / "gpasswd", f'echo "gpasswd $*" >>"$CALLS"; [ "$1" = -d ] && {{ u="$2" g="$3" del=1; {MEMBER}; }}; exit 0')
         executable(bin_dir / "passwd", f'echo "passwd $*" >>"$CALLS"; if [ "$1" = -d ]; then u="$2" file="$WORLD/shadow" f=2 v=""; {SET_FIELD}; fi; exit 0')
         self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "WORLD": str(tmp_path), "CALLS": str(self.calls)}
+        # What firstboot.sh reads when getent cannot list the accounts.
+        self.passwd_file = self.passwd
 
-    def run(self, call: str) -> subprocess.CompletedProcess:
+    def run(self, call: str, phase: str = "system") -> subprocess.CompletedProcess:
         quote = shlex.quote
         script = (
             "set -euo pipefail\n"
             f"HERMES_USER=hermes STATE={quote(str(self.state))} SWITCHED={quote(str(self.state / 'switched'))}\n"
-            f"LOGIN_SCREEN={quote(str(self.state / 'login-screen'))} PASSWD={quote(str(self.passwd))}\n"
+            f"PHASE={phase} FIRSTBOOT_DONE={quote(str(self.state / 'firstboot-done'))}\n"
+            f"LOGIN_SCREEN={quote(str(self.state / 'login-screen'))} PASSWD={quote(str(self.passwd_file))}\n"
             f"IMAGE_INSTALL={quote(str(self.state / 'image-install'))} SAVED_SHELL={quote(str(self.state / 'hermes-shell'))}\n"
+            f"ADMIN_PENDING={quote(str(self.state / 'hermes-admin-pending'))}\n"
             f"GREETD={quote(str(self.greetd))} LOGIN_DEFS={quote(str(self.root / 'login.defs'))} SHARE={quote(str(ROOT / 'linux'))}\n"
             f"NOLOGIN={NOLOGIN} HOMES=({quote(str(self.homes))}/*)\n"
-            + 'LOGIN_SCREEN_DUE=""\n'
-            + functions("earlier_accounts", "switched", "has_password", "sign_in_accounts", "login_screen_due", "session_account", "login_screen", "locked_linger", "login_phase", "greeter")
+            + 'LOGIN_SCREEN_DUE="" SWITCHED_NOW=""\n'
+            + functions("earlier_accounts", "switched", "has_password", "sign_in_accounts", "login_screen_due", "session_account", "login_screen", "hermes_admin", "hermes_linger", "login_phase", "greeter")
             + call
             + "\n"
         )
         return subprocess.run(["bash", "-c", script], env=self.env, capture_output=True, text=True, timeout=60, check=False)
 
-    def boot(self) -> subprocess.CompletedProcess:
-        """herald-os-login.service: firstboot.sh login."""
-        result = self.run("login_phase")
+    def boot(self, firstboot_done: bool = True) -> subprocess.CompletedProcess:
+        """herald-os-login.service: firstboot.sh login, by default once first-boot setup has finished."""
+        if firstboot_done:
+            (self.state / "firstboot-done").write_text("")
+        result = self.run("login_phase", phase="login")
         assert result.returncode == 0, result.stderr
         return result
 
@@ -314,6 +337,15 @@ class Accounts:
     def switched(self) -> bool:
         return (self.state / "switched").exists()
 
+    def in_wheel(self, user: str = "hermes") -> bool:
+        line = next(line for line in (self.root / "group").read_text().splitlines() if line.startswith("wheel:"))
+        return user in line.split(":")[3].split(",")
+
+    def set_password(self, user: str, hash_: str = "$y$theirs") -> None:
+        """passwd as the user (the shell's setup) or sudo passwd: a hash in place of what was there."""
+        lines = [f"{user}:{hash_}:" + line.split(":", 2)[2] if line.startswith(f"{user}:") else line for line in self.shadow.read_text().splitlines()]
+        self.shadow.write_text("\n".join(lines) + "\n")
+
     def login_screen(self) -> bool:
         """What the shell's setup reads: the account signed in at a login screen."""
         return (self.state / "login-screen").exists()
@@ -321,7 +353,7 @@ class Accounts:
 
 def first_boot(accounts: Accounts) -> subprocess.CompletedProcess:
     """What system_phase does about the account and greetd."""
-    result = accounts.run("session_account\ngreeter\nlocked_linger")
+    result = accounts.run("session_account\ngreeter\nif switched; then hermes_admin; hermes_linger; fi")
     assert result.returncode == 0, result.stderr
     return result
 
@@ -332,9 +364,17 @@ def reset(accounts: Accounts) -> None:
         file.write_text("".join(line + "\n" for line in file.read_text().splitlines() if not line.startswith("hermes:")))
 
 
+def assert_never_in_wheel(accounts: Accounts) -> None:
+    """hermes was made outside wheel, so nothing had to take it out."""
+    made = [line for line in accounts.calls.read_text().splitlines() if line.startswith("useradd ") and line.endswith(" hermes")]
+    assert made and all("wheel" not in line for line in made), made
+    assert "gpasswd -d hermes wheel" not in accounts.calls.read_text()
+
+
 def assert_switched_and_closed(accounts: Accounts) -> None:
-    """A login screen, and a session user no one can sign in to."""
+    """A login screen, and a session user no one can sign in to, which is no administrator."""
     assert accounts.switched() and accounts.login_screen()
+    assert not accounts.in_wheel()
     assert accounts.password("hermes").startswith("!") and accounts.shell("hermes") == NOLOGIN
     assert accounts.greetd.read_text() == LOGIN_SCREEN
 
@@ -342,7 +382,7 @@ def assert_switched_and_closed(accounts: Accounts) -> None:
 def test_an_install_from_the_image_signs_its_new_account_in_and_setup_asks_for_a_password(tmp_path):
     accounts = Accounts(tmp_path)
     first_boot(accounts)
-    assert "useradd -m -G wheel hermes" in accounts.calls.read_text()
+    assert "useradd -m -G wheel hermes" in accounts.calls.read_text() and accounts.in_wheel()
     assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/zsh"
     assert not accounts.switched() and not accounts.login_screen()
     assert accounts.greetd.read_text() == AUTOLOGIN
@@ -353,12 +393,13 @@ def test_an_install_from_the_image_signs_its_new_account_in_and_setup_asks_for_a
     assert accounts.greetd.read_text() == AUTOLOGIN and accounts.password("hermes") == ""
 
 
-def test_a_switched_system_gets_a_locked_administrator_with_no_shell_and_a_login_screen(tmp_path):
+def test_a_switched_system_gets_a_locked_hermes_outside_wheel_with_no_shell_and_a_login_screen(tmp_path):
     accounts = Accounts(tmp_path, passwd="me:x:1000:1000::/var/home/me:/bin/bash\n", shadow="me:$y$secret:::::::\n", homes={"me": "me"})
     result = first_boot(accounts)
     assert "switched from another system, which has these accounts:" in result.stdout and " me " in result.stdout
     assert "passwd -d" not in accounts.calls.read_text()
     assert_switched_and_closed(accounts)
+    assert_never_in_wheel(accounts)
     assert accounts.password("me") == "$y$secret" and accounts.shell("me") == "/bin/bash"
     assert 'command = "herald-os-compositor"' not in accounts.greetd.read_text()
 
@@ -386,6 +427,7 @@ def test_an_account_list_that_cannot_be_read_counts_as_switched_but_keeps_setup_
     assert "the account list could not be read" in result.stdout and "WARNING: switched from another system, but none of its accounts can sign in" in result.stdout
     assert accounts.switched() and not accounts.login_screen()
     assert accounts.password("hermes") == "" and accounts.greetd.read_text() == AUTOLOGIN
+    assert not accounts.in_wheel()
 
 
 def test_the_session_user_s_own_home_and_lost_and_found_are_not_another_account(tmp_path):
@@ -400,6 +442,7 @@ def test_a_system_switched_by_an_earlier_image_is_put_right_at_the_next_boot(tmp
         tmp_path,
         passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
         shadow="me:$y$secret:::::::\nhermes::::::::\n",
+        wheel="me,hermes",
     )
     result = accounts.boot()
     assert_switched_and_closed(accounts)
@@ -421,6 +464,7 @@ def test_a_session_user_given_a_password_gets_its_shell_back(tmp_path):
     assert accounts.shell("hermes") == "/bin/zsh" and accounts.password("hermes") == "$y$theirs"
     assert "has a password now, and its shell back (/bin/zsh)" in result.stdout
     assert "loginctl enable-linger hermes" in accounts.calls.read_text()
+    assert accounts.in_wheel() and "joins wheel" in result.stdout
     assert not (accounts.state / "hermes-shell").exists()
     assert accounts.greetd.read_text() == LOGIN_SCREEN
 
@@ -430,10 +474,12 @@ def test_a_session_user_that_has_a_password_keeps_it_and_meets_the_login_screen(
         tmp_path,
         passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
         shadow="me:$y$secret:::::::\nhermes:$y$theirs:::::::\n",
+        wheel="hermes",
     )
     accounts.boot()
     assert accounts.password("hermes") == "$y$theirs" and accounts.shell("hermes") == "/bin/bash"
-    assert "usermod" not in accounts.calls.read_text()
+    assert "usermod" not in accounts.calls.read_text() and "gpasswd" not in accounts.calls.read_text()
+    assert accounts.in_wheel()
     assert accounts.greetd.read_text() == LOGIN_SCREEN
 
 
@@ -502,6 +548,9 @@ def fallback(accounts: Accounts) -> subprocess.CompletedProcess:
     assert accounts.password("hermes") == "" and accounts.shell("hermes") == "/bin/zsh"
     assert accounts.greetd.read_text() == AUTOLOGIN
     assert "disable-linger" not in accounts.calls.read_text()
+    # Never a passwordless administrator on a switched system, not even for a moment.
+    assert not accounts.in_wheel() and (accounts.state / "hermes-admin-pending").exists()
+    assert_never_in_wheel(accounts)
     return result
 
 
@@ -522,9 +571,13 @@ def test_a_switched_system_whose_only_account_has_no_usable_password_keeps_setup
     assert "WARNING" in result.stdout and accounts.greetd.read_text() == AUTOLOGIN and accounts.password("hermes") == ""
 
 
-def test_a_home_folder_whose_owner_no_one_can_resolve_keeps_setup_s_password_prompt(tmp_path):
+def test_a_home_folder_whose_owner_no_one_can_resolve_counts_as_someone_who_can_sign_in(tmp_path):
+    # A UID nothing resolves now: SSSD or LDAP offline, or an account gone. Fail closed.
     accounts = Accounts(tmp_path, homes={"gone": "1234"})
-    fallback(accounts)
+    result = first_boot(accounts)
+    assert "an owner that cannot be looked up" in result.stdout
+    assert_switched_and_closed(accounts)
+    assert_never_in_wheel(accounts)
 
 
 def test_a_switched_system_whose_account_gets_a_password_later_gets_the_login_screen_at_the_next_boot(tmp_path):
@@ -590,7 +643,7 @@ def test_a_reset_after_adding_an_account_to_an_image_install_keeps_it_one(tmp_pa
     assert "switched" not in result.stdout and "WARNING" not in result.stdout
     assert not accounts.switched() and not accounts.login_screen()
     assert accounts.password("hermes") == "" and accounts.greetd.read_text() == AUTOLOGIN
-    assert "disable-linger" not in accounts.calls.read_text()
+    assert "disable-linger" not in accounts.calls.read_text() and accounts.in_wheel()
 
 
 def test_a_stray_folder_in_home_is_no_one_s_account(tmp_path):
@@ -614,3 +667,177 @@ def test_the_image_has_cmp():
     packages = (ROOT / "linux" / "image" / "packages.txt").read_text().split()
     assert "diffutils" in packages
     assert "cmp -s" in FIRSTBOOT.read_text()
+
+
+def test_a_switched_system_where_no_one_can_sign_in_never_has_a_passwordless_hermes_in_wheel(tmp_path):
+    # Key-only, smartcard or fingerprint accounts: a locked password, so no login screen for them.
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nkeys:x:1001:1001::/var/home/keys:/bin/bash\n",
+        shadow="me:!$y$fingerprint:::::::\nkeys:*:::::::\n",
+        wheel="me",
+    )
+    fallback(accounts)
+    for _ in range(2):
+        accounts.boot()
+        assert accounts.password("hermes") == "" and not accounts.in_wheel()
+    assert accounts.greetd.read_text() == AUTOLOGIN
+    # The shell's setup sets the password; at the next start hermes is an administrator.
+    accounts.set_password("hermes")
+    result = accounts.boot()
+    assert accounts.in_wheel() and "has a password now, and joins wheel" in result.stdout
+    assert not (accounts.state / "hermes-admin-pending").exists()
+    assert "loginctl enable-linger hermes" in accounts.calls.read_text()
+
+
+def test_an_earlier_image_s_passwordless_hermes_leaves_wheel_where_no_one_can_sign_in(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:!:::::::\nhermes::::::::\n",
+        wheel="hermes",
+    )
+    result = accounts.boot()
+    assert "gpasswd -d hermes wheel" in accounts.calls.read_text() and "out of wheel until it has one" in result.stdout
+    assert not accounts.in_wheel() and accounts.password("hermes") == "" and accounts.greetd.read_text() == AUTOLOGIN
+
+
+def test_a_hermes_someone_took_out_of_wheel_stays_out(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:$y$secret:::::::\nhermes:$y$theirs:::::::\n",
+    )
+    accounts.boot()
+    assert not accounts.in_wheel() and "usermod -aG wheel" not in accounts.calls.read_text()
+
+
+def test_a_systemd_homed_luks_image_in_home_is_an_account_that_can_sign_in(tmp_path):
+    accounts = Accounts(tmp_path, files=("me.home",))
+    result = first_boot(accounts)
+    assert "me.home (systemd-homed)" in result.stdout and "the login screen is for: me" in result.stdout
+    assert_switched_and_closed(accounts)
+
+
+def test_folders_of_accounts_newer_than_hermes_are_not_from_before_herald_os(tmp_path):
+    # An image install from before first boots wrote down what they found, with an account added since.
+    accounts = Accounts(
+        tmp_path,
+        passwd="hermes:x:1000:1000::/var/home/hermes:/bin/bash\nfriend:x:1001:1001::/var/home/friend:/bin/bash\n",
+        shadow="hermes:$y$theirs:::::::\nfriend:$y$friend:::::::\n",
+        homes={"hermes": "hermes", "friend": "friend"},
+        wheel="hermes",
+    )
+    accounts.boot()
+    assert not accounts.switched() and (accounts.state / "image-install").exists()
+    assert accounts.greetd.read_text() == AUTOLOGIN and accounts.in_wheel()
+
+
+def test_a_session_user_with_a_password_keeps_its_user_manager_whatever_its_shell(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd=f"me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:{NOLOGIN}\n",
+        shadow="me:$y$secret:::::::\nhermes:$y$theirs:::::::\n",
+    )
+    (accounts.state / "login-screen").write_text("")
+    accounts.boot()
+    assert "loginctl enable-linger hermes" in accounts.calls.read_text() and "disable-linger" not in accounts.calls.read_text()
+
+
+def test_first_boot_and_the_login_check_wait_for_homed_userdbd_and_sssd():
+    for unit in ("herald-os-firstboot.service", "herald-os-login.service"):
+        text = (ROOT / "linux" / "image" / unit).read_text()
+        wants = next(line for line in text.splitlines() if line.startswith("Wants="))
+        after = next(line for line in text.splitlines() if line.startswith("After="))
+        for service in ("systemd-homed.service", "systemd-userdbd.service", "sssd.service"):
+            assert service in wants and service in after, (unit, service)
+
+
+def test_sssd_offline_at_first_boot_its_users_home_folder_still_means_a_login_screen(tmp_path):
+    # stat -c %U says UNKNOWN when the owner's UID resolves to no name.
+    accounts = Accounts(tmp_path, homes={"carol": "UNKNOWN"})
+    result = first_boot(accounts)
+    assert "carol (an owner that cannot be looked up)" in result.stdout
+    assert_switched_and_closed(accounts)
+    assert_never_in_wheel(accounts)
+
+
+def test_an_account_list_getent_cannot_give_is_read_from_etc_passwd(tmp_path):
+    accounts = Accounts(tmp_path, passwd="alice:x:1000:1000::/var/home/alice:/bin/bash\n", shadow="alice:$y$secret:::::::\n")
+    (tmp_path / "getent-fails").write_text("")
+    result = first_boot(accounts)
+    assert "the login screen is for: alice" in result.stdout
+    assert_switched_and_closed(accounts)
+
+
+def test_an_account_list_no_one_can_read_means_a_login_screen(tmp_path):
+    accounts = Accounts(tmp_path, passwd="alice:x:1000:1000::/var/home/alice:/bin/bash\n", shadow="alice:$y$secret:::::::\n")
+    (tmp_path / "getent-fails").write_text("")
+    accounts.passwd_file = tmp_path / "unreadable"
+    result = first_boot(accounts)
+    assert "the login screen is for: (the account list could not be read)" in result.stdout
+    assert_switched_and_closed(accounts)
+
+
+def test_the_login_check_before_first_boot_finished_writes_down_no_verdict(tmp_path):
+    # First-boot setup failed, or the accounts' services were not up: nothing seen yet.
+    accounts = Accounts(tmp_path)
+    result = accounts.boot(firstboot_done=False)
+    assert "not writing down whether this system was switched yet" in result.stdout
+    assert not (accounts.state / "image-install").exists() and not accounts.switched()
+    # Later the owner's account is there (systemd-homed is up), and first boot finishes.
+    accounts.passwd.write_text(accounts.passwd.read_text() + "me:x:60100:60100::/home/me:/bin/bash\n")
+    accounts.boot()
+    assert accounts.switched() and not (accounts.state / "image-install").exists()
+    assert accounts.login_screen() and accounts.greetd.read_text() == LOGIN_SCREEN
+
+
+def test_the_login_check_before_first_boot_finished_still_acts_on_what_it_sees(tmp_path):
+    accounts = Accounts(
+        tmp_path,
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:$y$secret:::::::\nhermes::::::::\n",
+        wheel="hermes",
+    )
+    accounts.boot(firstboot_done=False)
+    assert not accounts.switched() and accounts.login_screen()
+    assert accounts.password("hermes").startswith("!") and not accounts.in_wheel()
+
+
+def test_first_boot_writes_down_its_verdict(tmp_path):
+    accounts = Accounts(tmp_path)
+    first_boot(accounts)
+    assert (accounts.state / "image-install").exists() and not (accounts.state / "firstboot-done").exists()
+
+
+SWITCHED_MACHINES_NO_ONE_SEEMS_TO_SIGN_IN_ON = {
+    "key-only accounts": dict(passwd="me:x:1000:1000::/var/home/me:/bin/bash\n", shadow="me:!:::::::\n"),
+    "a shell-less account": dict(passwd=f"svc:x:1000:1000::/var/home/svc:{NOLOGIN}\n", shadow="svc:$y$s:::::::\n"),
+    "a homed account not up yet": dict(homes={}, passwd="ghost:x:1000:1000::/var/home/ghost:/bin/bash\n", shadow="ghost:*:::::::\n"),
+    "an earlier image's hermes": dict(
+        passwd="me:x:1000:1000::/var/home/me:/bin/bash\nhermes:x:1001:1001::/var/home/hermes:/bin/bash\n",
+        shadow="me:!:::::::\nhermes::::::::\n",
+        wheel="me,hermes",
+    ),
+}
+
+
+@pytest.mark.parametrize("machine", SWITCHED_MACHINES_NO_ONE_SEEMS_TO_SIGN_IN_ON)
+def test_a_wrong_no_one_can_sign_in_never_leaves_a_passwordless_hermes_in_wheel(tmp_path, machine):
+    accounts = Accounts(tmp_path, **SWITCHED_MACHINES_NO_ONE_SEEMS_TO_SIGN_IN_ON[machine])
+    if "hermes:" not in accounts.passwd.read_text():
+        first_boot(accounts)
+        assert not (accounts.password("hermes") == "" and accounts.in_wheel())
+        assert_never_in_wheel(accounts)
+    for _ in range(2):
+        accounts.boot()
+        assert not (accounts.password("hermes") == "" and accounts.in_wheel())
+    (tmp_path / "getent-fails").write_text("")
+    accounts.boot()
+    assert not (accounts.password("hermes") == "" and accounts.in_wheel())
+
+
+def test_greetd_s_config_is_replaced_through_a_rename():
+    script = FIRSTBOOT.read_text()
+    assert 'install -m 0644 "$SHARE/session/greetd-login.toml" "$GREETD.herald-os-new"' in script
+    assert 'mv -f "$GREETD.herald-os-new" "$GREETD"' in script
