@@ -3,7 +3,8 @@
 # Invoked by cloud-init on first boot (see linux/vm/make-seed.sh); safe to re-run by hand inside
 # the development VM:
 #
-#   sudo bash /usr/local/share/herald-os-linux/provision.sh
+#   sudo bash /usr/local/share/herald-os-linux/provision.sh            # the seed disc still attached
+#   sudo bash /usr/local/share/herald-os-linux/provision.sh --dev-vm   # the seed disc removed
 #
 # It refuses to run anywhere else: it carries on only in a virtual machine with the cloud-init seed
 # attached (the disc labelled cidata, in any case), or when given --dev-vm (cloud-init's runcmd
@@ -50,7 +51,7 @@ cidata or CIDATA) attached. On this machine it would:
 
 Nothing has been changed. If this is the development VM, run it again with --dev-vm:
 
-  sudo bash ${BASH_SOURCE[0]} --dev-vm
+  sudo bash "${BASH_SOURCE[0]}" --dev-vm
 EOF
   exit 1
 fi

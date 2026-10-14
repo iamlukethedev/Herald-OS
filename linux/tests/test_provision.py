@@ -72,9 +72,18 @@ def test_the_explanation_names_the_account_it_would_log_in(tmp_path):
     assert changes(calls) == []
 
 
-def test_the_explanation_gives_the_command_to_run_it_again(tmp_path):
+def test_the_explanation_gives_the_command_to_run_it_again_with_the_path_quoted(tmp_path):
     result, _ = provision(tmp_path, vm=False, seed=False)
-    assert f"sudo bash {tmp_path / 'payload' / 'provision.sh'} --dev-vm" in result.stderr
+    assert f'sudo bash "{tmp_path / "payload" / "provision.sh"}" --dev-vm' in result.stderr
+
+
+def test_the_header_says_how_to_re_run_it_with_and_without_the_seed():
+    header = PROVISION.read_text().split("set -euo pipefail", 1)[0]
+    reruns = re.findall(r"^#\s+sudo bash (\S+provision\.sh)(.*?)\s+#", header, re.M)
+    assert [(path, flag.strip()) for path, flag in reruns] == [
+        ("/usr/local/share/herald-os-linux/provision.sh", ""),
+        ("/usr/local/share/herald-os-linux/provision.sh", "--dev-vm"),
+    ]
 
 
 def test_in_a_vm_with_the_seed_attached_it_provisions(tmp_path):
