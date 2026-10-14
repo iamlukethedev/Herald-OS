@@ -17,11 +17,13 @@ const run = vi.hoisted(() => vi.fn(async (_command: string, args: string[]) => {
 
   return { code: 0, stdout: '', stderr: '' }
 }))
-const readImageMac = vi.hoisted(() => vi.fn(async () => ['Order 4471']))
+const readImageMac = vi.hoisted(() => vi.fn(async (_file: string, _mode: string) => ['Order 4471']))
+const copyConcealedMac = vi.hoisted(() => vi.fn(async (_text: string) => undefined))
+const writeText = vi.hoisted(() => vi.fn())
 
 vi.mock('electron', () => ({
   app: { relaunch: electron.relaunch, quit: electron.quit },
-  clipboard: { writeText: vi.fn() },
+  clipboard: { writeText },
   ClipboardItem: class {},
   dialog: { showMessageBox: electron.showMessageBox },
   ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => unknown) => electron.handlers.set(channel, handler) },
@@ -30,7 +32,7 @@ vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: () => electron.status, askForMediaAccess: vi.fn() }
 }))
 vi.mock('../platform/exec.ts', () => ({ run }))
-vi.mock('../platform/mac-tools.ts', () => ({ pickColourMac: vi.fn(), readImageMac }))
+vi.mock('../platform/mac-tools.ts', () => ({ copyConcealedMac, pickColourMac: vi.fn(), readImageMac }))
 vi.mock('../i18n.ts', () => ({ menuLanguage: () => electron.language }))
 vi.mock('../attachments.ts', () => ({ allowAttachments: vi.fn() }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
@@ -50,6 +52,8 @@ beforeEach(() => {
   electron.language = 'en'
   run.mockClear()
   readImageMac.mockClear()
+  copyConcealedMac.mockReset()
+  writeText.mockClear()
   electron.showMessageBox.mockClear()
   electron.openExternal.mockClear()
   electron.relaunch.mockClear()
@@ -197,5 +201,38 @@ describe('the Screen Recording check on macOS', () => {
     await expect(electron.handlers.get(IPC.captureRegion)!({})).rejects.toThrow(blocked)
     await expect(electron.handlers.get(IPC.captureScreenshot)!({}, 'region')).rejects.toThrow(blocked)
     expect(interactive()).toHaveLength(0)
+  })
+})
+
+describe('the QR and text readers on macOS', () => {
+  const OTP = 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub'
+
+  beforeEach(() => {
+    electron.status = 'granted'
+  })
+
+  it('copies a QR code marked as concealed, so clipboard managers skip it', async () => {
+    readImageMac.mockResolvedValueOnce([OTP])
+
+    expect(await electron.handlers.get(IPC.captureTool)!({}, 'qr')).toEqual({ text: OTP, lines: 1 })
+    expect(readImageMac.mock.calls[0][1]).toBe('codes')
+    expect(copyConcealedMac).toHaveBeenCalledWith(OTP)
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('still copies it plainly when the concealed copy fails, so pasting works', async () => {
+    readImageMac.mockResolvedValueOnce([OTP])
+    copyConcealedMac.mockRejectedValueOnce(new Error('osascript failed'))
+
+    await electron.handlers.get(IPC.captureTool)!({}, 'qr')
+    expect(writeText).toHaveBeenCalledWith(OTP)
+  })
+
+  it('copies text read off the screen as before', async () => {
+    readImageMac.mockResolvedValueOnce(['Order 4471'])
+
+    expect(await electron.handlers.get(IPC.captureTool)!({}, 'text')).toEqual({ text: 'Order 4471', lines: 1 })
+    expect(writeText).toHaveBeenCalledWith('Order 4471')
+    expect(copyConcealedMac).not.toHaveBeenCalled()
   })
 })

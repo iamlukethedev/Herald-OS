@@ -9,7 +9,7 @@ import { allowAttachments } from '../attachments.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
-import { pickColourMac, readImageMac } from '../platform/mac-tools.ts'
+import { copyConcealedMac, pickColourMac, readImageMac } from '../platform/mac-tools.ts'
 
 /** Screen grabs handed to Hermes; they only need to outlive the question about them. */
 export function capturesDir(): string {
@@ -403,7 +403,13 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
       const lines = await readImageMac(file, tool === 'qr' ? 'codes' : 'text')
       const text = lines.join('\n')
 
-      if (text) {
+      if (text && tool === 'qr') {
+        // QR codes often carry secrets (a 2FA setup code); keep them out of clipboard managers.
+        await copyConcealedMac(text).catch(error => {
+          log('capture', `concealed copy: ${error instanceof Error ? error.message : String(error)}`)
+          clipboard.writeText(text)
+        })
+      } else if (text) {
         clipboard.writeText(text)
       }
 

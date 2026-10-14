@@ -5,8 +5,9 @@ import { run } from './exec.ts'
 
 /*
  * macOS halves of the capture tools Herald OS Linux runs through its CLI: the colour picker (the
- * system eyedropper), and reading text or a QR code in an image (the Vision framework). All three
- * are small JavaScript-for-Automation scripts, so nothing extra is installed.
+ * system eyedropper), reading text or a QR code in an image (the Vision framework), and copying
+ * what a QR code says so clipboard managers leave it out. They are small JavaScript-for-Automation
+ * scripts, so nothing extra is installed.
  */
 
 const SAMPLER = `ObjC.import('AppKit')
@@ -61,6 +62,20 @@ function run(argv) {
 }
 `
 
+// The text arrives on stdin, so it is never in a process list. org.nspasteboard.ConcealedType is
+// the nspasteboard.org marker clipboard managers read as "a password: do not keep or show this".
+const CONCEALED = `ObjC.import('AppKit')
+function run() {
+  const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile
+  const text = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)
+  const board = $.NSPasteboard.generalPasteboard
+  board.clearContents
+  if (!board.setStringForType(text, $.NSPasteboardTypeString)) throw new Error('The clipboard did not take the text')
+  board.setDataForType($.NSData.data, 'org.nspasteboard.ConcealedType')
+  return ''
+}
+`
+
 function scriptFile(name: string, source: string): string {
   const dir = path.join(os.tmpdir(), 'herald-os-scripts')
   const file = path.join(dir, `${name}.js`)
@@ -95,6 +110,15 @@ export async function readImageMac(image: string, mode: 'text' | 'codes'): Promi
   }
 
   return parseVisionOutput(result.stdout)
+}
+
+/** Text on the clipboard marked as concealed, so clipboard managers skip it; pasting works as usual. */
+export async function copyConcealedMac(text: string): Promise<void> {
+  const result = await run('osascript', ['-l', 'JavaScript', scriptFile('concealed-copy', CONCEALED)], 10_000, text)
+
+  if (result.code !== 0) {
+    throw new Error(result.stderr.trim() || 'The clipboard did not take the text')
+  }
 }
 
 /** The script's JSON list of strings, tidied (pure; tested). */
