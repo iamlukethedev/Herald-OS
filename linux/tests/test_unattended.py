@@ -18,9 +18,9 @@ BASH = shutil.which(os.environ.get("HERALD_OS_TEST_BASH", "bash"))
 
 # The fakes answer the lsblk, findmnt and readlink calls the %pre makes, from files in $FAKE.
 LSBLK = """#!/usr/bin/env bash
-dev="${@: -1}"
+dev="${!#}"
 lookup() {
-  while read -r name type rm ro tran; do
+  while read -r name type _ ro _; do
     [[ "/dev/$name" == "$dev" ]] && { echo "$name $type $ro"; return 0; }
   done < <(cat "$FAKE/disks" "$FAKE/devices")
   echo "lsblk: $dev: not a block device" >&2
@@ -42,12 +42,39 @@ echo "fake lsblk: unexpected $*" >&2
 exit 99
 """
 FINDMNT = """#!/usr/bin/env bash
-while read -r mount source; do [[ "$mount" == "${@: -1}" ]] && { echo "$source"; exit 0; }; done <"$FAKE/mounts"
+while read -r mount source; do [[ "$mount" == "${!#}" ]] && { echo "$source"; exit 0; }; done <"$FAKE/mounts"
 exit 1
 """
+# Like udev's links, the ones in $FAKE/links point at relative targets (../../vdb): only
+# readlink -f gives the device; plain readlink prints the target as it is, or nothing for a non-link.
 READLINK = """#!/usr/bin/env bash
-while read -r link target; do [[ "$link" == "${@: -1}" ]] && { echo "$target"; exit 0; }; done <"$FAKE/links"
-echo "${@: -1}"
+target_of() {
+  local link target
+  while read -r link target; do [[ "$link" == "$1" ]] && { echo "$target"; return 0; }; done <"$FAKE/links"
+  return 1
+}
+normalize() {
+  local IFS=/ part
+  local parts=()
+  for part in $1; do
+    case "$part" in
+      "" | .) ;;
+      ..) [[ ${#parts[@]} -gt 0 ]] && unset "parts[${#parts[@]}-1]"; parts=(${parts[@]+"${parts[@]}"}) ;;
+      *) parts+=("$part") ;;
+    esac
+  done
+  echo "/${parts[*]}"
+}
+if [[ "$1" != -f ]]; then
+  target_of "$1" || exit 1
+  exit 0
+fi
+path="$(normalize "$2")"
+while target="$(target_of "$path")"; do
+  [[ "$target" == /* ]] || target="${path%/*}/$target"
+  path="$(normalize "$target")"
+done
+echo "$path"
 """
 
 NONE, SEVERAL = "no internal disk", "internal disks"
@@ -84,6 +111,9 @@ MACHINES = {
         ["sr0 rom 1 0 sata", "sda disk 0 0 sata"], {"mounts": ["/run/install/repo /dev/sr0"]}, "sda",
     ),
     "zram swap": (["zram0 disk 0 0 ", "vda disk 0 0 "], {}, "vda"),
+    "loop, RAID, LVM and DVD devices beside one disk": (
+        ["loop0 loop 0 0 ", "md127 raid1 0 0 ", "dm-0 lvm 0 0 ", "sr0 rom 0 0 sata", "vda disk 0 0 "], {}, "vda",
+    ),
     "card reader and eMMC boot areas": (
         ["mmcblk1 disk 1 0 mmc", "mmcblk0boot0 disk 0 1 mmc", "mmcblk0 disk 0 0 mmc"], {}, "mmcblk0",
     ),
@@ -191,6 +221,32 @@ def refused(found: subprocess.CompletedProcess, out: Path, console: Path, *said:
     )
 
 
+def command_lines() -> list[tuple[str, str]]:
+    """Each line outside comments, with the section it is in ("" for the commands)."""
+    section, lines = "", []
+    for line in KICKSTART.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        if line == "%end":
+            section = ""
+        elif re.match(r"%(pre|post|packages|onerror|traceback|addon|anaconda)\b", line):
+            section = line.split()[0]
+        lines.append((section, line))
+    return lines
+
+
+def test_the_include_is_one_top_level_command_before_the_storage_commands():
+    commands = [line for section, line in command_lines() if section == ""]
+    includes = [line for _, line in command_lines() if line.lstrip().startswith("%include")]
+    assert includes == [f"%include {INCLUDE}"]
+    words = [line.split()[0] for line in commands]
+    at = words.index("%include")
+    assert words[at : at + 3] == ["%include", "zerombr", "autopart"]
+    assert words.index("lang") < at < words.index("ostreecontainer")
+    everything = [line for _, line in command_lines()]
+    assert everything.index(f"%include {INCLUDE}") < everything.index(next(line for line in everything if line.startswith("%pre ")))
+
+
 def test_the_disk_commands_come_only_from_the_pre():
     commands = [line.split()[0] for line in main_section().splitlines() if line and not line.startswith("#")]
     assert "clearpart" not in commands
@@ -221,6 +277,17 @@ def test_the_scripts_need_only_bash_3_2(script):
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     found = {name for name, pattern in BASH_4_ONLY.items() if re.search(pattern, code)}
     assert found == set()
+
+
+@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+def test_the_scripts_pass_shellcheck(script, tmp_path):
+    if not shutil.which("shellcheck"):
+        pytest.skip("shellcheck is not installed")
+    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    path = tmp_path / "script.sh"
+    path.write_text(text if text.startswith("#!") else "#!/usr/bin/env bash\n" + text)
+    found = subprocess.run(["shellcheck", "--shell=bash", str(path)], capture_output=True, text=True, check=False)
+    assert found.returncode == 0, found.stdout
 
 
 def test_the_bash_3_2_check_finds_mapfile():
@@ -263,11 +330,18 @@ BY_ID = "/dev/disk/by-id/virtio-data"
     [("vdb", "vdb"), ("vda", "vda"), ("/dev/vdb", "vdb"), (BY_ID, "vdb"), ("/dev/../dev/vda", "vda")],
 )
 def test_a_disk_set_in_the_pre_is_used_on_a_two_disk_machine(disk, expected, tmp_path):
-    links = [f"{BY_ID} /dev/vdb", "/dev/../dev/vda /dev/vda"]
+    links = [f"{BY_ID} ../../vdb"]
     found, out, console = run_pre(tmp_path, TWO_DISKS, with_disk(disk), links=links)
     assert found.returncode == 0, found.stderr
     assert erases_only(out, expected)
     assert f"erasing {expected}, and only {expected}" in console.read_text()
+
+
+def test_a_by_id_link_through_another_link_is_followed(tmp_path):
+    links = ["/dev/disk/by-label/data ../by-id/virtio-data", f"{BY_ID} ../../vdb"]
+    found, out, _ = run_pre(tmp_path, TWO_DISKS, with_disk("/dev/disk/by-label/data"), links=links)
+    assert found.returncode == 0, found.stderr
+    assert erases_only(out, "vdb")
 
 
 # A machine beyond TWO_DISKS: an internal SATA disk sda, the installer on a USB stick (sdb) beside
@@ -280,13 +354,13 @@ INSTALLER = {
         "dm-0 mpath 0 0 ", "sdd disk 0 0 fc", "sdg disk 0 0 fc", "sde disk 0 0 sata", "sdf disk 0 0 sata",
     ],
     "links": [
-        "/dev/disk/by-id/usb-stick /dev/sdb",
-        "/dev/disk/by-id/ata-data-part1 /dev/sda1",
-        "/dev/disk/by-id/gone /dev/sdz",
-        "/dev/mapper/mpatha /dev/dm-0",
-        "/dev/disk/by-id/dm-uuid-mpath-3600 /dev/dm-0",
-        "/dev/disk/by-path/fc-0x500-lun-0 /dev/sdd",
-        "/dev/disk/by-id/ata-raid-disk /dev/sde",
+        "/dev/disk/by-id/usb-stick ../../sdb",
+        "/dev/disk/by-id/ata-data-part1 ../../sda1",
+        "/dev/disk/by-id/gone ../../sdz",
+        "/dev/mapper/mpatha ../dm-0",
+        "/dev/disk/by-id/dm-uuid-mpath-3600 ../../dm-0",
+        "/dev/disk/by-path/fc-0x500-lun-0 ../../sdd",
+        "/dev/disk/by-id/ata-raid-disk ../../sde",
     ],
     "trees": {
         "sdd": ["disk mpath_member", "mpath "],
