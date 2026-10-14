@@ -50,6 +50,14 @@ some tools need niri or Hyprland so far; GNOME and KDE are tracked in
 [#20](https://github.com/iamlukethedev/Herald-OS/issues/20). [Arch and other Linux](other-linux.md)
 has the details.
 
+Fedora Silverblue, Kinoite, Bazzite, Bluefin and other bootc systems can also switch to the Herald
+OS image in place, which replaces the system you run, so try it on a spare machine or in a virtual
+machine. Afterwards a login screen asks who signs in, and your own account and its password keep
+working; run `herald-os setup` once in your own account to install Hermes Agent there. Herald OS
+also adds a `hermes` account, which stays locked, and is not an administrator, until you give it a
+password (`sudo passwd hermes`). [docs/LINUX.md](../LINUX.md#switching-a-bootc-system-to-herald-os)
+has the steps, what changes and how to go back.
+
 **How is this different from Omarchy?**
 Omarchy makes Linux something your coding agent can fix and reshape. Herald OS makes the agent how
 you use the computer, for everyone, and it asks before it changes anything. It also runs on the Mac
