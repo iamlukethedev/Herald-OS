@@ -3,3 +3,5 @@
 cf060c446d79180f748b8aac563b463f54edbcf9:apps/desktop/src/features/office/slides/SlidesWindow.tsx:generic-api-key:177
 # The same Present shortcut in the DOM slide editor on office/slides-basic.
 e8b6c1cded213c0690fef8c0bf7e00e67ffa879b:apps/desktop/src/features/office/slides/SlidesWindow.tsx:generic-api-key:58
+# A placeholder OpenSSH key in the QR privacy test cases (not a real key).
+a8f5a3dff3bd9538f4539c628e48554608c0d624:apps/desktop/shared/qr-cases.json:private-key:122
