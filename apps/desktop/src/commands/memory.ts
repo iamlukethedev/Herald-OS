@@ -12,7 +12,7 @@ async function ensureLoaded(options: { fresh?: boolean } = {}): Promise<string> 
     throw new Error('Hermes home is not known yet.')
   }
 
-  // Hermes's own memory tool writes the same files behind our back; re-read when asked to show.
+  // Hermes's own memory tool writes the same files behind our back; re-read before showing or matching.
   if (options.fresh || !$memory.get().loaded) {
     await loadMemory(home)
   }
@@ -133,7 +133,7 @@ export const memoryCommands: readonly OsCommand[] = [
     ],
     hidden: true,
     run: async ({ match, text }) => {
-      const home = await ensureLoaded()
+      const home = await ensureLoaded({ fresh: true })
       const matches = findEntries(String(match))
 
       if (matches.length !== 1) {
@@ -155,7 +155,7 @@ export const memoryCommands: readonly OsCommand[] = [
     args: [{ name: 'match', type: 'string', description: 'Text identifying the entry', required: true }],
     phrases: ['forget {match}', 'forget that {match}', 'delete the memory about {match}', 'remove {match} from memory'],
     run: async ({ match }) => {
-      const home = await ensureLoaded()
+      const home = await ensureLoaded({ fresh: true })
       const matches = findEntries(String(match))
 
       if (matches.length !== 1) {

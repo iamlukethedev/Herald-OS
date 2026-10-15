@@ -303,58 +303,95 @@ export async function loadMemory(hermesHome: string): Promise<void> {
   }
 }
 
-/** Replace one file's entries: optimistic cache update, write, then re-read from disk (honest). */
-async function commitFile(hermesHome: string, file: MemoryFile, texts: string[]): Promise<void> {
-  const state = $memory.get()
-  const current = state.files?.[file]
-
-  if (current?.truncated) {
-    throw new Error(`${file} is too large to edit safely from here`)
-  }
-
-  if (state.files && current) {
-    const next: MemoryFileState = { ...current, texts, exists: true, modifiedAt: Date.now() }
-    const files = { ...state.files, [file]: next }
-    $memory.set({ ...state, files, entries: MEMORY_FILES.flatMap(name => buildEntries(files[name])) })
-  }
-
-  try {
-    if (!current?.exists) {
-      try {
-        await window.heraldOS.fs.mkdir(memoriesDir(hermesHome))
-      } catch {
-        // Folder probably exists already; the write below reports real failures.
-      }
-    }
-
-    await window.heraldOS.fs.writeText(memoryPath(hermesHome, file), serialize(texts))
-  } finally {
-    await loadMemory(hermesHome)
+/** Thrown when the entry being edited or forgotten is no longer in its file on disk. */
+export class MemoryEntryGoneError extends Error {
+  constructor(entry: MemoryEntry) {
+    super(`"${entry.title}" is no longer in ${entry.file}. It was changed or removed outside the Memory page; the list now shows what is there.`)
+    this.name = 'MemoryEntryGoneError'
   }
 }
 
-const textsOf = (file: MemoryFile) => [...($memory.get().files?.[file]?.texts ?? [])]
+/** Where `entry` is now among `texts`: its old position if the text is still there, else the first copy of its text. */
+function locate(texts: readonly string[], entry: MemoryEntry): number {
+  const index = texts[entry.index] === entry.text ? entry.index : texts.indexOf(entry.text)
+
+  if (index < 0) {
+    throw new MemoryEntryGoneError(entry)
+  }
+
+  return index
+}
+
+// Herald's own writes run one at a time, so each one re-reads what the previous one wrote.
+let writes: Promise<unknown> = Promise.resolve()
+
+/**
+ * Change one file's entries. Hermes's memory tool writes the same files, so `change` gets the
+ * entries as they are on disk right now, never the cached copy. The result is shown at once,
+ * written atomically, then re-read from disk (honest).
+ */
+function commitFile<T>(hermesHome: string, file: MemoryFile, change: (texts: string[]) => { texts: string[]; result: T }): Promise<T> {
+  const run = writes.then(async () => {
+    try {
+      let listing: DirEntry[] = []
+
+      try {
+        listing = await window.heraldOS.fs.readDir(memoriesDir(hermesHome))
+      } catch {
+        // No memories folder yet: the file is simply absent.
+      }
+
+      const current = await readMemoryFile(hermesHome, file, listing)
+
+      if (current.truncated) {
+        throw new Error(`${file} is too large to edit safely from here`)
+      }
+
+      const { texts, result } = change([...current.texts])
+      const state = $memory.get()
+
+      if (state.files) {
+        const files = { ...state.files, [file]: { ...current, texts, exists: true, modifiedAt: Date.now() } }
+        $memory.set({ ...state, files, entries: MEMORY_FILES.flatMap(name => buildEntries(files[name])) })
+      }
+
+      if (!current.exists) {
+        try {
+          await window.heraldOS.fs.mkdir(memoriesDir(hermesHome))
+        } catch {
+          // Folder probably exists already; the write below reports real failures.
+        }
+      }
+
+      await window.heraldOS.fs.writeText(memoryPath(hermesHome, file), serialize(texts), { atomic: true })
+
+      return result
+    } finally {
+      await loadMemory(hermesHome)
+    }
+  })
+  writes = run.catch(() => undefined)
+
+  return run
+}
 
 export function updateEntry(hermesHome: string, entry: MemoryEntry, text: string): Promise<void> {
-  const texts = textsOf(entry.file)
-  texts[entry.index] = text.trim()
+  return commitFile(hermesHome, entry.file, texts => {
+    texts[locate(texts, entry)] = text.trim()
 
-  return commitFile(hermesHome, entry.file, texts)
+    return { texts, result: undefined }
+  })
 }
 
 export function forgetEntry(hermesHome: string, entry: MemoryEntry): Promise<void> {
-  return commitFile(
-    hermesHome,
-    entry.file,
-    textsOf(entry.file).filter((_, index) => index !== entry.index)
-  )
+  return commitFile(hermesHome, entry.file, texts => {
+    const index = locate(texts, entry)
+
+    return { texts: texts.filter((_, i) => i !== index), result: undefined }
+  })
 }
 
-/** Append an entry and return the id it will have once written. */
-export async function addEntry(hermesHome: string, file: MemoryFile, text: string): Promise<string> {
-  const texts = textsOf(file)
-  const id = `${file}:${texts.length}`
-  await commitFile(hermesHome, file, [...texts, text.trim()])
-
-  return id
+/** Append an entry and return the id it has once written. */
+export function addEntry(hermesHome: string, file: MemoryFile, text: string): Promise<string> {
+  return commitFile(hermesHome, file, texts => ({ texts: [...texts, text.trim()], result: `${file}:${texts.length}` }))
 }
