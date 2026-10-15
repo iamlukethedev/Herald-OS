@@ -40,6 +40,53 @@ export function waitingReason(install: string | null): string {
   }
 }
 
+/** The first readable reason in a JSON error: a string, `detail`/`error`/`message`/`msg`, or FastAPI's list of them. */
+function reasonIn(value: unknown, depth = 0): string | undefined {
+  if (typeof value === 'string') {
+    return value.trim() || undefined
+  }
+
+  if (depth > 3 || typeof value !== 'object' || value === null) {
+    return undefined
+  }
+
+  if (Array.isArray(value)) {
+    const reasons = value.map(item => reasonIn(item, depth + 1)).filter(Boolean)
+
+    return reasons.length ? reasons.join('; ') : undefined
+  }
+
+  const record = value as Record<string, unknown>
+
+  for (const key of ['detail', 'error', 'message', 'msg']) {
+    const reason = reasonIn(record[key], depth + 1)
+
+    if (reason) {
+      return reason
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * The reason in a failed REST answer's body. An HTML page (a proxy's 502, a server's 500 page)
+ * carries none, so it gives "" and the caller words the failure from the status code.
+ */
+export function restErrorDetail(text: string, statusText: string): string {
+  const body = text.trim()
+
+  if (body.startsWith('<')) {
+    return ''
+  }
+
+  try {
+    return reasonIn(JSON.parse(body)) ?? statusText
+  } catch {
+    return body || statusText
+  }
+}
+
 export type BackendListener = (state: BackendState) => void
 
 /**
@@ -150,16 +197,9 @@ export class BackendManager {
     const text = await response.text()
 
     if (!response.ok) {
-      let detail = response.statusText
+      const detail = restErrorDetail(text, response.statusText)
 
-      try {
-        const parsed = JSON.parse(text) as { detail?: unknown; error?: unknown }
-        detail = String(parsed.detail ?? parsed.error ?? detail)
-      } catch {
-        detail = text || detail
-      }
-
-      throw new Error(`${request.method} ${request.path} -> ${response.status}: ${detail}`)
+      throw new Error(`${request.method} ${request.path} -> ${response.status}${detail ? `: ${detail}` : ''}`)
     }
 
     return (text ? JSON.parse(text) : null) as T

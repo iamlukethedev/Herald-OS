@@ -11,7 +11,7 @@ vi.mock('./bridge-plugin.ts', () => ({ ensureBridgePlugin: async () => null }))
 vi.mock('./shell-env.ts', () => ({ loginShellPath: async () => process.env.PATH ?? '' }))
 vi.mock('../log.ts', () => ({ log: () => undefined }))
 
-import { BackendManager, WAIT_POLL_MS, waitingReason } from './manager.ts'
+import { BackendManager, restErrorDetail, WAIT_POLL_MS, waitingReason } from './manager.ts'
 
 let dir: string
 let manager: BackendManager
@@ -73,5 +73,35 @@ describe('BackendManager without a Hermes to start', () => {
     found.runtime = installed()
     vi.advanceTimersByTime(WAIT_POLL_MS * 2)
     expect(manager.getState().phase).toBe('stopped')
+  })
+})
+
+describe('restErrorDetail', () => {
+  it("reads Hermes's reason from a JSON error body", () => {
+    expect(restErrorDetail('{"detail":"Memory provider \'mem0\' is not ready."}', 'Bad Request')).toBe("Memory provider 'mem0' is not ready.")
+    expect(restErrorDetail('{"error":"no such job"}', 'Not Found')).toBe('no such job')
+    expect(restErrorDetail('"plain reason"', 'Bad Request')).toBe('plain reason')
+  })
+
+  it('shows the message inside an object detail instead of [object Object]', () => {
+    expect(restErrorDetail('{"detail":{"message":"Provider needs an API key."}}', 'Bad Request')).toBe('Provider needs an API key.')
+    expect(restErrorDetail('{"detail":{"detail":"Nested reason."}}', 'Bad Request')).toBe('Nested reason.')
+    expect(restErrorDetail('{"error":{"code":42,"message":"Quota exceeded."}}', 'Too Many Requests')).toBe('Quota exceeded.')
+    expect(restErrorDetail('{"detail":[{"loc":["body","provider"],"msg":"field required"},{"msg":"must be a string"}]}', 'Unprocessable Entity')).toBe('field required; must be a string')
+  })
+
+  it('falls back to the status text when the JSON carries no reason', () => {
+    expect(restErrorDetail('{"detail":{"code":42}}', 'Bad Request')).toBe('Bad Request')
+    expect(restErrorDetail('{}', 'Bad Request')).toBe('Bad Request')
+    expect(restErrorDetail('', 'Bad Gateway')).toBe('Bad Gateway')
+  })
+
+  it('gives nothing for an HTML page, so the caller words it from the status code', () => {
+    expect(restErrorDetail('<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>', 'Bad Gateway')).toBe('')
+    expect(restErrorDetail('\n  <html>Internal Server Error</html>', 'Internal Server Error')).toBe('')
+  })
+
+  it('keeps a plain-text body', () => {
+    expect(restErrorDetail('upstream timed out', 'Gateway Timeout')).toBe('upstream timed out')
   })
 })

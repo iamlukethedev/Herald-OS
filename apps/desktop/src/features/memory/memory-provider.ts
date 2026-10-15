@@ -97,9 +97,29 @@ export function memoryProviderBody(id: string): { provider: string } {
   return { provider: normalizeMemoryProvider(id) === BUILT_IN ? '' : id }
 }
 
-/** Hermes's reason alone: without Electron's IPC prefix or main's "PUT /api/memory/provider -> 400:". */
+// Main's REST failure: "PUT /api/memory/provider -> 400: <reason>", or no reason when the body had none.
+const REST_FAILURE = /^([A-Z]+) \/\S* -> (\d{3})(?:: ([\s\S]*))?$/
+
+/**
+ * Hermes's reason alone: without Electron's IPC prefix or main's "PUT /api/memory/provider -> 400:".
+ * With no reason, or an HTML page in its place, the status code is all there is to say.
+ */
 export function memoryErrorText(error: unknown): string {
-  return messageOf(error).replace(/^[A-Z]+ \/\S* -> \d{3}: /, '')
+  const message = messageOf(error)
+  const failure = REST_FAILURE.exec(message)
+
+  if (!failure) {
+    return message
+  }
+
+  const [, method, code, detail = ''] = failure
+  const reason = detail.trim()
+
+  if (reason && !reason.startsWith('<')) {
+    return reason
+  }
+
+  return method === 'GET' ? `Hermes did not send its memory status (HTTP ${code}).` : `Hermes refused the change (HTTP ${code}).`
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
