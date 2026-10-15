@@ -40,7 +40,7 @@ export function Toasts() {
             <button type="button" className="w-full min-w-0 text-left" onClick={() => open(toast)}>
               <div className="truncate text-[12.5px] font-medium text-fg">{toast.title}</div>
               {toast.subtitle && <div className="truncate text-[11px] text-fg-4">{toast.subtitle}</div>}
-              {toast.body && <div className="mt-0.5 text-[12px] break-words text-fg-2">{toast.body}</div>}
+              {toast.body && <div className="mt-0.5 max-h-40 overflow-y-auto text-[12px] break-words text-fg-2">{toast.body}</div>}
             </button>
             {toast.desktop && toast.desktop.actions.length > 0 && <DesktopActions item={toast} />}
             {toast.actions && <CommandActions item={toast} />}
