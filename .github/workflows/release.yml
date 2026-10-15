@@ -99,6 +99,10 @@ jobs:
       - name: Check the code signatures
         # Every app, as packed and inside each zip and DMG, signed or not: codesign --verify --deep
         # --strict passes, and the signature covers the bundle (sealed resources, bound Info.plist).
+        # A signed build must also carry a Developer ID signature from the team in APPLE_TEAM_ID.
+        env:
+          HERALD_OS_MAC_SIGNED: ${{ steps.signing.outputs.signed }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: node apps/desktop/scripts/check-mac-signatures.mjs
       - name: Notarize and staple the DMGs
         if: steps.signing.outputs.signed == 'true'

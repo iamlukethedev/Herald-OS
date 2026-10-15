@@ -47,6 +47,7 @@ No step gets more secrets than it needs:
 | Check the signing secrets (only tests whether each is set) | all five |
 | Package, sign and notarize the app (electron-builder) | all five: the first two as `CSC_LINK` and `CSC_KEY_PASSWORD`, the others by name for `@electron/notarize` |
 | Notarize and staple the DMG (`notarytool`) | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| Check the code signatures | `APPLE_TEAM_ID` (checked only on signed builds) |
 | Verify the signatures and the notarization tickets | `APPLE_TEAM_ID` |
 
 Dependencies are installed with `npm ci --ignore-scripts`, then only node-pty's and esbuild's install
@@ -156,8 +157,14 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
    - turns signing off (`identity: null`) or notarization off (`notarize: false`);
    - sets `identity: "-"`, which would sign even a Developer ID build ad hoc.
 
-   It also fails the job if `release.yml` stops passing `-c.mac.identity=-` to the unsigned build,
-   passes an identity to the signed one, or runs the signature check (step 5) only on some builds.
+   It also fails the job if `release.yml`:
+   - stops passing `-c.mac.identity=-` to the unsigned build, or passes an identity to the signed one;
+   - packs other than through `npm run pack:mac` (one signed and one unsigned step), passes an
+     architecture or `-c.mac.target` to it, or `pack:mac` stops building both `--arm64` and `--x64`;
+   - doesn't run the build check (step 4) or the signature check (step 5) on every build after
+     packing: each must be a real `node apps/desktop/scripts/…` line, not echoed, commented out or
+     followed by `|| …`, with no `if:` and no `continue-on-error` (on the step or the job);
+   - doesn't pass `HERALD_OS_MAC_SIGNED` to the signature check.
    Then `plutil -lint` checks the entitlements file.
 3. **Package.** Runs `npm run pack:mac` on the bundles built earlier, which packs the app for
    `--arm64` and `--x64`.
@@ -184,7 +191,10 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
    (unpacked with `ditto`) and inside each DMG (mounted read-only with `hdiutil`). It fails the job
    unless `codesign --verify --deep --strict` passes and `codesign --display` shows a signature over
    the bundle: not `linker-signed`, `Sealed Resources version=…`, a bound Info.plist and the
-   identifier `dev.iamluke.heraldos`.
+   identifier `dev.iamluke.heraldos`. It runs the same checks on each helper app and framework in
+   `Contents/Frameworks`, except for the identifier. On a signed build (`HERALD_OS_MAC_SIGNED=true`),
+   an ad hoc signature fails, and so does a `TeamIdentifier` other than `APPLE_TEAM_ID`. Neither
+   is checked on an ad hoc build. It also fails if `release/` has fewer zips or DMGs than apps.
 6. **Notarize and staple the DMGs** (signed builds only). The step submits each DMG with
    `xcrun notarytool submit --wait`, then staples the ticket. If Apple returns any status other
    than `Accepted`, the step prints the notarization log and fails.

@@ -79,6 +79,10 @@ Run this once, then open Herald OS from Applications:
 xattr -dr com.apple.quarantine "/Applications/Herald OS.app"
 ```
 
+Or, without Terminal: open Herald OS once and close the warning, then go to System Settings >
+Privacy & Security, scroll to Security, click Open Anyway next to "Herald OS was blocked", and
+confirm with your password. Since macOS Sequoia, right-click > Open no longer skips the warning.
+
 Herald OS takes over the screen: `Cmd+Ctrl+F` leaves or re-enters fullscreen and `Cmd+Q` quits. On
 its first start it adds its system tools to Hermes (`~/.hermes/plugins/herald-os-bridge`). macOS asks
 for each of these the first time a feature needs it:
@@ -712,8 +716,10 @@ does not change the shell's code. Moving the pin is described in [upstream/READM
   run `hermes doctor`. If Hermes lives somewhere other than `~/.hermes/hermes-agent` and is not on
   your PATH, start with `HERALD_OS_HERMES_ROOT=/path/to/hermes-agent npm run dev`. The cause is
   usually in `~/.hermes/logs/herald-os.log`.
-- **macOS says Herald OS "is damaged" or "cannot be opened".** The build is not notarized yet: run
-  `xattr -dr com.apple.quarantine "/Applications/Herald OS.app"` and open it again. 0.1.0-alpha.4
+- **macOS says Herald OS "is damaged", "cannot be opened" or "Apple could not verify Herald OS is
+  free of malware".** The build is not notarized yet: run
+  `xattr -dr com.apple.quarantine "/Applications/Herald OS.app"` and open it again, or click Open
+  Anyway in System Settings > Privacy & Security after the first attempt. 0.1.0-alpha.4
   shipped without a signature over the app bundle; if it still says "damaged", sign your copy ad
   hoc with `codesign --force --deep --sign - "/Applications/Herald OS.app"`.
 - **Hermes uses shell commands instead of its system tools.** `hermes plugins list` should show
