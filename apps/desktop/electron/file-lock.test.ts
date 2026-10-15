@@ -52,6 +52,7 @@ describe.skipIf(!python)('lockFile', () => {
   it('waits for Hermes to let go, then gives up cleanly after the timeout', async () => {
     const lockPath = path.join(dir, 'USER.md.lock')
     const hermes = spawn('python3', ['-c', 'import fcntl, os, sys, time\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\nfcntl.flock(fd, fcntl.LOCK_EX)\nprint("held", flush=True)\ntime.sleep(float(sys.argv[2]))', lockPath, '0.6'])
+    const hermesExited = new Promise(resolve => hermes.once('exit', resolve))
     await new Promise(resolve => hermes.stdout.once('data', resolve))
 
     const started = Date.now()
@@ -63,7 +64,7 @@ describe.skipIf(!python)('lockFile', () => {
     const waited = await lockFile(lockPath, 5000, pythons)
 
     expect(waited.status).toBe('locked')
-    expect(hermes.exitCode).toBe(0)
+    expect(await hermesExited).toBe(0)
 
     if (waited.status === 'locked') {
       await waited.lock.release()
