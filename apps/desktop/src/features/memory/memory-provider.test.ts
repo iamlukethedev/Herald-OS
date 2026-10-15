@@ -40,6 +40,14 @@ describe('memoryProviderView', () => {
     expect(view.description).not.toContain('also saves')
   })
 
+  it('says an unavailable active provider needs setup too', () => {
+    const view = memoryProviderView({ active: 'openviking', providers: [...PROVIDERS!, { name: 'openviking', description: 'OpenViking context store', available: false, configured: true, status: 'unavailable' }] })
+
+    expect(view.description).toBe('openviking is the active provider but needs setup before it saves or recalls anything.')
+    expect(view.choices.at(-1)?.status).toBe('unavailable')
+    expect(memoryStatusLabel('unavailable')).toBe('unavailable')
+  })
+
   it('says when the configured provider is not installed', () => {
     const view = memoryProviderView({ active: 'supermemory', providers: [...PROVIDERS!, { name: 'supermemory', description: 'Configured provider was not found.', available: false, configured: false, status: 'missing' }] })
 
@@ -89,6 +97,21 @@ describe('memoryErrorText', () => {
     expect(memoryErrorText(raw)).toBe("Memory provider 'mem0' is not ready (needs config).")
     expect(memoryErrorText(new Error('GET /api/memory -> 500: Internal Server Error'))).toBe('Internal Server Error')
     expect(memoryErrorText(new Error('connect ECONNREFUSED'))).toBe('connect ECONNREFUSED')
+  })
+
+  it('words the failure from the status code when there is no reason, or an HTML page in its place', () => {
+    const ipc = (message: string) => new Error(`Error invoking remote method 'herald-os:backend:rest': Error: ${message}`)
+
+    expect(memoryErrorText(ipc('PUT /api/memory/provider -> 502'))).toBe('Hermes refused the change (HTTP 502).')
+    expect(memoryErrorText(ipc('PUT /api/memory/provider -> 400: '))).toBe('Hermes refused the change (HTTP 400).')
+    expect(memoryErrorText(ipc('PUT /api/memory/provider -> 500: <!DOCTYPE html><html><body>Internal Server Error</body></html>'))).toBe('Hermes refused the change (HTTP 500).')
+    expect(memoryErrorText(ipc('PUT /api/memory/provider -> 502: \n  <html><title>502 Bad Gateway</title></html>'))).toBe('Hermes refused the change (HTTP 502).')
+    expect(memoryErrorText(ipc('GET /api/memory -> 503: <html>Service Unavailable</html>'))).toBe('Hermes did not send its memory status (HTTP 503).')
+    expect(memoryErrorText(ipc('GET /api/memory -> 500'))).toBe('Hermes did not send its memory status (HTTP 500).')
+  })
+
+  it('keeps a reason that spans lines', () => {
+    expect(memoryErrorText(new Error('PUT /api/memory/provider -> 400: First line.\nSecond line.'))).toBe('First line.\nSecond line.')
   })
 })
 
