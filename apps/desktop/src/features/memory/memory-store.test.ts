@@ -76,6 +76,20 @@ beforeEach(() => {
   disk.hooks.beforeWrite = () => {}
 })
 
+describe('parse', () => {
+  it('splits only on the exact delimiter Hermes writes', () => {
+    expect(parse('A\n§\nB')).toEqual(['A', 'B'])
+    expect(parse('A\n§\n\n§\nB\n')).toEqual(['A', 'B'])
+  })
+
+  it('keeps an entry with an indented § in it whole, as Hermes does', () => {
+    const text = 'Sections in the notes:\n  §  \nare marked like that'
+
+    expect(parse(serialize([text, 'B']))).toEqual([text, 'B'])
+    expect(parse('A\n §\nB')).toEqual(['A\n §\nB'])
+  })
+})
+
 describe('memory writes', () => {
   it('keeps an entry Hermes saved after Herald loaded the file when Herald adds one', async () => {
     await loadThenHermesWrites(['A', 'B'], ['A', 'B', 'saved by Hermes'])

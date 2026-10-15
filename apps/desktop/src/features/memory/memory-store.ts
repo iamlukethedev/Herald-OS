@@ -3,10 +3,10 @@ import { atom } from 'nanostores'
 import type { DirEntry } from '../../../shared/ipc.ts'
 
 /*
- * Hermes memory lives in two plain-text files under `$HERMES_HOME/memories/`: MEMORY.md (what the
- * agent remembers) and USER.md (facts about the user). Entries are separated by a line that is only
- * `§`. This module parses, classifies and caches them, and writes edits back under the lock Hermes's
- * memory tool takes before re-reading the truth from disk.
+ * Hermes memory lives in two plain-text files under `$HERMES_HOME/memories/`: MEMORY.md (what
+ * Hermes remembers) and USER.md (facts about the user). Entries are separated by `\n§\n`. This
+ * module parses, classifies and caches them, and writes edits back under the lock Hermes's memory
+ * tool takes before re-reading the truth from disk.
  */
 
 export type MemoryKind = 'preference' | 'project' | 'person' | 'knowledge'
@@ -79,27 +79,12 @@ export function focusMemory(focus: Omit<MemoryFocus, 'ts'>): void {
 // Text helpers (pure).
 // ---------------------------------------------------------------------------------------------
 
-/** Split a memory file into trimmed, non-empty entries. A delimiter is a line containing only `§`. */
+/** Split a memory file into trimmed, non-empty entries, exactly as Hermes does: only on `ENTRY_DELIMITER`. */
 export function parse(text: string): string[] {
-  if (!text.trim()) {
-    return []
-  }
-
-  const entries: string[] = []
-  let buffer: string[] = []
-
-  for (const line of text.split(/\r?\n/)) {
-    if (line.trim() === '§') {
-      entries.push(buffer.join('\n'))
-      buffer = []
-    } else {
-      buffer.push(line)
-    }
-  }
-
-  entries.push(buffer.join('\n'))
-
-  return entries.map(entry => entry.trim()).filter(Boolean)
+  return text
+    .split(ENTRY_DELIMITER)
+    .map(entry => entry.trim())
+    .filter(Boolean)
 }
 
 /** Inverse of `parse`, byte-compatible with what Hermes writes (no trailing newline). */
