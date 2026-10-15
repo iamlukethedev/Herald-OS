@@ -193,10 +193,24 @@ export function MenuDropdown<T extends string>({ label, items, value, onSelect, 
   const [open, setOpen] = useState(false)
   const ref = useDismiss(open, () => setOpen(false))
 
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false)
+    }
+  }, [disabled])
+
   return (
     <div ref={ref} className="relative">
-      <Dropdown label={<span className="max-w-[220px] truncate">{label}</span>} onClick={() => !disabled && setOpen(o => !o)} className={cn(disabled && 'opacity-50', className)} />
-      {open && (
+      <Dropdown
+        label={<span className="max-w-[220px] truncate">{label}</span>}
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled}
+        aria-disabled={disabled || undefined}
+        aria-haspopup="listbox"
+        aria-expanded={open && !disabled}
+        className={cn(disabled && 'opacity-50', className)}
+      />
+      {open && !disabled && (
         <div role="listbox" aria-label={ariaLabel} className={cn('float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 min-w-[220px] rounded-lg p-1', menuClassName)}>
           {items.map(item => {
             const active = item.id === value

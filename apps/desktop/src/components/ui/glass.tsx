@@ -214,9 +214,9 @@ export function MoreButton(props: React.ComponentProps<'button'>) {
   )
 }
 
-export function Dropdown({ label, className, onClick }: { label: React.ReactNode; className?: string; onClick?: () => void }) {
+export function Dropdown({ label, className, onClick, ...button }: { label: React.ReactNode; className?: string; onClick?: () => void } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'className' | 'onClick' | 'type'>) {
   return (
-    <button type="button" onClick={onClick} className={cn('flex h-8 items-center gap-2 rounded-lg border border-line bg-white/6 px-3 text-[12.5px] text-fg hover:bg-white/10', className)}>
+    <button type="button" {...button} onClick={onClick} className={cn('flex h-8 items-center gap-2 rounded-lg border border-line bg-white/6 px-3 text-[12.5px] text-fg hover:bg-white/10 disabled:cursor-default disabled:hover:bg-white/6', className)}>
       {label}
       <IconChevronDown size={14} className="text-fg-3" />
     </button>
