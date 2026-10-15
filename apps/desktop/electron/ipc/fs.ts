@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { type DirEntry, type FilePreview, IPC, type TreeEntry } from '../../shared/ipc.ts'
 import { allowAttachments, readAttachment } from '../attachments.ts'
+import { writeTextAtomic } from '../atomic-write.ts'
 import { run } from '../platform/exec.ts'
 import { type EditorTarget, hostPlatform } from '../platform/index.ts'
 import { WindowWatches } from './watches.ts'
@@ -189,8 +190,8 @@ async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number
 /** Folders a project listing and watcher skip: dependencies, VCS data, caches and build output. */
 const SKIPPED_DIRS = new Set(['node_modules', '.git', '.hg', '.svn', 'dist', 'build', '.next', '.nuxt', '.vite', '.turbo', '.cache', '.parcel-cache', '__pycache__', '.venv', 'venv', '.pytest_cache', '.DS_Store', 'coverage', '.idea'])
 
-/** Scratch files: Hermes's atomic-save temporaries, editor swap and backup files. */
-const SCRATCH_FILE = /^\.hermes-tmp\.|^\.#|\.sw[op]$|~$|^\.DS_Store$/
+/** Scratch files: Hermes's and Herald's atomic-save temporaries, editor swap and backup files. */
+const SCRATCH_FILE = /^\.hermes-tmp\.|^\.herald-tmp\.|^\.#|\.sw[op]$|~$|^\.DS_Store$/
 
 const skipped = (relative: string): boolean => relative.split(path.sep).some(part => SKIPPED_DIRS.has(part)) || SCRATCH_FILE.test(path.basename(relative))
 
@@ -320,8 +321,15 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
 
     return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null
   })
-  ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string) => {
+  ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string, options?: { atomic?: boolean }) => {
     const file = assertWritable(target)
+
+    if (options?.atomic) {
+      await writeTextAtomic(file, String(content))
+
+      return
+    }
+
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, String(content), 'utf8')
   })

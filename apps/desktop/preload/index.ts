@@ -145,7 +145,8 @@ const api = {
     find: (query: string, limit = 10): Promise<RecentFile[]> => ipcRenderer.invoke(IPC.fsFind, query, limit),
     thumbnail: (target: string, size = 512): Promise<string | null> => ipcRenderer.invoke(IPC.fsThumbnail, target, size),
     imageInfo: (target: string): Promise<ImageInfo | null> => ipcRenderer.invoke(IPC.fsImageInfo, target),
-    writeText: (target: string, content: string): Promise<void> => ipcRenderer.invoke(IPC.fsWriteText, target, content),
+    /** `atomic` replaces the file through a renamed temporary, so readers never see it half written. */
+    writeText: (target: string, content: string, options?: { atomic?: boolean }): Promise<void> => ipcRenderer.invoke(IPC.fsWriteText, target, content, options),
     mkdir: (target: string): Promise<void> => ipcRenderer.invoke(IPC.fsMkdir, target),
     rename: (from: string, to: string): Promise<void> => ipcRenderer.invoke(IPC.fsRename, from, to),
     trash: (targets: string[]): Promise<void> => ipcRenderer.invoke(IPC.fsTrash, targets),
