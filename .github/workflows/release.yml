@@ -69,6 +69,7 @@ jobs:
             echo "::warning title=Unsigned macOS build::Missing secrets: ${list%, }. This build is not signed or notarized. See docs/MACOS-SIGNING.md."
           fi
       - name: Check the mac signing config
+        # Also checks that this workflow signs unsigned builds ad hoc and checks every build's signature.
         run: |
           node apps/desktop/scripts/check-mac-signing-config.mjs
           plutil -lint apps/desktop/build/entitlements.mac.plist
@@ -83,15 +84,22 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run pack:mac --workspace apps/desktop -- -c.dmg.sign=true
-      - name: Package the app unsigned
+      - name: Package the app, signed ad hoc
         if: steps.signing.outputs.signed != 'true'
         env:
           # Never pick up a stray identity from the runner's keychain for an unsigned build.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run pack:mac --workspace apps/desktop -- -c.mac.notarize=false
+        # identity "-" signs the whole bundle ad hoc, inside out, after afterPack and before the DMG
+        # and zip are made. Without it the app keeps only the linker's per-binary signatures, with no
+        # sealed resources, and macOS reports the downloaded app as damaged.
+        run: npm run pack:mac --workspace apps/desktop -- -c.mac.notarize=false -c.mac.identity=-
       - name: Check the Apple Silicon and Intel builds
         # One app, DMG and zip per architecture; every Mach-O in each app is built for its architecture alone.
         run: node apps/desktop/scripts/check-mac-builds.mjs
+      - name: Check the code signatures
+        # Every app, as packed and inside each zip and DMG, signed or not: codesign --verify --deep
+        # --strict passes, and the signature covers the bundle (sealed resources, bound Info.plist).
+        run: node apps/desktop/scripts/check-mac-signatures.mjs
       - name: Notarize and staple the DMGs
         if: steps.signing.outputs.signed == 'true'
         env:
