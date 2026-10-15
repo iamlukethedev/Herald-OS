@@ -13,6 +13,7 @@ import { $connection, gatewayRequest } from '../../../store/gateway.ts'
 import { $providerChanges, type ModelChange, setHermesModel } from '../../../store/model-provider.ts'
 import { notify } from '../../../store/notifications.ts'
 import { readTier, withTier } from './policy.ts'
+import { MemoryProviderRow } from './MemoryProviderRow.tsx'
 import { ModelConfirm, ModelProviderRow } from './ProviderRow.tsx'
 import { useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, MenuDropdown, RadioCard, SectionTitle, SettingsBlock, SettingsGroup, SettingsRow, Stepper, useDismiss } from './shared.tsx'
@@ -26,6 +27,7 @@ import { ToolSearchRow } from './ToolSearchRow.tsx'
  *   /api/tools/terminal/backend(s)                     -> Run on
  *   delegation.max_concurrent_children (/api/config)   -> Background agents
  *   `memory` toolset (/api/tools/toolsets)             -> Remember preferences
+ *   memory.provider (/api/memory)                      -> Memory provider (MemoryProviderRow.tsx)
  *   bridge policy tier `act`                           -> Ask before sending messages
  *   bridge audit log                                   -> Activity history
  */
@@ -68,6 +70,7 @@ export function AgentsSection() {
 
       <SettingsGroup title="Privacy & control">
         <RememberPreferencesRow />
+        <MemoryProviderRow />
         <AskBeforeSendingRow />
         <ActivityHistoryRow />
       </SettingsGroup>
