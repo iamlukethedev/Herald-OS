@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BUILT_IN, memoryProviderBody, memoryProviderView, type MemoryStatusPayload } from './memory-provider.ts'
+import { BUILT_IN, memoryErrorText, memoryProviderBody, memoryProviderView, memoryStatusLabel, type MemoryStatusPayload, parseMemoryStatus } from './memory-provider.ts'
 
 // GET /api/memory as Hermes answers it, with Honcho set up and Mem0 not configured yet.
 const PROVIDERS: MemoryStatusPayload['providers'] = [
@@ -24,33 +24,53 @@ describe('memoryProviderView', () => {
     expect(memoryProviderView(null).label).toBe('Built-in only')
   })
 
-  it('names an external provider and says it remembers outside the two files', () => {
+  it('names a ready external provider with its display casing and says it remembers outside the two files', () => {
     const view = memoryProviderView({ active: 'honcho', providers: PROVIDERS })
 
     expect(view.active).toBe('honcho')
-    expect(view.label).toBe('honcho')
-    expect(view.description).toBe('honcho also saves and recalls memories outside the two files on the Memory page.')
+    expect(view.label).toBe('Honcho')
+    expect(view.description).toBe('Honcho also saves and recalls memories outside the two files on the Memory page.')
+  })
+
+  it('says the active provider needs setup when it is not ready', () => {
+    const view = memoryProviderView({ active: 'mem0', providers: PROVIDERS })
+
+    expect(view.label).toBe('Mem0')
+    expect(view.description).toBe('Mem0 is the active provider but needs setup before it saves or recalls anything.')
+    expect(view.description).not.toContain('also saves')
   })
 
   it('says when the configured provider is not installed', () => {
     const view = memoryProviderView({ active: 'supermemory', providers: [...PROVIDERS!, { name: 'supermemory', description: 'Configured provider was not found.', available: false, configured: false, status: 'missing' }] })
 
     expect(view.label).toBe('supermemory')
-    expect(view.description).toBe("supermemory is set in Hermes's config but isn't installed.")
+    expect(view.description).toBe("supermemory is set in Hermes's config but not installed.")
   })
 
   it('offers built-in first, then every provider with its readiness, including ones not set up', () => {
     expect(memoryProviderView({ active: 'honcho', providers: PROVIDERS }).choices).toEqual([
       { id: BUILT_IN, label: 'Built-in only', description: 'MEMORY.md and USER.md', status: null },
-      { id: 'honcho', label: 'honcho', description: 'Cross-session user modelling', status: 'ready' },
-      { id: 'mem0', label: 'mem0', description: 'Mem0 cloud memory', status: 'needs_config' }
+      { id: 'honcho', label: 'Honcho', description: 'Cross-session user modelling', status: 'ready' },
+      { id: 'mem0', label: 'Mem0', description: 'Mem0 cloud memory', status: 'needs_config' }
     ])
   })
 
-  it('keeps the active provider selectable when discovery did not list it', () => {
+  it('keeps the active provider selectable, as not installed, when discovery did not list it', () => {
     const view = memoryProviderView({ active: 'honcho', providers: [] })
 
-    expect(view.choices.map(choice => choice.id)).toEqual([BUILT_IN, 'honcho'])
+    expect(view.choices.map(choice => [choice.id, choice.status])).toEqual([
+      [BUILT_IN, null],
+      ['honcho', 'missing']
+    ])
+    expect(view.description).toBe("Honcho is set in Hermes's config but not installed.")
+  })
+})
+
+describe('memoryStatusLabel', () => {
+  it('uses one term for a configured provider that is not installed', () => {
+    expect(memoryStatusLabel('missing')).toBe('not installed')
+    expect(memoryStatusLabel('needs_config')).toBe('needs setup')
+    expect(memoryStatusLabel('some_new_state')).toBe('some new state')
   })
 })
 
@@ -58,5 +78,33 @@ describe('memoryProviderBody', () => {
   it('sends an empty provider for built-in, and the name otherwise', () => {
     expect(memoryProviderBody(BUILT_IN)).toEqual({ provider: '' })
     expect(memoryProviderBody('honcho')).toEqual({ provider: 'honcho' })
+  })
+})
+
+describe('memoryErrorText', () => {
+  it("keeps only Hermes's reason", () => {
+    const raw = "Error invoking remote method 'herald-os:backend:rest': Error: PUT /api/memory/provider -> 400: Memory provider 'mem0' is not ready (needs config)."
+
+    expect(memoryErrorText(new Error(raw))).toBe("Memory provider 'mem0' is not ready (needs config).")
+    expect(memoryErrorText(raw)).toBe("Memory provider 'mem0' is not ready (needs config).")
+    expect(memoryErrorText(new Error('GET /api/memory -> 500: Internal Server Error'))).toBe('Internal Server Error')
+    expect(memoryErrorText(new Error('connect ECONNREFUSED'))).toBe('connect ECONNREFUSED')
+  })
+})
+
+describe('parseMemoryStatus', () => {
+  it('accepts what Hermes sends', () => {
+    expect(parseMemoryStatus({ active: 'honcho', providers: PROVIDERS }).providers?.map(row => row.name)).toEqual(['honcho', 'mem0'])
+    expect(parseMemoryStatus({ active: null, providers: [] }).active).toBeNull()
+  })
+
+  it('drops non-string descriptions and statuses rather than rendering them', () => {
+    expect(parseMemoryStatus({ active: '', providers: [{ name: 'honcho', description: 5, status: {} }] }).providers).toEqual([{ name: 'honcho', description: undefined, status: undefined }])
+  })
+
+  it('refuses payloads the row cannot read', () => {
+    for (const raw of [null, undefined, {}, [], '<html>oops</html>', { active: '', providers: { a: 1 } }, { active: 5, providers: [] }, { active: '', providers: [{ name: 7 }] }, { active: '', providers: [null] }]) {
+      expect(() => parseMemoryStatus(raw)).toThrow('Hermes sent a memory status Herald does not understand.')
+    }
   })
 })
