@@ -387,6 +387,14 @@ export interface FilePreview {
   mime?: string
 }
 
+/** `fs.writeText` options. */
+export interface WriteTextOptions {
+  /** Replace the file through a renamed temporary, so readers never see it half written. */
+  atomic?: boolean
+  /** With `atomic`: write only if the file still holds exactly this text (`null`: only if absent). */
+  expect?: string | null
+}
+
 /** A file read whole for Hermes to receive (`file.attach`) when it cannot read this computer's files. */
 export interface AttachmentFile {
   name: string

@@ -107,6 +107,24 @@ describe('writeTextAtomic', () => {
     expect(open.mock.calls.map(call => call[0])).not.toContain(dir)
   })
 
+  it('writes only over the text it expects, and writes nothing otherwise', async () => {
+    const file = path.join(dir, 'MEMORY.md')
+    fs.writeFileSync(file, 'A')
+
+    expect(await writeTextAtomic(file, 'A\n§\nB', { expect: 'A' })).toBe(true)
+    expect(await writeTextAtomic(file, 'A\n§\nC', { expect: 'A' })).toBe(false)
+    expect(fs.readFileSync(file, 'utf8')).toBe('A\n§\nB')
+    expect(leftovers()).toEqual([])
+  })
+
+  it('with expect null, writes only a file that does not exist yet', async () => {
+    const file = path.join(dir, 'USER.md')
+
+    expect(await writeTextAtomic(file, 'first', { expect: null })).toBe(true)
+    expect(await writeTextAtomic(file, 'second', { expect: null })).toBe(false)
+    expect(fs.readFileSync(file, 'utf8')).toBe('first')
+  })
+
   it('on Windows, retries a rename refused while the file is open elsewhere', async () => {
     onPlatform('win32')
     const rename = fsp.rename

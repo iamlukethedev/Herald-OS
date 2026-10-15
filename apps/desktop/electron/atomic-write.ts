@@ -1,9 +1,18 @@
 import { randomBytes } from 'node:crypto'
+import { readFileSync, renameSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 /** Prefix of the temporaries `writeTextAtomic` leaves for an instant before renaming them. */
 export const ATOMIC_TMP_PREFIX = '.herald-tmp.'
+
+export interface AtomicWriteOptions {
+  /**
+   * Write only if the file still holds exactly this text (`null`: only if it does not exist),
+   * checked just before the rename. A mismatch writes nothing and returns false.
+   */
+  expect?: string | null
+}
 
 /** Windows refuses a rename while another process has the target open (an editor, an indexer, Hermes reading it). */
 const RENAME_RETRYABLE = new Set(['EPERM', 'EBUSY', 'EACCES'])
@@ -48,14 +57,26 @@ async function syncDir(dir: string): Promise<void> {
   }
 }
 
+function currentTextSync(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+
+    throw error
+  }
+}
+
 /**
  * Replace `file` with `content` so a reader sees either the old text or the new, never a
  * truncated file: write and fsync a temporary beside it, rename it over the target, then fsync the
  * folder. Follows a symlink to the real file (the link stays a link), keeps an existing file's
  * permission bits and creates a new one owner-only (0600). Hermes rewrites its memory files the
- * same way (`utils.atomic_write_text`).
+ * same way (`utils.atomic_write_text`). Returns false, writing nothing, when `expect` no longer holds.
  */
-export async function writeTextAtomic(file: string, content: string): Promise<void> {
+export async function writeTextAtomic(file: string, content: string, options: AtomicWriteOptions = {}): Promise<boolean> {
   const target = await fs.realpath(file).catch(() => file)
   const dir = path.dirname(target)
   await fs.mkdir(dir, { recursive: true })
@@ -77,11 +98,29 @@ export async function writeTextAtomic(file: string, content: string): Promise<vo
       await handle.close()
     }
 
-    await renameRetrying(tmp, target)
+    if (options.expect !== undefined) {
+      // Check and rename with nothing in between, not even a turn of the event loop: a writer that
+      // ignores the lock can only slip into that gap.
+      if (currentTextSync(target) !== options.expect) {
+        await fs.rm(tmp, { force: true })
+
+        return false
+      }
+
+      try {
+        renameSync(tmp, target)
+      } catch {
+        await renameRetrying(tmp, target)
+      }
+    } else {
+      await renameRetrying(tmp, target)
+    }
   } catch (error) {
     await fs.rm(tmp, { force: true })
     throw error
   }
 
   await syncDir(dir)
+
+  return true
 }

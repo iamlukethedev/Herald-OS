@@ -79,7 +79,8 @@ import {
   type WebViewEvent,
   type WindowState,
   type WmAction,
-  type WmState
+  type WmState,
+  type WriteTextOptions
 } from '../shared/ipc.ts'
 import type { BrandingPatch, BrandingView } from '../shared/branding.ts'
 import type { ModelId, ModelProgress, ModelStatus } from '../shared/canvas/models.ts'
@@ -145,8 +146,8 @@ const api = {
     find: (query: string, limit = 10): Promise<RecentFile[]> => ipcRenderer.invoke(IPC.fsFind, query, limit),
     thumbnail: (target: string, size = 512): Promise<string | null> => ipcRenderer.invoke(IPC.fsThumbnail, target, size),
     imageInfo: (target: string): Promise<ImageInfo | null> => ipcRenderer.invoke(IPC.fsImageInfo, target),
-    /** `atomic` replaces the file through a renamed temporary, so readers never see it half written. */
-    writeText: (target: string, content: string, options?: { atomic?: boolean }): Promise<void> => ipcRenderer.invoke(IPC.fsWriteText, target, content, options),
+    /** False only when `options.expect` no longer held, in which case nothing was written. */
+    writeText: (target: string, content: string, options?: WriteTextOptions): Promise<boolean> => ipcRenderer.invoke(IPC.fsWriteText, target, content, options),
     mkdir: (target: string): Promise<void> => ipcRenderer.invoke(IPC.fsMkdir, target),
     rename: (from: string, to: string): Promise<void> => ipcRenderer.invoke(IPC.fsRename, from, to),
     trash: (targets: string[]): Promise<void> => ipcRenderer.invoke(IPC.fsTrash, targets),

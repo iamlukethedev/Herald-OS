@@ -3,7 +3,7 @@ import { type FSWatcher, watch as watchFs } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { type DirEntry, type FilePreview, IPC, type TreeEntry } from '../../shared/ipc.ts'
+import { type DirEntry, type FilePreview, IPC, type TreeEntry, type WriteTextOptions } from '../../shared/ipc.ts'
 import { allowAttachments, readAttachment } from '../attachments.ts'
 import { writeTextAtomic } from '../atomic-write.ts'
 import { run } from '../platform/exec.ts'
@@ -321,17 +321,17 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
 
     return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null
   })
-  ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string, options?: { atomic?: boolean }) => {
+  ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string, options?: WriteTextOptions) => {
     const file = assertWritable(target)
 
     if (options?.atomic) {
-      await writeTextAtomic(file, String(content))
-
-      return
+      return writeTextAtomic(file, String(content), options.expect === undefined ? {} : { expect: options.expect === null ? null : String(options.expect) })
     }
 
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, String(content), 'utf8')
+
+    return true
   })
   ipcMain.handle(IPC.fsMkdir, async (_event, target: string) => {
     await fs.mkdir(assertWritable(target), { recursive: true })
