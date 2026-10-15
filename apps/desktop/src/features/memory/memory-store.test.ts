@@ -1,29 +1,57 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { $memory, addEntry, forgetEntry, loadMemory, MemoryEntryGoneError, parse, serialize, updateEntry } from './memory-store.ts'
+import type { FileLockResult, WriteTextOptions } from '../../../shared/ipc.ts'
+import { $memory, addEntry, forgetEntry, loadMemory, MemoryEntryGoneError, MemoryLockTimeoutError, parse, serialize, updateEntry, WRITE_ATTEMPTS } from './memory-store.ts'
 
 // The Electron file bridge, backed by a map from path to file text.
 const disk = vi.hoisted(() => {
   const files = new Map<string, string>()
   const truncated = new Set<string>()
-  const writes: { path: string; options?: { atomic?: boolean } }[] = []
+  const writes: { path: string; options?: WriteTextOptions }[] = []
+  const calls: string[] = []
+  const hooks = {
+    lock: async (): Promise<FileLockResult> => ({ status: 'locked', id: 'lock-1' }),
+    /** Runs just before a write's check, as another writer that ignores the lock would. */
+    beforeWrite: (_path: string) => {}
+  }
   Object.assign(globalThis, {
     window: {
       heraldOS: {
         fs: {
           readDir: async (dir: string) =>
             [...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => ({ name: path.slice(dir.length + 1), path, isDirectory: false, size: 0, modifiedAt: 1 })),
-          readFile: async (path: string) => ({ path, kind: 'text', size: 0, content: files.get(path) ?? '', truncated: truncated.has(path) }),
-          writeText: async (path: string, content: string, options?: { atomic?: boolean }) => {
+          readFile: async (path: string) => {
+            calls.push('read')
+
+            return { path, kind: 'text', size: 0, content: files.get(path) ?? '', truncated: truncated.has(path) }
+          },
+          writeText: async (path: string, content: string, options?: WriteTextOptions) => {
+            calls.push('write')
+            hooks.beforeWrite(path)
+
+            if (options?.expect !== undefined && (files.get(path) ?? null) !== options.expect) {
+              return false
+            }
+
             writes.push({ path, options })
             files.set(path, content)
+
+            return true
           },
-          mkdir: async () => undefined
+          mkdir: async () => undefined,
+          lock: async (path: string) => {
+            calls.push(`lock ${path.split('/').pop()}`)
+
+            return hooks.lock()
+          },
+          unlock: async (id: string) => {
+            calls.push(`unlock ${id}`)
+          }
         }
       }
     }
   })
 
-  return { files, truncated, writes }
+  return { files, truncated, writes, calls, hooks }
 })
 
 const HOME = '/home/sam/.hermes'
@@ -43,6 +71,9 @@ beforeEach(() => {
   disk.files.clear()
   disk.truncated.clear()
   disk.writes.length = 0
+  disk.calls.length = 0
+  disk.hooks.lock = async () => ({ status: 'locked', id: 'lock-1' })
+  disk.hooks.beforeWrite = () => {}
 })
 
 describe('memory writes', () => {
@@ -110,6 +141,77 @@ describe('memory writes', () => {
     await addEntry(HOME, 'MEMORY.md', 'first memory')
 
     expect(onDisk()).toEqual(['first memory'])
-    expect(disk.writes).toEqual([{ path: MEMORY, options: { atomic: true } }])
+    expect(disk.writes).toEqual([{ path: MEMORY, options: { atomic: true, expect: null } }])
+  })
+})
+
+describe("Hermes's lock", () => {
+  it('holds MEMORY.md.lock across the read and the write, and lets it go after', async () => {
+    disk.files.set(MEMORY, serialize(['A']))
+    await loadMemory(HOME)
+    disk.calls.length = 0
+    await addEntry(HOME, 'MEMORY.md', 'B')
+
+    expect(disk.calls.slice(0, 4)).toEqual(['lock MEMORY.md.lock', 'read', 'write', 'unlock lock-1'])
+    expect(disk.writes[0].options).toEqual({ atomic: true, expect: serialize(['A']) })
+  })
+
+  it('lets the lock go when the change fails', async () => {
+    await loadThenHermesWrites(['A'], [])
+
+    await expect(forgetEntry(HOME, entry('A'))).rejects.toBeInstanceOf(MemoryEntryGoneError)
+    expect(disk.calls).toContain('unlock lock-1')
+  })
+
+  it('reads and writes nothing when the lock stays taken, and says so', async () => {
+    disk.files.set(MEMORY, serialize(['A']))
+    disk.hooks.lock = async () => ({ status: 'timeout' })
+
+    await expect(addEntry(HOME, 'MEMORY.md', 'B')).rejects.toBeInstanceOf(MemoryLockTimeoutError)
+    await expect(addEntry(HOME, 'MEMORY.md', 'B')).rejects.toThrow('MEMORY.md stayed locked by another writer')
+    expect(disk.writes).toEqual([])
+    expect(disk.calls).not.toContain('write')
+    expect(onDisk()).toEqual(['A'])
+  })
+
+  it('without the lock, re-reads and re-applies the change when the file changed just before the rename', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    disk.hooks.lock = async () => ({ status: 'unavailable', reason: 'no Python 3 interpreter found' })
+    disk.files.set(MEMORY, serialize(['A']))
+    let hermesWrites = 2
+    disk.hooks.beforeWrite = path => {
+      if (hermesWrites > 0) {
+        disk.files.set(path, serialize([...parse(disk.files.get(path) ?? ''), `saved by Hermes ${hermesWrites--}`]))
+      }
+    }
+    const id = await addEntry(HOME, 'MEMORY.md', 'added by Herald')
+
+    expect(onDisk()).toEqual(['A', 'saved by Hermes 2', 'saved by Hermes 1', 'added by Herald'])
+    expect(id).toBe('MEMORY.md:3')
+    expect(disk.calls.filter(call => call.startsWith('unlock'))).toEqual([])
+  })
+
+  it('gives up, writing nothing, when the file keeps changing under it', async () => {
+    disk.hooks.lock = async () => ({ status: 'unavailable', reason: 'no Python 3 interpreter found' })
+    let n = 0
+    disk.hooks.beforeWrite = path => disk.files.set(path, `changed ${++n}`)
+
+    await expect(addEntry(HOME, 'MEMORY.md', 'B')).rejects.toThrow('MEMORY.md kept changing while Herald was saving it')
+    expect(n).toBe(WRITE_ATTEMPTS)
+    expect(disk.writes).toEqual([])
+  })
+
+  it('shows an entry only once it is written', async () => {
+    disk.files.set(MEMORY, serialize(['A']))
+    await loadMemory(HOME)
+    const shownDuringWrite: string[][] = []
+    disk.hooks.beforeWrite = () => {
+      shownDuringWrite.push($memory.get().entries.map(e => e.text))
+      throw new Error('disk full')
+    }
+
+    await expect(addEntry(HOME, 'MEMORY.md', 'B')).rejects.toThrow('disk full')
+    expect(shownDuringWrite).toEqual([['A']])
+    expect($memory.get().entries.map(e => e.text)).toEqual(['A'])
   })
 })

@@ -5,8 +5,8 @@ import type { DirEntry } from '../../../shared/ipc.ts'
 /*
  * Hermes memory lives in two plain-text files under `$HERMES_HOME/memories/`: MEMORY.md (what the
  * agent remembers) and USER.md (facts about the user). Entries are separated by a line that is only
- * `§`. This module parses, classifies and caches them, and writes edits back optimistically before
- * re-reading the truth from disk.
+ * `§`. This module parses, classifies and caches them, and writes edits back under the lock Hermes's
+ * memory tool takes before re-reading the truth from disk.
  */
 
 export type MemoryKind = 'preference' | 'project' | 'person' | 'knowledge'
@@ -247,30 +247,31 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
 
 let generation = 0
 
-async function readMemoryFile(hermesHome: string, file: MemoryFile, listing: readonly DirEntry[]): Promise<MemoryFileState> {
+/** A file's state plus its exact text (null when absent), which a write checks it is replacing. */
+async function readMemoryFileRaw(hermesHome: string, file: MemoryFile, listing: readonly DirEntry[]): Promise<{ state: MemoryFileState; raw: string | null }> {
   const path = memoryPath(hermesHome, file)
   const dirEntry = listing.find(entry => entry.name === file)
 
   if (!dirEntry) {
-    return { file, path, exists: false, modifiedAt: 0, truncated: false, texts: [] }
+    return { state: { file, path, exists: false, modifiedAt: 0, truncated: false, texts: [] }, raw: null }
   }
 
   const preview = await window.heraldOS.fs.readFile(path)
 
   if (preview.kind !== 'text') {
     // Binary or too large to preview: show nothing rather than a garbled list, and never write back.
-    return { file, path, exists: true, modifiedAt: dirEntry.modifiedAt, truncated: true, texts: [] }
+    return { state: { file, path, exists: true, modifiedAt: dirEntry.modifiedAt, truncated: true, texts: [] }, raw: null }
   }
 
+  const raw = preview.content ?? ''
+
   return {
-    file,
-    path,
-    exists: true,
-    modifiedAt: dirEntry.modifiedAt,
-    truncated: Boolean(preview.truncated),
-    texts: parse(preview.content ?? '')
+    state: { file, path, exists: true, modifiedAt: dirEntry.modifiedAt, truncated: Boolean(preview.truncated), texts: parse(raw) },
+    raw
   }
 }
+
+const readMemoryFile = async (hermesHome: string, file: MemoryFile, listing: readonly DirEntry[]) => (await readMemoryFileRaw(hermesHome, file, listing)).state
 
 /** Re-read both files from disk. Stale loads never overwrite newer ones. */
 export async function loadMemory(hermesHome: string): Promise<void> {
@@ -325,47 +326,105 @@ function locate(texts: readonly string[], entry: MemoryEntry): number {
 // Herald's own writes run one at a time, so each one re-reads what the previous one wrote.
 let writes: Promise<unknown> = Promise.resolve()
 
+/** How long a write waits for Hermes (or another Herald) to let go of a memory file's lock. */
+export const LOCK_TIMEOUT_MS = 10_000
+/** How many times a write re-reads and re-applies its change when the file changed under it (no lock here, or a writer that ignores it). */
+export const WRITE_ATTEMPTS = 5
+
+export const lockPath = (hermesHome: string, file: MemoryFile) => `${memoryPath(hermesHome, file)}.lock`
+
+/** Thrown when Hermes (or another Herald) held a memory file's lock for longer than `LOCK_TIMEOUT_MS`. */
+export class MemoryLockTimeoutError extends Error {
+  constructor(file: MemoryFile) {
+    super(`${file} stayed locked by another writer (Hermes's memory tool or another Herald window) for ${LOCK_TIMEOUT_MS / 1000} s, so nothing was written. Try again in a moment.`)
+    this.name = 'MemoryLockTimeoutError'
+  }
+}
+
+let warnedUnlocked = false
+
+/** Run `work` holding the lock Hermes's memory tool takes on `file`, or without it when it can't be taken here (no Python). */
+async function withFileLock<T>(hermesHome: string, file: MemoryFile, work: () => Promise<T>): Promise<T> {
+  const lock = await window.heraldOS.fs.lock(lockPath(hermesHome, file), LOCK_TIMEOUT_MS)
+
+  if (lock.status === 'timeout') {
+    throw new MemoryLockTimeoutError(file)
+  }
+
+  if (lock.status === 'unavailable') {
+    if (!warnedUnlocked) {
+      warnedUnlocked = true
+      console.warn(`[memory] cannot take ${file}.lock (${lock.reason}); checking the file just before each write instead`)
+    }
+
+    return work()
+  }
+
+  try {
+    return await work()
+  } finally {
+    await window.heraldOS.fs.unlock(lock.id)
+  }
+}
+
 /**
  * Change one file's entries. Hermes's memory tool writes the same files, so `change` gets the
- * entries as they are on disk right now, never the cached copy. The result is shown at once,
- * written atomically, then re-read from disk (honest).
+ * entries as they are on disk right now, never the cached copy, and the read, change and write
+ * happen under the exclusive lock Hermes takes on `<file>.lock`. Every write is also checked against
+ * the text just read, just before its rename, so where the lock can't be taken (or a writer ignores
+ * it) a write that finds the file changed re-reads it and applies the change again. The result is shown once written, then
+ * re-read from disk (honest).
  */
 function commitFile<T>(hermesHome: string, file: MemoryFile, change: (texts: string[]) => { texts: string[]; result: T }): Promise<T> {
   const run = writes.then(async () => {
     try {
-      let listing: DirEntry[] = []
+      return await withFileLock(hermesHome, file, async () => {
+        for (let attempt = 1; ; attempt++) {
+          let listing: DirEntry[] = []
 
-      try {
-        listing = await window.heraldOS.fs.readDir(memoriesDir(hermesHome))
-      } catch {
-        // No memories folder yet: the file is simply absent.
-      }
+          try {
+            listing = await window.heraldOS.fs.readDir(memoriesDir(hermesHome))
+          } catch {
+            // No memories folder yet: the file is simply absent.
+          }
 
-      const current = await readMemoryFile(hermesHome, file, listing)
+          const { state: current, raw } = await readMemoryFileRaw(hermesHome, file, listing)
 
-      if (current.truncated) {
-        throw new Error(`${file} is too large to edit safely from here`)
-      }
+          if (current.truncated) {
+            throw new Error(`${file} is too large to edit safely from here`)
+          }
 
-      const { texts, result } = change([...current.texts])
-      const state = $memory.get()
+          const { texts, result } = change([...current.texts])
 
-      if (state.files) {
-        const files = { ...state.files, [file]: { ...current, texts, exists: true, modifiedAt: Date.now() } }
-        $memory.set({ ...state, files, entries: MEMORY_FILES.flatMap(name => buildEntries(files[name])) })
-      }
+          if (!current.exists) {
+            try {
+              await window.heraldOS.fs.mkdir(memoriesDir(hermesHome))
+            } catch {
+              // Folder probably exists already; the write below reports real failures.
+            }
+          }
 
-      if (!current.exists) {
-        try {
-          await window.heraldOS.fs.mkdir(memoriesDir(hermesHome))
-        } catch {
-          // Folder probably exists already; the write below reports real failures.
+          const written = await window.heraldOS.fs.writeText(memoryPath(hermesHome, file), serialize(texts), { atomic: true, expect: raw })
+
+          if (written) {
+            const state = $memory.get()
+
+            if (state.files) {
+              const files = { ...state.files, [file]: { ...current, texts, exists: true, modifiedAt: Date.now() } }
+              $memory.set({ ...state, files, entries: MEMORY_FILES.flatMap(name => buildEntries(files[name])) })
+            }
+
+            return result
+          }
+
+          if (attempt >= WRITE_ATTEMPTS) {
+            throw new Error(`${file} kept changing while Herald was saving it, so nothing was written. Try again in a moment.`)
+          }
+
+          // Random, so two writers that just collided don't collide again on the next try.
+          await new Promise(resolve => setTimeout(resolve, Math.random() * 25 * attempt))
         }
-      }
-
-      await window.heraldOS.fs.writeText(memoryPath(hermesHome, file), serialize(texts), { atomic: true })
-
-      return result
+      })
     } finally {
       await loadMemory(hermesHome)
     }

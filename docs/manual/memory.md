@@ -24,4 +24,8 @@ notes and `~/.hermes/memories/USER.md` for what it knows about you. They stay on
 are sent to your model provider as part of a conversation, so Hermes can use them. Hermes Desktop
 and the `hermes` command line use the same files.
 
+Herald and Hermes take turns with these files, the same way Hermes's own sessions do, so a memory
+Hermes saves while you add or edit one is kept. If Hermes is busy with a file for more than ten
+seconds, Herald says so and changes nothing; try again in a moment.
+
 Each [bot](README.md#talking-to-your-other-bots) has its own memory.

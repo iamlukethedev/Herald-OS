@@ -22,8 +22,12 @@ const files = vi.hoisted(() => {
           readFile: async (path: string) => ({ path, kind: 'text', size: 0, content: files.get(path) ?? '' }),
           writeText: async (path: string, content: string) => {
             files.set(path, content)
+
+            return true
           },
-          mkdir: async () => undefined
+          mkdir: async () => undefined,
+          lock: async () => ({ status: 'locked', id: 'lock-1' }),
+          unlock: async () => undefined
         }
       },
       matchMedia: () => ({ matches: false }),

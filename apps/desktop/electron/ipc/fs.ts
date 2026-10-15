@@ -3,9 +3,10 @@ import { type FSWatcher, watch as watchFs } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { type DirEntry, type FilePreview, IPC, type TreeEntry, type WriteTextOptions } from '../../shared/ipc.ts'
+import { type DirEntry, type FileLockResult, type FilePreview, IPC, type TreeEntry, type WriteTextOptions } from '../../shared/ipc.ts'
 import { allowAttachments, readAttachment } from '../attachments.ts'
 import { writeTextAtomic } from '../atomic-write.ts'
+import { type FileLock, lockFile } from '../file-lock.ts'
 import { run } from '../platform/exec.ts'
 import { type EditorTarget, hostPlatform } from '../platform/index.ts'
 import { WindowWatches } from './watches.ts'
@@ -258,6 +259,11 @@ interface TreeWatch {
 }
 
 const treeWatches = new WindowWatches<TreeWatch>()
+
+const LOCK_WAIT_MAX_MS = 60_000
+const LOCK_HOLD_MAX_MS = 30_000
+const heldLocks = new WindowWatches<{ id: string; lock: FileLock }>()
+let lockCounter = 0
 let treeWatchCounter = 0
 
 function stopTree(watch: TreeWatch): void {
@@ -332,6 +338,31 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     await fs.writeFile(file, String(content), 'utf8')
 
     return true
+  })
+  ipcMain.handle(IPC.fsLock, async (event, target: string, timeoutMs: number): Promise<FileLockResult> => {
+    const file = assertWritable(target)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    const outcome = await lockFile(file, Math.max(0, Math.min(LOCK_WAIT_MAX_MS, Number(timeoutMs) || 0)))
+
+    if (outcome.status !== 'locked') {
+      return outcome
+    }
+
+    const id = `lock-${++lockCounter}`
+    const owner = event.sender
+    // Hermes waits on this lock without a timeout, so a window that never unlocks must not hold it for long.
+    const expiry = setTimeout(() => heldLocks.remove(id, owner), LOCK_HOLD_MAX_MS)
+    heldLocks.add(id, owner, { id, lock: outcome.lock }, () => {
+      clearTimeout(expiry)
+      void outcome.lock.release()
+    })
+
+    return { status: 'locked', id }
+  })
+  ipcMain.handle(IPC.fsUnlock, async (event, id: string) => {
+    const held = heldLocks.find(event.sender, value => value.id === String(id))
+    heldLocks.remove(String(id), event.sender)
+    await held?.lock.release()
   })
   ipcMain.handle(IPC.fsMkdir, async (_event, target: string) => {
     await fs.mkdir(assertWritable(target), { recursive: true })
