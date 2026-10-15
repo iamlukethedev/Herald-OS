@@ -713,7 +713,9 @@ does not change the shell's code. Moving the pin is described in [upstream/READM
   your PATH, start with `HERALD_OS_HERMES_ROOT=/path/to/hermes-agent npm run dev`. The cause is
   usually in `~/.hermes/logs/herald-os.log`.
 - **macOS says Herald OS "is damaged" or "cannot be opened".** The build is not notarized yet: run
-  `xattr -dr com.apple.quarantine "/Applications/Herald OS.app"` and open it again.
+  `xattr -dr com.apple.quarantine "/Applications/Herald OS.app"` and open it again. 0.1.0-alpha.4
+  shipped without a signature over the app bundle; if it still says "damaged", sign your copy ad
+  hoc with `codesign --force --deep --sign - "/Applications/Herald OS.app"`.
 - **Hermes uses shell commands instead of its system tools.** `hermes plugins list` should show
   `herald-os-bridge` as enabled; `hermes plugins enable herald-os-bridge` turns it on. From a
   checkout, re-run `npm run bootstrap`; on Linux, `herald-os setup`. Then restart Herald OS.

@@ -153,8 +153,11 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
    in `apps/desktop/package.json`:
    - no longer has `hardenedRuntime: true`;
    - has `entitlements` or `entitlementsInherit` unset, or pointing at a file that is not there;
-   - turns signing off (`identity: null`) or notarization off (`notarize: false`).
+   - turns signing off (`identity: null`) or notarization off (`notarize: false`);
+   - sets `identity: "-"`, which would sign even a Developer ID build ad hoc.
 
+   It also fails the job if `release.yml` stops passing `-c.mac.identity=-` to the unsigned build,
+   passes an identity to the signed one, or runs the signature check (step 5) only on some builds.
    Then `plutil -lint` checks the entitlements file.
 3. **Package.** Runs `npm run pack:mac` on the bundles built earlier, which packs the app for
    `--arm64` and `--x64`.
@@ -162,8 +165,13 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
      the hardened runtime and the entitlements, notarizes and staples it, then builds and signs the
      DMG and the zip.
    - Unsigned: the step gets no secrets at all. `CSC_IDENTITY_AUTO_DISCOVERY=false` stops
-     electron-builder from picking up any identity on the runner, and `-c.mac.notarize=false` turns
-     notarization off. The app keeps the linker's ad-hoc signature.
+     electron-builder from picking up any identity on the runner, `-c.mac.notarize=false` turns
+     notarization off, and `-c.mac.identity=-` signs the whole app ad hoc, with the hardened
+     runtime and the entitlements, before the DMG and zip are made. Without that, electron-builder
+     skips signing and the app keeps only the signatures the linker put on each binary: no
+     `_CodeSignature/CodeResources`, so `codesign --verify` fails with "code has no resources but
+     signature indicates they must be present" and macOS says the downloaded app "is damaged and
+     can't be opened" (0.1.0-alpha.4 shipped like this).
 4. **Check the Apple Silicon and Intel builds.** Runs on unsigned builds too.
    `apps/desktop/scripts/check-mac-builds.mjs` reads the Mach-O headers and fails the job unless
    `release/` has exactly one app per architecture, and every Mach-O in each app (frameworks,
@@ -171,10 +179,16 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
    node-pty's `prebuilds/darwin-<arch>/` must match `<arch>`. Each architecture also needs
    `HeraldOS-<version>-mac-<arch>.dmg` and `.zip` with `package.json`'s version, and no other DMG
    or zip may be there.
-5. **Notarize and staple the DMGs** (signed builds only). The step submits each DMG with
+5. **Check the code signatures.** Runs on unsigned builds too.
+   `apps/desktop/scripts/check-mac-signatures.mjs` checks each app as packed, inside each zip
+   (unpacked with `ditto`) and inside each DMG (mounted read-only with `hdiutil`). It fails the job
+   unless `codesign --verify --deep --strict` passes and `codesign --display` shows a signature over
+   the bundle: not `linker-signed`, `Sealed Resources version=…`, a bound Info.plist and the
+   identifier `dev.iamluke.heraldos`.
+6. **Notarize and staple the DMGs** (signed builds only). The step submits each DMG with
    `xcrun notarytool submit --wait`, then staples the ticket. If Apple returns any status other
    than `Accepted`, the step prints the notarization log and fails.
-6. **Verify the signatures and the notarization tickets** (signed builds only). The job fails if any
+7. **Verify the signatures and the notarization tickets** (signed builds only). The job fails if any
    of these fail:
    - on each app:
      - `codesign --verify --deep --strict`;
@@ -186,7 +200,7 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
      `spctl --assess --type open --context context:primary-signature -vv`;
    - on each zip: unpacks it, then runs `xcrun stapler validate` and `spctl --assess` on the app
      inside.
-7. **Attach to the draft release** (tags only). This separate job downloads the artifacts and is the
+8. **Attach to the draft release** (tags only). This separate job downloads the artifacts and is the
    only job that can write to releases (`contents: write`).
 
 ## Checking a build on your Mac
@@ -205,7 +219,10 @@ xcrun stapler validate "$app"
 spctl --assess --type execute -vv "$app"
 ```
 
-An unsigned build shows `flags=0x20002(adhoc,linker-signed)` and `spctl` rejects it.
+An unsigned build is signed ad hoc: `Signature=adhoc`, `TeamIdentifier=not set` and
+`Sealed Resources version=2 …`. `codesign --verify` passes and `spctl` rejects it, because it is not
+notarized. A build that shows `flags=0x20002(adhoc,linker-signed)` and `Sealed Resources=none` was
+never signed as a bundle (0.1.0-alpha.4), and macOS reports it as damaged once downloaded.
 
 ## When it fails
 
