@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import fsp from 'node:fs/promises'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ATOMIC_TMP_PREFIX, writeTextAtomic } from './atomic-write.ts'
 
 let dir: string
@@ -11,8 +12,12 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+const onPlatform = (platform: NodeJS.Platform) => vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
+const errno = (code: string) => Object.assign(new Error(code), { code })
 
 const leftovers = (folder = dir) => fs.readdirSync(folder).filter(name => name.startsWith(ATOMIC_TMP_PREFIX))
 
@@ -72,5 +77,65 @@ describe('writeTextAtomic', () => {
     await expect(writeTextAtomic(target, 'new')).rejects.toThrow()
     expect(leftovers()).toEqual([])
     expect(fs.readdirSync(target)).toEqual(['keep'])
+  })
+
+  it('creates a new file owner-only, whatever the umask', async () => {
+    const file = path.join(dir, 'MEMORY.md')
+    const umask = process.umask(0)
+
+    try {
+      await writeTextAtomic(file, 'x')
+    } finally {
+      process.umask(umask)
+    }
+
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600)
+  })
+
+  it('fsyncs the folder after the rename', async () => {
+    const open = vi.spyOn(fsp, 'open')
+    await writeTextAtomic(path.join(dir, 'MEMORY.md'), 'x')
+
+    expect(open).toHaveBeenLastCalledWith(dir, 'r')
+  })
+
+  it('does not fsync the folder on Windows', async () => {
+    onPlatform('win32')
+    const open = vi.spyOn(fsp, 'open')
+    await writeTextAtomic(path.join(dir, 'MEMORY.md'), 'x')
+
+    expect(open.mock.calls.map(call => call[0])).not.toContain(dir)
+  })
+
+  it('on Windows, retries a rename refused while the file is open elsewhere', async () => {
+    onPlatform('win32')
+    const rename = fsp.rename
+    const spy = vi
+      .spyOn(fsp, 'rename')
+      .mockRejectedValueOnce(errno('EPERM'))
+      .mockRejectedValueOnce(errno('EBUSY'))
+      .mockRejectedValueOnce(errno('EACCES'))
+      .mockImplementation(rename)
+    const file = path.join(dir, 'MEMORY.md')
+    await writeTextAtomic(file, 'new')
+
+    expect(spy).toHaveBeenCalledTimes(4)
+    expect(fs.readFileSync(file, 'utf8')).toBe('new')
+  })
+
+  it('on Windows, gives up after a few tries, and elsewhere does not retry at all', async () => {
+    const file = path.join(dir, 'MEMORY.md')
+    onPlatform('win32')
+    const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(errno('EBUSY'))
+
+    await expect(writeTextAtomic(file, 'new')).rejects.toThrow('EBUSY')
+    expect(spy).toHaveBeenCalledTimes(6)
+
+    onPlatform('linux')
+    spy.mockClear()
+
+    await expect(writeTextAtomic(file, 'new')).rejects.toThrow('EBUSY')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(leftovers()).toEqual([])
   })
 })
