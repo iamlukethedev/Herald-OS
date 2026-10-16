@@ -70,6 +70,7 @@ import {
   type SwitchName,
   type SwitchState,
   type SystemInfo,
+  type SystemSpeech,
   type SystemStats,
   type TerminalCreateOptions,
   type TerminalHandle,
@@ -84,6 +85,7 @@ import {
   type WriteTextOptions
 } from '../shared/ipc.ts'
 import type { BrandingPatch, BrandingView } from '../shared/branding.ts'
+import type { CalcBridge, CalcChange, CalcHistoryEntry, CalcHistoryInput, CalcNote, CalcNoteSummary, CalcRatesState } from '../shared/calc.ts'
 import type { ModelId, ModelProgress, ModelStatus } from '../shared/canvas/models.ts'
 import type { OfficeAbilities, OfficeApp } from '../shared/office/files.ts'
 import type { MenuExtensions } from '../shared/menu-extensions.ts'
@@ -170,7 +172,8 @@ const api = {
     attachment: (target: string, maxBytes: number): Promise<AttachmentFile> => ipcRenderer.invoke(IPC.fsAttachment, target, maxBytes),
     dirSize: (target: string): Promise<{ bytes: number; files: number; complete: boolean }> => ipcRenderer.invoke(IPC.fsDirSize, target),
     listTree: (root: string, limit = 3000): Promise<{ entries: TreeEntry[]; truncated: boolean }> => ipcRenderer.invoke(IPC.fsListTree, root, limit),
-    watchTree: (root: string): Promise<string> => ipcRenderer.invoke(IPC.fsWatchTree, root),
+    /** The watch's id, or `null` where nothing is watched (the home folder). */
+    watchTree: (root: string): Promise<string | null> => ipcRenderer.invoke(IPC.fsWatchTree, root),
     unwatchTree: (watchId: string): Promise<void> => ipcRenderer.invoke(IPC.fsUnwatchTree, watchId),
     onTreeChanged: (listener: (event: TreeChangedEvent) => void): Unsubscribe => subscribe(IPC.fsTreeChanged, listener),
     /** Absolute path of a File dropped from Finder (Electron removed File.path). */
@@ -359,6 +362,17 @@ const api = {
     readLog: (day: string): Promise<RoomLogEntry[]> => ipcRenderer.invoke(IPC.roomLogRead, day),
     deleteLog: (): Promise<void> => ipcRenderer.invoke(IPC.roomLogDelete)
   } satisfies RoomBridge,
+  calc: {
+    rates: (options?: { cached?: boolean; refresh?: boolean }): Promise<CalcRatesState> => ipcRenderer.invoke(IPC.calcRates, options ?? {}),
+    listNotes: (): Promise<CalcNoteSummary[]> => ipcRenderer.invoke(IPC.calcNotesList),
+    readNote: (id: string): Promise<CalcNote | null> => ipcRenderer.invoke(IPC.calcNoteRead, id),
+    saveNote: (note: { id?: string; text: string }): Promise<CalcNote> => ipcRenderer.invoke(IPC.calcNoteSave, note),
+    deleteNote: (id: string): Promise<void> => ipcRenderer.invoke(IPC.calcNoteDelete, id),
+    history: (limit?: number): Promise<CalcHistoryEntry[]> => ipcRenderer.invoke(IPC.calcHistory, limit),
+    addHistory: (entries: CalcHistoryInput[]): Promise<void> => ipcRenderer.invoke(IPC.calcHistoryAdd, entries),
+    clearHistory: (): Promise<void> => ipcRenderer.invoke(IPC.calcHistoryClear),
+    onChanged: (listener: (what: CalcChange) => void): Unsubscribe => subscribe(IPC.calcChanged, listener)
+  } satisfies CalcBridge,
   catalog: {
     /** The install catalog with each entry's state on this machine (Linux: everything; macOS: what installs here). */
     list: (): Promise<CatalogGroupView[]> => ipcRenderer.invoke(IPC.catalogList),
@@ -522,6 +536,8 @@ const api = {
     requestMicrophone: (): Promise<MicPermission> => ipcRenderer.invoke(IPC.voiceRequestMicrophone),
     /** Tokenized URL for an authenticated audio WebSocket (speak-stream). */
     audioWsUrl: (kind: AudioWsKind): Promise<string> => ipcRenderer.invoke(IPC.voiceAudioWsUrl, kind),
+    /** A line said by the computer's own voice as a WAV clip, for when Hermes cannot speak. */
+    systemSpeech: (text: string): Promise<SystemSpeech> => ipcRenderer.invoke(IPC.voiceSystemSpeech, text),
     /** The global voice hotkey was pressed (fires in every window; the main surface acts). */
     onHotkey: (listener: () => void): Unsubscribe => subscribe<void>(IPC.voiceHotkey, () => listener())
   },

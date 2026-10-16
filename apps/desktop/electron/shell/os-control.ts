@@ -24,9 +24,9 @@ import type { ActivityHub } from '../room/activity.ts'
  */
 
 const REPLY_TIMEOUT_MS = 8_000
-/** Herald Canvas and Herald Office commands load, render and save whole images and documents. */
+/** Herald Canvas and Herald Office commands load, render and save whole images and documents; Herald Calc's plots may read a closed workbook. */
 const CANVAS_TIMEOUT_MS = 90_000
-const LONG_COMMAND = /^(canvas|docs|sheets|slides|office)\./
+const LONG_COMMAND = /^(canvas|docs|sheets|slides|office|calc)\./
 
 export class OsCommandBridge {
   private readonly pending = new Map<string, { resolve: (reply: OsControlReply) => void; timer: ReturnType<typeof setTimeout> }>()

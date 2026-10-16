@@ -4,6 +4,7 @@
 // Hermes unchanged. Pure, so the grammar is unit-tested in node.
 import { type CommandPhrase, type CommandSummary, listCommands } from '../../store/os-commands.ts'
 import { dictationRemainder } from './dictation.ts'
+import { spokenMath } from './math.ts'
 
 export interface IntentMatch {
   command: string
@@ -221,6 +222,14 @@ export function matchIntent(text: string, commands: readonly CommandSummary[] = 
   }
 
   const utterance = normaliseUtterance(text)
+
+  // Simple math ("whats 15% of 340") before the Office and Hermes checks below, which would claim
+  // "calculate …" and "work out …": Herald Calc answers it exactly, at once.
+  const math = commands.some(c => c.id === 'calc.eval') ? spokenMath(utterance) : null
+
+  if (math) {
+    return { command: 'calc.eval', args: { text: math }, title: `Calculate: ${math.slice(0, 60)}`, confidence: 0.95 }
+  }
 
   // A lone file name ("hello.pdf", or a transcriber's "www.openhello.pdf") means "open that file".
   const bareFile = BARE_FILE.exec(utterance)

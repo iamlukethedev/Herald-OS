@@ -11,9 +11,11 @@ import { logFailure } from '../../../lib/report.ts'
 import { rest } from '../../../lib/rest.ts'
 import { useBackendData } from '../../../lib/use-async.ts'
 import { $inputDevices } from '../../../lib/voice/audio-capture.ts'
+import { helloReport, type SpeechOutcome } from '../../../lib/voice/speak-fallback.ts'
 import { LOCAL_STT_MODELS } from '../../../lib/voice/stt-tuning.ts'
 import { $inputChoice, $micLevelPercent, chooseInputDevice, watchAudioDevices } from '../../../store/audio-devices.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
+import { useT } from '../../../store/i18n.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $voice, $voiceActive, LIVE_RATE_PER_MINUTE, liveSecondsToday, speakWithFreeFallback, startVoice } from '../../../store/voice.ts'
 import { fetchLiveStatus, type LiveStatus } from '../../../store/voice-live-status.ts'
@@ -68,6 +70,9 @@ export function VoiceSection() {
   const [mic, setMic] = useState<MicPermission>('unknown')
   const [hotkeyDraft, setHotkeyDraft] = useState(voice.hotkey)
   const [testing, setTesting] = useState(false)
+  // How the last Say hello went; `unplayable` when its sound was made but could not be played.
+  const [tested, setTested] = useState<SpeechOutcome | 'unplayable' | null>(null)
+  const t = useT()
 
   useEffect(() => {
     void fetchLiveStatus().then(setLiveStatus)
@@ -115,17 +120,21 @@ export function VoiceSection() {
 
   const sayHello = async () => {
     setTesting(true)
+    setTested(null)
 
     try {
-      await speakWithFreeFallback('Hello. This is Hermes, speaking from Herald OS.')
+      setTested(await speakWithFreeFallback('Hello. This is Hermes, speaking from Herald OS.', undefined, { notice: false }))
       config.reload()
       markSaved()
     } catch (error) {
-      notify({ title: 'Speech test failed', body: errorText(error), level: 'error' })
+      console.warn(`[voice] the test sentence could not be played: ${errorText(error)}`)
+      setTested('unplayable')
     } finally {
       setTesting(false)
     }
   }
+
+  const testReport = tested === 'unplayable' ? ({ tone: 'danger', text: t('voice.test.playbackFailed') } as const) : tested ? helloReport(tested) : null
 
   const saveLocalModel = async (model: string) => {
     try {
@@ -198,7 +207,7 @@ export function VoiceSection() {
             Show commands
           </GlassButton>
         </SettingsRow>
-        <SettingsRow icon={<IconPlayerPlay />} label="Try it" description="Hear the configured voice, or start a conversation right here.">
+        <SettingsRow icon={<IconPlayerPlay />} label="Try it" description="Hear the configured voice, or start a conversation right here." below={testReport && <InlineNote tone={testReport.tone}>{testReport.text}</InlineNote>}>
           <GlassButton size="sm" onClick={() => void sayHello()} disabled={testing} aria-label="Play a test sentence">
             <IconVolume />
             {testing ? 'Speaking…' : 'Say hello'}

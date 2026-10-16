@@ -72,6 +72,8 @@ how Herald OS Linux is put together.
   working on pictures with Hermes.
 - [Herald Office](office.md): Herald Docs, Sheets and Slides, the files they open and save,
   printing, and working on documents with Hermes and your voice.
+- [Herald Calc](calc.md): the sentence notepad, currencies and time zones, graphs, the keypads,
+  the history, and math with Hermes and your voice.
 
 ### The system
 

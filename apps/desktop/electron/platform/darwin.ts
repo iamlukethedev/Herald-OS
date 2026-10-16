@@ -4,13 +4,14 @@ import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { BatteryStatus, CalendarEvent, CalendarResult, ControlAction, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemStats } from '../../shared/ipc.ts'
+import type { BatteryStatus, CalendarEvent, CalendarResult, ControlAction, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemSpeech, SystemStats } from '../../shared/ipc.ts'
 import { heraldOsDataDir } from '../paths.ts'
 import { darwinControlAction, darwinControlStatus } from './darwin-controls.ts'
 import { run } from './exec.ts'
 import { normaliseFileQuery, rankFiles } from './find.ts'
 import { parseDf, parsePs } from './posix.ts'
 import { findCodeEditor } from './editors.ts'
+import { MAC_SPEECH, renderSystemSpeech } from './system-voice.ts'
 import { type EditorTarget, type HostPlatform } from './types.ts'
 
 // The `df -kP` / `ps -o` parsers are POSIX-generic and live in posix.ts; re-exported for existing importers.
@@ -466,5 +467,10 @@ export class DarwinPlatform implements HostPlatform {
 
   controlAction(action: ControlAction): Promise<void> {
     return darwinControlAction(action)
+  }
+
+  /** `say` speaks in the system voice the person chose, which already follows their language. */
+  systemSpeech(text: string): Promise<SystemSpeech> {
+    return renderSystemSpeech(text, MAC_SPEECH)
   }
 }

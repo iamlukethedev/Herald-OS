@@ -7,7 +7,8 @@ import { earcons } from './earcons.ts'
 import { type ConversationEngine, describeTurnError, silentTurnLine, type VoiceHost } from './engine.ts'
 import { bytesToBase64, concatInt16, encodeWav } from './pcm.ts'
 import { withProviderFallback } from './provider-fallback.ts'
-import { SpeakStream, speakOnce, stopFallbackAudio } from './speak-stream.ts'
+import { type SpeechOutcome, speakWithFallbacks } from './speak-fallback.ts'
+import { SpeakStream, stopFallbackAudio } from './speak-stream.ts'
 import { isNoiseTranscript, isStopPhrase, sanitizeForSpeech } from './speech-text.ts'
 import { BARGE_IN_ENDPOINTER, DEFAULT_ENDPOINTER, Endpointer } from './vad.ts'
 
@@ -389,13 +390,13 @@ export class ChainedEngine implements ConversationEngine {
     return (result?.transcript ?? '').trim()
   }
 
-  /** Whole-utterance speech with the same free-provider fallback. */
-  private speakWithFallback(text: string, signal: { stopped: boolean }): Promise<void> {
-    return withProviderFallback(
-      'tts',
-      () => speakOnce(text, signal),
-      (from, to) => this.host.notify('Text to speech switched', `${from ?? 'The configured provider'} is not set up; using the free ${to} voice. Change it in Settings > Voice.`, 'info')
-    )
+  /** Whole-utterance speech: the configured provider, the free voice it falls back to, then the computer's own. */
+  private speakWithFallback(text: string, signal: { stopped: boolean }): Promise<SpeechOutcome> {
+    return speakWithFallbacks(text, {
+      signal,
+      onSwitched: (from, to) => this.host.notify('Text to speech switched', `${from ?? 'The configured provider'} is not set up; using the free ${to} voice. Change it in Settings > Voice.`, 'info'),
+      notify: (title, body, level) => this.host.notify(title, body, level)
+    })
   }
 
   private voiceContext(): string | undefined {
@@ -438,8 +439,9 @@ export class ChainedEngine implements ConversationEngine {
 
         this.speechEnded = true
 
+        // The whole-reply fallback below tells the person what failed in plain words; the socket's own error is for the log.
         if (reason === 'error' && error) {
-          this.host.notify('Speech unavailable', error, 'warn')
+          console.warn(`[voice] the speech stream failed: ${error}`)
         }
 
         // Provider has no chunked API, or the stream ended while Hermes was still working (its socket

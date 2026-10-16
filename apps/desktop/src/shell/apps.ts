@@ -7,7 +7,7 @@ import { t } from '../store/i18n.ts'
 export type PageId = 'overview' | 'hermes' | 'missions' | 'memory' | 'files' | 'automations' | 'connections' | 'settings'
 
 /** Apps that open in their own floating window. */
-export type FloatingAppId = 'terminal' | 'system' | 'chat-popout' | 'web' | 'studio' | 'capture-editor' | 'camera' | 'widget' | 'canvas' | 'docs' | 'sheets' | 'slides' | 'room'
+export type FloatingAppId = 'terminal' | 'system' | 'chat-popout' | 'web' | 'studio' | 'capture-editor' | 'camera' | 'widget' | 'canvas' | 'docs' | 'sheets' | 'slides' | 'room' | 'calc'
 
 export type HermesAppId = PageId | FloatingAppId
 
@@ -44,6 +44,7 @@ export type AppIconId =
   | 'sheets'
   | 'slides'
   | 'room'
+  | 'calc'
   | 'office'
   | 'documents'
   | 'grid'
@@ -77,7 +78,8 @@ export const FLOATING_APPS: readonly HermesAppDef<FloatingAppId>[] = [
   { id: 'docs', name: 'Herald Docs', tagline: 'Write and edit documents, with Hermes.', category: 'productivity', kind: 'window', icon: 'docs', defaultSize: { width: 1120, height: 840 } },
   { id: 'sheets', name: 'Herald Sheets', tagline: 'Spreadsheets and formulas, with Hermes.', category: 'productivity', kind: 'window', icon: 'sheets', defaultSize: { width: 1280, height: 820 } },
   { id: 'slides', name: 'Herald Slides', tagline: 'Make presentations, with Hermes.', category: 'productivity', kind: 'window', icon: 'slides', defaultSize: { width: 1280, height: 820 } },
-  { id: 'room', name: 'Pet Room', tagline: 'Watch Hermes at work.', category: 'productivity', kind: 'window', icon: 'room', defaultSize: { width: 1100, height: 720 } }
+  { id: 'room', name: 'Pet Room', tagline: 'Watch Hermes at work.', category: 'productivity', kind: 'window', icon: 'room', defaultSize: { width: 1100, height: 720 } },
+  { id: 'calc', name: 'Herald Calc', tagline: 'Math in plain sentences, exact every time.', category: 'productivity', kind: 'window', icon: 'calc', defaultSize: { width: 780, height: 560 } }
 ]
 
 /** Floating apps the launcher and command bar offer; the rest open only with a payload. */
@@ -108,7 +110,8 @@ const APP_NAMES: Record<HermesAppId, TextKey> = {
   docs: 'app.docs',
   sheets: 'app.sheets',
   slides: 'app.slides',
-  room: 'app.room'
+  room: 'app.room',
+  calc: 'app.calc'
 }
 
 /** An app's name in the language Herald shows; `name` stays English, which commands, voice and the Dock match on. */

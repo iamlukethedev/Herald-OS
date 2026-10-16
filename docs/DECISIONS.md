@@ -224,7 +224,9 @@ store in `store/studio.ts`) folds those events per session, for every session th
   http(s) and `file://` inside the project folder only, and supports `navigate` / `reload`; the
   Studio reloads it after file changes and retries while a dev server is still starting.
 - **The disk is watched too.** `fs.watchTree` (recursive `fs.watch`, dependencies, build output and
-  scratch files skipped) catches files that commands create, such as a scaffolded project.
+  scratch files skipped) catches files that commands create, such as a scaffolded project. The home
+  folder is the one exception: a chat with no project works there, so its tree is listed (one level,
+  without `Library` and dot-entries) but never watched, because everything under `~` changes all the time.
 - **Focus rules hold.** A session started with `build.start` opens its Studio when it starts
   working and never again after the user closes it; other sessions that start writing code only get
   a one-time caption ("say 'show me' to watch").
@@ -1458,3 +1460,164 @@ serve one socket path, so only the one started last hears live steps. The activi
 the Room showed while the Hermes window fed it: a reload, a lost connection or a closed Herald is a
 gap, a day is the local day it was written on, and a replay names pets by kind. Cost meters show a
 helper's tokens only once it finishes, and the total is of the work in the room now, not of a day.
+
+## ADR-027: Herald Calc is math.js under Herald's own sentence parser, and the math tool Hermes uses
+
+**Status: Accepted.**
+
+Herald Calc is a notepad where each line is a calculation written the way people say it ("20% of
+84.50", "5 km in miles", "days until Dec 25", "9am Sydney in New York"), answered as they type,
+with a classic keypad and its scientific and programmer modes, graphs, a searchable history, and
+links to Herald Sheets and Docs. The same engine answers Hermes's `calc` tool, the `calc.*`
+commands, `herald-os calc` and simple spoken math, so a number Hermes gives is worked out, not
+guessed.
+
+- **math.js for numbers, units and functions; Herald's parser for sentences.** math.js (Apache-2.0)
+  brings exact decimal arithmetic on arbitrary-precision decimals, fractions, a unit system whose
+  conversions include temperature offsets, and the usual functions, in one well-tested library. The
+  forms people write (percent of, off and on, "what % of", "split 3 ways", labels, names, totals,
+  "in" and "to" conversions, currency symbols, number styles of their region) are read by Herald's
+  own parser and evaluator, which keep exact fractions themselves and hand math.js 64-digit
+  decimals, units and functions, so math.js never sees English and every form has a test.
+  math.js is loaded only when Herald Calc, a `calc.*` command or voice math first needs it: it is a
+  chunk of its own (about 180 KB compressed), and so are Herald's engine and the window. What the
+  shell loads at start is the commands and the voice grammar with the words and places it knows,
+  about 27 KB compressed.
+- **"in" after a plain number is inches when a length follows.** "12 in cm" is 30.48 cm, the way
+  people write inches, and the 10 of "5 ft 10 in cm" is inches too. Only a number written there
+  counts: a name, a sum or a bracket before "in" keeps its value ("x in cm" is 12 cm after "x =
+  12", "12 + 3 in cm" is 15 cm), "to" and "as" never mean inches, and `calc.convert` writes "to"
+  for an amount with no unit. Voice math writes the inches out ("12 inches in cm"), so the answer
+  says what it read.
+- **Dates and time zones from the platform.** Calendar arithmetic and time-zone conversion use Intl
+  and the system's time-zone database, daylight saving included, so nothing is fetched for them and
+  nothing goes stale with the app.
+- **Currencies from the ECB, at most once a day, and nothing else on the network.** The European
+  Central Bank's daily reference rates come through Frankfurter's keyless v2 route for that provider
+  (`api.frankfurter.dev/v2/providers/ecb/rates`); Frankfurter's operators encourage caching, set no
+  quotas and log no personal data, and the ECB allows reuse of its rates with the source named. Main
+  fetches, never a window: only when a calculation names a currency and the cached rates are a day
+  old, never twice within a day, and a failed try waits an hour. The request is a bare GET with an
+  Accept header. The rates live in Herald's data folder, so conversions work offline from the last
+  rates with a quiet "Rates from <date>", and a setting turns the fetch off.
+- **One engine for the person and for Hermes.** The `calc.*` commands in the registry run the
+  engine in the shell; the bridge's `calc` tool relays to them and is read tier, because it only
+  computes: it opens no window (its plot action returns what a graph shows; `os_ui` with
+  `calc.plot` shows one) and reads the history without clearing it. The `herald-calc` skill tells
+  Hermes to use it for any arithmetic, percentage, unit, currency, date or time-zone math and to
+  show the working the engine returns. The CLI runs the same commands.
+- **Voice math on the fast path, and only simple math.** A pure grammar accepts an utterance only
+  when every word is a number, an operator word, a unit, a currency, a place or a date word, and
+  hands it to `calc.eval`, which answers at once with the voice Herald already speaks with.
+  Anything else, including "15% of my rent", goes to Hermes unchanged.
+- **A plotter of our own on a canvas.** Drawing functions well is mostly sampling: adaptive steps
+  where a curve bends, no line drawn across an asymptote or a jump, gaps where a function has no
+  value. A small canvas plotter does that exactly, takes its colours from Herald's theme tokens,
+  and adds no dependency; ECharts, already in the bundle for Sheets, samples evenly and knows
+  nothing of asymptotes.
+- **Copy to Sheets writes formulas.** Each line becomes a row: a formula where the line maps
+  cleanly onto a spreadsheet (arithmetic, percentages, splits, sums, names used later as cell
+  references), the value otherwise, and the line's label in the next column. In panels mode, where
+  Herald Sheets is another process, Calc opens a blank workbook there and writes into it through
+  main's Office relay, since `sheets.new` there opens a workbook without values.
+- **Everything stays on the computer.** Notes (a JSON file each), the history (the newest 2,000)
+  and the rates are in `calc/` in Herald's data folder.
+
+Limits. The ECB publishes about 30 currencies once each working day, so rates are a day old at best
+and some currencies are missing; they are reference rates, not what a bank charges. Months and
+years as durations are calendar months and years in date sentences and average lengths in unit
+arithmetic. The voice grammar is English.
+
+## ADR-028: When Hermes cannot speak, the computer's own voice does, on Herald's player
+
+**Status: Accepted.**
+
+Microsoft began asking its free read-aloud service for a new token, and the edge-tts Hermes pinned
+(7.2.7) got HTTP 403 for every line. Edge is the free provider the voice falls back to (ADR-013), so
+nothing was left to try: the voice went quiet, and every reply showed the raw error.
+
+- **The chain ends with the computer's voice.** Speech goes to the configured provider, then to the
+  free Edge voice when that provider is not set up, then to the system voice when Hermes's voice
+  still fails for any reason. A failure of the free provider is never a setup problem, so it does
+  not touch the config.
+- **Rendered in main, played by the renderer.** Main renders a line to WAV (`say -o` on macOS;
+  espeak-ng, espeak, then flite on Linux) with the text on stdin, and the renderer plays it on the
+  whole-utterance player Hermes's speech uses. Echo cancellation only removes what Chromium plays,
+  so a voice played by `say` itself, or by `speechSynthesis` (which hands speech to the system), would
+  reach the microphone and trip barge-in on itself. The shared player also keeps the stop button,
+  barge-in, the end of a conversation and the output device working as they do for Hermes's voices.
+- **A few sentences at a time.** `say` takes a second or two to start and renders about five times
+  faster than it speaks, so a reply is cut into a short first part and longer ones after it, each
+  rendering while the one before plays. A part is at most 1,000 characters and 30 seconds, main runs
+  four renders at once at most, and a reply is cut at about five minutes.
+- **A stop drops lines still being made.** Barge-in, the stop button and the end of a conversation
+  make every playback ticket taken before them stale, and a line whose ticket is stale is never
+  played. That also closes an older gap, where Edge audio that arrived after a barge-in played over
+  the next request. A stopped clip's wait now ends at once too: once the player takes the source
+  away and loads, Chromium fires neither `pause` nor `error`, so a stop used to leave a spoken
+  notification, and Say hello, waiting for good.
+- **Once a session, in plain words.** The first stand-in, and the first time nothing can speak, each
+  post one notice; the error goes to the log. Say hello reports which voice spoke instead.
+- **Rejected: `speechSynthesis`.** No echo cancellation, no shared stop, and on Linux it needs
+  speech-dispatcher and a Chromium switch the image has neither of.
+- **Linux.** The image lists flite itself. ffmpeg-free's filters (and the omakase apps' WebKitGTK)
+  pull it in as well, so listing it adds nothing to the image, but the voice no longer depends on
+  them. It speaks English, so it stands in only for an English locale. espeak-ng would cover other
+  languages for about 24 MiB installed (9.4 MiB to download), and is not in the image.
+
+## ADR-029: NVIDIA's driver comes in an image of its own, built on Universal Blue's signed modules
+
+**Status: Accepted.** Supersedes the decision in #62, which closed an NVIDIA image as not planned.
+
+Local models want CUDA, and the default image drives NVIDIA GPUs with nouveau, which has none. The
+driver's kernel modules are built for one kernel and, for Secure Boot, signed; a bootc image can
+neither build them on the person's machine (akmods writes to `/usr`) nor sign them with a key it
+does not hold.
+
+- **A second image, not a choice inside one.** `ghcr.io/iamlukethedev/herald-os-nvidia` is the
+  default image plus `linux/image/nvidia.sh`: `linux/image/Containerfile.nvidia` starts from the
+  default image the same run builds, so the two cannot drift. Everyone else keeps an image without
+  NVIDIA's proprietary userspace, its 1 GiB, or a second signing key. x86_64 only.
+- **Universal Blue's prebuilt modules.** `ghcr.io/ublue-os/akmods-nvidia-open` publishes NVIDIA's
+  open modules for each Fedora kernel, signed with their key, with negativo17's driver to match;
+  the images' labels name Bluefin and Aurora, which use them too. Building and signing them here
+  would mean a kernel-module key of our own for people to enroll, and a build per kernel; theirs
+  may already be enrolled on machines switched from those systems.
+- **Rejected: a Universal Blue base image.** Their NVIDIA images start from Silverblue's desktop
+  base, not `fedora-bootc`, and would change everything under Herald, not only the driver.
+- **Trusting Universal Blue, checked.** Enrolling their key trusts every module (and boot binary)
+  they sign with it, for good, and that was accepted. The build trusts no more than that: the akmods
+  images go in by digest once their cosign signatures check out against Universal Blue's key,
+  committed in the repository; `nvidia.sh` pins the certificate people enroll by its SHA-256 and the
+  repositories' signing keys, and checks negativo17's signatures on the driver RPMs against a key
+  database that holds that key alone. `kmod-nvidia` carries no RPM signature; the cosign signature
+  on its image vouches for it.
+- **Digests resolved each run, not committed.** Each run resolves the akmods tags for the base's
+  kernel to digests, logs them, checks their cosign signatures and builds from those digests;
+  `Containerfile.nvidia` has no default for them, so no build takes a tag as it stands. The digests
+  are not in the repository, so a run takes what Universal Blue signed for that kernel without a
+  change here. The stricter alternative is to commit the digests and have a bump PR (by hand or
+  automated) move them with each kernel: every module build would then be reviewed before it ships,
+  at the cost of an NVIDIA image that waits for that PR after every Fedora kernel update.
+- **One kernel.** The workflow pins the base by digest and takes the akmods images for its kernel,
+  and `nvidia.sh` refuses a mismatch. When Universal Blue has not caught up with a new kernel, the
+  NVIDIA build fails on its own, with a warning in the run, and the default image is not held back.
+- **A Containerfile of its own.** `Containerfile.nvidia` starts from the default image, so the
+  default image's build has no akmods stages to pull, whatever the builder does with unused stages.
+- **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image says how to
+  switch, and the NVIDIA image, with Secure Boot on and the driver refused, how to enroll the key
+  (`herald-os-gpu-check`). `herald-os-gpu-check switch` checks `/boot` first, since the NVIDIA
+  image needs a 2 GiB one (with 1 GiB or less it refuses unless `--force`), and uses rpm-ostree
+  wherever bootc would refuse, by the same check as `herald-os update` (#156). Once the image
+  carries the project's signing key, the rebase goes ahead only where the policy requires that key
+  for the NVIDIA image; `ostree-unverified-registry:` applies the policy too, and
+  `ostree-image-signed:` is used only under a default stricter than Fedora's
+  `insecureAcceptAnything`, which it refuses. `herald-os channel`
+  keeps to the image, and both repositories are in the signature policy.
+- **Turing and newer.** The open modules need a GSP, so GTX 900 and 1000 cards stay on nouveau;
+  NVIDIA's 580 legacy driver (`akmods-nvidia-lts`) could be a third image if they turn out to matter.
+- **Firmware in every image.** Fedora's `linux-firmware` only recommends the Wi-Fi, GPU and audio
+  firmware split out of it, and the image installs without weak dependencies, so `packages.txt`
+  names them. `fedora-bootc:44` ships most today; what it lacked was Sound Open Firmware, ALSA's UCM
+  profiles (Intel laptops' speakers and microphones) and the older Intel Wi-Fi firmware, about
+  13 MiB in all. The default image stays lean: the NVIDIA driver's 1.6 GB is only in its own image.

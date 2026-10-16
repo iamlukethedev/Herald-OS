@@ -687,6 +687,28 @@ def test_the_image_has_intel_wi_fi_firmware_and_exfat():
     assert "exfatprogs" in packages
 
 
+def test_the_image_names_the_firmware_linux_firmware_only_recommends():
+    # packages.sh installs without weak dependencies, and Fedora's linux-firmware only recommends the
+    # Wi-Fi, GPU and audio firmware: each must be listed, or laptops lose Wi-Fi and sound.
+    packages = image_packages()
+    for firmware in ("linux-firmware", "atheros-firmware", "brcmfmac-firmware", "mt7xxx-firmware", "realtek-firmware",
+                     "amd-gpu-firmware", "intel-gpu-firmware", "nvidia-gpu-firmware", "intel-audio-firmware"):
+        assert firmware in packages, firmware
+    assert "--setopt=install_weak_deps=False" in (ROOT / "linux" / "image" / "packages.sh").read_text()
+
+
+def test_the_image_has_sound_open_firmware_and_its_profiles():
+    # Most Intel laptops since 2019 have no speakers or built-in microphone without SOF and UCM.
+    packages = image_packages()
+    assert "alsa-sof-firmware" in packages and "alsa-ucm" in packages
+
+
+def test_the_image_lists_the_system_voice_the_shell_falls_back_to():
+    # ffmpeg-free (and the omakase apps' WebKitGTK) pull flite in today; the voice must not depend on that.
+    assert "flite" in image_packages()
+    assert "command: 'flite'" in (ROOT / "apps" / "desktop" / "electron" / "platform" / "system-voice.ts").read_text()
+
+
 DOWNLOAD = r"\b(?:curl|wget)\b"
 SHELL = r"(?:/\S*/)?(?:(?:busybox\s+)?(?:ba|z|da|k)?sh|python(?:3(?:\.\d+)?)?|perl|ruby|node)\b"
 SUDO = r"(?:sudo\b(?:\s+-\S+)*\s+)?(?:env\b(?:\s+\S+=\S*)*\s+)?"

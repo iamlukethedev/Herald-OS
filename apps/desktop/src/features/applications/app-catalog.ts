@@ -61,6 +61,7 @@ const ORDER: readonly Slot[] = [
   { kind: 'hermes', appId: 'docs', keywords: ['word', 'document', 'writer', 'markdown'] },
   { kind: 'hermes', appId: 'sheets', keywords: ['excel', 'spreadsheet', 'numbers', 'csv'] },
   { kind: 'hermes', appId: 'slides', keywords: ['powerpoint', 'presentation', 'keynote', 'deck'] },
+  { kind: 'hermes', appId: 'calc', keywords: ['calculator', 'math', 'convert', 'units', 'currency', 'graph'] },
   { kind: 'hermes', appId: 'files', label: 'Documents', icon: 'documents' },
   { kind: 'hermes', appId: 'automations' },
   { kind: 'hermes', appId: 'connections' },

@@ -39,4 +39,16 @@ describe('buildCatalog', () => {
     expect(filterTiles(buildCatalog([]), 'all', 'pet room').map(tile => tile.label)).toEqual(['Pet Room'])
     expect(filterTiles(buildCatalog([]), 'productivity', 'agents').map(tile => tile.label)).toEqual(['Pet Room'])
   })
+
+  it('puts Herald Calc after Herald Slides, found as a calculator and by what it does', () => {
+    const labels = buildCatalog([]).map(tile => tile.label)
+
+    expect(labels[labels.indexOf('Herald Slides') + 1]).toBe('Herald Calc')
+
+    for (const query of ['calculator', 'calc', 'Calc', 'convert', 'units', 'currency', 'math']) {
+      expect(filterTiles(buildCatalog([]), 'all', query).map(tile => tile.label), query).toEqual(['Herald Calc'])
+    }
+
+    expect(filterTiles(buildCatalog([]), 'productivity', 'calculator')).toMatchObject([{ kind: 'hermes', appId: 'calc', icon: 'calc' }])
+  })
 })

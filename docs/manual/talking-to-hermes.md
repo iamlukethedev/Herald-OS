@@ -54,6 +54,9 @@ buttons check that it works.
   on without the key.
 - **What you can say:** Show commands lists every voice command with examples, or say "what can I
   say".
+- **When a voice fails:** the reply is spoken in your computer's own voice when it has one for your
+  language, and a notice says so once. When it is Microsoft's free voice that failed, updating Hermes
+  usually brings it back.
 
 [docs/VOICE.md](../VOICE.md) has the details.
 

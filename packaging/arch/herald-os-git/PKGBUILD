@@ -3,7 +3,7 @@
 # Herald OS built from the main branch. Not on the AUR yet: build it from the repository with makepkg -si.
 
 pkgname=herald-os-git
-pkgver=0.1.0alpha.4.r0.g0000000
+pkgver=0.1.0alpha.5.r0.g0000000
 pkgrel=1
 pkgdesc='An AI-native desktop built around Hermes Agent (development build from git)'
 arch=('x86_64' 'aarch64')
@@ -32,6 +32,7 @@ optdepends=(
   'tesseract: copying text from the screen'
   'libheif: opening HEIC photos in Herald Canvas'
   'imagemagick: opening TIFF and camera RAW files in Herald Canvas'
+  'flite: the system voice, in English, when Hermes cannot speak'
   'flatpak: installing apps from the catalog'
   'podman: the Windows VM and containers'
   'yay: AUR installs from the catalog'

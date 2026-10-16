@@ -12,21 +12,30 @@ export const FREE_PROVIDER: Record<SpeechKind, string> = { stt: 'local', tts: 'e
 const CONFIG_ERROR =
   /api[_ ]?key|not set|not available|not entitled|unreachable|configuration error|no credentials|unauthorized|401|403|is not installed|not installed|ModuleNotFoundError|No module named|quota|insufficient_quota|billing/i
 
-/** True when the failure is about the provider's setup rather than the audio itself. */
-export function isProviderConfigError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-  return CONFIG_ERROR.test(message)
+/** The provider a Hermes speech error names, as in `TTS generation failed (edge): 403, …`; null when it names none. */
+export function failedProvider(error: unknown): string | null {
+  return /\(([a-z][\w-]*)\):/i.exec(messageOf(error))?.[1].toLowerCase() ?? null
+}
+
+/**
+ * True when the failure is about the provider's setup rather than the audio itself. Never for the
+ * free provider: it needs no key or account, so its failures (Microsoft refusing the Edge voice
+ * with a 403, a missing package) are not something switching to it can fix.
+ */
+export function isProviderConfigError(error: unknown, kind: SpeechKind = 'tts'): boolean {
+  return failedProvider(error) !== FREE_PROVIDER[kind] && CONFIG_ERROR.test(messageOf(error))
 }
 
 const switched = new Set<SpeechKind>()
 
-/** Which provider `kind` is currently configured, or null when the config cannot be read. */
+/** Which provider `kind` uses: the configured one, else Hermes's default (the free one); null when the config cannot be read. */
 export async function currentProvider(kind: SpeechKind): Promise<string | null> {
   try {
     const config = await rest.get<Record<SpeechKind, { provider?: string } | undefined>>('/api/config')
 
-    return config?.[kind]?.provider ?? null
+    return config?.[kind]?.provider || FREE_PROVIDER[kind]
   } catch {
     return null
   }
@@ -40,7 +49,7 @@ export async function withProviderFallback<T>(kind: SpeechKind, attempt: () => P
   try {
     return await attempt()
   } catch (error) {
-    if (!isProviderConfigError(error) || switched.has(kind)) {
+    if (!isProviderConfigError(error, kind) || switched.has(kind)) {
       throw error
     }
 

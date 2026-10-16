@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CommandContext } from '../store/os-commands.ts'
 import { $focusedWindowId, $windows, type OSWindow } from '../store/windows.ts'
-import { navigationCommands } from './navigation.ts'
+import { navigationCommands, resolveAppId } from './navigation.ts'
 
 const AGENT: CommandContext = { source: 'agent' }
 
@@ -42,5 +42,11 @@ describe('window commands', () => {
 
     expect((await command('window.focus').run({ name: 'terminal' }, AGENT)).ok).toBe(true)
     expect($focusedWindowId.get()).toBe('w-1')
+  })
+})
+
+describe('app names', () => {
+  it('finds Herald Calc as the calculator too', () => {
+    expect(['calculator', 'the calculator', 'calculator app', 'Herald Calc', 'calc'].map(resolveAppId)).toEqual(['calc', 'calc', 'calc', 'calc', 'calc'])
   })
 })

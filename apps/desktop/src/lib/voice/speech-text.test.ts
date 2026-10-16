@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chunkForCommentary, COMMENTARY_MAX_CHARS, isNoiseTranscript, isStopPhrase, sanitizeForSpeech, SentenceChunker } from './speech-text.ts'
+import { chunkForCommentary, chunkForSystemVoice, COMMENTARY_MAX_CHARS, isNoiseTranscript, isStopPhrase, sanitizeForSpeech, SentenceChunker, SYSTEM_VOICE_MAX_CHARS } from './speech-text.ts'
 
 describe('sanitizeForSpeech', () => {
   it('strips markdown, code and links', () => {
@@ -65,6 +65,49 @@ describe('chunkForCommentary', () => {
 
   it('returns nothing for empty input', () => {
     expect(chunkForCommentary('   ')).toEqual([])
+  })
+})
+
+describe('chunkForSystemVoice', () => {
+  it('keeps a short line whole', () => {
+    expect(chunkForSystemVoice('Hello. This is Hermes, speaking from Herald OS.')).toEqual(['Hello. This is Hermes, speaking from Herald OS.'])
+    expect(chunkForSystemVoice('  ')).toEqual([])
+  })
+
+  it('starts with a short piece, then groups whole sentences into longer ones', () => {
+    const sentence = (n: number) => `This is sentence number ${n} of a long reply from Hermes, said by the system voice.`
+    const reply = Array.from({ length: 20 }, (_, i) => sentence(i + 1)).join(' ')
+    const pieces = chunkForSystemVoice(reply)
+
+    expect(pieces[0]).toBe(`${sentence(1)} ${sentence(2)}`)
+    expect(pieces[0].length).toBeLessThanOrEqual(200)
+    expect(pieces.slice(1).every(piece => piece.length <= 600 && piece.length > 200)).toBe(true)
+    expect(pieces.join(' ')).toBe(reply)
+  })
+
+  it('cuts a long first sentence after a comma, so speech starts soon', () => {
+    const first = `${'Hermes looked through every folder in your Documents and Downloads, '.repeat(3)}and found nothing.`
+    const pieces = chunkForSystemVoice(`${first} Done.`)
+
+    expect(pieces[0].length).toBeLessThanOrEqual(200)
+    expect(pieces[0].endsWith(',')).toBe(true)
+    expect(pieces.join(' ')).toBe(`${first} Done.`)
+  })
+
+  it('cuts a sentence with no pauses between words', () => {
+    const words = 'word '.repeat(300).trim()
+    const pieces = chunkForSystemVoice(words)
+
+    expect(pieces.every(piece => piece.length <= 600 && !piece.startsWith(' ') && !piece.endsWith(' '))).toBe(true)
+    expect(pieces.join(' ')).toBe(words)
+  })
+
+  it('stops at about five minutes of speech', () => {
+    const reply = 'Here is one more sentence of a very long answer. '.repeat(400)
+    const total = chunkForSystemVoice(reply).join(' ').length
+
+    expect(total).toBeLessThanOrEqual(SYSTEM_VOICE_MAX_CHARS)
+    expect(total).toBeGreaterThan(SYSTEM_VOICE_MAX_CHARS - 100)
   })
 })
 

@@ -1,6 +1,6 @@
 {
   "name": "herald-os",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "private": true,
   "description": "Herald OS: an agent-native operating system built on Hermes Agent.",
   "license": "MIT",

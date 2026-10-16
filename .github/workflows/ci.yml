@@ -26,6 +26,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r apps/desktop/test-requirements.txt
       - name: Fetch the pinned Hermes Agent snapshot
         run: npm run sync-upstream
       - run: npm ci

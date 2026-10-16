@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { CALC_PREFS_DEFAULTS, mergeCalcPrefs, normalizeCalcPrefs } from '../shared/calc.ts'
 import { type EventAutomation, isEventName } from '../shared/events.ts'
 import { languageSetting } from '../shared/i18n.ts'
 import type { ContinuityPrefs, CrashHelpPrefs, HeraldOSPrefs, NotifyPrefs, PrefsPatch } from '../shared/ipc.ts'
@@ -21,6 +22,7 @@ const DEFAULTS: HeraldOSPrefs = {
   notify: NOTIFY_DEFAULTS,
   pet: PET_PREFS_DEFAULTS,
   room: ROOM_PREFS_DEFAULTS,
+  calc: CALC_PREFS_DEFAULTS,
   fullscreenOnLaunch: true,
   reduceMotion: false,
   accent: 'blue',
@@ -57,6 +59,7 @@ export function readPrefs(): HeraldOSPrefs {
       notify: normalizeNotifyPrefs(parsed.notify),
       pet: normalizePetPrefs(parsed.pet),
       room: normalizeRoomPrefs(parsed.room),
+      calc: normalizeCalcPrefs(parsed.calc),
       eventAutomations: normalizeEventAutomations(parsed.eventAutomations),
       commentName: normalizeCommentName(parsed.commentName) || undefined,
       ...(parsed.menuBar ? { menuBar: normalizeMenuBar(parsed.menuBar) } : {})
@@ -106,6 +109,7 @@ export function writePrefs(patch: PrefsPatch): HeraldOSPrefs {
     notify: normalizeNotifyPrefs(notify),
     pet: normalizePetPrefs({ ...current.pet, ...(patch.pet ?? {}) }),
     room: mergeRoomPrefs(current.room, patch.room),
+    calc: mergeCalcPrefs(current.calc, patch.calc),
     ...('commentName' in patch ? { commentName: normalizeCommentName(patch.commentName) || undefined } : {}),
     ...('language' in patch ? { language: languageSetting(patch.language) } : {}),
     ...(patch.menuBar ? { menuBar: normalizeMenuBar({ ...current.menuBar, ...patch.menuBar }) } : {})

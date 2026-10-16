@@ -100,6 +100,7 @@ read `skill_view name="herald-os-bridge:herald-docs"`,
 | "Open Apps" / "Show all apps" | `os_ui` run `overlay.applications` |
 | "Build / create / make me a website (app, game) for …" | `os_ui` run `build.start goal=...` (new project + Studio) |
 | "Show me the code" / "Show me what you're doing" | `os_ui` run `studio.open` |
+| "What's 15% of 84.50?" / "5 km in miles" / "100 USD in BRL" / "Days until Dec 25" | `calc` action=eval text=... (any arithmetic, percentage, unit, currency, date or time-zone math; show its `steps`); "plot sin(x)" for the person to see → `os_ui` run `calc.plot`; details in the `herald-calc` skill |
 | "What's using the most CPU / memory?" | `system_processes` action=top sort=cpu (or memory); summarise the top 3 with numbers |
 | "What's on port 3000?" | `system_processes` action=port port=3000 |
 | "Kill the process on port 3000" | `system_kill_process` port=3000 (the user confirms) |

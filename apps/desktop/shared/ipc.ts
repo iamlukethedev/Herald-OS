@@ -1,6 +1,7 @@
 // Typed contract between Electron main, the preload bridge and the renderer.
 // Everything the renderer can ask the machine to do is declared here; nothing else is exposed.
 
+import type { CalcPrefs } from './calc.ts'
 import type { EventAutomation } from './events.ts'
 import type { LanguageSetting } from './i18n.ts'
 import type { MenuBarLayout } from './menu-bar.ts'
@@ -563,6 +564,12 @@ export interface OsControlReply {
 /** Authenticated WebSocket endpoints the renderer may dial besides the gateway. */
 export type AudioWsKind = 'speak-stream'
 
+/**
+ * A line said by the computer's own voice (`say` on macOS, espeak-ng or flite on Linux) as a WAV
+ * clip, or why it could not be: `missing` when this computer has no voice for the person's language.
+ */
+export type SystemSpeech = { ok: true; audio: Uint8Array<ArrayBuffer>; mimeType: string } | { ok: false; reason: 'missing' | 'failed'; detail: string }
+
 export interface HeraldOSPrefs {
   /** The language Herald OS is shown in; unset follows the system's languages. */
   language?: LanguageSetting
@@ -619,6 +626,8 @@ export interface HeraldOSPrefs {
   pet?: PetPrefs
   /** The Pet Room: which installed pet stands for each kind of work, and how much the Room moves. */
   room?: RoomPrefs
+  /** Herald Calc: the daily rates fetch, key sounds, the keypad's angles and the keypad shown last. */
+  calc?: CalcPrefs
   voice: VoicePrefs
   continuity: ContinuityPrefs
   crashHelp: CrashHelpPrefs
@@ -626,10 +635,10 @@ export interface HeraldOSPrefs {
 }
 
 /**
- * A prefs write: top-level fields replace what is saved; `notify`, `pet` and `room` are merged field
- * by field in main, so a window names only what it changes (its copy of the rest may be stale).
+ * A prefs write: top-level fields replace what is saved; `notify`, `pet`, `room` and `calc` are
+ * merged field by field in main, so a window names only what it changes (its copy of the rest may be stale).
  */
-export type PrefsPatch = Partial<Omit<HeraldOSPrefs, 'notify' | 'pet' | 'room'>> & { notify?: Partial<NotifyPrefs>; pet?: Partial<PetPrefs>; room?: RoomPrefsPatch }
+export type PrefsPatch = Partial<Omit<HeraldOSPrefs, 'notify' | 'pet' | 'room' | 'calc'>> & { notify?: Partial<NotifyPrefs>; pet?: Partial<PetPrefs>; room?: RoomPrefsPatch; calc?: Partial<CalcPrefs> }
 
 export type ScreenshotMode = 'region' | 'window' | 'screen'
 
@@ -1013,6 +1022,8 @@ export const IPC = {
   voiceRequestMicrophone: 'herald-os:voice:request-microphone',
   voiceMicrophoneStatus: 'herald-os:voice:microphone-status',
   voiceAudioWsUrl: 'herald-os:voice:audio-ws-url',
+  /** Render a line with the computer's own voice, the last resort when Hermes cannot speak. */
+  voiceSystemSpeech: 'herald-os:voice:system-speech',
   /** Main -> renderer: the global voice hotkey was pressed. */
   voiceHotkey: 'herald-os:voice:hotkey',
 
@@ -1141,7 +1152,19 @@ export const IPC = {
   roomLogAppend: 'herald-os:room:log-append',
   roomLogDays: 'herald-os:room:log-days',
   roomLogRead: 'herald-os:room:log-read',
-  roomLogDelete: 'herald-os:room:log-delete'
+  roomLogDelete: 'herald-os:room:log-delete',
+
+  // Herald Calc (shared/calc.ts): the rates, the notes and the history in Herald's data folder.
+  calcRates: 'herald-os:calc:rates',
+  calcNotesList: 'herald-os:calc:notes-list',
+  calcNoteRead: 'herald-os:calc:note-read',
+  calcNoteSave: 'herald-os:calc:note-save',
+  calcNoteDelete: 'herald-os:calc:note-delete',
+  calcHistory: 'herald-os:calc:history',
+  calcHistoryAdd: 'herald-os:calc:history-add',
+  calcHistoryClear: 'herald-os:calc:history-clear',
+  /** Main -> every window: `CalcChange`, after any window changed them. */
+  calcChanged: 'herald-os:calc:changed'
 } as const
 
 /** Raw pixels for a project image or an export: RGBA layers, grayscale masks. */

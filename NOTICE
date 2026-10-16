@@ -77,6 +77,13 @@ packaged build carries the ECharts, d3.js and ZRender licenses in
 licenses/echarts-LICENSE.txt, licenses/echarts-LICENSE-d3.txt and
 licenses/zrender-LICENSE.txt.
 
+Herald Calc does its exact arithmetic, units and functions with math.js
+(https://github.com/josdejong/mathjs), Copyright (C) 2013-2026 Jos de Jong
+<wjosdejong@gmail.com>, released under the Apache License, Version 2.0. It is
+compiled into the renderer without changes, as a separate part loaded only when
+a calculation needs it, and its smaller dependencies are listed below. The
+Apache License 2.0 text is in licenses/univer-LICENSE.txt.
+
 The renderer and main process are also compiled from the smaller npm packages
 below, some of which ExcelJS, docx and JSZip carry inside their prebuilt browser
 files. Each keeps its own license and is used without changes, and each is
@@ -91,6 +98,8 @@ Compiled into the renderer:
   use-sidecar (MIT): Copyright (c) 2017 Anton Korzunov
 - async-lock (MIT): Copyright (c) 2016 Rogier Schouten
   <github@workingcode.ninja>
+- @babel/runtime (MIT): Copyright (c) 2014-present Sebastian McKenzie and other
+  contributors
 - bail, ccount, character-entities-html4, character-entities-legacy,
   collapse-white-space, mdast-util-to-string, unified, unist-util-is,
   unist-util-position, unist-util-visit, vfile (MIT): Copyright (c) 2015 Titus
@@ -102,6 +111,7 @@ Compiled into the renderer:
   mdast-util-to-hast, space-separated-tokens, trough,
   unist-util-stringify-position, unist-util-visit-parents, zwitch (MIT):
   Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+- complex.js, fraction.js (MIT): Copyright (c) 2025 Robert Eisele
 - decimal.js (MIT): Copyright (c) 2025 Michael Mclaughlin
 - decode-named-character-reference, hast-util-to-html, hast-util-to-jsx-runtime,
   markdown-table, mdast-util-find-and-replace, mdast-util-from-markdown,
@@ -119,6 +129,7 @@ Compiled into the renderer:
   remark-rehype, vfile-message (MIT): Copyright (c) Titus Wormer
   <tituswormer@gmail.com>
 - devlop (MIT): Copyright (c) 2023 Titus Wormer <tituswormer@gmail.com>
+- escape-latex (MIT): Copyright (c) 2012 Dang Mai
 - escape-string-regexp, is-plain-obj (MIT): Copyright (c) Sindre Sorhus
   <sindresorhus@gmail.com> (https://sindresorhus.com)
 - estree-util-is-identifier-name, mdast-util-gfm-autolink-literal,
@@ -139,6 +150,7 @@ Compiled into the renderer:
 - html-url-attributes (MIT): Copyright (c) Titus Wormer
 - inline-style-parser (MIT): Copyright (c) 2012 TJ Holowaychuk
   <tj@vision-media.ca>
+- javascript-natural-sort (MIT)
 - kdbush (ISC): Copyright (c) 2026, Vladimir Agafonkin
 - linkifyjs (MIT): Copyright (c) 2024 Nick Frasser
 - lodash-es (MIT): Copyright OpenJS Foundation and other contributors
@@ -179,6 +191,7 @@ Compiled into the renderer:
   <marijn@haverbeke.berlin>
 - rxjs (Apache-2.0): Copyright (c) 2015-2018 Google, Inc., Netflix, Inc.,
   Microsoft Corp. and contributors
+- seedrandom (MIT): Copyright 2019 David Bau.
 - @shikijs/core, @shikijs/engine-javascript, @shikijs/langs, @shikijs/primitive,
   @shikijs/themes, @shikijs/types (MIT): Copyright (c) 2021 Pine Wu;
   Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
@@ -191,6 +204,8 @@ Compiled into the renderer:
 - @tabler/icons-react (MIT): Copyright (c) 2020-2026 Paweł Kuna
 - tailwindcss (MIT, compiled into the stylesheet): Copyright (c) Tailwind Labs,
   Inc.
+- tiny-emitter (MIT): Copyright (c) 2017 Scott Corgan
+- typed-function (MIT): Copyright (c) 2014-2024 Jos de Jong
 - @ungap/structured-clone (ISC): Copyright (c) 2021, Andrea Giammarchi,
   @WebReflection
 - unicount (ISC): Copyright 2019 Joseph Gentle

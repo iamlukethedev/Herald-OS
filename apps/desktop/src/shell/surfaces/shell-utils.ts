@@ -24,7 +24,8 @@ const OUR_FLOATING_TITLES: Record<string, FloatingAppId> = {
   'Herald OS · Docs': 'docs',
   'Herald OS · Sheets': 'sheets',
   'Herald OS · Slides': 'slides',
-  'Herald OS · Pet Room': 'room'
+  'Herald OS · Pet Room': 'room',
+  'Herald OS · Calc': 'calc'
 }
 
 export const OUR_MAIN_TITLE = 'Herald OS'

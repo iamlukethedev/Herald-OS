@@ -1,6 +1,7 @@
 import { defineCommands, type OsCommand } from '../store/os-commands.ts'
 import { automationCommands } from './automations.ts'
 import { botCommands } from './bots.ts'
+import { calcCommands } from './calc.ts'
 import { canvasCommands } from './canvas.ts'
 import { captureCommands } from './capture.ts'
 import { connectionCommands } from './connections.ts'
@@ -61,7 +62,8 @@ export const commandGroups: Record<string, readonly OsCommand[]> = {
   sheets: sheetsCommands,
   slides: slidesCommands,
   pet: petCommands,
-  room: roomCommands
+  room: roomCommands,
+  calc: calcCommands
 }
 
 let registered = false

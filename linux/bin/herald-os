@@ -46,6 +46,8 @@ call the tools directly.
                 slides move <slide> <number|first|last> | slides remove <slide> | slides theme <name> | slides replace <find> <with>
                 slides from-doc [document] [--level <n>] [--notes] | slides insert-range [range] [--workbook <w>] [--slide <s>]
                 slides save [deck] [--to <file>] [--overwrite] | slides pdf [deck] [--to <file>] | slides undo|redo [--steps <n>]
+  Calc          calc <expression...> [--steps] [--json] | calc - (a note from stdin) | calc convert <value> <from> <to>
+                calc history [query] [--json] | calc open [text]
   Crashes       crash list | crash diagnose [pid|name] | crash mute <name> [off]
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
@@ -130,6 +132,7 @@ COMMANDS: dict[str, str] = {
     "docs": "docs open [file] | new [name] [--template …] [--path …] [--content <markdown>|-] | list | read [document] [--part …] [--heading …] | find <text> | write <markdown>|- [--at …] [--heading …] [--mode …] | replace <find> <replacement> [--first] | format [--at …] [--bold] [--style …] [--color …] [--size …] [--align …] | table <json-rows> | image <file> [--width …] | insert-range [range] [--workbook …] | save [document] [--to …] [--overwrite] | pdf [document] [--to …] | undo | redo [--steps <n>]; --document picks the document: Herald Docs, the word processor",
     "sheets": "sheets open [file] | new [name] [--template …] [--path …] | list | read [range] [--sheet …] | find <text> | write <range> <value…|json-rows> | fill <range> [formula] | format <range> <json> | sort <range> --by <column> [--descending] [--header] | filter <range> --by <column> --values <json> | filter --clear | freeze <rows> [columns] | add-sheet [name] | rename-sheet <sheet> <name> | remove-sheet <sheet> | replace <find> <replacement> [--first] | clean <range> dedupe|trim|numbers|dates|split|case | save [workbook] [--to …] [--overwrite] | pdf [workbook] | undo | redo [--steps <n>]; --workbook picks the workbook: Herald Sheets, the spreadsheet",
     "slides": "slides open [file] | new [name] [--theme …] [--size …] [--path …] [--slides <json>|-] | list | read [presentation] [--slide …] | add-slide [title] [--layout …] [--body <text>|-] [--notes …] [--after …] | set-slide <slide> [--title …] [--body …] [--layout …] [--hidden|--shown] | notes <slide> <text>|- | move <slide> <to> | remove <slide> | theme <name> | from-doc [document] [--level <n>] [--notes] | insert-range [range] [--workbook …] [--slide …] | replace <find> <replacement> [--first] | save [presentation] [--to …] [--overwrite] | pdf [presentation] | undo | redo [--steps <n>]; --presentation picks the deck: Herald Slides, the presentation editor",
+    "calc": "calc <expression…> [--steps] [--json] | - (a note from stdin) | convert <value> <from> <to> | history [query] | open [text]: Herald Calc, exact math; quote a sum with * or brackets in it",
     "voice": "Talk to Hermes: voice [toggle|start|stop|mute] (default toggle)",
     "dictate": "Start or finish dictation: what you say is typed into the focused app",
     "emoji": "Emoji picker; the pick is typed into the focused app",
@@ -2488,6 +2491,64 @@ def slides_cmd(args: list[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# Herald Calc: exact math, through the same calc.* commands Hermes uses.
+CALC_USAGE = "calc <expression…> [--steps] [--json] | - (lines from stdin, read as a note) | convert <value> <from> <to> | history [<query>] | open [<text>]"
+
+
+def calc_request(args: list[str]) -> tuple[str, dict]:
+    """(command id, arguments) for `herald-os calc ...` (pure; tested)."""
+    words = [word for word in args if word not in ("--steps", "--json")]
+    if not words:
+        die(f"herald-os {CALC_USAGE}", 2)
+    sub, rest = words[0], words[1:]
+    if sub == "convert":
+        # "convert 5 km to miles" is "convert 5 km miles"; a quantity's own units stay in the value.
+        if len(rest) >= 4 and rest[-2] in ("to", "in", "into"):
+            rest = rest[:-2] + rest[-1:]
+        if len(rest) < 3:
+            die("herald-os calc convert <value> <from> <to>", 2)
+        return "calc.convert", {"value": " ".join(rest[:-2]), "from": rest[-2], "to": rest[-1]}
+    if sub == "history":
+        return "calc.history", ({"query": " ".join(rest)} if rest else {})
+    if sub == "open":
+        return "calc.open", ({"text": " ".join(rest)} if rest else {})
+    text = sys.stdin.read() if words == ["-"] else " ".join(words)
+    if not text.strip():
+        die("herald-os calc: nothing to work out (give the sum, or - to read it from stdin)", 2)
+    return "calc.eval", {"text": text}
+
+
+def calc_cmd(args: list[str]) -> int:
+    command, payload = calc_request(args)
+    reply = run_os_wait(command, payload, timeout=60)
+    data = reply.get("data") or {}
+    if "--json" in args:
+        print(json.dumps({**data, "items": reply.get("items") or []} if command == "calc.history" else data, indent=2))
+        return 0
+    if command == "calc.history":
+        items = reply.get("items") or []
+        for item in items:
+            print(f"{' '.join(str(item.get('input')).split())} = {item.get('result')}")
+        if not items:
+            print(reply.get("summary") or "No calculations yet")
+        return 0
+    if command == "calc.open":
+        print(reply.get("summary") or "done")
+        return 0
+    lines = data.get("lines") or []
+    for line in lines:
+        print(f"{line.get('source')}\t{line['display'] if 'display' in line else '! ' + str(line.get('error') or '')}")
+    if not lines:
+        print(data.get("display") or reply.get("summary") or "")
+    if "--steps" in args:
+        for step in data.get("steps") or []:
+            print(f"  {step}")
+        if data.get("ratesDate"):
+            print(f"  (ECB reference rates of {data['ratesDate']})")
+    return 0
+
+
 def signal_name(number: object) -> str:
     try:
         return signal.Signals(int(number)).name  # type: ignore[arg-type]
@@ -3650,6 +3711,8 @@ def main(argv: list[str]) -> int:
         return sheets_cmd(args)
     if cmd == "slides":
         return slides_cmd(args)
+    if cmd == "calc":
+        return calc_cmd(args)
     if cmd == "os":
         if not args:
             die("os <command.id> [json args]", 2)

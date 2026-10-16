@@ -53,6 +53,7 @@ export const en = {
   'app.sheets': 'Herald Sheets',
   'app.slides': 'Herald Slides',
   'app.room': 'Pet Room',
+  'app.calc': 'Herald Calc',
   'app.applications': 'Applications',
 
   'space.personal': 'Personal',
@@ -378,5 +379,28 @@ export const en = {
   'settings.general.sleepAfter': 'Sleep after',
   'settings.general.sleepHint': 'Minutes without input.',
   'settings.general.neverSleep': 'Never: the computer only sleeps when you ask.',
-  'settings.general.sleepMinutes': 'Minutes before sleeping'
+  'settings.general.sleepMinutes': 'Minutes before sleeping',
+
+  // When the voice Hermes speaks with fails and the computer's own voice stands in, or nothing can.
+  // {voice} is a voice.name message that begins the sentence; {system} is voice.name.mac or
+  // voice.name.system; {device} is “Mac” or “computer”, and a language may say “this computer” without it.
+  'voice.fallback.title': 'Voice',
+  'voice.fallback.usingSystem': "{voice} isn't working right now, so Herald OS is using {system}.",
+  'voice.fallback.noSystemVoice': "{voice} isn't working right now, and there's no system voice on this {device} that can stand in.",
+  'voice.fallback.systemFailed': "{voice} isn't working right now, and {system} couldn't speak either.",
+  'voice.fallback.updateHermes': 'Updating Hermes usually fixes it.',
+  'voice.fallback.pickAnother': 'You can choose another voice in Settings > Voice.',
+  // These begin a sentence; {provider} is a product name, such as “OpenAI”.
+  'voice.name.edge': "Microsoft's free voice",
+  'voice.name.provider': 'The {provider} voice',
+  'voice.name.hermes': "Hermes's voice",
+  // These sit inside a sentence.
+  'voice.name.mac': "your Mac's voice",
+  'voice.name.system': 'the system voice',
+  // What Settings > Voice > Say hello reports, with the slots above.
+  'voice.test.provider': '{voice} said hello.',
+  'voice.test.usedSystem': '{voice} failed, so {system} said hello instead.',
+  'voice.test.noSystemVoice': "{voice} failed, and there's no system voice on this {device} that can stand in.",
+  'voice.test.systemFailed': "{voice} failed, and {system} couldn't speak either.",
+  'voice.test.playbackFailed': "Herald OS couldn't play the test sentence."
 } as const

@@ -378,6 +378,12 @@ abilities as a regular Hermes plugin, `herald-os-bridge`.
   masters and a presenter view. Ask Hermes for a cover letter, a cleaner column or slides from a
   report and watch each change land as a step you can undo. Before Herald first saves over a file,
   it says what the file would lose and backs it up. See [the manual](docs/manual/office.md).
+- **Herald Calc**: a notepad where you write math the way you say it ("20% of 84.50", "5 km in
+  miles", "100 USD in BRL", "days until Dec 25", "9am Sydney in New York") and every line answers
+  as you type, in exact decimals. A classic keypad with scientific and programmer modes, graphs you
+  can pan, zoom and trace, a searchable history, and a note becomes a workbook with real formulas in
+  one click. Hermes uses the same engine for math, so its numbers are worked out, not guessed. See
+  [the manual](docs/manual/calc.md).
 - **A desktop pet**: Hermes's own petdex pet on the desktop, the same one its CLI, TUI and desktop
   app show. It acts out what Hermes is doing, holds up approvals for you to answer, takes questions
   in a chat bubble and files you drop on it, walks over to the window Hermes works in, and gets out

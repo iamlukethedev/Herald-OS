@@ -100,6 +100,23 @@ def test_the_pet_room_tiles_at_a_third_of_the_screen_beside_the_work_and_is_neve
         assert "border { off; }" not in rules
 
 
+def test_herald_calc_floats_over_the_work_at_the_size_the_shell_opens_it_with():
+    calc = re.search(r"calc: \{ title: '([^']+)', width: (\d+), height: (\d+) \}", (DESKTOP / "electron" / "shell" / "mode.ts").read_text())
+    title, width, height = calc.groups()
+    assert (width, height) == ("780", "560")
+    for app_id in ("herald-os", "Herald OS"):
+        rules = props(app_id, title)
+        assert FLOATS in rules
+        assert _last(rules, "default-column-width") == f"default-column-width {{ fixed {width}; }}"
+        assert _last(rules, "default-window-height") == f"default-window-height {{ fixed {height}; }}"
+        # A rounded glass tile like the shell's other apps, not a frameless surface.
+        assert _last(rules, "geometry-corner-radius") == "geometry-corner-radius 14"
+        assert "border { off; }" not in rules
+    # The rule is Calc's alone: the Hermes window and the other apps still tile.
+    for other in ("Herald OS", "Herald OS · Sheets", "Herald OS · Pet Room"):
+        assert FLOATS not in props("herald-os", other), other
+
+
 def test_the_audience_window_opens_full_screen_and_leaves_the_keys_to_the_presenter_view():
     title = re.search(r"const AUDIENCE_TITLE = '([^']+)'", (DESKTOP / "electron" / "office" / "presenter.ts").read_text()).group(1)
     rules = props("herald-os", title)

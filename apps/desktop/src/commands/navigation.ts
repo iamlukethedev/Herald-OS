@@ -51,7 +51,8 @@ const APP_ALIASES: Record<string, HermesAppId> = {
   processes: 'system',
   cpu: 'system',
   popout: 'chat-popout',
-  'chat window': 'chat-popout'
+  'chat window': 'chat-popout',
+  calculator: 'calc'
 }
 
 const normalise = (value: string) => value.toLowerCase().replace(/^(the|my)\s+/, '').replace(/\s+(page|tab|window|app|screen|section)$/, '').trim()

@@ -3,12 +3,13 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { BatteryStatus, CalendarResult, ControlAction, DiskUsage, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemStats } from '../../shared/ipc.ts'
+import type { BatteryStatus, CalendarResult, ControlAction, DiskUsage, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemSpeech, SystemStats } from '../../shared/ipc.ts'
 import { findCodeEditor } from './editors.ts'
 import { MISSING_BINARY, run, runBuffer } from './exec.ts'
 import { normaliseFileQuery, rankFiles } from './find.ts'
 import { linuxControlAction, linuxControlStatus } from './linux-controls.ts'
 import { parseDf, parsePs } from './posix.ts'
+import { linuxSpeech, renderSystemSpeech } from './system-voice.ts'
 import { type EditorTarget, type HostPlatform, HostNotSupported } from './types.ts'
 
 interface CpuSample {
@@ -1008,5 +1009,9 @@ export class LinuxPlatform implements HostPlatform {
 
   controlAction(action: ControlAction): Promise<void> {
     return linuxControlAction(action)
+  }
+
+  systemSpeech(text: string, locale: string): Promise<SystemSpeech> {
+    return renderSystemSpeech(text, linuxSpeech(locale))
   }
 }

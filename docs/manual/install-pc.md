@@ -12,6 +12,9 @@ much real hardware, so try it on a computer you can spare and keep backups.
 - A USB stick of 8 GB or more (it is erased).
 - A wired network for the first start helps: it installs Hermes Agent from the internet. Without one,
   the desktop comes up first and Hermes installs once you join Wi-Fi.
+- Wi-Fi, Bluetooth and laptop sound (including the Sound Open Firmware most recent Intel laptops
+  need) work out of the box. An NVIDIA graphics card works too, on the open-source driver; to run
+  local models on it, switch to the NVIDIA image after installing ([NVIDIA graphics](#nvidia-graphics)).
 
 ## 1. Download and join the installer
 
@@ -78,6 +81,45 @@ The installer's disk screen can install Herald OS next to Windows on the same di
 in Windows, Disk Management's "Shrink Volume" frees space at the end of the Windows partition, and a
 backup beforehand is wise. Afterwards, the PC's boot menu, or the menu Herald OS shows at power-on,
 picks which system starts. Herald OS's updates leave the Windows partition alone.
+
+## NVIDIA graphics
+
+The installer puts the standard image on every PC. It runs an NVIDIA card's screen with the
+open-source driver, which has no CUDA, so local models do not use the card. If the PC has one, a
+notification after the first sign-in says so. The NVIDIA image has NVIDIA's own driver, for the
+GeForce GTX 16 and RTX 20 series and newer, and needs a `/boot` partition of 2 GiB, which the
+installer makes unless you lay out the disk yourself. In a terminal:
+
+```bash
+herald-os-gpu-check switch stable
+systemctl reboot
+```
+
+It checks that `/boot` has room first, and changes nothing if it does not (on a `/boot` of 1 GiB or
+less it stops unless you add `--force`).
+
+### Secure Boot: one key, once
+
+With Secure Boot on, the NVIDIA driver only loads once Universal Blue's signing key is enrolled in
+the computer. Until then, including the NVIDIA image's first start, the screen has the basic display
+(on a laptop, the integrated graphics as usual) and a notification says how to enroll the key.
+Enrolling it trusts everything Universal Blue signs with that key, not only this driver, and it
+stays enrolled if you switch back. [The NVIDIA image](../LINUX.md#the-nvidia-image) says how to
+check the key before you trust it, and how to remove it.
+
+1. With the NVIDIA image running, in a terminal:
+
+   ```bash
+   sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der
+   ```
+
+   It asks for a password twice (`input password:`). Choose a one-time password; it is only asked
+   once more, at the next start.
+2. Restart. Before Herald OS starts, a screen says `Press any key to perform MOK management`:
+   press a key before its countdown ends.
+3. Pick `Enroll MOK`, then `Continue`, `Yes`, type the password, and pick `Reboot`.
+
+Afterwards `nvidia-smi` lists the card, and `modinfo -F signer nvidia` says `ublue kernel`.
 
 ## The disk password and your keyboard
 

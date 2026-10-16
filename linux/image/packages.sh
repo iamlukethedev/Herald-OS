@@ -110,17 +110,20 @@ if [[ "$MODE" == "--image" ]]; then
   # until the maintainer generates the key and CI signs with it, enforcing a policy would make the
   # image reject every update (unsigned images fail it). The image workflow and CI's signing check
   # refuse a committed cosign.pub without the signing key, so the two never ship out of step (#18).
+  # Both repositories, the default image's and the NVIDIA image's: either can switch to the other,
+  # and scopes match whole path components, so herald-os does not cover herald-os-nvidia.
   if [[ -f "$LINUX/image/cosign.pub" ]]; then
     install -Dm0644 "$LINUX/image/cosign.pub" /etc/pki/containers/herald-os.pub
     install -d /etc/containers/registries.d
-    printf 'docker:\n  ghcr.io/iamlukethedev/herald-os:\n    use-sigstore-attachments: true\n' >/etc/containers/registries.d/herald-os.yaml
+    printf 'docker:\n  ghcr.io/iamlukethedev/herald-os:\n    use-sigstore-attachments: true\n  ghcr.io/iamlukethedev/herald-os-nvidia:\n    use-sigstore-attachments: true\n' >/etc/containers/registries.d/herald-os.yaml
     python3 - <<'PY'
 import json
 path = "/etc/containers/policy.json"
 policy = json.load(open(path))
-policy.setdefault("transports", {}).setdefault("docker", {})["ghcr.io/iamlukethedev/herald-os"] = [
-    {"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/herald-os.pub", "signedIdentity": {"type": "matchRepository"}}
-]
+for repo in ("ghcr.io/iamlukethedev/herald-os", "ghcr.io/iamlukethedev/herald-os-nvidia"):
+    policy.setdefault("transports", {}).setdefault("docker", {})[repo] = [
+        {"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/herald-os.pub", "signedIdentity": {"type": "matchRepository"}}
+    ]
 json.dump(policy, open(path, "w"), indent=2)
 PY
   fi

@@ -270,7 +270,7 @@ export function DockSurface() {
       }
     }
 
-    // Shortcuts beside the ones in Applications; an open Pet Room or Canvas window belongs to its shortcut rather than to an entry of its own.
+    // Shortcuts beside the ones in Applications; an open Pet Room, Canvas or Calc window belongs to its shortcut rather than to an entry of its own.
     const roomWindows = ours.filter(w => ourFloatingAppId(w) === 'room')
     list.push({
       id: 'hermes:room',
@@ -303,13 +303,23 @@ export function DockSurface() {
       windows: officeWindows
     })
 
+    const calcWindows = ours.filter(w => ourFloatingAppId(w) === 'calc')
+    list.push({
+      id: 'hermes:calc',
+      label: 'Herald Calc',
+      render: () => <AppTile id="calc" size={44} />,
+      onClick: () => (calcWindows.length > 0 ? focusGroup('hermes:calc', calcWindows) : openApp('calc')),
+      running: calcWindows.length > 0,
+      windows: calcWindows
+    })
+
     // Our own floating Hermes apps (terminal, system, popped-out chat) as running entries.
     const floatingGroups = new Map<FloatingAppId, WmWindow[]>()
 
     for (const win of ours) {
       const appId = ourFloatingAppId(win)
 
-      if (appId && appId !== 'room' && appId !== 'canvas' && !isOfficeApp(appId)) {
+      if (appId && appId !== 'room' && appId !== 'canvas' && appId !== 'calc' && !isOfficeApp(appId)) {
         floatingGroups.set(appId, [...(floatingGroups.get(appId) ?? []), win])
       }
     }

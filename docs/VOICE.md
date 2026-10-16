@@ -42,6 +42,40 @@ to, a missing package), Herald OS switches that setting to the free provider (`l
 to text, `edge` for speech), tells you once, and retries. Pick a different provider in Settings
 whenever you want it back.
 
+#### When a voice fails
+
+Speech goes down a chain, so a reply is heard even when a voice fails:
+
+1. **The provider Hermes is set to use** (`tts.provider`).
+2. **The free Edge voice**, when that provider is not set up (as above). A failure of the Edge voice
+   itself is never treated as a setup problem: it needs no key, so there is nothing to switch to.
+3. **The computer's own voice**, when Hermes's voice still fails, for whatever reason: Microsoft
+   refusing the Edge voice (HTTP 403), no network, a missing `edge_tts` module, a provider that is
+   down. On macOS that is `say`, in the voice chosen under System Settings > Accessibility > Spoken
+   Content. On Linux it is espeak-ng (or espeak) in the system's language, else flite, which speaks
+   only English and so only stands in for an English locale.
+
+The same chain speaks conversation replies, spoken notifications and Settings > Voice > Say hello.
+Every reply tries Hermes's voice first, so it is back as soon as it works again.
+
+Electron main renders the system voice to WAV files a few sentences at a time, the text passed to
+the program on stdin (at most 1,000 characters and 30 seconds a part, about five minutes a reply),
+and they play on the player Hermes's whole-reply speech uses. So barge-in, the stop button and the
+end of the conversation cut it off as they do any other voice, it plays on the same speakers, and
+echo cancellation keeps it out of the microphone, which it could not do for a voice the system
+played by itself.
+
+The first time in a session the system voice stands in, a notice says so in plain words: "Microsoft's
+free voice isn't working right now, so Herald OS is using your Mac's voice. Updating Hermes usually
+fixes it." (on Linux, "the system voice"). When the computer has no voice of its own, or it fails
+too, a notice says that instead, also once, and replies show in the captions without being spoken.
+Neither repeats for later replies, conversations or notifications; the error itself goes to
+`~/.hermes/logs/herald-os.log`. Say hello reports which voice spoke: Hermes's, or that it failed and
+the system voice said hello instead.
+
+The Herald OS Linux image lists flite for this, but not espeak-ng, so its system voice speaks English
+only.
+
 ### Live (opt-in)
 
 OpenAI `gpt-live-1` listens and speaks over WebRTC, full duplex, and delegates every real request
@@ -64,8 +98,9 @@ catalogue under `apps/desktop/src/commands/`). Three things call it:
 1. **The voice fast path.** Simple utterances match a command locally in under 100 ms and cost no
    tokens: "open missions", "show my memory", "open the terminal", "close this window", "remember
    that I prefer short answers", "pause the daily digest", "start a mission to …", "open Safari",
-   "hide the sidebar", "switch to the live voice engine". Hermes hears a short acknowledgement
-   ("Opening Missions."). Anything that needs reasoning, is long, or is destructive goes to Hermes.
+   "hide the sidebar", "switch to the live voice engine", "what's 15% of 340". Herald says a short
+   acknowledgement ("Opening Missions.") or the answer. Anything that needs reasoning, is long, or
+   is destructive goes to Hermes.
 2. **Hermes itself** through the `os_ui` tool (bridge plugin): `list` the catalogue, read the
    screen `state`, `run` a command. Hermes uses it whenever you ask it to open, show, add, find or
    change something in the OS, and to show its work after its own memory / automation / file tools.
@@ -129,6 +164,28 @@ has open, for the model only and before the screen line: the document in front w
 sheet and selection (or the selected text, or the slide), and the other open documents, so "this
 sheet", "this paragraph" and "the selection" mean what you are looking at.
 
+**Simple math is answered at once.** A spoken sum goes straight to Herald Calc's exact engine
+(`calc.eval`) and Herald speaks the answer with no Hermes turn: "what's 15% of 340" ("15% of 340 is
+51"), "what is two plus two", "three hundred and forty divided by eight", "half of 340", "84.50 plus
+15%", "2,400 plus 180 split three ways", "two to the power of ten", "the square root of 144", "how
+many miles is 10 km", "how many cups in a litre", "convert 100 dollars to euros" (at the European
+Central Bank's reference rates), "what's 5 foot 10 in centimetres" (a plain number before "in" and a
+length is inches, as in the notepad, and the answer says so), "what time is it in Tokyo", "what's
+9am Sydney in New York", "how many days until December 25th", "what date is 90 days from today".
+"Calculate …" and "work out …" count too. The grammar (`lib/voice/math.ts`) reads number words ("fifteen", "three hundred and
+forty", "one point five", "a million", "two and a half", "half"), spoken operators (plus, minus,
+take away, times, divided by, over, to the power of, squared, cubed, square root of, percent, of,
+off, split N ways) and the units, currencies and places Herald Calc knows; every other word sends
+the sentence to Hermes, and so does anything over 16 words. What goes to Hermes, as said, is math
+that needs thought or context: the person's own numbers ("what's 15% of my rent", "what's the
+total of my invoices"), advice ("how much should I tip"), and why or explain ("why is 0.1 plus 0.2
+not 0.3 in JavaScript", "explain compound interest"). Hermes then does the math with the same
+engine (the `calc` tool). A sum the engine cannot read goes to Hermes as well. Starting a
+conversation loads the engine, so the first answer is as quick as the rest; each answer shows in the
+caption and is kept in Herald Calc's history. "Open the calculator", "open the scientific
+calculator", "open the graphing calculator", "show my calculations" and "what was my last
+calculation" open Herald Calc or read from its history.
+
 **Approvals by voice.** While one of the conversation's approval cards is up, a short answer decides
 it instead of interrupting Hermes: "yes", "yes, go ahead", "do it", "approve" or "okay" allow it
 once; "no", "cancel", "don't" or "stop" deny it. The card says so ("Or say yes…") while a
@@ -169,7 +226,8 @@ Command families: `page.open|back`, `window.focus|close|minimize|maximize|restor
 `memory.show|search|add|update|forget`; `file.open|openExternal`, `files.open|show|search|reveal|newFolder`; `automation.list|show|run|pause|resume|create|delete`;
 `connection.list|show|enable|disable`; `build.start`, `studio.open|preview|file|close`; `native.launch`, `web.open`; `settings.open`, `theme.set`, `accent.set`,
 `motion.reduce`, `dock.autoHide`, `voice.engine.set`, `voice.wake.set`; `agents.pauseAll`, `agents.toolSearch.set`;
-`docs.open|new|save`, `sheets.open|new|save`, `slides.open|new|addSlide|save` and the rest of `docs.*`, `sheets.*`, `slides.*`, `office.list` for Hermes.
+`docs.open|new|save`, `sheets.open|new|save`, `slides.open|new|addSlide|save` and the rest of `docs.*`, `sheets.*`, `slides.*`, `office.list` for Hermes;
+`calc.eval|convert|plot|open|history`.
 
 Tiers: `read` and `act` commands run immediately (audited when Hermes runs them); `mutate` (add a
 memory, pause an automation, change a setting) runs and is shown in the caption; `destructive`
@@ -239,6 +297,19 @@ model switches between fast, accurate, multilingual and most-accurate models.
   Today's Hermes installs keep no venv in the checkout; there
   `hermes pm install --extra voice --extra edge-tts --extra wake-openwakeword` adds them, and
   `hermes update` keeps them. The Herald OS image adds them at its first boot either way.
+- **Microsoft's free voice returns 403**: the system voice speaks instead, and herald-os.log shows
+  `TTS generation failed (edge): 403`. Microsoft changed what its read-aloud service asks for, and
+  Hermes needs edge-tts 7.3.0 or newer to answer it. Until Hermes ships a newer edge-tts, upgrade it in
+  Hermes's own environment with Hermes's uv:
+
+  ```bash
+  ~/.hermes/bin/uv pip install --python <hermes venv python> "edge-tts>=7.3.1"
+  ```
+
+  `<hermes venv python>` is `venv/bin/python` in a Hermes checkout that has a venv, or the
+  `venv/bin/python` under `~/.hermes/installs/<install>/environments/<environment>/` for an install
+  `hermes pm` manages. A `hermes update` may put the older edge-tts back until Hermes raises its pin,
+  so run the upgrade again if the 403 returns. Herald OS never changes Hermes's environment itself.
 - When the model provider is signed out (expired or revoked login), Herald OS shows its sign-in
   card: one click opens the provider's page with a one-time code inside Herald OS, as a Herald OS
   window beside the card (never the system browser), and both the page and the card close
@@ -266,10 +337,14 @@ apps/desktop/src/lib/voice/vad.ts        energy endpointing (utterance start/end
 apps/desktop/src/lib/voice/chained-engine.ts  free engine
 apps/desktop/src/lib/voice/live-engine.ts     GPT-Live engine (WebRTC + delegation loop)
 apps/desktop/src/lib/voice/speak-stream.ts    /api/audio/speak-stream player, POST /api/audio/speak fallback
+apps/desktop/src/lib/voice/speak-fallback.ts  the speech chain (provider, free voice, system voice) and its notices
+apps/desktop/src/lib/voice/system-voice.ts    the computer's own voice, a few sentences at a time
+apps/desktop/electron/platform/system-voice.ts  say / espeak-ng / flite rendered to WAV in main
 apps/desktop/src/lib/voice/speech-text.ts     sanitizer, sentence chunker, commentary chunking, stop phrases
+apps/desktop/src/lib/voice/math.ts            spoken math: the sentence Herald Calc's engine reads, or null (pure)
 apps/desktop/src/features/voice/               VoiceOrb, MicButton, VoiceIndicator
 apps/desktop/src/features/office/typing.ts     dictation into the Docs page, Sheets cell or Slides text box in front
 apps/desktop/electron/ipc/voice.ts        mic permission, audio WebSocket URL, global hotkey
 ```
 
-Decisions: `docs/DECISIONS.md` ADR-013, ADR-024 (and the ADR-007 amendment).
+Decisions: `docs/DECISIONS.md` ADR-013, ADR-024, ADR-028 (and the ADR-007 amendment).

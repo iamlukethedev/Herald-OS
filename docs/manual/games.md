@@ -29,7 +29,7 @@ x86_64-only ones are marked unavailable and say why.
 - **Stay awake** (`Super+Ctrl+I`) stops the screen from locking during a long cutscene or a game you
   play with a controller.
 - **Graphics drivers:** Herald OS Linux comes with Fedora's open-source drivers, which cover AMD and
-  Intel graphics. There is no image with NVIDIA's own driver yet
-  ([#62](https://github.com/iamlukethedev/Herald-OS/issues/62)).
+  Intel graphics. For an NVIDIA card from the GTX 16 and RTX 20 series on, switch to the NVIDIA
+  image, which has NVIDIA's own driver ([NVIDIA graphics](install-pc.md#nvidia-graphics)).
 - Games that need anti-cheat software made only for Windows may not run on Linux at all, and the
   [Windows VM](windows-vm.md) has no graphics acceleration for games.

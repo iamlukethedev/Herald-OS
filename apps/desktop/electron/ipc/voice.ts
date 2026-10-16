@@ -1,8 +1,10 @@
 import { BrowserWindow, globalShortcut, ipcMain, session, systemPreferences } from 'electron'
-import { type AudioWsKind, IPC, type MicPermission } from '../../shared/ipc.ts'
+import { type AudioWsKind, IPC, type MicPermission, type SystemSpeech } from '../../shared/ipc.ts'
 import type { BackendManager } from '../backend/manager.ts'
+import { systemLanguages } from '../i18n.ts'
 import { log } from '../log.ts'
 import { isShellPage } from '../paths.ts'
+import { hostPlatform } from '../platform/index.ts'
 
 /**
  * Chromium permission names the shell grants for its own origin; everything else stays denied.
@@ -13,8 +15,9 @@ const SHELL_PERMISSIONS = new Set(['media', 'audioCapture', 'speaker-selection',
 
 /**
  * Voice plumbing owned by main: the microphone permission gate, tokenized audio WebSocket URLs
- * (so the renderer can dial `/api/audio/speak-stream` the same way it dials the gateway), and the
- * global hotkey that toggles a conversation from any app.
+ * (so the renderer can dial `/api/audio/speak-stream` the same way it dials the gateway), the
+ * computer's own voice for when Hermes cannot speak, and the global hotkey that toggles a
+ * conversation from any app.
  */
 export function registerVoiceIpc(backend: BackendManager): void {
   installShellPermissions()
@@ -30,6 +33,7 @@ export function registerVoiceIpc(backend: BackendManager): void {
     return granted ? 'granted' : microphoneStatus()
   })
   ipcMain.handle(IPC.voiceAudioWsUrl, (_event, kind: AudioWsKind) => backend.audioWsUrl(kind))
+  ipcMain.handle(IPC.voiceSystemSpeech, (_event, text: unknown): Promise<SystemSpeech> => hostPlatform().systemSpeech(typeof text === 'string' ? text : '', systemLanguages()[0] ?? ''))
 }
 
 function microphoneStatus(): MicPermission {

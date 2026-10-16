@@ -139,10 +139,10 @@ vi.mock('../lib/voice/speak-stream.ts', async () => {
     $speakLevel: atom(0),
     SpeakStream,
     stopFallbackAudio: () => undefined,
-    speakOnce: async (text: string) => {
-      if (text.trim()) {
-        edges.spoken.push(text.trim())
-      }
+    playbackTicket: () => () => true,
+    synthesizeOnce: async (text: string) => (text.trim() ? { src: text.trim(), provider: 'edge' } : null),
+    playClip: async (src: string) => {
+      edges.spoken.push(src)
     }
   }
 })

@@ -299,6 +299,78 @@ def test_slides_print_what_they_read(monkeypatch, capsys):
     assert all(timeout >= 60 for timeout in timeouts)
 
 
+def test_calc_words_become_calc_commands(monkeypatch):
+    assert cli.calc_request(["20%", "of", "84.50"]) == ("calc.eval", {"text": "20% of 84.50"})
+    assert cli.calc_request(["2,400 + 180 split 3 ways", "--steps"]) == ("calc.eval", {"text": "2,400 + 180 split 3 ways"})
+    assert cli.calc_request(["--json", "-5", "+", "3"]) == ("calc.eval", {"text": "-5 + 3"})
+    assert cli.calc_request(["convert", "5", "km", "miles"]) == ("calc.convert", {"value": "5", "from": "km", "to": "miles"})
+    assert cli.calc_request(["convert", "100", "USD", "to", "BRL"]) == ("calc.convert", {"value": "100", "from": "USD", "to": "BRL"})
+    assert cli.calc_request(["convert", "5", "ft", "3", "in", "ft", "cm"]) == ("calc.convert", {"value": "5 ft 3 in", "from": "ft", "to": "cm"})
+    assert cli.calc_request(["convert", "9am", "New York", "to", "London"]) == ("calc.convert", {"value": "9am", "from": "New York", "to": "London"})
+    assert cli.calc_request(["history"]) == ("calc.history", {})
+    assert cli.calc_request(["history", "that", "mortgage", "thing"]) == ("calc.history", {"query": "that mortgage thing"})
+    assert cli.calc_request(["open"]) == ("calc.open", {})
+    assert cli.calc_request(["open", "rent = 1,200"]) == ("calc.open", {"text": "rent = 1,200"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("rent = 1,200\nrent * 12\n"))
+    assert cli.calc_request(["-"]) == ("calc.eval", {"text": "rent = 1,200\nrent * 12\n"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(" \n"))
+    for wrong in ([], ["--steps"], ["convert", "5", "km"], ["-"]):
+        with pytest.raises(SystemExit) as stopped:
+            cli.calc_request(wrong)
+        assert stopped.value.code == 2, wrong
+
+
+def test_calc_prints_the_answer_its_working_or_its_data(monkeypatch, capsys):
+    tip = {"input": "84.50 + 15%", "display": "97.18", "value": "97.175", "kind": "number", "steps": ["84.50 + 15% = 84.50 × 1.15", "= 97.175"]}
+    reais = {"input": "100 USD in BRL", "display": "R$545.45", "value": "545.454545", "kind": "currency", "unit": "BRL", "steps": ["100 USD = 90.91 EUR", "= R$545.45"], "ratesDate": "2026-10-15"}
+    note = {"input": "rent = 1,200\nrent * 12\n5 kg + 2 m", "display": "14,400", "value": "14400", "kind": "number", "steps": [], "lines": [
+        {"index": 0, "source": "rent = 1,200", "display": "1,200"},
+        {"index": 1, "source": "rent * 12", "display": "14,400"},
+        {"index": 2, "source": "5 kg + 2 m", "error": "A mass and a length don't add up"},
+    ]}
+    replies = {
+        "84.50 + 15%": {"ok": True, "summary": "84.50 + 15% = 97.18", "data": tip},
+        "100 USD in BRL": {"ok": True, "summary": "100 USD in BRL = R$545.45 (ECB reference rates of 2026-10-15)", "data": reais},
+        note["input"]: {"ok": True, "summary": "rent * 12 = 14,400; 1 line has no answer", "data": note},
+    }
+    history = {"ok": True, "summary": "2 calculations, newest first", "items": [{"input": "84.50 + 15%", "result": "97.18"}, {"input": "rent =\n1,200", "result": "1,200"}], "data": {"query": "", "count": 2}}
+    sent = []
+
+    def run_os_wait(command, args=None, timeout=30):
+        sent.append((command, args, timeout))
+        return history if command == "calc.history" else {"ok": True, "summary": "Opened Herald Calc"} if command == "calc.open" else replies[args["text"]]
+
+    monkeypatch.setattr(cli, "run_os_wait", run_os_wait)
+    assert cli.calc_cmd(["84.50 + 15%"]) == 0
+    assert capsys.readouterr().out == "97.18\n"
+    cli.calc_cmd(["84.50 + 15%", "--steps"])
+    assert capsys.readouterr().out == "97.18\n  84.50 + 15% = 84.50 × 1.15\n  = 97.175\n"
+    cli.calc_cmd(["100 USD in BRL", "--steps"])
+    assert capsys.readouterr().out.splitlines()[-1] == "  (ECB reference rates of 2026-10-15)"
+    cli.calc_cmd(["100 USD in BRL", "--json"])
+    assert json.loads(capsys.readouterr().out) == reais
+    cli.calc_cmd([note["input"]])
+    assert capsys.readouterr().out == "rent = 1,200\t1,200\nrent * 12\t14,400\n5 kg + 2 m\t! A mass and a length don't add up\n"
+    cli.calc_cmd(["history"])
+    assert capsys.readouterr().out == "84.50 + 15% = 97.18\nrent = 1,200 = 1,200\n"
+    cli.calc_cmd(["history", "--json"])
+    assert json.loads(capsys.readouterr().out)["items"][0] == {"input": "84.50 + 15%", "result": "97.18"}
+    cli.calc_cmd(["open"])
+    assert capsys.readouterr().out == "Opened Herald Calc\n"
+    assert [command for command, _, _ in sent] == ["calc.eval"] * 5 + ["calc.history"] * 2 + ["calc.open"]
+    assert all(timeout >= 30 for _, _, timeout in sent)
+
+
+def test_calc_fails_with_the_engines_words(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "relay", lambda cmd, args, *rest, **kwargs: calls.append((cmd, args)) or {"ok": False, "error": 'Herald Calc does not know "banana"'})
+    with pytest.raises(SystemExit) as stopped:
+        cli.calc_cmd(["banana", "+", "2"])
+    assert stopped.value.code == 1
+    assert calls == [("os-run", ["calc.eval", json.dumps({"text": "banana + 2"})])]
+    assert 'Herald Calc does not know "banana"' in capsys.readouterr().err
+
+
 def test_herald_keymap_is_the_template():
     assert cli.render_keymap(TEMPLATE, "herald") == TEMPLATE
 

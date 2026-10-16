@@ -272,34 +272,65 @@ export class SpeakStream {
 }
 
 let fallbackAudio: HTMLAudioElement | null = null
+/** Bumped by every barge-in, stop and end of conversation. */
+let silencedAt = 0
+
+/** False once barge-in, the stop button or the end of the conversation silenced the player after the ticket was taken. */
+export type PlaybackTicket = () => boolean
+
+/** Take before a line is synthesized, so a line silenced while it was being made never starts late. */
+export function playbackTicket(): PlaybackTicket {
+  const taken = silencedAt
+
+  return () => silencedAt === taken
+}
+
+/** A whole line synthesized by Hermes's voice, and the provider that spoke it. */
+export interface SpokenClip {
+  src: string
+  provider: string | null
+}
 
 /**
  * Whole-utterance TTS through `POST /api/audio/speak` (providers without a chunked API, and short
- * announcements). Resolves when playback ends; rejects when synthesis fails.
+ * announcements); null when there is nothing to say. Rejects when synthesis fails.
  */
-export async function speakOnce(text: string, signal?: { stopped: boolean }): Promise<void> {
+export async function synthesizeOnce(text: string): Promise<SpokenClip | null> {
   const trimmed = text.trim()
 
   if (!trimmed) {
+    return null
+  }
+
+  const result = await rest.post<{ ok: boolean; data_url?: string; provider?: string | null }>('/api/audio/speak', { text: trimmed })
+
+  return result?.data_url ? { src: result.data_url, provider: result.provider ?? null } : null
+}
+
+/**
+ * Play one clip on the whole-utterance player, in place of whatever it was playing. Resolves when
+ * the clip ends or is silenced (and at once when `ticket` has gone stale); rejects when it cannot
+ * be played. `onPlaying` runs once the clip is audible.
+ */
+export async function playClip(src: string, ticket?: PlaybackTicket, onPlaying?: () => void): Promise<void> {
+  if (ticket && !ticket()) {
     return
   }
 
-  const result = await rest.post<{ ok: boolean; data_url?: string }>('/api/audio/speak', { text: trimmed })
-
-  if (!result?.data_url || signal?.stopped) {
-    return
-  }
-
-  stopFallbackAudio()
-  const audio = new Audio(result.data_url)
+  silence()
+  const audio = new Audio(src)
   fallbackAudio = audio
 
   await new Promise<void>((resolve, reject) => {
+    settle.set(audio, resolve)
     audio.onended = () => resolve()
-    // Clearing `src` on an intentional stop also fires `error`; only a real failure rejects.
+    // An error or a refused play() after an intentional stop is not a failure; only a real one rejects.
     audio.onerror = () => (stoppedAudio.has(audio) ? resolve() : reject(new Error('audio playback failed')))
     audio.onpause = () => resolve()
-    audio.play().catch(error => (stoppedAudio.has(audio) ? resolve() : reject(error)))
+    audio
+      .play()
+      .then(() => onPlaying?.())
+      .catch(error => (stoppedAudio.has(audio) ? resolve() : reject(error)))
   })
 
   stoppedAudio.delete(audio)
@@ -309,10 +340,22 @@ export async function speakOnce(text: string, signal?: { stopped: boolean }): Pr
   }
 }
 
-const stoppedAudio = new WeakSet<HTMLAudioElement>()
+/** Synthesize a line with Hermes's voice and play it. Resolves when playback ends; rejects when synthesis fails. */
+export async function speakOnce(text: string, signal?: { stopped: boolean }): Promise<void> {
+  const ticket = playbackTicket()
+  const clip = await synthesizeOnce(text)
 
-/** Barge-in / end of conversation: silence the whole-utterance player without reporting an error. */
-export function stopFallbackAudio(): void {
+  if (clip && !signal?.stopped) {
+    await playClip(clip.src, ticket)
+  }
+}
+
+const stoppedAudio = new WeakSet<HTMLAudioElement>()
+/** Ends a clip's wait when it is stopped: once `load()` follows `pause()`, Chromium fires neither `pause` nor `error`. */
+const settle = new WeakMap<HTMLAudioElement, () => void>()
+
+/** Stop the clip playing now; lines still being synthesized keep their turn. */
+function silence(): void {
   if (fallbackAudio) {
     const audio = fallbackAudio
     fallbackAudio = null
@@ -320,5 +363,12 @@ export function stopFallbackAudio(): void {
     audio.pause()
     audio.removeAttribute('src')
     audio.load()
+    settle.get(audio)?.()
   }
+}
+
+/** Barge-in / end of conversation: silence the whole-utterance player without reporting an error, and drop lines still being made. */
+export function stopFallbackAudio(): void {
+  silencedAt++
+  silence()
 }

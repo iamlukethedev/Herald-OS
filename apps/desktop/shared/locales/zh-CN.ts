@@ -56,6 +56,7 @@ export const zhCN: Translation = {
   'app.sheets': 'Herald Sheets',
   'app.slides': 'Herald Slides',
   'app.room': '宠物小屋',
+  'app.calc': 'Herald Calc',
   'app.applications': '应用程序',
 
   'space.personal': '个人',
@@ -370,5 +371,22 @@ export const zhCN: Translation = {
   'settings.general.sleepAfter': '睡眠',
   'settings.general.sleepHint': '无操作多少分钟后睡眠。',
   'settings.general.neverSleep': '从不：只有在你要求时电脑才会睡眠。',
-  'settings.general.sleepMinutes': '睡眠前的分钟数'
+  'settings.general.sleepMinutes': '睡眠前的分钟数',
+
+  'voice.fallback.title': '语音',
+  'voice.fallback.usingSystem': '{voice}暂时无法使用，Herald OS 正在改用{system}。',
+  'voice.fallback.noSystemVoice': '{voice}暂时无法使用，本机也没有可以代替它的系统语音。',
+  'voice.fallback.systemFailed': '{voice}暂时无法使用，{system}也没能朗读。',
+  'voice.fallback.updateHermes': '更新 Hermes 通常可以解决。',
+  'voice.fallback.pickAnother': '你可以在“设置”>“语音”中选择其他语音。',
+  'voice.name.edge': '微软的免费语音',
+  'voice.name.provider': '{provider} 语音',
+  'voice.name.hermes': 'Hermes 的语音',
+  'voice.name.mac': 'Mac 自带的语音',
+  'voice.name.system': '系统语音',
+  'voice.test.provider': '{voice}已朗读问候语。',
+  'voice.test.usedSystem': '{voice}无法使用，已改由{system}朗读问候语。',
+  'voice.test.noSystemVoice': '{voice}无法使用，本机也没有可以代替它的系统语音。',
+  'voice.test.systemFailed': '{voice}无法使用，{system}也没能朗读。',
+  'voice.test.playbackFailed': 'Herald OS 无法播放测试语句。'
 }

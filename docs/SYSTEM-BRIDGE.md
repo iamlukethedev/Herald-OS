@@ -26,13 +26,14 @@ unrestricted machine access.
 | `docs` | read / act / mutate / destructive | Herald Docs, the word processor: what is open (`list_all` across Herald Docs, Sheets and Slides), opening and starting documents (blank, from a template, or with Markdown), reading, finding, writing Markdown where it belongs (the end, a heading's section, the selection, the text marked for the request), find and replace, formatting, tables, pictures, page setup for the document or one section, headers and footers, page numbers and other fields, footnotes and endnotes, section breaks, comments (adding one or a review's worth in one step, replying, resolving, deleting), tables of contents, templates, statistics, a Herald Sheets range as a table, several edits as one step, saving, PDFs and undo. Each action is a `docs.*` command; removing a header or footer, a note, a section break, a comment or a table of contents asks, and saving over a file, or changing a file that is not open, asks every time. Used by the `herald-docs` skill |
 | `sheets` | read / act / mutate / destructive | Herald Sheets, the spreadsheet: what is open, opening and starting workbooks, reading ranges (values, formulas and what the cells show), finding, writing values and formulas, filling, formatting, sorting, filtering, freezing, adding, renaming and removing sheets, replacing, cleaning data (duplicates, spaces, numbers and dates kept as text, splitting, case, filling down, highlighting duplicates, sorting by several columns, with previews), charts (recommending, inserting, describing, changing, moving, removing), summaries of tables in live formulas, named ranges, validation and dropdown lists, comments and notes, several edits as one step, saving (`.xlsx`, `.csv`), PDFs and undo. Each action is a `sheets.*` command; removing a sheet, a chart, a name, validation rules, a comment or a note asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-sheets` skill |
 | `slides` | read / act / mutate / destructive | Herald Slides, the presentation editor: what is open, opening and starting decks (a whole deck in one call), reading, finding, adding, changing, duplicating, moving, hiding and removing slides, speaker notes, text boxes, shapes, pictures, tables, the slide master and its layouts (backgrounds, placeholders, a logo and other drawings, whether layouts and slides show them), header and footer (date, slide number, footer text), themes for the deck or chosen slides and custom themes, transitions, groups, rotating, connectors between shapes, cell borders, gradient fills, find and replace, slides from a Herald Docs document and tables or slides from a Herald Sheets range (the same rules as the editor's own), several edits as one step, saving (`.pptx`), PDFs and undo. Each action is a `slides.*` command; removing a slide, removing an element from the master or a layout, resetting the master or deleting a custom theme asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-slides` skill |
+| `calc` | read | Herald Calc's exact engine, for any arithmetic, percentage, unit, currency, date or time-zone math: `eval` works out a sentence or expression with its steps (several lines are read as a note, with names and totals), `convert` converts an amount, `plot` says what a graph of functions of x shows (zeros, local maxima and minima, asymptotes, the range of y) or what a sheet's column holds (count, smallest, largest, sum, mean) without opening a window, and `history` finds the person's past calculations. Each action is a `calc.*` command that only computes or reads; currency answers use the European Central Bank's reference rates and name their day. Showing a graph or opening Herald Calc is `os_ui` (`calc.plot`, `calc.open`). Used by the `herald-calc` skill |
 | `system_os` | act / mutate | Herald OS Linux only: install apps and anything in the install catalog (`catalog_list`, `catalog_install`, `catalog_remove`), widget plugins (`plugin_list`, `plugin_add`, `plugin_update`, `plugin_disable`, `plugin_remove`; turning one on is left to the user), reminders, themes, screenshots, lock, suspend, update, restarting Wi-Fi, Bluetooth, sound or the touchpad (`restart`) |
 
 "Start my development environment" is a skill: it composes `system_open` with Hermes's existing
 `terminal` tool rather than adding another core-shaped tool.
 
-`os_ui`, `canvas`, `docs`, `sheets` and `slides`, and `system_open` for the pages, files and folders
-it opens inside Herald OS, run commands of the shell's registry over its control socket
+`os_ui`, `canvas`, `docs`, `sheets`, `slides` and `calc`, and `system_open` for the pages, files and
+folders it opens inside Herald OS, run commands of the shell's registry over its control socket
 (`bridge/ui.py`): one JSON line per request, with the per-launch token the shell gives the backend.
 A `ui` request, which runs one command, also carries `session`: the live Hermes UI session id that
 Hermes binds for tools (`HERMES_UI_SESSION_ID`), so the shell can tell which conversation's agent ran
@@ -132,6 +133,44 @@ form. The depth commands have no forms of their own: `herald-os os <command.id> 
 any of them, as in `herald-os os sheets.insertChart '{"range": "A1:B13", "kind": "line"}'` or
 `herald-os os docs.insertToc '{"levels": 2}'`.
 
+## Herald Calc
+
+"What's 15% of 84.50", "5 km in miles", "100 USD in BRL" and "days until Dec 25" are the `calc`
+tool, with the `herald-calc` skill: Hermes uses Herald Calc's engine for every sum instead of
+working it out, and shows the working. Each action is one command of the shell's registry
+(`calc.eval`, `calc.convert`, `calc.plot`, `calc.history`), run over the control socket with a long
+timeout (100 seconds; the shell gives these commands 90), since a currency answer may fetch the
+day's rates first and a plot may read a whole workbook. Arguments the action does not take are dropped; `plot` passes `x_min` and
+`x_max` on as the command's `from` and `to`, and `history` keeps `limit` between 1 and 50.
+
+- **It changes nothing.** Every action is `read`: it runs at once, audited, and never asks. `plot`
+  always passes `show: false`, so the tool never opens a window; the registry's `calc.plot` is
+  `act` because it opens Herald Calc's graph, and Hermes runs it through `os_ui` when the person
+  wants to see the graph (`calc.open` opens Herald Calc on a view, a keypad or a new note).
+  `history` reads the history and has no way to clear it; clearing it is the person's, in Herald
+  Calc. Each answer Hermes gets is kept in that history, marked as from Hermes.
+- **What comes back.** `result` is the shell's line ("20% of 84.50 = 16.9"); then `display` (as
+  Herald shows it), `value` (exact, a plain decimal), `kind`, `unit` (a unit, or a currency's ISO
+  code), `fraction` (when the value is a fraction that never ends), `zone` (for a time), `steps`,
+  `ratesDate`, and for several lines `lines`, each with its `display` or its `error`. `plot`
+  answers with `functions` (`zeros`, `extrema`, `asymptotes`, `gaps`, `yMin`, `yMax`, `samples`)
+  and `series` (`count`, `min`, `max`, `sum`, `mean`, `first`, `last`); `history` with `items`
+  (`input`, `result`, `at`, `source`, `context`).
+- **Currency rates.** Herald Calc converts currencies at the European Central Bank's daily
+  reference rates, which Herald OS's main process fetches from Frankfurter at most once a day, only
+  when a calculation names a currency, with nothing about the person in the request. They are kept
+  for when the computer is offline, and the `calc.fetchRates` preference turns the fetch off (the
+  last rates keep answering). Every answer that used them carries `ratesDate`, the ECB's date for
+  them, and the line says "ECB reference rates of 2026-10-15".
+
+On Herald OS Linux the same commands run from a terminal: `herald-os calc "20% of 84.50"` prints
+the answer as Herald shows it, `--steps` adds the working (and the rates' date) and `--json` prints
+the command's data; `herald-os calc - < budget.txt` reads a note from stdin and prints each line
+with its answer, `herald-os calc convert 5 km miles` converts (and
+`herald-os calc convert 9am Sydney London` takes a time of day from one place to another),
+`herald-os calc history mortgage` finds past calculations, and `herald-os calc open` opens Herald
+Calc. Quote a sum that holds `*` or brackets, which the shell would read itself.
+
 ## Where the tools run
 
 Only in sessions Herald OS starts. Hermes turns a plugin's toolset on for every platform that has not
@@ -220,7 +259,7 @@ there ([the Pet Room](manual/room.md#hermes-outside-herald)).
 
 | Tier | Behaviour | Examples |
 | --- | --- | --- |
-| `read` | Runs immediately, audited | info, processes, disk usage, search |
+| `read` | Runs immediately, audited | info, processes, disk usage, search, a calculation |
 | `act` | Runs immediately, audited, surfaced as a notification | open Safari, open a repo in VS Code |
 | `mutate` | Requires confirmation; `session` and `always` are honoured, per action (`system_os` restart: per device, so allowing Wi-Fi does not allow cutting the sound) | mkdir, move, rename, restart Wi-Fi |
 | `destructive` | Always requires confirmation; per-call rule key so `always` cannot persist | kill process, trash files, save over a document |

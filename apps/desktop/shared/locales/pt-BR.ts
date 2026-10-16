@@ -62,6 +62,7 @@ export const ptBR: Translation = {
   'app.sheets': 'Herald Sheets',
   'app.slides': 'Herald Slides',
   'app.room': 'Sala dos Mascotes',
+  'app.calc': 'Herald Calc',
   'app.applications': 'Aplicativos',
 
   'space.personal': 'Pessoal',
@@ -386,5 +387,22 @@ export const ptBR: Translation = {
   'settings.general.sleepAfter': 'Entrar em repouso após',
   'settings.general.sleepHint': 'Minutos sem atividade.',
   'settings.general.neverSleep': 'Nunca: o computador só entra em repouso quando você pedir.',
-  'settings.general.sleepMinutes': 'Minutos até entrar em repouso'
+  'settings.general.sleepMinutes': 'Minutos até entrar em repouso',
+
+  'voice.fallback.title': 'Voz',
+  'voice.fallback.usingSystem': '{voice} não está funcionando agora, então o Herald OS está usando {system}.',
+  'voice.fallback.noSystemVoice': '{voice} não está funcionando agora, e não há neste computador uma voz do sistema que possa substituí-la.',
+  'voice.fallback.systemFailed': '{voice} não está funcionando agora, e {system} também não conseguiu falar.',
+  'voice.fallback.updateHermes': 'Atualizar o Hermes costuma resolver.',
+  'voice.fallback.pickAnother': 'Você pode escolher outra voz em Configurações > Voz.',
+  'voice.name.edge': 'A voz gratuita da Microsoft',
+  'voice.name.provider': 'A voz de {provider}',
+  'voice.name.hermes': 'A voz do Hermes',
+  'voice.name.mac': 'a voz do seu Mac',
+  'voice.name.system': 'a voz do sistema',
+  'voice.test.provider': '{voice} disse olá.',
+  'voice.test.usedSystem': '{voice} falhou, então {system} disse olá no lugar dela.',
+  'voice.test.noSystemVoice': '{voice} falhou, e não há neste computador uma voz do sistema que possa substituí-la.',
+  'voice.test.systemFailed': '{voice} falhou, e {system} também não conseguiu falar.',
+  'voice.test.playbackFailed': 'O Herald OS não conseguiu tocar a frase de teste.'
 }

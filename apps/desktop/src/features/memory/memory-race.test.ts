@@ -17,16 +17,19 @@ const WRITER = fileURLToPath(new URL('./memory-race.writer.py', import.meta.url)
 const HERMES_CHECKOUT = fileURLToPath(new URL('../../../../../upstream/hermes-agent', import.meta.url))
 const COUNT = 60
 
-const hasPython = (() => {
+const canImport = (module: string) => {
   try {
-    execFileSync('python3', ['-c', 'import fcntl'], { stdio: 'ignore' })
+    execFileSync('python3', ['-c', `import ${module}`], { stdio: 'ignore' })
 
     return true
   } catch {
     return false
   }
-})()
+}
+const hasPython = canImport('fcntl')
 const hasHermes = hasPython && fs.existsSync(path.join(HERMES_CHECKOUT, 'tools', 'memory_tool_store.py'))
+// CI installs PyYAML (apps/desktop/test-requirements.txt), so there a missing one fails the test instead of skipping it.
+const lacksPyYaml = hasHermes && !process.env.CI && !canImport('yaml')
 
 let home: string
 
@@ -66,7 +69,9 @@ describe.skipIf(!hasPython)('MEMORY.md written from several processes at once', 
     expect(fs.readdirSync(path.join(home, 'memories')).sort()).toEqual(['MEMORY.md', 'MEMORY.md.lock'])
   }, 60_000)
 
-  it.skipIf(!hasHermes)("loses nothing between Herald and Hermes's own MemoryStore", async () => {
+  it.skipIf(!hasHermes)("loses nothing between Herald and Hermes's own MemoryStore", async ({ skip }) => {
+    skip(lacksPyYaml, "python3 has no PyYAML, which Hermes's MemoryStore imports: install apps/desktop/test-requirements.txt")
+
     await Promise.all([herald('a'), run('python3', [WRITER, 'h', String(COUNT), HERMES_CHECKOUT])])
 
     expect(onDisk()).toEqual(expected('a', 'h'))

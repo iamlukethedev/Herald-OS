@@ -98,6 +98,7 @@ export function Dock() {
   const main = windows[MAIN_WINDOW_ID]
   const canvasOpen = Object.values(windows).some(w => w.appId === 'canvas')
   const roomOpen = Object.values(windows).some(w => w.appId === 'room')
+  const calcOpen = Object.values(windows).some(w => w.appId === 'calc')
   const officeKey = Object.values(windows)
     .map(w => w.appId)
     .filter(isOfficeApp)
@@ -166,12 +167,13 @@ export function Dock() {
       },
       running: officeKey !== ''
     })
+    list.push({ id: 'calc', label: 'Herald Calc', render: () => <span className="icon-tile size-11 rounded-[11px]"><AppGlyph id="calc" size={22} /></span>, onClick: () => openApp('calc'), running: calcOpen })
     list.push({ id: 'applications', label: 'Applications', render: () => <span className="icon-tile size-11 rounded-[11px]"><AppGlyph id="grid" size={22} /></span>, onClick: () => $applicationsOpen.set(true) })
     list.push({ id: 'trash', label: 'Trash', render: () => <span className="flex size-11 items-center justify-center rounded-[11px] bg-white/6 text-fg-2"><AppGlyph id="trash" size={22} /></span>, onClick: () => void window.heraldOS.fs.openPath(trashPath).catch(logFailure('fs.openPath')) })
 
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apps, iconFor, main?.phase, platform, roomOpen, canvasOpen, officeKey])
+  }, [apps, iconFor, main?.phase, platform, roomOpen, canvasOpen, officeKey, calcOpen])
 
   const barRef = useRef<HTMLDivElement>(null)
   const { onMove, onLeave } = useDockMagnification(barRef)

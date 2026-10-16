@@ -1,0 +1,5 @@
+# Kernel arguments for the NVIDIA image (linux/image/nvidia.sh): nouveau and nova stay out of the
+# initramfs as well, where the modprobe.d blacklist that negativo17's driver ships does not reach.
+# Their nvidia-boot-update edits the boot loader instead, which does nothing in an image build.
+kargs = ["rd.driver.blacklist=nouveau", "rd.driver.blacklist=nova-core"]
+match-architectures = ["x86_64"]

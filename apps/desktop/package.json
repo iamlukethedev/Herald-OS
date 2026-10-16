@@ -1,7 +1,7 @@
 {
   "name": "@herald-os/desktop",
   "productName": "Herald OS",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "private": true,
   "description": "The Herald OS shell: menu bar, dock, windows and apps for an agent-native operating system.",
   "author": "Luke The Dev",
@@ -101,6 +101,7 @@
     "echarts": "6.1.0",
     "exceljs": "4.4.0",
     "jszip": "3.10.2",
+    "mathjs": "15.2.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm": "3.1.0",
     "mdast-util-to-markdown": "2.1.2",
@@ -162,6 +163,8 @@
       "!**/node_modules/{pptxgenjs,image-size,queue}/**",
       "!**/node_modules/{jszip,lie,setimmediate}/**",
       "!**/node_modules/{echarts,zrender}/**",
+      "!**/node_modules/{mathjs,complex.js,fraction.js,typed-function,tiny-emitter,escape-latex,javascript-natural-sort,seedrandom}/**",
+      "!**/node_modules/@babel/runtime/**",
       "!**/node_modules/{onnxruntime-web,onnxruntime-common}/**",
       "!**/node_modules/@tabler/**",
       "!**/node_modules/ag-psd/**"

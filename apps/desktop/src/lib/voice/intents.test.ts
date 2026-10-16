@@ -1,6 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CommandSummary } from '../../store/os-commands.ts'
 import { type MatchContext, matchIntent, normaliseUtterance } from './intents.ts'
+
+// A slice of Herald Calc's vocabulary and places for the spoken math grammar.
+vi.mock('../../features/calc/engine/vocabulary.ts', () => ({
+  UNIT_WORDS: new Set(['km', 'mile', 'miles', 'litre', 'cup', 'cups', 'kg']),
+  LENGTH_WORDS: new Set(['km', 'mile', 'miles']),
+  CURRENCY_WORDS: new Set(['dollars', 'euros', 'usd']),
+  MATH_WORDS: new Set(['sqrt', 'pi', 'plus'])
+}))
+vi.mock('../../features/calc/engine/zones.ts', () => ({ zoneNames: () => ['tokyo', 'sydney', 'new york'], findZone: () => null, evaluateZoneLine: () => null }))
+
+const CALC: CommandSummary = { id: 'calc.eval', title: 'Calculate', description: '', tier: 'read', hidden: false, args: [{ name: 'text', type: 'string', description: '', required: true }], phrases: [] }
 
 // A slice of the real catalogue's phrases (the registry itself needs the DOM to import).
 const commands: CommandSummary[] = [
@@ -134,6 +145,100 @@ describe('matchIntent', () => {
     expect(match('new chat')?.confidence).toBe(1)
     expect(match('open missions')?.confidence).toBeLessThan(1)
   })
+
+  it('routes every request the same way with Herald Calc in the catalogue', () => {
+    const withCalc = [...commands, CALC]
+
+    for (const text of [
+      'open missions',
+      'Hey Hermes, open the memory',
+      'show me my downloads',
+      'launch Safari',
+      'open the missions page',
+      'close the terminal window',
+      'open memory',
+      'hide the sidebar',
+      'remember that I prefer short answers',
+      'what do you remember about Herald',
+      'pause the daily digest automation',
+      'start a mission to clean up my downloads',
+      'forget that I like tea',
+      'open the file I was editing yesterday afternoon in the herald project',
+      'why is my disk full',
+      'write a summary of my missions',
+      'stop the dev server on port 3000',
+      'Hey Hermes, type how hi are you?',
+      'type why is the sky blue and write me a long essay about it please',
+      'copy that',
+      'Minimise it.',
+      'minimize',
+      'Hey Hermes, open Apps.',
+      'show all apps',
+      'Open hello.pdf.',
+      'open hello dot pdf',
+      'open the file Budget.xlsx',
+      'www.openhello.pdf',
+      'hello.pdf',
+      'Hey Hermes, create a website for a hair salon.',
+      'build me an app that tracks my runs',
+      'make the app icon bigger',
+      "show me what you're doing",
+      'new chat'
+    ]) {
+      expect(matchIntent(text, withCalc), text).toEqual(match(text))
+    }
+  })
+})
+
+describe('spoken math', () => {
+  const withCalc = [...commands, CALC]
+  const route = (text: string) => matchIntent(text, withCalc)
+
+  it('answers simple math with Herald Calc at once', () => {
+    expect(route('whats 15% of 340')).toEqual({ command: 'calc.eval', args: { text: '15% of 340' }, title: 'Calculate: 15% of 340', confidence: 0.95 })
+    expect(route("Hey Hermes, what's 15% of 340?")).toMatchObject({ command: 'calc.eval', args: { text: '15% of 340' } })
+    expect(route('how many miles is 10 km')).toMatchObject({ command: 'calc.eval', args: { text: '10 km in miles' } })
+    expect(route('what is 2 plus 2')).toMatchObject({ command: 'calc.eval', args: { text: '2 + 2' } })
+    expect(route('convert 100 dollars to euros')).toMatchObject({ command: 'calc.eval', args: { text: '100 dollars in euros' } })
+    expect(route('what time is it in tokyo')).toMatchObject({ command: 'calc.eval', args: { text: 'time in tokyo' } })
+    expect(route('whats 9am sydney in new york')).toMatchObject({ command: 'calc.eval', args: { text: '9am sydney in new york' } })
+    expect(route('how many cups in a litre')).toMatchObject({ command: 'calc.eval', args: { text: '1 litre in cups' } })
+    expect(route('how many days until december 25th')).toMatchObject({ command: 'calc.eval', args: { text: 'days until december 25' } })
+  })
+
+  it('takes "calculate" and "work out" before the Office requests do', () => {
+    expect(route('calculate 15% of 340')).toMatchObject({ command: 'calc.eval', args: { text: '15% of 340' } })
+    expect(route('work out two hundred divided by eight')).toMatchObject({ command: 'calc.eval', args: { text: '200 / 8' } })
+    expect(route('Can you add 15% to 84.50?')).toMatchObject({ command: 'calc.eval', args: { text: '84.50 + 15%' } })
+  })
+
+  it('hands reasoning, personal and contextual math to Hermes', () => {
+    for (const text of [
+      'whats 15% of my rent',
+      'why is 0.1 plus 0.2 not 0.3 in javascript',
+      'explain compound interest',
+      'how much should i tip on my dinner',
+      'how much should I tip',
+      'whats the total of my invoices',
+      'calculate the total of this column',
+      'sum the March sales',
+      'work out how much I spent on food',
+      'what time is it'
+    ]) {
+      expect(route(text), text).toBeNull()
+    }
+  })
+
+  it('keeps dictation and the slots of other commands', () => {
+    expect(route('type 2 plus 2')).toMatchObject({ command: 'text.type', args: { text: '2 plus 2' } })
+    expect(route('remember that I pay 15% of my rent')).toMatchObject({ command: 'memory.add', args: { text: 'I pay 15% of my rent' } })
+    expect(route('start a mission to work out my taxes')).toMatchObject({ command: 'mission.start', args: { goal: 'work out my taxes' } })
+  })
+
+  it('leaves math to Hermes when Herald Calc is not in the catalogue', () => {
+    expect(match('what is 2 plus 2')).toBeNull()
+    expect(match('whats 15% of 340')).toBeNull()
+  })
 })
 
 describe('document requests', () => {
@@ -177,6 +282,27 @@ describe('document requests', () => {
     expect(route('undo that', { afterHermesAction: true })).toBeNull()
     expect(route('Take that back.', { afterHermesAction: true })).toBeNull()
     expect(route('copy that', { afterHermesAction: true })).toMatchObject({ command: 'edit.copy' })
+  })
+
+  it('routes every request the same way with Herald Calc in the catalogue', () => {
+    const withCalc = [...withFiles, CALC]
+
+    for (const text of [
+      'Find the invoice from Acme in my Downloads, rename it properly and put it where it belongs.',
+      'Hey Hermes, file the invoices in this folder.',
+      'organise my downloads',
+      'show me the invoices in my Downloads',
+      'pull up the receipt from the plumber',
+      'open invoice.pdf',
+      'find files named invoice',
+      'create a folder called Invoices',
+      'remember that I file my invoices by year',
+      'type rename the file',
+      'undo that',
+      'Take that back.'
+    ]) {
+      expect(matchIntent(text, withCalc), text).toEqual(route(text))
+    }
   })
 })
 
@@ -290,5 +416,40 @@ describe('Office requests', () => {
   it('still types what follows "type", word for word', () => {
     expect(route('type make this a table')).toMatchObject({ command: 'text.type', args: { text: 'make this a table' } })
     expect(route('Type add a total row.')).toMatchObject({ command: 'text.type', args: { text: 'add a total row.' } })
+  })
+
+  it('routes every request the same way with Herald Calc in the catalogue', () => {
+    const withCalc = [...withOffice, CALC]
+
+    for (const text of [
+      'Make a budget for my trip.',
+      'draft a report on our Q3 numbers',
+      'turn this into slides',
+      'add a total row',
+      'Add a column for tax.',
+      'fill in the rest of this column',
+      'sum the March sales',
+      'sort this by date',
+      'make the heading bold',
+      'can you make me a spreadsheet of my expenses',
+      'get me a spreadsheet of my monthly costs',
+      'add a new slide about pricing',
+      'make slide 3 a two-column comparison',
+      'put my budget table on a slide',
+      'go to slide 3',
+      'show slide 3',
+      'new document',
+      'Open Herald Docs',
+      'save the workbook',
+      'open budget.xlsx',
+      'make it bigger',
+      'make the terminal bigger',
+      'get me Spotify',
+      'add the meeting notes to my memory',
+      'Add a slide.',
+      'new slide'
+    ]) {
+      expect(matchIntent(text, withCalc), text).toEqual(route(text))
+    }
   })
 })

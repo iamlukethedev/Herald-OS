@@ -1,0 +1,3 @@
+# What python3 needs for npm test: memory-race.test.ts runs Hermes's own MemoryStore, which imports PyYAML.
+# The pin is Hermes's own, from its pyproject.toml at the sha in upstream/UPSTREAM.lock.
+pyyaml==6.0.3

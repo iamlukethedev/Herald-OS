@@ -123,6 +123,59 @@ export function chunkForCommentary(text: string, maxChars = COMMENTARY_MAX_CHARS
   return out
 }
 
+/** The most of a reply the computer's own voice reads, about five minutes of speech. */
+export const SYSTEM_VOICE_MAX_CHARS = 5000
+
+/** A sentence in pieces of at most `maxChars`, cut after a comma, semicolon or colon where one comes late enough, else between words. */
+function piecesUpTo(sentence: string, maxChars: number): string[] {
+  const out: string[] = []
+  let rest = sentence.trim()
+
+  while (rest.length > maxChars) {
+    const head = rest.slice(0, maxChars + 1)
+    const pause = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '), head.lastIndexOf(': '))
+    const space = head.lastIndexOf(' ')
+    const cut = pause > maxChars / 2 ? pause + 1 : space > maxChars / 2 ? space : maxChars
+    out.push(rest.slice(0, cut).trim())
+    rest = rest.slice(cut).trim()
+  }
+
+  return rest ? [...out, rest] : out
+}
+
+/**
+ * Split a line for the computer's own voice, which renders each piece whole before it plays: a
+ * short first piece starts the reply soon, and longer ones after it keep the renders few. Stops
+ * before the piece that would pass `SYSTEM_VOICE_MAX_CHARS`.
+ */
+export function chunkForSystemVoice(text: string, firstMax = 200, restMax = 600): string[] {
+  const chunker = new SentenceChunker()
+  const sentences = [...chunker.feed(text.trim()), ...chunker.flush()].map(sentence => sentence.replace(/\s+/g, ' '))
+  const pieces = sentences.flatMap((sentence, index) => piecesUpTo(sentence, index === 0 ? firstMax : restMax))
+  const out: string[] = []
+  let current = ''
+  let total = 0
+
+  for (const piece of pieces) {
+    total += piece.length + 1
+
+    if (total > SYSTEM_VOICE_MAX_CHARS + 1) {
+      break
+    }
+
+    const joined = current ? `${current} ${piece}` : piece
+
+    if (current && joined.length > (out.length === 0 ? firstMax : restMax)) {
+      out.push(current)
+      current = piece
+    } else {
+      current = joined
+    }
+  }
+
+  return current ? [...out, current] : out
+}
+
 /** Default phrases that end a conversation when they are the whole utterance. */
 export const DEFAULT_STOP_PHRASES = ['stop', 'stop listening', "that's all", 'that is all', 'thanks hermes', 'thank you hermes', 'goodbye', 'never mind', 'nevermind', 'cancel']
 

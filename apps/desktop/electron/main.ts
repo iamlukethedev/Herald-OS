@@ -13,6 +13,7 @@ import { run } from './platform/exec.ts'
 import { startEventSources } from './events/sources.ts'
 import { registerAppsIpc } from './ipc/apps.ts'
 import { registerBridgeIpc } from './ipc/bridge.ts'
+import { registerCalcIpc } from './calc/ipc.ts'
 import { registerCanvasIpc } from './canvas/ipc.ts'
 import { registerModelIpc } from './canvas/model-ipc.ts'
 import { registerOfficeIpc } from './office/ipc.ts'
@@ -294,6 +295,7 @@ function registerCoreIpc(): void {
   registerNotificationHistoryIpc()
   registerPetIpc({ hermesWindow: () => (panels ? panels.mainWindow() : mainWindow), petWindow })
   registerRoomIpc({ activity, log: roomLog })
+  registerCalcIpc({ dir: path.join(heraldOsDataDir(), 'calc'), prefs: () => readPrefs().calc })
   registerDictationIpc(() => (panels ? panels.mainWindow() : mainWindow))
   registerCatalogIpc()
   registerSetupIpc()

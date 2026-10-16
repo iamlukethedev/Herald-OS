@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import type { BrowserWindow } from 'electron'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { OsControlReply } from '../../shared/ipc.ts'
 import type { ShellHost } from './host.ts'
@@ -13,7 +14,7 @@ vi.mock('../log.ts', () => ({ log: vi.fn() }))
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'hx-'))
 vi.stubEnv('HERMES_HOME', path.join(scratch, 'hermes'))
 
-const { CONTROL_LINE_MAX, desktopControlHandler, handleUiRequest, OsControlServer, osControlToken } = await import('./os-control.ts')
+const { CONTROL_LINE_MAX, desktopControlHandler, handleUiRequest, OsCommandBridge, OsControlServer, osControlToken } = await import('./os-control.ts')
 const { ControlSocket } = await import('./control-socket.ts')
 const { ActivityHub } = await import('../room/activity.ts')
 
@@ -66,6 +67,35 @@ describe('a ui request on the control socket', () => {
     expect(await handleUiRequest(ui({ token: 'guess', session: 'a1b2c3d4' }), bridge)).toEqual({ ok: false, error: 'invalid control token' })
     expect(await handleUiRequest(ui({ token: undefined, session: 'a1b2c3d4' }), bridge)).toEqual({ ok: false, error: 'invalid control token' })
     expect(bridge.run).not.toHaveBeenCalled()
+  })
+})
+
+describe('how long the Hermes window has to answer a command', () => {
+  it('is 90 seconds for the commands that open whole files, Herald Calc among them, and 8 for the rest', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const send = vi.fn()
+      const bridge = new OsCommandBridge(() => ({ isDestroyed: () => false, webContents: { send } }) as unknown as BrowserWindow)
+      const commands = ['page.open', 'calculator.open', 'calc.plot', 'calc.evaluate', 'sheets.read', 'canvas.export']
+      const timedOut: string[] = []
+
+      for (const command of commands) {
+        void bridge.run(command, {}, 'agent').then(reply => {
+          if (reply.error) {
+            timedOut.push(command)
+          }
+        })
+      }
+
+      expect(send).toHaveBeenCalledTimes(commands.length)
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(timedOut).toEqual(['page.open', 'calculator.open'])
+      await vi.advanceTimersByTimeAsync(82_000)
+      expect(timedOut).toEqual(commands)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

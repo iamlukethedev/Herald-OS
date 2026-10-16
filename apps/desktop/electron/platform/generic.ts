@@ -1,6 +1,6 @@
 import { shell } from 'electron'
 import os from 'node:os'
-import type { CalendarResult, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelState, SystemInfo, SystemStats } from '../../shared/ipc.ts'
+import type { CalendarResult, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelState, SystemInfo, SystemSpeech, SystemStats } from '../../shared/ipc.ts'
 import { type EditorTarget, type HostPlatform, HostNotSupported } from './types.ts'
 
 /**
@@ -96,5 +96,9 @@ export class GenericPlatform implements HostPlatform {
 
   async controlAction(): Promise<void> {
     throw new HostNotSupported('quick panels')
+  }
+
+  async systemSpeech(): Promise<SystemSpeech> {
+    return { ok: false, reason: 'missing', detail: `no system voice is known on ${process.platform}` }
   }
 }

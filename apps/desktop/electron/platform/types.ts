@@ -1,4 +1,4 @@
-import type { CalendarResult, ControlAction, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemStats } from '../../shared/ipc.ts'
+import type { CalendarResult, ControlAction, InstalledApp, NetworkStatus, ProcessInfo, RecentFile, StatusPanelId, StatusPanelState, SystemInfo, SystemSpeech, SystemStats } from '../../shared/ipc.ts'
 
 /** `editor` is the first installed of `CODE_EDITORS`; `finder` shows the item in the file manager. */
 export type EditorTarget = 'editor' | 'finder' | 'terminal'
@@ -32,6 +32,8 @@ export interface HostPlatform {
   controlStatus(panel: StatusPanelId): Promise<StatusPanelState>
   /** Change something from a quick panel; HostNotSupported where the platform keeps that for itself. */
   controlAction(action: ControlAction): Promise<void>
+  /** `text` said by the computer's own voice as a WAV clip, for when Hermes cannot speak; `locale` is the system's language. */
+  systemSpeech(text: string, locale: string): Promise<SystemSpeech>
 }
 
 export class HostNotSupported extends Error {

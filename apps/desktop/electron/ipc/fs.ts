@@ -769,11 +769,29 @@ export const SCRATCH_FILE = /^\.hermes-tmp\.|^\.herald-tmp\.|^\.mem_.*\.tmp$|^\.
 
 const skipped = (relative: string): boolean => relative.split(path.sep).some(part => SKIPPED_DIRS.has(part)) || SCRATCH_FILE.test(path.basename(relative))
 
+type FolderPlace = 'home' | 'inside' | 'temporary'
+
+/** Where a project folder may sit: the home folder itself (`~` and `~/` name it alike), inside it, or in a temporary folder. Anywhere else is `null`. */
+export function folderPlace(root: string, home: string): FolderPlace | null {
+  if (root === home || root === home + path.sep) {
+    return 'home'
+  }
+
+  if (root.startsWith(home + path.sep)) {
+    return 'inside'
+  }
+
+  return root.startsWith('/tmp/') || root.startsWith('/private/tmp/') ? 'temporary' : null
+}
+
+/** A chat with no project works in the home folder, so the home folder is accepted: listed one level deep, and never watched. */
+const atHome = (root: string): boolean => folderPlace(root, os.homedir()) === 'home'
+
 /** Project folders must be real directories inside the home folder. */
 async function projectRoot(target: string): Promise<string> {
   const root = await assertProjectFolder(target)
 
-  if (!root.startsWith(os.homedir() + path.sep) && !root.startsWith('/tmp/') && !root.startsWith('/private/tmp/')) {
+  if (!folderPlace(root, os.homedir())) {
     throw new Error('project folders must be inside your home folder')
   }
 
@@ -784,8 +802,17 @@ async function projectRoot(target: string): Promise<string> {
   return root
 }
 
-async function listTree(target: string, limit: number): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
+/** Left out of the home folder's listing: `Library` and everything starting with a dot (`.Trash`, `.ssh`, `.hermes`). */
+const hiddenAtHome = (name: string): boolean => name === 'Library' || name.startsWith('.')
+
+/**
+ * List a project folder. The home folder is listed one level deep and without `Library` and dot-entries: a deeper
+ * walk opens ~/Desktop, ~/Documents and ~/Downloads (macOS asks permission for each) and everything else the apps keep there.
+ */
+export async function listTree(target: string, limit: number): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
   const root = await projectRoot(target)
+  const listingHome = atHome(root)
+  const maxDepth = listingHome ? 0 : 10
   const entries: TreeEntry[] = []
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
   const secret = await secretsUnder(root)
@@ -801,7 +828,7 @@ async function listTree(target: string, limit: number): Promise<{ entries: TreeE
     }
 
     for (const dirent of dirents) {
-      if (SKIPPED_DIRS.has(dirent.name) || SCRATCH_FILE.test(dirent.name)) {
+      if (SKIPPED_DIRS.has(dirent.name) || SCRATCH_FILE.test(dirent.name) || (listingHome && hiddenAtHome(dirent.name))) {
         continue
       }
 
@@ -818,7 +845,7 @@ async function listTree(target: string, limit: number): Promise<{ entries: TreeE
       if (dirent.isDirectory()) {
         entries.push({ path: full, kind: 'directory' })
 
-        if (depth < 10) {
+        if (depth < maxDepth) {
           queue.push({ dir: full, depth: depth + 1 })
         }
       } else if (dirent.isFile() || dirent.isSymbolicLink()) {
@@ -852,9 +879,18 @@ function stopTree(watch: TreeWatch): void {
   }
 }
 
-/** Report changes under a project folder to the renderer, batched, ignoring dependencies and build output. */
-async function watchTree(owner: WebContents, target: string): Promise<string> {
+/**
+ * Report changes under a project folder to the renderer, batched, ignoring dependencies and build output.
+ * The home folder is never watched, so its watch id is `null`: everything under it changes all the time
+ * (`Library`, `~/.hermes`, caches) and none of it is a project's files.
+ */
+export async function watchTree(owner: WebContents, target: string): Promise<string | null> {
   const root = await projectRoot(target)
+
+  if (atHome(root)) {
+    return null
+  }
+
   const watchId = `tree-${++treeWatchCounter}`
   const secret = await secretsUnder(root)
   const watch: TreeWatch = { watcher: watchFs(root, { recursive: true }), pending: new Set(), timer: null }

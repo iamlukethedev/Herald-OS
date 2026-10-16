@@ -56,7 +56,8 @@ on the Mac (QEMU or UTM).
 (optional encryption, dual boot, unattended through kickstart) and an aarch64 VM image, `bootc
 upgrade` and `bootc rollback` behind `herald-os update` and `herald-os rollback`, first-boot setup and
 reset, firewall and SSH off by default, fingerprint and security-key sign-in, firmware updates,
-signed images. Still to come: a recovery partition, an NVIDIA image, Fedora Asahi for M1 and M2.
+signed images, an NVIDIA image (ADR-029) and laptop Wi-Fi and sound firmware. Still to come: a
+recovery partition, an NVIDIA installer ISO, Fedora Asahi for M1 and M2.
 Apple Silicon M3 and later stay VM-only until Asahi covers them.
 
 ## Arch and Omarchy (ADR-017)

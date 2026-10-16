@@ -4,8 +4,8 @@
 # A local tarball builds too: HERALD_OS_TARBALL_URL=file:///path/herald-os-<v>-linux-x64.tar.gz makepkg -si --skipchecksums
 
 pkgname=herald-os-bin
-_version=0.1.0-alpha.4
-pkgver=0.1.0alpha.4
+_version=0.1.0-alpha.5
+pkgver=0.1.0alpha.5
 pkgrel=1
 pkgdesc='An AI-native desktop built around Hermes Agent: a niri session, or an app inside Hyprland and Omarchy'
 arch=('x86_64' 'aarch64')
@@ -33,6 +33,7 @@ optdepends=(
   'tesseract: copying text from the screen'
   'libheif: opening HEIC photos in Herald Canvas'
   'imagemagick: opening TIFF and camera RAW files in Herald Canvas'
+  'flite: the system voice, in English, when Hermes cannot speak'
   'flatpak: installing apps from the catalog'
   'podman: the Windows VM and containers'
   'yay: AUR installs from the catalog'
@@ -44,10 +45,11 @@ install=herald-os.install
 source=('herald-os-package.sh')
 source_x86_64=("herald-os-${_version}-x64.tar.gz::${HERALD_OS_TARBALL_URL:-$url/releases/download/v${_version}/herald-os-${_version}-linux-x64.tar.gz}")
 source_aarch64=("herald-os-${_version}-arm64.tar.gz::${HERALD_OS_TARBALL_URL:-$url/releases/download/v${_version}/herald-os-${_version}-linux-arm64.tar.gz}")
-# From the release's .sha256 files; a tarball of your own (HERALD_OS_TARBALL_URL) needs --skipchecksums.
+# From the release's .sha256 files, filled in for the tarballs once the release is built; a tarball
+# of your own (HERALD_OS_TARBALL_URL) needs --skipchecksums.
 sha256sums=('120a3b0922a8677c6790af4a93b04109030b5d7201bc85125b62031b152c247c')
-sha256sums_x86_64=('30f80de8d6f07329943b6ef0be81c951a4a0021a9382c699b4f7967eb7726d44')
-sha256sums_aarch64=('afc0402261893e7b731ebd0fb776b47e95ecfacc6e48878764f8b5c41a8988f5')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
   source "$srcdir/herald-os-package.sh"
