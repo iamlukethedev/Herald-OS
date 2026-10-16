@@ -215,10 +215,14 @@ boot does more, as in [Switching a bootc system to Herald OS](LINUX.md#switching
 
 Afterwards, on your build:
 
-- `herald-os update` runs `bootc upgrade`, which follows the image `bootc status` shows: rebuild or
-  push the same tag, then update.
-- `herald-os channel stable` and `herald-os channel edge` keep the repository of that image and
-  change only the tag, so they work only where `stable` and `edge` tags exist.
+- `herald-os update` runs `bootc upgrade` (or `rpm-ostree upgrade` when packages are layered),
+  which follows the image `bootc status` shows: rebuild or push the same tag, then update.
+- `herald-os channel stable` and `herald-os channel edge` need a registry image. They keep the
+  repository of the image `bootc status` shows, change only the tag and run `bootc switch` with
+  bootc's default transport, the registry, so they work only where `stable` and `edge` tags exist
+  there. After `bootc switch --transport containers-storage`, the channel switch looks for
+  `localhost/herald-os:<channel>` in a registry, fails and leaves the channel as it was; switch
+  back to a registry image with `bootc switch` first.
 - Keep `IMAGE_ID=herald-os`. `herald-os` and `herald-os-update` tell the Herald OS image from other
   bootc systems by that line, and leave other systems' updates and rollbacks alone.
 
@@ -310,10 +314,8 @@ maintainer's steps for turning signing on.
 
 ### An NVIDIA variant
 
-There is none. The image has Fedora's open-source graphics drivers, which cover AMD and Intel
-([Games](manual/games.md)), and the workflow builds one image per architecture.
-[#62](https://github.com/iamlukethedev/Herald-OS/issues/62), an NVIDIA variant, was closed as not
-planned for now.
+No NVIDIA variant yet; [#154](https://github.com/iamlukethedev/Herald-OS/issues/154) tracks NVIDIA
+drivers for x86_64.
 
 ## Checking a change
 
