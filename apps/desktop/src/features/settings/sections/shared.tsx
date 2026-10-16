@@ -35,14 +35,15 @@ export function markSaved(): void {
 }
 
 // Messages the gateway client raises in English, word for word.
-const KNOWN_ERRORS: Partial<Record<string, TextKey>> = {
-  'gateway not connected': 'settings.agents.gatewayNotConnected'
-}
+// A Map, so inherited object keys such as 'toString' or '__proto__' never match.
+const KNOWN_ERRORS: ReadonlyMap<string, TextKey> = new Map<string, TextKey>([
+  ['gateway not connected', 'settings.agents.gatewayNotConnected']
+])
 
 /** What went wrong, in the person's language when it is a message Herald knows; any other as it came. */
 export function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  const known = KNOWN_ERRORS[message]
+  const known = KNOWN_ERRORS.get(message.trim().toLowerCase())
 
   return known ? t(known) : message
 }
