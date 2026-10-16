@@ -348,7 +348,8 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
     try {
       const stat = await fs.stat((await assertReadable(String(target))).real)
 
-      return stat.isDirectory() ? 'directory' : 'file'
+      // A FIFO, socket or device is neither a picture nor a project: it looks missing too.
+      return stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : null
     } catch {
       return null
     }

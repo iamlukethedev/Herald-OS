@@ -1599,4 +1599,10 @@ describe.runIf(process.platform !== 'win32')('FIFOs and other special files', ()
     expect(fs.statSync(pipe).isFile()).toBe(true)
     expect(fs.readFileSync(pipe, 'utf8')).toBe('saved')
   })
+
+  it('answers exists with neither file nor folder for a FIFO', async () => {
+    expect(await invoke(IPC.canvasExists, fifo('Pictures/pipe.png'))).toBeNull()
+    expect(await invoke(IPC.canvasExists, `${home}/notes.md`)).toBe('file')
+    expect(await invoke(IPC.canvasExists, `${home}/Projects`)).toBe('directory')
+  })
 })
