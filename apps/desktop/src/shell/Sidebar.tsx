@@ -4,13 +4,15 @@ import { useRef, useState } from 'react'
 import { AppGlyph, HermesAvatar } from '../components/app-icon.tsx'
 import { cn } from '../lib/cn.ts'
 import { shortcutLabel } from '../lib/platform-labels.ts'
+import { useT } from '../store/i18n.ts'
 import { $sidebar, SIDEBAR_COLLAPSED, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_SNAP, setSidebarCollapsed, setSidebarWidth, toggleSidebar } from '../store/sidebar.ts'
-import { $activeSpace, $spaces, addSpace, setActiveSpace } from '../store/spaces.ts'
+import { $activeSpace, $spaces, addSpace, setActiveSpace, spaceLabel } from '../store/spaces.ts'
 import { $page, showPage } from '../store/windows.ts'
-import { PAGES } from './apps.ts'
+import { appName, PAGES } from './apps.ts'
 
 /** The persistent left rail of the main Hermes window: identity, pages, spaces. Resizable; collapses to icons. */
 export function Sidebar() {
+  const t = useT()
   const page = useStore($page)
   const spaces = useStore($spaces)
   const active = useStore($activeSpace)
@@ -77,14 +79,15 @@ export function Sidebar() {
         {!collapsed && (
           <>
             <div className="mt-2.5 text-[15px] font-semibold leading-tight text-fg">Hermes</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-fg-3 italic">A more capable you. Always.</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-fg-3 italic">{t('sidebar.tagline')}</div>
           </>
         )}
       </div>
 
-      <nav className={cn('relative mt-5 flex flex-col gap-0.5', collapsed && 'w-full items-center')} aria-label="Pages">
+      <nav className={cn('relative mt-5 flex flex-col gap-0.5', collapsed && 'w-full items-center')} aria-label={t('sidebar.pages')}>
         {PAGES.map(def => {
           const activePage = def.id === page
+          const name = appName(def)
 
           return (
             <button
@@ -92,15 +95,21 @@ export function Sidebar() {
               type="button"
               onClick={() => showPage(def.id)}
               aria-current={activePage ? 'page' : undefined}
-              aria-label={collapsed ? def.name : undefined}
+              aria-label={collapsed ? name : undefined}
               className={cn(
                 'side-item group relative flex h-8 items-center rounded-lg text-[12.5px] transition-colors duration-150',
                 collapsed ? 'w-9 justify-center' : 'gap-2.5 px-2.5',
                 activePage ? 'bg-accent text-accent-fg shadow-[0_4px_16px_rgba(47,125,255,.45)]' : 'text-fg-2 hover:bg-white/8 hover:text-fg'
               )}
             >
-              <AppGlyph id={def.icon} size={16} stroke={1.9} className={activePage ? 'text-accent-fg' : 'text-fg-2 group-hover:text-fg'} />
-              {collapsed ? <span className="side-tip">{def.name}</span> : <span className="truncate">{def.name}</span>}
+              <AppGlyph id={def.icon} size={16} stroke={1.9} className={cn('shrink-0', activePage ? 'text-accent-fg' : 'text-fg-2 group-hover:text-fg')} />
+              {collapsed ? (
+                <span className="side-tip">{name}</span>
+              ) : (
+                <span className="min-w-0 truncate" title={name}>
+                  {name}
+                </span>
+              )}
             </button>
           )
         })}
@@ -112,24 +121,25 @@ export function Sidebar() {
         <div className="flex w-full flex-col items-center gap-1">
           {spaces.map(space => {
             const on = space.id === active.id
+            const label = spaceLabel(space)
 
             return (
               <button
                 key={space.id}
                 type="button"
                 onClick={() => setActiveSpace(space.id)}
-                aria-label={`${space.name} space`}
+                aria-label={t('sidebar.spaceNamed', { name: label })}
                 aria-pressed={on}
                 className={cn('side-item group relative flex size-7 items-center justify-center rounded-lg transition-colors duration-150', on ? 'bg-white/14' : 'hover:bg-white/8')}
               >
                 <span className={cn('rounded-full shadow-[0_0_8px_currentColor] transition-[width,height]', on ? 'size-2.5' : 'size-2')} style={{ background: space.color, color: space.color }} />
-                <span className="side-tip">{space.name}</span>
+                <span className="side-tip">{label}</span>
               </button>
             )
           })}
           <button
             type="button"
-            aria-label="Add space"
+            aria-label={t('sidebar.addSpace')}
             onClick={() => {
               setSidebarCollapsed(false)
               setAdding(true)
@@ -137,20 +147,23 @@ export function Sidebar() {
             className="side-item group relative flex size-7 items-center justify-center rounded-lg text-fg-3 hover:bg-white/10 hover:text-fg"
           >
             <IconPlus size={13} />
-            <span className="side-tip">Add space</span>
+            <span className="side-tip">{t('sidebar.addSpace')}</span>
           </button>
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-between px-2">
-            <span className="text-[10px] font-semibold tracking-[0.14em] text-fg-3 uppercase">Spaces</span>
-            <button type="button" aria-label="Add space" onClick={() => setAdding(true)} className="flex size-5 items-center justify-center rounded text-fg-3 hover:bg-white/10 hover:text-fg">
+          <div className="flex items-center justify-between gap-1 px-2">
+            <span className="min-w-0 truncate text-[10px] font-semibold tracking-[0.14em] text-fg-3 uppercase" title={t('sidebar.spaces')}>
+              {t('sidebar.spaces')}
+            </span>
+            <button type="button" aria-label={t('sidebar.addSpace')} title={t('sidebar.addSpace')} onClick={() => setAdding(true)} className="flex size-5 shrink-0 items-center justify-center rounded text-fg-3 hover:bg-white/10 hover:text-fg">
               <IconPlus size={13} />
             </button>
           </div>
           <div className="mt-1.5 flex flex-col gap-0.5">
             {spaces.map(space => {
               const on = space.id === active.id
+              const label = spaceLabel(space)
 
               return (
                 <button
@@ -160,7 +173,9 @@ export function Sidebar() {
                   className={cn('flex h-7 items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] transition-colors duration-150', on ? 'bg-white/14 text-fg' : 'text-fg-2 hover:bg-white/8 hover:text-fg')}
                 >
                   <span className="size-2 shrink-0 rounded-full shadow-[0_0_8px_currentColor]" style={{ background: space.color, color: space.color }} />
-                  <span className="truncate">{space.name}</span>
+                  <span className="min-w-0 truncate" title={label}>
+                    {label}
+                  </span>
                 </button>
               )
             })}
@@ -185,8 +200,9 @@ export function Sidebar() {
                     setDraft('')
                   }
                 }}
-                placeholder="New space"
-                className="glass-input mt-1 h-7 rounded-lg px-2.5 text-[12.5px] outline-none"
+                placeholder={t('sidebar.newSpace')}
+                aria-label={t('sidebar.newSpace')}
+                className="glass-input mt-1 h-7 min-w-0 rounded-lg px-2.5 text-[12.5px] outline-none"
               />
             )}
           </div>
@@ -196,19 +212,19 @@ export function Sidebar() {
       <button
         type="button"
         onClick={toggleSidebar}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={`${collapsed ? 'Expand' : 'Collapse'} sidebar (${shortcutLabel('\\')})`}
+        aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+        title={collapsed ? t('sidebar.expandHint', { shortcut: shortcutLabel('\\') }) : t('sidebar.collapseHint', { shortcut: shortcutLabel('\\') })}
         className={cn('side-item group relative mt-auto flex h-8 items-center rounded-lg text-fg-3 transition-colors duration-150 hover:bg-white/8 hover:text-fg', collapsed ? 'w-9 justify-center' : 'gap-2.5 px-2.5 text-[12px]')}
       >
-        {collapsed ? <IconLayoutSidebarLeftExpand size={16} stroke={1.9} /> : <IconLayoutSidebarLeftCollapse size={16} stroke={1.9} />}
-        {collapsed ? <span className="side-tip">Expand sidebar</span> : <span>Collapse</span>}
+        {collapsed ? <IconLayoutSidebarLeftExpand size={16} stroke={1.9} className="shrink-0" /> : <IconLayoutSidebarLeftCollapse size={16} stroke={1.9} className="shrink-0" />}
+        {collapsed ? <span className="side-tip">{t('sidebar.expand')}</span> : <span className="min-w-0 truncate">{t('sidebar.collapseShort')}</span>}
       </button>
 
       {/* Resize handle: drag to resize, drag past the snap point to collapse, double-click to toggle. */}
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize sidebar"
+        aria-label={t('sidebar.resize')}
         aria-valuemin={SIDEBAR_MIN}
         aria-valuemax={SIDEBAR_MAX}
         aria-valuenow={collapsed ? SIDEBAR_COLLAPSED : width}
