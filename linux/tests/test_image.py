@@ -467,10 +467,55 @@ def test_the_session_and_the_gpu_check_keep_state_in_one_folder():
 
 
 MIB = 1024 * 1024
+UPDATE = ROOT / "linux" / "bin" / "herald-os-update"
+
+# rpm-ostree status's keys for what the system changed, as herald-os-update's tests (#156) have them:
+# each with a value and how the switch names it.
+FIREFOX = ["firefox-131.0-1.fc44.x86_64", "firefox", "0", "131.0", "1.fc44", "x86_64"]
+MESA = ["mesa-dri-drivers-25.0-2.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "2.fc44", "x86_64"]
+MESA_OLD = ["mesa-dri-drivers-25.0-1.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "1.fc44", "x86_64"]
+KERNEL = ["kernel-6.17.1-300.fc44.x86_64", "kernel", "0", "6.17.1", "300.fc44", "x86_64"]
+KERNEL_OLD = ["kernel-6.16.9-300.fc44.x86_64", "kernel", "0", "6.16.9", "300.fc44", "x86_64"]
+CHANGES = {
+    "requested-packages": (["htop", "vim-enhanced"], "layered: htop, vim-enhanced"),
+    "requested-local-packages": (["mytool-1.0-1.x86_64"], "local: mytool-1.0-1.x86_64"),
+    "requested-local-fileoverride-packages": (["myfix-2.0-1.x86_64"], "local: myfix-2.0-1.x86_64"),
+    "requested-modules": (["nodejs:22/default"], "modules: nodejs:22/default"),
+    "requested-modules-enabled": (["nodejs:22"], "modules: nodejs:22"),
+    "requested-base-removals": (["firefox", "firefox-langpacks"], "removed: firefox, firefox-langpacks"),
+    "requested-base-local-replacements": (["mesa-dri-drivers-25.0-2.fc44.x86_64"], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "requested-base-remote-replacements": (
+        [["repo=updates-testing", ["kernel", "kernel-core"]]],
+        "replaced: kernel from repo=updates-testing, kernel-core from repo=updates-testing",
+    ),
+    "packages": (["htop"], "layered: htop"),
+    "base-removals": ([FIREFOX], "removed: firefox-131.0-1.fc44.x86_64"),
+    "base-local-replacements": ([[MESA, MESA_OLD]], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "base-remote-replacements": ({"repo=updates-testing": [[KERNEL, KERNEL_OLD]]}, "replaced: kernel-6.17.1-300.fc44.x86_64 from repo=updates-testing"),
+    "regenerate-initramfs": (True, "initramfs: regenerated"),
+    "initramfs-etc": (["/etc/crypttab"], "initramfs: /etc/crypttab"),
+}
+# Every key, empty, as rpm-ostree reports them for the image as built.
+CLEAN = {key: {} if key == "base-remote-replacements" else False if key == "regenerate-initramfs" else [] for key in CHANGES}
+NVIDIA_REF = "ghcr.io/iamlukethedev/herald-os-nvidia"
 
 
-def switching(tmp_path: Path, boot_size: int, boot_free: int, status: dict | None = None, args=("switch",),
-              release=HERALD, arch="x86_64"):
+def deployments(booted: dict | None = None, staged: dict | None = None, rollback: dict | None = None,
+                staged_osname: str = "fedora", staged_field: bool = True) -> dict:
+    """The booted deployment, and if given one pending for the next boot and a rollback one."""
+    found = [{"id": "fedora-booted", "osname": "fedora", "booted": True, "staged": False, **CLEAN, **(booted or {})}]
+    if staged is not None:
+        pending = {"id": "fedora-staged", "osname": staged_osname, "booted": False, **CLEAN, **staged}
+        if staged_field:
+            pending["staged"] = True
+        found.insert(0, pending)
+    if rollback is not None:
+        found.append({"id": "fedora-rollback", "osname": "fedora", "booted": False, "staged": False, **CLEAN, **rollback})
+    return {"deployments": found}
+
+
+def switching(tmp_path: Path, boot_size: int = 2000 * MIB, boot_free: int = 1500 * MIB, status="clean",
+              args=("switch",), release=HERALD, arch="x86_64"):
     """herald-os-gpu-check switch with df, sudo and rpm-ostree stand-ins; what sudo was asked to run."""
     gpu = Gpu(tmp_path, [NVIDIA_VGA], release=release, arch=arch)
     bin_dir = tmp_path / "bin"
@@ -480,8 +525,10 @@ def switching(tmp_path: Path, boot_size: int, boot_free: int, status: dict | Non
     }
     if status == "fails":
         stubs["rpm-ostree"] = 'echo "error: Could not connect" >&2; exit 1'
+    elif status == "not json":
+        stubs["rpm-ostree"] = "echo not json"
     elif status is not None:
-        (tmp_path / "status.json").write_text(__import__("json").dumps(status))
+        (tmp_path / "status.json").write_text(json.dumps(deployments() if status == "clean" else status))
         stubs["rpm-ostree"] = f'[ "$1 $2" = "status --json" ] && cat "{tmp_path / "status.json"}"'
     for name, body in stubs.items():
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
@@ -491,46 +538,108 @@ def switching(tmp_path: Path, boot_size: int, boot_free: int, status: dict | Non
     return result, ran
 
 
-def deployment(**requested) -> dict:
-    return {"deployments": [{"booted": False, "requested-packages": ["vim"]},
-                            {"booted": True, "requested-packages": [], "requested-local-packages": [], **requested}]}
+def bootc(channel="edge") -> list[str]:
+    return [f"bootc switch {NVIDIA_REF}:{channel}"]
+
+
+def rebase(channel="edge") -> list[str]:
+    return [f"rpm-ostree rebase ostree-unverified-registry:{NVIDIA_REF}:{channel}"]
 
 
 def test_switch_follows_the_channel_with_bootc(tmp_path):
-    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status=deployment())
+    result, ran = switching(tmp_path)
     assert result.returncode == 0, result.stderr
-    assert ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
+    assert ran == bootc()
     assert "enroll Universal Blue's key after that" in result.stdout and "WARNING" not in result.stderr
 
 
-@pytest.mark.parametrize("requested", [{"requested-packages": ["htop"]}, {"requested-local-packages": ["x.rpm"]},
-                                       {"requested-base-removals": ["firefox"]}], ids=["layered", "local", "removed"])
-def test_switch_with_rpm_ostree_changes_rebases_through_rpm_ostree(tmp_path, requested):
-    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status=deployment(**requested), args=("switch", "stable"))
+@pytest.mark.parametrize("key", CHANGES)
+def test_every_rpm_ostree_change_switches_through_rpm_ostree_and_is_named(tmp_path, key):
+    value, described = CHANGES[key]
+    result, ran = switching(tmp_path, status=deployments(booted={key: value}), args=("switch", "stable"))
     assert result.returncode == 0, result.stderr
-    assert ran == ["rpm-ostree rebase ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os-nvidia:stable"]
+    assert ran == rebase("stable")
+    assert f"rpm-ostree changes ({described})" in result.stdout
+
+
+def test_what_was_requested_is_named_rather_than_what_rpm_ostree_made_of_it(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={"requested-base-removals": ["firefox"], "base-removals": [FIREFOX]}))
+    assert ran == rebase() and "rpm-ostree changes (removed: firefox)" in result.stdout
+
+
+def test_a_staged_deployment_with_layers_switches_through_rpm_ostree(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={}, staged={"requested-packages": ["htop"]}))
+    assert ran == rebase() and "layered: htop (staged for the next restart)" in result.stdout
+
+
+def test_a_pending_deployment_without_a_staged_field_counts(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(staged={"requested-packages": ["htop"]}, staged_field=False))
+    assert ran == rebase() and "layered: htop (pending for the next restart)" in result.stdout
+
+
+def test_a_clean_staged_deployment_over_a_layered_booted_one_still_needs_rpm_ostree(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={"requested-packages": ["htop"]}, staged={}))
+    assert ran == rebase() and "in the running system only" in result.stdout
+
+
+@pytest.mark.parametrize("status", [
+    deployments(rollback={"requested-packages": ["htop"]}),
+    deployments(staged={"requested-packages": ["htop"]}, staged_osname="other"),
+    deployments(booted={"regenerate-initramfs": False, "initramfs-etc": []}),
+], ids=["rollback", "another os", "initramfs as built"])
+def test_what_bootc_does_not_mind_switches_with_bootc(tmp_path, status):
+    result, ran = switching(tmp_path, status=status)
+    assert result.returncode == 0 and ran == bootc()
+
+
+@pytest.mark.parametrize("status", ["fails", "not json", None], ids=["fails", "not json", "no rpm-ostree"])
+def test_switch_tries_bootc_when_the_rpm_ostree_status_cannot_be_read(tmp_path, status):
+    result, ran = switching(tmp_path, status=status)
+    assert result.returncode == 0 and ran == bootc()
+    assert "Traceback" not in result.stderr
 
 
 def test_switch_without_room_in_boot_changes_nothing(tmp_path):
-    result, ran = switching(tmp_path, 2000 * MIB, 300 * MIB, status=deployment())
+    result, ran = switching(tmp_path, boot_free=300 * MIB)
     assert result.returncode == 1 and ran == []
     assert "has 300 MiB free" in result.stderr and "about 352 MiB" in result.stderr
 
 
-def test_switch_with_a_small_boot_warns_and_goes_on(tmp_path):
-    result, ran = switching(tmp_path, 1024 * MIB, 600 * MIB)
-    assert result.returncode == 0 and ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
-    assert "WARNING: /boot is 1024 MiB" in result.stderr
+@pytest.mark.parametrize("size", [1024, 1800 - 1], ids=["1 GiB", "just under 2 GiB"])
+def test_switch_with_a_boot_between_1_and_2_gib_warns_and_goes_on(tmp_path, size):
+    result, ran = switching(tmp_path, boot_size=size * MIB, boot_free=600 * MIB)
+    assert result.returncode == 0 and ran == bootc()
+    assert f"WARNING: /boot is {size} MiB" in result.stderr
 
 
-@pytest.mark.parametrize("kind", ["not the image", "arm", "bad channel"])
+@pytest.mark.parametrize("size", [512, 900 - 1], ids=["512 MiB", "just under 900 MiB"])
+def test_switch_with_a_boot_under_1_gib_is_refused_unless_forced(tmp_path, size):
+    result, ran = switching(tmp_path / "refused", boot_size=size * MIB, boot_free=450 * MIB)
+    assert result.returncode == 1 and ran == []
+    assert f"/boot is {size} MiB" in result.stderr and "--force switches anyway" in result.stderr
+    result, ran = switching(tmp_path / "forced", boot_size=size * MIB, boot_free=450 * MIB, args=("switch", "--force", "stable"))
+    assert result.returncode == 0 and ran == bootc("stable") and "WARNING" in result.stderr
+
+
+def test_force_does_not_skip_the_free_space_check(tmp_path):
+    result, ran = switching(tmp_path, boot_size=512 * MIB, boot_free=100 * MIB, args=("switch", "--force"))
+    assert result.returncode == 1 and ran == [] and "has 100 MiB free" in result.stderr
+
+
+@pytest.mark.parametrize("kind", ["not the image", "arm", "bad channel", "unknown option"])
 def test_switch_refuses_where_there_is_no_nvidia_image(tmp_path, kind):
-    args = {"not the image": dict(release=FEDORA), "arm": dict(arch="aarch64"), "bad channel": dict(args=("switch", "beta"))}[kind]
-    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, **args)
+    args = {"not the image": dict(release=FEDORA), "arm": dict(arch="aarch64"), "bad channel": dict(args=("switch", "beta")),
+            "unknown option": dict(args=("switch", "--yes"))}[kind]
+    result, ran = switching(tmp_path, **args)
     assert result.returncode == 2 and ran == []
 
 
-def test_switch_tries_bootc_when_the_rpm_ostree_status_cannot_be_read(tmp_path):
-    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status="fails")
-    assert result.returncode == 0 and ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
-    assert "Traceback" not in result.stderr
+def shell_function(path: Path, name: str) -> str | None:
+    found = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", path.read_text(), re.M | re.S)
+    return found.group(0) if found else None
+
+
+@pytest.mark.skipif(shell_function(UPDATE, "local_modifications") is None,
+                    reason="herald-os-update has no local_modifications until #156 is merged")
+def test_the_switch_and_the_update_agree_on_rpm_ostree_changes():
+    assert shell_function(GPU_CHECK, "local_modifications") == shell_function(UPDATE, "local_modifications")

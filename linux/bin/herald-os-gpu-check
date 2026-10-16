@@ -11,8 +11,10 @@
 #
 #   herald-os-gpu-check                   print the notice (the first boot writes it to the journal)
 #   herald-os-gpu-check --notify          also show it as a notification, once each (herald-os-session)
-#   herald-os-gpu-check switch [channel]  switch to the NVIDIA image, once /boot has room for it:
-#                                         bootc switch, or rpm-ostree rebase where packages are layered
+#   herald-os-gpu-check switch [--force] [stable|edge]
+#                                         switch to the NVIDIA image, once /boot has room for it (a
+#                                         /boot under 1 GiB only with --force): bootc switch, or
+#                                         rpm-ostree rebase where rpm-ostree changed the system
 set -euo pipefail
 
 SYSFS="${HERALD_OS_SYSFS:-/sys}"
@@ -27,8 +29,11 @@ SECURE_BOOT="$SYSFS/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e0
 BOOT="${HERALD_OS_BOOT:-/boot}"
 # An NVIDIA deployment's kernel and initramfs take about 352 MiB of /boot (docs/LINUX.md), and the
 # system keeps up to three deployments: a 2 GiB /boot holds them (df shows a little less than 2 GiB).
+# Under about 1 GiB (df shows a 1 GiB /boot as a little less), the NVIDIA deployment and the one to
+# go back to leave no room for an update's: switching is refused unless --force.
 BOOT_FREE_MIN=$((400 * 1024 * 1024))
 BOOT_SIZE_MIN=$((1800 * 1024 * 1024))
+BOOT_SIZE_REFUSE=$((900 * 1024 * 1024))
 
 herald_image() { grep -Eqx 'IMAGE_ID="?herald-os"?' "$OS_RELEASE" 2>/dev/null; }
 
@@ -67,24 +72,102 @@ current_channel() {
   echo "$channel"
 }
 
-# Whether the booted deployment has packages layered, removed or replaced through rpm-ostree:
-# bootc refuses to switch those ("Deployment contains local rpm-ostree modifications"). When the
-# status cannot be read, bootc is tried, and says so itself.
-layered() {
-  local status
-  command -v rpm-ostree >/dev/null || return 1
-  status="$(rpm-ostree status --json 2>/dev/null)" || return 1
-  python3 -c '
+# What the system adds to the image or takes from it with rpm-ostree, in the booted deployment or
+# the one pending for the next boot: packages layered (from a repo or a local RPM), modules, packages
+# removed or replaced with rpm-ostree override, and an initramfs regenerated on the machine. bootc
+# refuses to switch when there is any ("Deployment contains local rpm-ostree modifications"), and
+# rpm-ostree rebase keeps them. Prints them, e.g. "layered: htop, vim; removed: firefox", or prints
+# nothing and fails, also when the status cannot be read (bootc is tried, and says so itself).
+# The same function as herald-os-update's (#156): keep the two alike (linux/tests/test_image.py).
+local_modifications() {
+  command -v rpm-ostree >/dev/null && command -v python3 >/dev/null || return 1
+  rpm-ostree status --json 2>/dev/null | python3 -c '
 import json, sys
-booted = [d for d in json.loads(sys.argv[1]).get("deployments", []) if d.get("booted")]
-keys = ("requested-packages", "requested-local-packages", "requested-base-removals",
-        "requested-base-local-replacements", "requested-base-remote-replacements")
-sys.exit(0 if booted and any(booted[0].get(key) for key in keys) else 1)' "$status"
+
+# Each label with the keys that fill it: first what was asked for (the requested-* keys, from the
+# deployment origin), then, only when those are empty, what rpm-ostree made of it in the deployment.
+KEYS = (
+    ("layered", ("requested-packages",), ("packages",)),
+    ("local", ("requested-local-packages", "requested-local-fileoverride-packages"), ()),
+    ("modules", ("requested-modules", "requested-modules-enabled"), ()),
+    ("removed", ("requested-base-removals",), ("base-removals",)),
+    ("replaced", ("requested-base-local-replacements", "requested-base-remote-replacements"),
+     ("base-local-replacements", "base-remote-replacements")),
+    ("initramfs", ("regenerate-initramfs", "initramfs-etc"), ()),
+)
+
+def name(item):
+    # A package is a name, an object, or (from GVariant tuples) [nevra, name, ...]; a replacement
+    # is a pair of packages, the new one first.
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return str(item.get("nevra") or item.get("name") or "?")
+    if isinstance(item, list) and item:
+        return name(item[0])
+    return "?"
+
+def names(key, value):
+    if key == "regenerate-initramfs":
+        return ["regenerated"] if value is True else []
+    if key == "requested-base-remote-replacements":
+        # [[source, [package, ...]], ...]
+        return [f"{package} from {pair[0]}" for pair in value or [] if isinstance(pair, list) and len(pair) == 2
+                for package in (pair[1] if isinstance(pair[1], list) else [pair[1]])]
+    if isinstance(value, dict):
+        # base-remote-replacements: {source: [replacement, ...]}
+        return [f"{name(item)} from {source}" for source, items in value.items()
+                for item in (items if isinstance(items, list) else [items])]
+    return [name(item) for item in value] if isinstance(value, list) else []
+
+def describe(deployment):
+    found = []
+    for label, requested, derived in KEYS:
+        listed = [n for key in requested for n in names(key, deployment.get(key))]
+        listed = listed or [n for key in derived for n in names(key, deployment.get(key))]
+        if listed:
+            found.append(label + ": " + ", ".join(dict.fromkeys(listed)))
+    return "; ".join(found)
+
+try:
+    status = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+deployments = [d for d in status.get("deployments") or [] if isinstance(d, dict)]
+booted = next((d for d in deployments if d.get("booted")), None)
+if booted is None:
+    sys.exit(1)
+# rpm-ostree upgrade builds on the first deployment of the OS (the staged one when there is one),
+# and rpm-ostree status calls that one pending when it is not the booted one, staged or not.
+same_os = [d for d in deployments if d.get("osname") == booted.get("osname")]
+pending = next((d for d in same_os if d.get("staged") and not d.get("booted")), None)
+if pending is None and same_os and not same_os[0].get("booted"):
+    pending = same_os[0]
+if pending is None:
+    found = describe(booted)
+elif describe(pending):
+    found = describe(pending) + (" (staged for the next restart)" if pending.get("staged") else " (pending for the next restart)")
+elif describe(booted):
+    found = describe(booted) + " (in the running system only; the next restart drops them)"
+else:
+    found = ""
+if not found:
+    sys.exit(1)
+print(found)
+'
 }
 
 switch() {
-  local channel="${1:-$(current_channel)}" size avail target
-  [[ "$channel" == stable || "$channel" == edge ]] || { echo "usage: herald-os-gpu-check switch [stable|edge]" >&2; exit 2; }
+  local force=0 channel="" size avail target changes
+  while (( $# )); do
+    case "$1" in
+      --force) force=1 ;;
+      stable | edge) channel="$1" ;;
+      *) echo "usage: herald-os-gpu-check switch [--force] [stable|edge]" >&2; exit 2 ;;
+    esac
+    shift
+  done
+  channel="${channel:-$(current_channel)}"
   herald_image || { echo "this is not the Herald OS image: nothing to switch" >&2; exit 2; }
   [[ "$ARCH" == x86_64 ]] || { echo "the NVIDIA image is x86_64 only" >&2; exit 2; }
   read -r size avail < <(df -B1 --output=size,avail "$BOOT" | tail -n 1)
@@ -92,12 +175,16 @@ switch() {
     echo "$BOOT has $((avail / 1048576)) MiB free, and the NVIDIA image's kernel and initramfs need about 352 MiB (docs/LINUX.md, \"Space in /boot\"): nothing was changed" >&2
     exit 1
   fi
+  if (( size < BOOT_SIZE_REFUSE && ! force )); then
+    echo "$BOOT is $((size / 1048576)) MiB, and the NVIDIA image needs a 2 GiB /boot (docs/LINUX.md, \"Space in /boot\"): with the one to go back to, updates would not fit. Nothing was changed; --force switches anyway" >&2
+    exit 1
+  fi
   if (( size < BOOT_SIZE_MIN )); then
     echo "WARNING: $BOOT is $((size / 1048576)) MiB; the NVIDIA image needs a 2 GiB /boot to keep three deployments (the running one, the one to go back to and an update)" >&2
   fi
   target="$NVIDIA_IMAGE:$channel"
-  if layered; then
-    echo "==> packages are layered on this system, so rpm-ostree switches it: $target"
+  if changes="$(local_modifications)"; then
+    echo "==> this system has rpm-ostree changes ($changes), so rpm-ostree switches it, keeping them: $target"
     sudo rpm-ostree rebase "ostree-unverified-registry:$target"
   else
     echo "==> switching to $target"
@@ -111,7 +198,7 @@ case "${1:-}" in
   --notify) NOTIFY=1 ;;
   switch) shift; switch "$@"; exit ;;
   "") ;;
-  *) echo "usage: herald-os-gpu-check [--notify | switch [stable|edge]]" >&2; exit 2 ;;
+  *) echo "usage: herald-os-gpu-check [--notify | switch [--force] [stable|edge]]" >&2; exit 2 ;;
 esac
 
 if [[ "$ARCH" != x86_64 ]] || ! herald_image || ! nvidia_gpu; then
