@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Toggle } from '../../../components/ui/glass.tsx'
 import { useBackendData } from '../../../lib/use-async.ts'
 import { $backend } from '../../../store/backend.ts'
+import { useT } from '../../../store/i18n.ts'
 import { notify } from '../../../store/notifications.ts'
 import { readToolSearch, setToolSearch } from '../../../store/tool-search.ts'
 import { errorText, InlineNote, markSaved, SettingsRow } from './shared.tsx'
@@ -14,6 +15,7 @@ import { errorText, InlineNote, markSaved, SettingsRow } from './shared.tsx'
  */
 
 export function ToolSearchRow() {
+  const t = useT()
   const setting = useBackendData(readToolSearch)
   const bridgeError = useStore($backend).bridgeError
   const [override, setOverride] = useState<{ base: unknown; on: boolean } | null>(null)
@@ -27,10 +29,10 @@ export function ToolSearchRow() {
     try {
       await setToolSearch(next)
       markSaved()
-      notify({ title: next ? 'Tool search on' : 'Tool search off', body: next ? 'Hermes looks plugin and MCP tools up when it needs them.' : "Herald OS's system tools stay directly callable.", level: 'success' })
+      notify({ title: t(next ? 'settings.agents.toolSearch.on' : 'settings.agents.toolSearch.off'), body: t(next ? 'settings.agents.toolSearch.onBody' : 'settings.agents.toolSearch.offBody'), level: 'success' })
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change tool search', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.toolSearch.failed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       setting.reload()
@@ -40,12 +42,12 @@ export function ToolSearchRow() {
   return (
     <SettingsRow
       icon={<IconListSearch />}
-      label="Tool search"
-      description="Hermes looks plugin and MCP tools up when it needs them, using fewer prompt tokens. Off, Herald OS's system tools stay at hand instead of behind a search. Applies to every Hermes session, from its next conversation."
+      label={t('settings.agents.toolSearch.label')}
+      description={t('settings.agents.toolSearch.hint')}
       keywords="tool search defer plugins mcp system tools bridge prompt tokens"
-      below={bridgeError ? <InlineNote tone="danger">Herald OS could not set its system tools up in Hermes: {bridgeError}. It tries again at its next start.</InlineNote> : undefined}
+      below={bridgeError ? <InlineNote tone="danger">{t('settings.agents.toolSearch.bridgeError', { error: bridgeError })}</InlineNote> : undefined}
     >
-      <Toggle checked={on ?? false} onChange={next => void toggle(next)} label="Tool search" disabled={busy || on === null || on === undefined} />
+      <Toggle checked={on ?? false} onChange={next => void toggle(next)} label={t('settings.agents.toolSearch.label')} disabled={busy || on === null || on === undefined} />
     </SettingsRow>
   )
 }

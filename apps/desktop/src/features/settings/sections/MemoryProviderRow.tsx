@@ -2,6 +2,7 @@ import { IconDatabase } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Pill, type PillTone } from '../../../components/ui/glass.tsx'
 import { useBackendData } from '../../../lib/use-async.ts'
+import { useT } from '../../../store/i18n.ts'
 import { notify } from '../../../store/notifications.ts'
 import { getMemoryStatus, memoryErrorText, memoryProviderView, memoryStatusLabel, setMemoryProvider } from '../../memory/memory-provider.ts'
 import { InlineNote, markSaved, MenuDropdown, SettingsRow } from './shared.tsx'
@@ -12,11 +13,10 @@ import { InlineNote, markSaved, MenuDropdown, SettingsRow } from './shared.tsx'
  * Memory page lists isn't everything Hermes remembers.
  */
 
-const SCOPE = 'Applies to all of Hermes, including CLI and messaging. New sessions only.'
-
 const statusTone = (status: string | null): PillTone => (status === 'ready' ? 'ok' : status === 'needs_config' ? 'warn' : 'muted')
 
 export function MemoryProviderRow() {
+  const t = useT()
   const memory = useBackendData(getMemoryStatus)
   const [override, setOverride] = useState<{ base: unknown; active: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -33,10 +33,10 @@ export function MemoryProviderRow() {
     try {
       await setMemoryProvider(id)
       markSaved()
-      notify({ title: 'Memory provider changed', body: `${view.choices.find(choice => choice.id === id)?.label ?? id}. New sessions use it.`, level: 'success' })
+      notify({ title: t('settings.agents.memoryProvider.changed'), body: t('settings.agents.newSessionsUseIt', { name: view.choices.find(choice => choice.id === id)?.label ?? id }), level: 'success' })
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change memory provider', body: memoryErrorText(error), level: 'error' })
+      notify({ title: t('settings.agents.memoryProvider.failed'), body: memoryErrorText(error), level: 'error' })
     } finally {
       setBusy(false)
       memory.reload()
@@ -46,14 +46,14 @@ export function MemoryProviderRow() {
   return (
     <SettingsRow
       icon={<IconDatabase />}
-      label="Memory provider"
-      description={`${memory.data ? view.description : 'Where Hermes saves and recalls memories.'} ${SCOPE}`}
+      label={t('settings.agents.memoryProvider.label')}
+      description={`${memory.data ? view.description : t('settings.agents.memoryProvider.hint')} ${t('settings.agents.memoryProvider.scope')}`}
       keywords="memory provider honcho mem0 external built-in recall cli messaging"
-      below={memory.error ? <InlineNote tone="danger">Could not read the memory provider: {memoryErrorText(memory.error)}</InlineNote> : undefined}
+      below={memory.error ? <InlineNote tone="danger">{t('settings.agents.memoryProvider.unreadable', { error: memoryErrorText(memory.error) })}</InlineNote> : undefined}
     >
       <MenuDropdown
-        ariaLabel="Memory provider"
-        label={memory.data ? view.label : memory.error ? 'Unavailable' : '…'}
+        ariaLabel={t('settings.agents.memoryProvider.label')}
+        label={memory.data ? view.label : memory.error ? t('settings.agents.memoryProvider.unavailable') : '…'}
         value={view.active}
         disabled={busy || !memory.data}
         menuClassName="min-w-[300px]"

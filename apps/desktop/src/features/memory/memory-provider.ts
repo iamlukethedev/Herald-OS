@@ -1,4 +1,6 @@
+import type { TextKey } from '../../../shared/i18n.ts'
 import { rest } from '../../lib/rest.ts'
+import { t } from '../../store/i18n.ts'
 import { messageOf } from '../canvas/errors.ts'
 
 /** One row of `providers` in Hermes's GET /api/memory. */
@@ -25,7 +27,12 @@ const BUILT_IN_NAMES = new Set(['', 'default', 'builtin', 'built-in', 'none'])
 const DISPLAY_NAMES: Record<string, string> = { honcho: 'Honcho', mem0: 'Mem0' }
 
 /** Hermes's readiness values as the row shows them; "missing" means configured but not installed. */
-const STATUS_LABELS: Record<string, string> = { ready: 'ready', needs_config: 'needs setup', unavailable: 'unavailable', missing: 'not installed' }
+const STATUS_LABELS: Partial<Record<string, TextKey>> = {
+  ready: 'settings.agents.status.ready',
+  needs_config: 'settings.agents.status.needsSetup',
+  unavailable: 'settings.agents.status.unavailable',
+  missing: 'settings.agents.status.notInstalled'
+}
 
 export interface MemoryProviderChoice {
   id: string
@@ -55,7 +62,9 @@ export function memoryProviderLabel(name: string): string {
 }
 
 export function memoryStatusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status.replace(/_/g, ' ')
+  const key = STATUS_LABELS[status]
+
+  return key ? t(key) : status.replace(/_/g, ' ')
 }
 
 /**
@@ -67,12 +76,12 @@ export function memoryProviderView(payload: MemoryStatusPayload | null | undefin
   const providers = (payload?.providers ?? []).filter(row => normalizeMemoryProvider(row.name) !== BUILT_IN)
   const activeRow = providers.find(row => row.name === active)
   const choices: MemoryProviderChoice[] = [
-    { id: BUILT_IN, label: 'Built-in only', description: 'MEMORY.md and USER.md', status: null },
+    { id: BUILT_IN, label: t('settings.agents.memoryProvider.builtIn'), description: t('settings.agents.memoryProvider.builtInFiles'), status: null },
     ...providers.map(row => ({ id: row.name, label: memoryProviderLabel(row.name), description: row.description ?? '', status: row.status ?? null }))
   ]
 
   if (active === BUILT_IN) {
-    return { active, label: 'Built-in only', description: 'Hermes remembers only what the Memory page lists.', choices }
+    return { active, label: t('settings.agents.memoryProvider.builtIn'), description: t('settings.agents.memoryProvider.builtInHint'), choices }
   }
 
   const label = memoryProviderLabel(active)
@@ -82,14 +91,14 @@ export function memoryProviderView(payload: MemoryStatusPayload | null | undefin
   }
 
   if (!activeRow || activeRow.status === 'missing') {
-    return { active, label, description: `${label} is set in Hermes's config but not installed.`, choices }
+    return { active, label, description: t('settings.agents.memoryProvider.notInstalled', { name: label }), choices }
   }
 
   if (activeRow.status && activeRow.status !== 'ready') {
-    return { active, label, description: `${label} is the active provider but needs setup before it saves or recalls anything.`, choices }
+    return { active, label, description: t('settings.agents.memoryProvider.needsSetup', { name: label }), choices }
   }
 
-  return { active, label, description: `${label} also saves and recalls memories outside the two files on the Memory page.`, choices }
+  return { active, label, description: t('settings.agents.memoryProvider.active', { name: label }), choices }
 }
 
 /** Body for PUT /api/memory/provider; Hermes refuses a provider that isn't set up yet. */
@@ -119,7 +128,7 @@ export function memoryErrorText(error: unknown): string {
     return reason
   }
 
-  return method === 'GET' ? `Hermes did not send its memory status (HTTP ${code}).` : `Hermes refused the change (HTTP ${code}).`
+  return method === 'GET' ? t('settings.agents.memoryProvider.noStatus', { code }) : t('settings.agents.memoryProvider.refused', { code })
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -127,7 +136,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 /** GET /api/memory checked before the row trusts it; anything else is a read error, not a crash. */
 export function parseMemoryStatus(raw: unknown): MemoryStatusPayload {
   const fail = (): never => {
-    throw new Error('Hermes sent a memory status Herald does not understand.')
+    throw new Error(t('settings.agents.memoryProvider.badStatus'))
   }
 
   if (!isRecord(raw) || !Array.isArray(raw.providers) || (raw.active != null && typeof raw.active !== 'string')) {

@@ -16,7 +16,7 @@ import { notify } from '../../../store/notifications.ts'
 import { readTier, withTier } from './policy.ts'
 import { MemoryProviderRow } from './MemoryProviderRow.tsx'
 import { ModelConfirm, ModelProviderRow } from './ProviderRow.tsx'
-import { useT } from '../../../store/i18n.ts'
+import { t, useT } from '../../../store/i18n.ts'
 import { errorText, InlineNote, markSaved, MenuDropdown, RadioCard, SectionTitle, SettingsBlock, SettingsGroup, SettingsRow, Stepper, useDismiss } from './shared.tsx'
 import { ToolSearchRow } from './ToolSearchRow.tsx'
 
@@ -33,6 +33,13 @@ import { ToolSearchRow } from './ToolSearchRow.tsx'
  *   bridge audit log                                   -> Activity history
  */
 
+const CONNECTION: Partial<Record<string, TextKey>> = {
+  open: 'settings.agents.ready',
+  connecting: 'settings.agents.connecting',
+  error: 'settings.agents.connectionError',
+  closed: 'settings.agents.disconnected'
+}
+
 export function AgentsSection() {
   const t = useT()
   const connection = useStore($connection)
@@ -42,15 +49,15 @@ export function AgentsSection() {
     <>
       <SectionTitle title={t('settings.section.agents')} subtitle={t('settings.agents.subtitle')} />
 
-      <SettingsBlock label="Hermes" description="Personal agent" keywords="status identity ready connecting">
+      <SettingsBlock label={t('app.hermes')} description={t('settings.agents.personalAgent')} keywords="status identity ready connecting">
         <GlassCard className="flex items-center gap-3.5 px-4 py-3">
           <HermesAvatar size={44} rounded={11} />
           <div className="min-w-0 flex-1">
-            <div className="text-[13.5px] font-semibold text-fg">Hermes</div>
-            <div className="text-[12px] text-fg-3">Personal agent</div>
+            <div className="text-[13.5px] font-semibold text-fg">{t('app.hermes')}</div>
+            <div className="text-[12px] text-fg-3">{t('settings.agents.personalAgent')}</div>
             <div className="mt-1 flex items-center gap-1.5 text-[12px] text-fg-2">
               <StatusDot tone={ready ? 'ok' : connection === 'error' || connection === 'closed' ? 'danger' : 'warn'} pulse={!ready} />
-              {ready ? 'Ready' : connection === 'connecting' ? 'Connecting' : connection === 'error' ? 'Connection error' : connection === 'closed' ? 'Disconnected' : 'Waiting for Hermes'}
+              {t(CONNECTION[connection] ?? 'menuBar.waitingForHermes')}
             </div>
           </div>
         </GlassCard>
@@ -58,18 +65,18 @@ export function AgentsSection() {
 
       <AutonomyBlock ready={ready} />
 
-      <SettingsGroup title="Account">
+      <SettingsGroup title={t('settings.agents.account')}>
         <ModelProviderRow />
       </SettingsGroup>
 
-      <SettingsGroup title="Model & performance">
+      <SettingsGroup title={t('settings.agents.modelPerformance')}>
         <PreferredModelRow ready={ready} />
         <RunOnRow />
         <BackgroundAgentsRow />
         <ToolSearchRow />
       </SettingsGroup>
 
-      <SettingsGroup title="Privacy & control">
+      <SettingsGroup title={t('settings.agents.privacyControl')}>
         <RememberPreferencesRow />
         <MemoryProviderRow />
         <AskBeforeSendingRow />
@@ -165,15 +172,16 @@ function AutonomyBlock({ ready }: { ready: boolean }) {
 
 // ---- Preferred model -----------------------------------------------------------------------
 
-function shortModel(model: string | undefined | null): string {
+function shortModel(model: string | undefined | null, automatic: string): string {
   if (!model) {
-    return 'Automatic'
+    return automatic
   }
 
   return model.includes('/') ? model.slice(model.indexOf('/') + 1) : model
 }
 
 function PreferredModelRow({ ready }: { ready: boolean }) {
+  const t = useT()
   const chat = useStore($activeChat)
   const changes = useStore($providerChanges)
   const options = useBackendData(() => gatewayRequest('model.options', { include_unconfigured: false }), [changes], { enabled: ready })
@@ -213,9 +221,9 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
 
       markSaved()
       const name = nameOf(change.provider)
-      notify({ title: 'Model changed', body: `${name} · ${change.model}, ${chat ? 'in this chat and new ones' : 'for new conversations'}.`, level: 'success' })
+      notify({ title: t('settings.agents.modelChanged'), body: t(chat ? 'settings.agents.modelChangedChat' : 'settings.agents.modelChangedNew', { provider: name, model: change.model }), level: 'success' })
     } catch (error) {
-      notify({ title: 'Could not change model', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.modelFailed'), body: errorText(error), level: 'error' })
     } finally {
       setPending(null)
     }
@@ -224,28 +232,28 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
   return (
     <SettingsRow
       icon={<IconCpu />}
-      label="Preferred model"
-      description="Choose the model Hermes uses for most tasks."
+      label={t('settings.agents.preferredModel')}
+      description={t('settings.agents.preferredModelHint')}
       keywords="llm provider"
       below={confirm ? <ModelConfirm message={confirm.confirm} busy={Boolean(pending)} onCancel={() => setConfirm(null)} onConfirm={() => void setModel(confirm.provider, confirm.model, true)} /> : undefined}
     >
       <div ref={ref} className="relative">
-        <Dropdown label={<span className="max-w-[240px] truncate">{providerLabel ? `${providerLabel} · ${shortModel(current)}` : `Hermes · ${shortModel(current)}`}</span>} onClick={() => ready && setOpen(o => !o)} className={cn(!ready && 'opacity-50')} />
+        <Dropdown label={<span className="max-w-[240px] truncate">{`${providerLabel || t('app.hermes')} · ${shortModel(current, t('settings.agents.automatic'))}`}</span>} onClick={() => ready && setOpen(o => !o)} className={cn(!ready && 'opacity-50')} />
         {open && (
-          <div className="float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 flex w-[380px] flex-col rounded-lg" role="dialog" aria-label="Choose model">
+          <div className="float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 flex w-[380px] flex-col rounded-lg" role="dialog" aria-label={t('settings.agents.chooseModel')}>
             <label className="glass-input m-2 flex h-8 items-center gap-2 rounded-lg px-2.5">
               <IconSearch size={14} className="text-fg-3" />
-              <input autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter models" className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-fg-4" />
+              <input autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder={t('settings.agents.filterModels')} aria-label={t('settings.agents.filterModels')} className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-fg-4" />
             </label>
             <div className="flex max-h-[360px] flex-col gap-3 overflow-y-auto px-2 pb-2">
-              {options.loading && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">Loading models…</div>}
+              {options.loading && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.loadingModels')}</div>}
               {options.error && <div className="px-1 py-2 text-[12px] text-danger">{options.error}</div>}
-              {!options.loading && !options.error && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">No configured models match.</div>}
+              {!options.loading && !options.error && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.noModels')}</div>}
               {providers.map(p => (
                 <section key={p.slug}>
                   <div className="mb-1 flex items-center gap-2 px-1">
                     <span className="text-[11.5px] font-medium text-fg-2">{p.name}</span>
-                    {p.is_current && <Pill tone="accent">current</Pill>}
+                    {p.is_current && <Pill tone="accent">{t('settings.agents.current')}</Pill>}
                   </div>
                   <div className="flex flex-col">
                     {p.models.slice(0, 40).map(model => {
@@ -255,11 +263,11 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
                       return (
                         <button key={model} type="button" disabled={Boolean(pending)} onClick={() => void setModel(p.slug, model)} className={cn('flex items-center justify-between rounded-md px-2 py-1.5 text-left font-mono text-[12px] transition-colors disabled:opacity-60', active ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/8 hover:text-fg', busy && 'opacity-60')}>
                           <span className="truncate">{model}</span>
-                          {active && <span className="ml-2 text-[10.5px] text-accent-strong">active</span>}
+                          {active && <span className="ml-2 text-[10.5px] text-accent-strong">{t('settings.agents.active')}</span>}
                         </button>
                       )
                     })}
-                    {(p.total_models ?? 0) > 40 && <span className="px-2 py-1 text-[11px] text-fg-4">+{(p.total_models ?? 0) - 40} more via /model</span>}
+                    {(p.total_models ?? 0) > 40 && <span className="px-2 py-1 text-[11px] text-fg-4">{t('settings.agents.moreModels', { count: (p.total_models ?? 0) - 40 })}</span>}
                   </div>
                 </section>
               ))}
@@ -287,9 +295,22 @@ interface TerminalBackendsPayload {
   backends: TerminalBackendRow[]
 }
 
-const backendLabel = (row: TerminalBackendRow | undefined, name: string) => (name === 'local' ? 'This device' : (row?.label ?? name))
+const backendLabel = (row: TerminalBackendRow | undefined, name: string) => (name === 'local' ? t('settings.agents.thisDevice') : (row?.label ?? name))
+
+const BACKEND_STATUS: Partial<Record<string, TextKey>> = {
+  ready: 'settings.agents.status.ready',
+  needs_setup: 'settings.agents.status.needsSetup',
+  unavailable: 'settings.agents.status.unavailable'
+}
+
+const backendStatus = (status: string) => {
+  const key = BACKEND_STATUS[status]
+
+  return key ? t(key) : status.replace('_', ' ')
+}
 
 function RunOnRow() {
+  const t = useT()
   const backends = useBackendData(() => rest.get<TerminalBackendsPayload>('/api/tools/terminal/backends'))
   const [override, setOverride] = useState<{ base: unknown; active: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -308,10 +329,10 @@ function RunOnRow() {
     try {
       await rest.put('/api/tools/terminal/backend', { backend: name })
       markSaved()
-      notify({ title: 'Execution backend changed', body: `${backendLabel(rows.find(row => row.name === name), name)}. New sessions use it.`, level: 'success' })
+      notify({ title: t('settings.agents.backendChanged'), body: t('settings.agents.newSessionsUseIt', { name: backendLabel(rows.find(row => row.name === name), name) }), level: 'success' })
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change backend', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.backendFailed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       backends.reload()
@@ -321,9 +342,9 @@ function RunOnRow() {
   const statusTone = (status: string | undefined): PillTone => (status === 'ready' ? 'ok' : status === 'needs_setup' ? 'warn' : 'muted')
 
   return (
-    <SettingsRow icon={<IconCloud />} label="Run on" description={activeRow?.detail && activeRow.status !== 'ready' ? activeRow.detail : 'Where agents execute your tasks.'} keywords="terminal backend execution docker ssh modal cloud local">
+    <SettingsRow icon={<IconCloud />} label={t('settings.agents.runOn')} description={activeRow?.detail && activeRow.status !== 'ready' ? activeRow.detail : t('settings.agents.runOnHint')} keywords="terminal backend execution docker ssh modal cloud local">
       <MenuDropdown
-        ariaLabel="Execution backend"
+        ariaLabel={t('settings.agents.executionBackend')}
         label={backendLabel(activeRow, active)}
         value={active}
         disabled={busy || rows.length === 0}
@@ -332,7 +353,7 @@ function RunOnRow() {
           id: row.name,
           label: backendLabel(row, row.name),
           description: row.description,
-          trailing: row.status ? <Pill tone={statusTone(row.status)}>{row.status.replace('_', ' ')}</Pill> : undefined
+          trailing: row.status ? <Pill tone={statusTone(row.status)}>{backendStatus(row.status)}</Pill> : undefined
         }))}
         onSelect={name => void select(name)}
       />
@@ -348,6 +369,7 @@ interface HermesConfigPayload {
 }
 
 function BackgroundAgentsRow() {
+  const t = useT()
   const config = useBackendData(() => rest.get<HermesConfigPayload>('/api/config'))
   const [override, setOverride] = useState<{ base: unknown; value: number } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -363,7 +385,7 @@ function BackgroundAgentsRow() {
       markSaved()
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change background agents', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.backgroundAgentsFailed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       config.reload()
@@ -371,8 +393,8 @@ function BackgroundAgentsRow() {
   }
 
   return (
-    <SettingsRow icon={<IconUsers />} label="Background agents" description="Number of concurrent background agents." keywords="delegation subagents parallel concurrency">
-      <Stepper value={value} onChange={next => void change(next)} min={1} max={32} disabled={busy || value === null} label="background agents" />
+    <SettingsRow icon={<IconUsers />} label={t('settings.agents.backgroundAgents')} description={t('settings.agents.backgroundAgentsHint')} keywords="delegation subagents parallel concurrency">
+      <Stepper value={value} onChange={next => void change(next)} min={1} max={32} disabled={busy || value === null} label={t('settings.agents.backgroundAgentsCount')} />
     </SettingsRow>
   )
 }
@@ -387,6 +409,7 @@ interface ToolsetRow {
 }
 
 function RememberPreferencesRow() {
+  const t = useT()
   const toolsets = useBackendData(() => rest.get<ToolsetRow[]>('/api/tools/toolsets'))
   const [override, setOverride] = useState<{ base: unknown; enabled: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -400,10 +423,10 @@ function RememberPreferencesRow() {
     try {
       await rest.put('/api/tools/toolsets/memory', { enabled: next })
       markSaved()
-      notify({ title: next ? 'Memory on' : 'Memory paused', body: next ? 'Hermes can save memories again.' : 'Hermes stops saving to its own memory, in its CLI too, but still uses it.', level: 'success' })
+      notify({ title: t(next ? 'overview.memory.on' : 'overview.memory.paused'), body: t(next ? 'settings.agents.memoryOnBody' : 'settings.agents.memoryPausedBody'), level: 'success' })
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change memory', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.memoryFailed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       toolsets.reload()
@@ -411,8 +434,8 @@ function RememberPreferencesRow() {
   }
 
   return (
-    <SettingsRow icon={<IconFileText />} label="Remember preferences" description="Let Hermes remember your settings and learn from your choices." keywords="memory toolset learn">
-      <Toggle checked={enabled} onChange={next => void toggle(next)} label="Remember preferences" disabled={busy || !row} />
+    <SettingsRow icon={<IconFileText />} label={t('settings.agents.rememberPreferences')} description={t('settings.agents.rememberPreferencesHint')} keywords="memory toolset learn">
+      <Toggle checked={enabled} onChange={next => void toggle(next)} label={t('settings.agents.rememberPreferences')} disabled={busy || !row} />
     </SettingsRow>
   )
 }
@@ -420,6 +443,7 @@ function RememberPreferencesRow() {
 // ---- Ask before sending messages (bridge `act` tier) ---------------------------------------
 
 function AskBeforeSendingRow() {
+  const t = useT()
   const policy = useLocalData(() => window.heraldOS.bridge.readPolicy())
   const [override, setOverride] = useState<{ base: unknown; confirm: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -439,7 +463,7 @@ function AskBeforeSendingRow() {
       markSaved()
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not update permissions', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.permissionsFailed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       policy.reload()
@@ -447,8 +471,8 @@ function AskBeforeSendingRow() {
   }
 
   return (
-    <SettingsRow icon={<IconLock />} label="Ask before sending messages" description="Get a confirmation before Hermes sends messages on your behalf. Sets the system bridge's “act” tier to confirm." keywords="permissions policy act tier bridge">
-      <Toggle checked={confirm} onChange={next => void toggle(next)} label="Ask before sending messages" disabled={busy || !policy.data} />
+    <SettingsRow icon={<IconLock />} label={t('settings.agents.askBeforeSending')} description={t('settings.agents.askBeforeSendingHint')} keywords="permissions policy act tier bridge">
+      <Toggle checked={confirm} onChange={next => void toggle(next)} label={t('settings.agents.askBeforeSending')} disabled={busy || !policy.data} />
     </SettingsRow>
   )
 }
@@ -456,6 +480,7 @@ function AskBeforeSendingRow() {
 // ---- Activity history (bridge audit) --------------------------------------------------------
 
 function ActivityHistoryRow() {
+  const t = useT()
   const [open, setOpen] = useState(false)
   // Only read the log while the panel is open; `open` in deps refetches on every expand.
   const audit = useLocalData(() => (open ? window.heraldOS.bridge.readAudit(200) : Promise.resolve<AuditEntry[]>([])), [open])
@@ -463,21 +488,21 @@ function ActivityHistoryRow() {
   return (
     <SettingsRow
       icon={<IconHistory />}
-      label="Activity history"
-      description="View and manage your past agent activity."
+      label={t('settings.agents.activityHistory')}
+      description={t('settings.agents.activityHistoryHint')}
       keywords="audit log bridge actions"
       below={
         open ? (
           <div className="animate-rise flex flex-col gap-2">
             <div className="flex items-center justify-between text-[12px] text-fg-3">
-              <span>Every action the system bridge took or refused, newest first.</span>
+              <span>{t('settings.agents.activityHistoryIntro')}</span>
               <GlassButton size="sm" variant="ghost" onClick={audit.reload}>
-                Refresh
+                {t('overview.refresh')}
               </GlassButton>
             </div>
             <div className="flex max-h-[320px] flex-col overflow-y-auto rounded-lg border border-line bg-black/20">
-              {audit.loading && !audit.data?.length && <div className="p-3 text-[12px] text-fg-4">Loading…</div>}
-              {!audit.loading && (audit.data?.length ?? 0) === 0 && <div className="p-3 text-[12px] text-fg-4">No bridge activity yet.</div>}
+              {audit.loading && !audit.data?.length && <div className="p-3 text-[12px] text-fg-4">{t('settings.agents.loading')}</div>}
+              {!audit.loading && (audit.data?.length ?? 0) === 0 && <div className="p-3 text-[12px] text-fg-4">{t('settings.agents.noActivity')}</div>}
               {(audit.data ?? []).map((entry, index) => (
                 <AuditRow key={`${entry.ts}-${index}`} entry={entry} />
               ))}
@@ -486,7 +511,7 @@ function ActivityHistoryRow() {
         ) : undefined
       }
     >
-      <LinkAction onClick={() => setOpen(o => !o)}>{open ? 'Hide history' : 'View history'}</LinkAction>
+      <LinkAction onClick={() => setOpen(o => !o)}>{t(open ? 'settings.agents.hideHistory' : 'settings.agents.viewHistory')}</LinkAction>
     </SettingsRow>
   )
 }
