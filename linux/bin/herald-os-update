@@ -269,9 +269,21 @@ as_root() {
   fi
 }
 
+# What the update leaves behind on its way out, however it ends: the sudo keeper below. Any other
+# cleanup belongs here too, as bash keeps one EXIT trap.
+SUDO_KEEPER=""
+on_exit() {
+  if [[ -n "$SUDO_KEEPER" ]]; then
+    kill "$SUDO_KEEPER" 2>/dev/null || true
+  fi
+}
+trap on_exit EXIT
+
 # Whether this run can act as root, asking for the password (in a terminal) the first time only.
 # sudo then remembers it for a few minutes; a background `sudo -n -v` keeps that fresh until the
-# update ends, so a long system upgrade does not leave the steps after it asking again.
+# update ends, so a long system upgrade does not leave the steps after it asking again. The keeper
+# waits on its sleep, so that on_exit's kill ends it (and the sleep) at once, and it looks whether
+# the update still runs before each refresh.
 have_root() {
   [[ -n "${ADMIN:-}" ]] || ADMIN="$(admin_access)"
   case $ADMIN in
@@ -281,7 +293,16 @@ have_root() {
   [[ -n "${SUDO_KEPT:-}" ]] && return 0
   sudo -v || return 1
   SUDO_KEPT=1
-  (while kill -0 $$ 2>/dev/null; do sleep 50; sudo -n -v || exit; done) </dev/null >/dev/null 2>&1 &
+  (
+    trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+    while :; do
+      sleep 50 &
+      nap=$!
+      wait "$nap"
+      kill -0 $$ 2>/dev/null && sudo -n -v || exit 0
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  SUDO_KEEPER=$!
   return 0
 }
 NEEDS_ROOT="needs root: run sudo herald-os update"
@@ -404,18 +425,53 @@ user_has_sudo() {
   fi
 }
 
-run_migrations() {
-  # A checkout's migrations, the ones that came with this command (a link into /opt/herald-os), or the
-  # installed package's (/usr/share/herald-os/migrations).
-  local dir="$REPO/linux/migrations"
-  [[ -d "$dir" ]] || dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../migrations"
-  [[ -d "$dir" ]] || dir=/usr/share/herald-os/migrations
-  [[ -d "$dir" ]] || return 0
-  MIGRATION_USER="$(migration_user)"
-  local migration name kind waiting=() no_user=()
+# Where migrations are: a checkout's, the ones that came with this command (a link into
+# /opt/herald-os), or the installed package's (/usr/share/herald-os/migrations). `installed` skips
+# the checkout: under sudo that is root's ~/Herald-OS, which the person cannot read, so their
+# migrations come from where this command is installed.
+migrations_dir() {
+  local dir
+  for dir in ${1:+"$REPO/linux/migrations"} "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../migrations" /usr/share/herald-os/migrations; do
+    if [[ -d "$dir" ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Every migration to consider, as "name<TAB>path" in name order: all of the usual folder's, except
+# that under sudo the person's come from the installed folder.
+migration_list() {
+  local dir="$1" mine="$2" migration kind
   for migration in "$dir"/*.sh; do
     [[ -f "$migration" ]] || continue
-    name="$(basename "$migration")"
+    kind="$(migration_kind "$migration")"
+    if [[ -z "$mine" || $kind == root ]]; then
+      printf '%s\t%s\n' "$(basename "$migration")" "$migration"
+    fi
+  done
+  [[ -n "$mine" ]] || return 0
+  for migration in "$mine"/*.sh; do
+    [[ -f "$migration" ]] || continue
+    kind="$(migration_kind "$migration")"
+    if [[ $kind != root ]]; then
+      printf '%s\t%s\n' "$(basename "$migration")" "$migration"
+    fi
+  done
+}
+
+run_migrations() {
+  local dir mine=""
+  dir="$(migrations_dir checkout)" || return 0
+  MIGRATION_USER="$(migration_user)"
+  if [[ $MIGRATION_USER == sudo ]]; then
+    mine="$(migrations_dir)" || mine=""
+  fi
+  local migration name kind waiting=() no_user=()
+  # The list comes in on fd 3: stdin stays the terminal, for sudo and admin_access.
+  while IFS=$'\t' read -r name migration <&3; do
+    [[ -n "$name" ]] || continue
     kind="$(migration_kind "$migration")"
     if [[ $kind == root ]]; then
       [[ -f "$MIGRATIONS_DONE/$name" ]] && continue
@@ -442,13 +498,19 @@ run_migrations() {
       waiting+=("$name")
       continue
     fi
+    if [[ $MIGRATION_USER == sudo ]] && ! as_user test -r "$migration"; then
+      echo "WARNING: $SUDO_USER cannot read $migration, so migration $name did not run" >&2
+      continue
+    fi
     echo "==> migration $name"
     if run_as_user "$migration"; then
-      user_marker write "$name"
+      if ! user_marker write "$name"; then
+        echo "WARNING: migration $name ran, but could not be recorded in ~/.local/state/herald-os/migrations; it will run again on the next update" >&2
+      fi
     else
       failed+=("migration:$name")
     fi
-  done
+  done 3< <(migration_list "$dir" "$mine" | sort -t "$(printf '\t')" -k 1,1)
   if [[ ${#waiting[@]} -gt 0 ]]; then
     echo "==> migrations: skipped ($NEEDS_ROOT)"
     skipped+=(migrations)

@@ -182,8 +182,8 @@ def deploy(home: Path, booted: dict | None = None, staged: dict | None = None, r
     (home / "layered").write_text("1" if any((booted or {}).values()) or any(pending.values()) else "")
 
 
-def run(env, *args, prefix=()):
-    return subprocess.run([*prefix, BASH, str(UPDATE), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+def run(env, *args, prefix=(), script=UPDATE):
+    return subprocess.run([*prefix, BASH, str(script), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
 
 
 def calls(home: Path) -> list[str]:
@@ -720,8 +720,12 @@ def test_as_the_user_a_forced_rebuild_counts(machine):
 TERMINAL = pytest.mark.skipif(sys.platform != "linux" or shutil.which("script") is None, reason="needs script from util-linux for a terminal")
 
 
-def in_a_terminal(env: dict, *args: str) -> str:
+def in_a_terminal(env: dict, *args: str, stays_open: bool = False) -> str:
     command = " ".join([BASH, str(UPDATE), "--no-hermes", *args])
+    if stays_open:
+        # script hangs up its terminal when the update ends, which a terminal window does not; a
+        # hangup ignored here stays ignored in everything the update starts.
+        command = f"trap '' HUP; {command}"
     done = subprocess.run(["script", "-qec", command, "/dev/null"], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     return done.stdout.replace("\r\n", "\n")
 
@@ -779,12 +783,22 @@ def test_without_rpm_ostree_the_check_asks_bootc(machine, tmp_path, up_to_date):
     assert "timeout 120 sudo -n bootc upgrade --check" in calls(home)
 
 
-def migration(env: dict, name: str, kind: str | None) -> str:
-    """A migration of a kind ("root", "user", "user, with sudo" or none) that counts its runs in
-    $HOME/runs-NAME, $HOME being whoever it ran as."""
+def migration(env: dict, name: str, kind: str | None, folder: Path | None = None, mark: str | None = None) -> str:
+    """A migration of a kind ("root", "user", "user, with sudo" or none), in the checkout or `folder`,
+    that counts its runs in $HOME/runs-MARK, $HOME being whoever it ran as."""
     header = f"# Runs as: {kind}\n" if kind else ""
-    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / f"{name}.sh").write_text(f'#!/bin/sh\n{header}echo run >>"$HOME/runs-{name}"\n')
+    folder = folder or Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    (folder / f"{name}.sh").write_text(f'#!/bin/sh\n{header}echo run >>"$HOME/runs-{mark or name}"\n')
     return name
+
+
+def installed(tmp_path: Path) -> tuple[Path, Path]:
+    """A copy of the updater installed as a package would, with its migrations beside it."""
+    folder = tmp_path / "install"
+    (folder / "bin").mkdir(parents=True)
+    (folder / "migrations").mkdir()
+    shutil.copy(UPDATE, folder / "bin" / "herald-os-update")
+    return folder / "bin" / "herald-os-update", folder / "migrations"
 
 
 def runs(home: Path, name: str) -> int:
@@ -837,15 +851,18 @@ def test_as_root_under_sudo_user_migrations_run_as_that_person_with_their_home(m
     home, env = machine
     alice = home / "people" / "alice"
     alice.mkdir(parents=True)
-    three_kinds(env)
-    done = run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"))
+    script, folder = installed(tmp_path)
+    migration(env, "a-root", "root")
+    migration(env, "b-user", "user", folder)
+    migration(env, "c-mixed", "user, with sudo", folder)
+    done = run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"), script=script)
     assert done.returncode == 0, done.stdout + done.stderr
     assert runs(alice, "b-user") == 1 and runs(alice, "c-mixed") == 1
     assert runs(home, "b-user") == 0 and runs(home, "c-mixed") == 0
     assert runs(home, "a-root") == 1 and runs(alice, "a-root") == 0
     assert user_marker(alice, "b-user").exists() and not user_marker(home, "b-user").exists()
     assert any(call.startswith("sudo -n -u alice -H env bash ") and call.endswith("b-user.sh") for call in calls(home))
-    run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"))
+    run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"), script=script)
     assert runs(alice, "b-user") == 1
 
 
@@ -1000,3 +1017,85 @@ def test_without_timeout_the_check_uses_gtimeout(machine, tmp_path):
     out, _, _ = check(home, env)
     assert out == "1 package"
     assert "gtimeout 120 rpm-ostree upgrade --check" in calls(home)
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+def test_under_sudo_user_migrations_come_from_the_installed_folder_not_roots_checkout(machine, tmp_path):
+    """Root's ~/Herald-OS is not readable by the person; the installed migrations are."""
+    home, env = machine
+    alice = home / "people" / "alice"
+    alice.mkdir(parents=True)
+    script, folder = installed(tmp_path)
+    roots_checkout = home / "Herald-OS" / "linux" / "migrations"
+    migration(env, "b-user", "user", roots_checkout, mark="from-roots-checkout")
+    migration(env, "b-user", "user", folder, mark="from-the-installed-folder")
+    migration(env, "a-root", "root", roots_checkout)
+    env = {key: value for key, value in env.items() if key != "HERALD_OS_REPO"}
+    done = run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"), script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert runs(alice, "from-the-installed-folder") == 1
+    assert runs(alice, "from-roots-checkout") == 0 and runs(home, "from-roots-checkout") == 0
+    assert runs(home, "a-root") == 1
+    assert not [call for call in calls(home) if call.startswith("sudo -n -u alice") and str(roots_checkout) in call]
+
+
+def test_as_the_person_migrations_still_come_from_their_checkout(machine, tmp_path):
+    home, env = machine
+    script, folder = installed(tmp_path)
+    migration(env, "b-user", "user", mark="from-the-checkout")
+    migration(env, "b-user", "user", folder, mark="from-the-installed-folder")
+    run(env, script=script)
+    assert runs(home, "from-the-checkout") == 1 and runs(home, "from-the-installed-folder") == 0
+
+
+def test_a_marker_that_cannot_be_written_is_a_warning_and_the_migration_runs_again(machine):
+    home, env = machine
+    migration(env, "b-user", "user")
+    state = home / ".local" / "state" / "herald-os"
+    state.mkdir(parents=True)
+    (state / "migrations").write_text("a file where the folder should be")
+    done = run(env)
+    assert done.returncode == 0, done.stderr
+    assert runs(home, "b-user") == 1
+    assert "WARNING: migration b-user.sh ran, but could not be recorded in ~/.local/state/herald-os/migrations; it will run again on the next update" in done.stderr
+    run(env)
+    assert runs(home, "b-user") == 2
+
+
+def test_a_migration_that_reads_its_input_does_not_swallow_the_others(machine):
+    home, env = machine
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "a-reads.sh").write_text("# Runs as: user\ncat >/dev/null\n")
+    migration(env, "b-user", "user")
+    migration(env, "c-user", "user")
+    assert run(env).returncode == 0
+    assert runs(home, "b-user") == 1 and runs(home, "c-user") == 1
+
+
+def leftovers(home: Path) -> list[str]:
+    """Processes still running from this test's update (they carry its TEST_HOME)."""
+    found = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            environ = (proc / "environ").read_bytes()
+            command = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        if f"TEST_HOME={home}".encode() in environ.split(b"\0"):
+            found.append(f"{proc.name}: {command}")
+    return found
+
+
+@TERMINAL
+def test_the_sudo_keeper_ends_with_the_update(machine):
+    import time
+    home, env = machine
+    (home / "no-sudo").write_text("")
+    in_a_terminal(env, stays_open=True)
+    assert calls(home).count("sudo -v") == 1
+    for _ in range(30):
+        if not leftovers(home):
+            break
+        time.sleep(0.1)
+    assert leftovers(home) == []
