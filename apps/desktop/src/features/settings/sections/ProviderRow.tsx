@@ -155,7 +155,7 @@ export function ModelProviderRow() {
     ? !online
       ? t('menuBar.waitingForHermes')
       : options.error
-        ? t('settings.agents.provider.unreadable', { error: options.error })
+        ? t('settings.agents.provider.unreadable', { error: errorText(options.error) })
         : t('settings.agents.provider.checking')
     : !current
       ? t('settings.agents.provider.none')
@@ -255,7 +255,7 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
 
   return (
     <div ref={ref} className="relative">
-      <Dropdown label={<span className="max-w-[200px] truncate">{busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}</span>} onClick={() => !disabled && setOpen(o => !o)} className={cn(disabled && 'opacity-50')} />
+      <Dropdown label={<span className="max-w-[200px] truncate" title={busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}>{busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}</span>} onClick={() => !disabled && setOpen(o => !o)} className={cn(disabled && 'opacity-50')} />
       {open && (
         <div className="float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 flex w-[340px] flex-col rounded-lg" role="dialog" aria-label={t('settings.agents.provider.chooseLabel')}>
           <label className="glass-input m-2 flex h-8 items-center gap-2 rounded-lg px-2.5">
@@ -264,7 +264,7 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
           </label>
           <div className="flex max-h-[360px] flex-col gap-3 overflow-y-auto px-2 pb-2">
             {loading && choices.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.provider.loading')}</div>}
-            {error && <div className="px-1 py-2 text-[12px] text-danger">{error}</div>}
+            {error && <div className="px-1 py-2 text-[12px] text-danger">{errorText(error)}</div>}
             {!loading && !error && shown.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.provider.noMatch')}</div>}
             {groups.map(group => (
               <section key={group.title}>
@@ -284,7 +284,9 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
                       }}
                       className={cn('flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors', choice.current ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/8 hover:text-fg')}
                     >
-                      <span className="min-w-0 flex-1 truncate">{choice.name}</span>
+                      <span className="min-w-0 flex-1 truncate" title={choice.name}>
+                        {choice.name}
+                      </span>
                       {!choice.ready && <span className="shrink-0 text-[11px] text-fg-4">{t(SETUP_HINT[choice.setup])}</span>}
                       {choice.current && <IconCheck size={14} className="shrink-0 text-accent-strong" />}
                     </button>
