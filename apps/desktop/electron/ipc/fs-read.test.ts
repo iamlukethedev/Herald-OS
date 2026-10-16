@@ -1552,3 +1552,51 @@ describe('the Studio preview', () => {
     await expect(preview(hermes)).rejects.toThrow(/system folder/)
   })
 })
+
+describe.runIf(process.platform !== 'win32')('FIFOs and other special files', () => {
+  const fifo = (name: string): string => {
+    const file = path.join(home, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    execFileSync('mkfifo', [file])
+
+    return file
+  }
+  const quickly = async (work: Promise<unknown>, pattern: RegExp) => {
+    const started = Date.now()
+
+    await expect(work).rejects.toThrow(pattern)
+    expect(Date.now() - started).toBeLessThan(1000)
+  }
+
+  it('refuses a write to a FIFO with no reader at once instead of waiting for one', async () => {
+    const pipe = fifo('notes.txt.fifo')
+
+    await quickly(invoke(IPC.fsWriteText, pipe, 'x'), /not a regular file/)
+    await quickly(writeChecked(await checkWritable(pipe), 'x'), /not a regular file/)
+    await quickly(invoke(IPC.canvasWriteFile, fifo('Pictures/out.png'), new Uint8Array([1])), /not a regular file/)
+    await quickly(invoke(IPC.captureSaveImage, fifo('Pictures/shot.png'), 'data:image/png;base64,AA=='), /not a regular file/)
+    expect(fs.statSync(pipe).isFIFO()).toBe(true)
+  })
+
+  it('refuses a write to a FIFO that has a reader, so nothing reaches it', async () => {
+    const pipe = fifo('feed.txt')
+    const reader = await fsp.open(pipe, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+
+    try {
+      await quickly(invoke(IPC.fsWriteText, pipe, 'leaked'), /not a regular file/)
+      const buffer = Buffer.alloc(16)
+      const { bytesRead } = await reader.read(buffer, 0, 16, null).catch(() => ({ bytesRead: 0 }))
+      expect(bytesRead).toBe(0)
+    } finally {
+      await reader.close()
+    }
+  })
+
+  it('still replaces a FIFO with a regular file on an atomic write', async () => {
+    const pipe = fifo('memo.md')
+
+    await invoke(IPC.fsWriteText, pipe, 'saved', { atomic: true })
+    expect(fs.statSync(pipe).isFile()).toBe(true)
+    expect(fs.readFileSync(pipe, 'utf8')).toBe('saved')
+  })
+})

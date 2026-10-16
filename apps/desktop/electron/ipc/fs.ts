@@ -681,17 +681,32 @@ async function opensChecked(handle: fs.FileHandle, checked: CheckedPath, flags: 
   return now === checked.real && there !== null && there.dev === opened.dev && there.ino === opened.ino
 }
 
+/** Opening for a write never waits on a FIFO with no reader (it fails with ENXIO instead); regular files write the same either way. */
+export const WRITE_FLAGS = fsConstants.O_WRONLY | fsConstants.O_CREAT | (fsConstants.O_NONBLOCK ?? 0)
+
 /**
  * Write a whole file at a checked path through its resolved form, creating its folder. Nothing is truncated or written
- * before the open is verified. A new file is created by the open itself (O_CREAT), so when a folder on the way was
- * swapped for a symlink, an empty file can be left where the swap led even though the write is refused; it is not
- * removed, as deleting by path would race the same swap.
+ * before the open is verified, and only a regular file is written: a FIFO, with a reader or without, a socket or a
+ * device is refused before anything reaches it. A new file is created by the open itself (O_CREAT), so when a folder
+ * on the way was swapped for a symlink, an empty file can be left where the swap led even though the write is
+ * refused; it is not removed, as deleting by path would race the same swap.
  */
 export async function writeChecked(checked: CheckedPath, data: string | Uint8Array): Promise<void> {
   await fs.mkdir(path.dirname(checked.real), { recursive: true })
-  const handle = await openChecked(checked, fsConstants.O_WRONLY | fsConstants.O_CREAT)
+  const notRegular = () => new Error(`${checked.path} is not a regular file`)
+  let handle: fs.FileHandle
 
   try {
+    handle = await openChecked(checked, WRITE_FLAGS)
+  } catch (error) {
+    throw (error as NodeJS.ErrnoException).code === 'ENXIO' ? notRegular() : error
+  }
+
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw notRegular()
+    }
+
     await handle.truncate(0)
     await handle.writeFile(data)
   } finally {
