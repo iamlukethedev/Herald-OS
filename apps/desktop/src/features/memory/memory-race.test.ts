@@ -26,7 +26,19 @@ const hasPython = (() => {
     return false
   }
 })()
-const hasHermes = hasPython && fs.existsSync(path.join(HERMES_CHECKOUT, 'tools', 'memory_tool_store.py'))
+// Hermes's MemoryStore needs its own dependencies (yaml and others), which a bare runner's python3 may lack.
+const hasHermes =
+  hasPython &&
+  fs.existsSync(path.join(HERMES_CHECKOUT, 'tools', 'memory_tool_store.py')) &&
+  (() => {
+    try {
+      execFileSync('python3', ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from tools.memory_tool_store import MemoryStore', HERMES_CHECKOUT], { stdio: 'ignore' })
+
+      return true
+    } catch {
+      return false
+    }
+  })()
 
 let home: string
 
