@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -48,7 +49,7 @@ vi.mock('electron', () => ({
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
-const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
+const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, OPEN_IMMEDIATE_RETRIES, OPEN_RETRY_BUDGET_MS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openBackoff, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
 const { WebViews, confineFiles, registerWebIpc, servableFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
@@ -1080,6 +1081,109 @@ describe('opening checked paths', () => {
     expect(fs.readFileSync(`${hermes}/memories/MEMORY.md`, 'utf8')).toBe('written')
     open.mockRestore()
   })
+
+  it('opens a read-write file again when it is replaced while it is being opened', async () => {
+    write('.hermes/memories/MEMORY.md', 'old')
+    const checked = await checkWritable(`${hermes}/memories/MEMORY.md`)
+    const open = replacedWhileOpening(`${hermes}/memories/MEMORY.md`, 'new')
+
+    expect(await contentOf(await openChecked(checked, fs.constants.O_RDWR))).toBe('new')
+    expect(open).toHaveBeenCalledTimes(2)
+    open.mockRestore()
+  })
+
+  it('opens again at once a few times, then waits longer each time, with jitter, up to a cap', () => {
+    for (let attempt = 1; attempt <= OPEN_IMMEDIATE_RETRIES; attempt++) {
+      expect(openBackoff(attempt, () => 1)).toBe(0)
+    }
+
+    expect([1, 2, 3, 4, 5].map(step => openBackoff(OPEN_IMMEDIATE_RETRIES + step, () => 1))).toEqual([5, 10, 20, 40, 50])
+    expect([1, 2, 3].map(step => openBackoff(OPEN_IMMEDIATE_RETRIES + step, () => 0))).toEqual([2.5, 5, 10])
+    expect(openBackoff(OPEN_IMMEDIATE_RETRIES + 20, () => 0.5)).toBe(37.5)
+  })
+
+  it('closes every handle it does not return, and refuses a swap that persists within the retry budget', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    const opened: fsp.FileHandle[] = []
+    const open = vi.spyOn(fsp, 'open').mockImplementation(async (_file, flags) => {
+      const handle = await realOpen(`${home}/.ssh/id_rsa`, flags)
+      opened.push(handle)
+
+      return handle
+    })
+
+    try {
+      for (const platform of ['linux', 'darwin'] as const) {
+        opened.length = 0
+        const started = Date.now()
+
+        await onPlatform(platform, async () => {
+          await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+        })
+        expect(Date.now() - started).toBeLessThan(OPEN_RETRY_BUDGET_MS + 250)
+        expect(opened).toHaveLength(OPEN_ATTEMPTS)
+        expect(opened.every(handle => handle.fd === -1)).toBe(true)
+      }
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('stops opening again once the retry budget is spent, however slow each open is', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    const slow = OPEN_RETRY_BUDGET_MS / 4
+    const open = vi.spyOn(fsp, 'open').mockImplementation(async (_file, flags) => {
+      await new Promise(resolve => setTimeout(resolve, slow))
+
+      return realOpen(`${home}/.ssh/id_rsa`, flags)
+    })
+    const started = Date.now()
+
+    try {
+      await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+      expect(open.mock.calls.length).toBeLessThan(OPEN_ATTEMPTS)
+      expect(Date.now() - started).toBeLessThan(OPEN_RETRY_BUDGET_MS + 2 * slow)
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  /** Hermes saving a file over and over: write a temporary file and rename it over `file`, `perSecond` times a second, in another process. */
+  const saving = (file: string, perSecond: number) =>
+    spawn(process.execPath, ['-e', `const fs = require('fs'); let i = 0; setInterval(() => { const tmp = ${JSON.stringify(file)} + '.hermes-tmp.' + (i++ % 4); fs.writeFileSync(tmp, 'hermes ' + i); fs.renameSync(tmp, ${JSON.stringify(file)}) }, ${Math.round(1000 / perSecond)})`], { stdio: 'ignore' })
+
+  it.each(['linux', 'darwin'] as const)('writes through rename-over saves at 50 a second, as written on %s, and only to the checked file', async platform => {
+    write('.hermes/memories/MEMORY.md', 'start')
+    const file = `${hermes}/memories/MEMORY.md`
+    const saver = saving(file, 50)
+    const total = 150
+    let written = 0
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      await onPlatform(platform, async () => {
+        for (let i = 0; i < total; i++) {
+          try {
+            await writeChecked(await checkWritable(file), `files ${i}`)
+            written++
+            await (await openChecked(await assertReadable(file), fs.constants.O_RDONLY)).close()
+          } catch {
+            // Counted below.
+          }
+          await new Promise(resolve => setTimeout(resolve, 5))
+        }
+      })
+    } finally {
+      saver.kill('SIGKILL')
+    }
+
+    expect(written / total).toBeGreaterThanOrEqual(0.99)
+    expect(fs.readFileSync(file, 'utf8')).toMatch(/^(files|hermes) \d+$/)
+    expect(fs.readdirSync(`${hermes}/memories`).filter(name => !name.startsWith('MEMORY.md.hermes-tmp.'))).toEqual(['MEMORY.md', 'USER.md'])
+    expect(fs.readFileSync(`${home}/.ssh/id_rsa`, 'utf8')).toBe('PRIVATE KEY')
+  }, 20_000)
 
   it.runIf(process.platform === 'linux')('does not take a file named like a replaced one for it', async () => {
     write('dir/a.txt (deleted)', 'other')

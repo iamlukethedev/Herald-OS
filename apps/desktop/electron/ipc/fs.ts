@@ -553,16 +553,46 @@ export async function assertWritable(target: string, options: WritableOptions = 
   return (await checkWritable(target, options)).path
 }
 
-/** Opens of a checked path before one that keeps changing is refused: a save that renames a new file into place (as Hermes saves memory) can land between the open and its check. */
-export const OPEN_ATTEMPTS = 3
+/**
+ * Opens of a checked path before one that keeps changing is refused: a save that renames a new file into place (as
+ * Hermes saves memory, sometimes many times a second) can land between the open and its check. The handle is closed
+ * between attempts. A failed check means a rename has just landed, and a saver writes its next file before the next
+ * rename, so the first OPEN_IMMEDIATE_RETRIES opens again at once; after that the wait grows from OPEN_BACKOFF_MS to
+ * OPEN_BACKOFF_MAX_MS, with jitter. No attempt starts once OPEN_RETRY_BUDGET_MS have passed since the first, waits,
+ * opens and checks included, so a slow disk refuses in bounded time too.
+ */
+export const OPEN_ATTEMPTS = 8
+export const OPEN_IMMEDIATE_RETRIES = 5
+export const OPEN_BACKOFF_MS = 5
+export const OPEN_BACKOFF_MAX_MS = 50
+export const OPEN_RETRY_BUDGET_MS = 300
+
+/**
+ * The wait before attempt `attempt + 1`: none for the first OPEN_IMMEDIATE_RETRIES, then doubling from OPEN_BACKOFF_MS
+ * up to OPEN_BACKOFF_MAX_MS, between half and all of it.
+ */
+export function openBackoff(attempt: number, random: () => number = Math.random): number {
+  if (attempt <= OPEN_IMMEDIATE_RETRIES) {
+    return 0
+  }
+
+  const ceiling = Math.min(OPEN_BACKOFF_MAX_MS, OPEN_BACKOFF_MS * 2 ** (attempt - 1 - OPEN_IMMEDIATE_RETRIES))
+
+  return ceiling / 2 + random() * (ceiling / 2)
+}
+
+const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
  * Open a checked path through its resolved form, without following a symlink put in its place after the check, and
  * make sure the file opened is the one checked. A folder on the way swapped for a symlink between the check and the
  * open is caught here: on Linux by the path the kernel reports for the open file; elsewhere by resolving the path
- * again and comparing the file there with the one open, which leaves only a swap undone and redone in between.
+ * again and comparing the file there with the one open, which leaves only a swap undone and redone in between. Only a
+ * verified handle is returned; every other one is closed before the next attempt.
  */
 export async function openChecked(checked: CheckedPath, flags: number): Promise<fs.FileHandle> {
+  const started = Date.now()
+
   for (let attempt = 1; ; attempt++) {
     const handle = await fs.open(checked.real, flags | (fsConstants.O_NOFOLLOW ?? 0))
     let verified: boolean
@@ -579,9 +609,14 @@ export async function openChecked(checked: CheckedPath, flags: number): Promise<
     }
 
     await handle.close()
+    const wait = openBackoff(attempt)
 
-    if (attempt >= OPEN_ATTEMPTS) {
+    if (attempt >= OPEN_ATTEMPTS || Date.now() - started + wait > OPEN_RETRY_BUDGET_MS) {
       throw new Error(`${checked.path} changed while it was being opened`)
+    }
+
+    if (wait > 0) {
+      await pause(wait)
     }
   }
 }
