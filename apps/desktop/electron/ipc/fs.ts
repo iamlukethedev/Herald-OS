@@ -245,7 +245,7 @@ export interface ReadablePath {
  * Paths the shell may read, list, stat or watch: the home folder, the Hermes home and the temporary folders, judged
  * after symlinks resolve. Credential stores ({@link isSecret}) are refused wherever a path or its target lands.
  */
-export async function assertReadable(target: string): Promise<ReadablePath> {
+export async function assertReadable(target: string, outside = 'Herald OS only reads files inside your home folder'): Promise<ReadablePath> {
   const file = withoutTrailingSeparator(normalizeUserPath(target))
   const places = await resolvedPlaces()
 
@@ -257,7 +257,7 @@ export async function assertReadable(target: string): Promise<ReadablePath> {
   const real = await realpathDeep(file)
 
   if (![...places.homes, ...places.hermes, ...places.temps].some(root => within(real, root))) {
-    throw new Error('Herald OS only reads files inside your home folder')
+    throw new Error(outside)
   }
 
   if (isSecret(real, places)) {
@@ -267,13 +267,15 @@ export async function assertReadable(target: string): Promise<ReadablePath> {
   return { path: file, real }
 }
 
+const PROJECT_OUTSIDE = 'project folders must be inside your home folder'
+
 /**
  * A folder that may be listed deeply or watched: readable, inside the home folder or a temporary folder once
  * symlinks resolve, and not a whole system folder such as `/`, `/tmp` or the Hermes home. As the caller wrote it,
  * without a trailing separator.
  */
 export async function assertProjectFolder(target: string): Promise<string> {
-  const { path: root, real } = await assertReadable(target)
+  const { path: root, real } = await assertReadable(target, PROJECT_OUTSIDE)
   const places = await resolvedPlaces()
 
   if (path.dirname(real) === real || [...places.temps, ...places.hermes].some(dir => comparable(dir) === comparable(real))) {
@@ -281,7 +283,7 @@ export async function assertProjectFolder(target: string): Promise<string> {
   }
 
   if (![...places.homes, ...places.temps].some(dir => within(real, dir))) {
-    throw new Error('project folders must be inside your home folder')
+    throw new Error(PROJECT_OUTSIDE)
   }
 
   return root

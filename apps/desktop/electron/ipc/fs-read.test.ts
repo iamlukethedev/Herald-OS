@@ -28,6 +28,7 @@ let sender = owner()
 const invoke = (channel: string, ...args: unknown[]): Promise<unknown> => Promise.resolve(handlers.get(channel)!({ sender }, ...args))
 const PROTECTED = /is a protected location/
 const OUTSIDE = /only reads files inside your home folder/
+const PROJECT_OUTSIDE = /project folders must be inside your home folder/
 
 let home: string
 let hermes: string
@@ -258,10 +259,10 @@ describe('project folders for the Studio tree and its watcher', () => {
     fs.symlinkSync('/etc', `${home}/etc`)
     fs.symlinkSync('/', `${home}/root`)
 
-    await expect(invoke(IPC.fsListTree, `${home}/etc`, 100)).rejects.toThrow(OUTSIDE)
-    await expect(invoke(IPC.fsListTree, `${home}/etc/`, 100)).rejects.toThrow(OUTSIDE)
-    await expect(invoke(IPC.fsWatchTree, `${home}/etc`)).rejects.toThrow(OUTSIDE)
-    await expect(invoke(IPC.fsListTree, `${home}/root`, 100)).rejects.toThrow(OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/etc`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/etc/`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
+    await expect(invoke(IPC.fsWatchTree, `${home}/etc`)).rejects.toThrow(PROJECT_OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/root`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
   })
 
   it('refuses a symlink in the home folder that leads to a credential store', async () => {
@@ -273,8 +274,8 @@ describe('project folders for the Studio tree and its watcher', () => {
 
   it('refuses the temporary folders and the root themselves, however they are written', async () => {
     for (const root of ['/tmp', '/tmp/', '/tmp//', '/private/tmp/', `${os.tmpdir()}/`, '/tmp/../tmp', '/', '//']) {
-      await expect(invoke(IPC.fsListTree, root, 100)).rejects.toThrow(/system folder|only reads files inside/)
-      await expect(invoke(IPC.fsWatchTree, root)).rejects.toThrow(/system folder|only reads files inside/)
+      await expect(invoke(IPC.fsListTree, root, 100)).rejects.toThrow(/system folder|project folders must be inside/)
+      await expect(invoke(IPC.fsWatchTree, root)).rejects.toThrow(/system folder|project folders must be inside/)
     }
   })
 
@@ -298,6 +299,6 @@ describe('project folders for the Studio tree and its watcher', () => {
   })
 
   it('refuses .. that climbs out of the home folder', async () => {
-    await expect(invoke(IPC.fsListTree, `${home}/Projects/../../../../../../etc`, 100)).rejects.toThrow(OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/Projects/../../../../../../etc`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
   })
 })
