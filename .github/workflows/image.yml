@@ -4,7 +4,8 @@ name: Herald OS image
 # GHCR package, joined into one multi-arch tag; then the installer ISO (x86_64) and the VM disks from
 # it: a qcow2 for both architectures, a Hyper-V VHDX (x86_64) and a UTM bundle (aarch64), packaged by
 # linux/vm/package-disk.sh. A tag attaches the disks to the draft release; nothing here makes the
-# image, the package or a release public.
+# image, the package or a release public. Next to it, the NVIDIA image (ADR-029): x86_64 only, in a
+# package of its own (herald-os-nvidia) under the channel's tag itself, with no disks of its own.
 
 on:
   push:
@@ -60,23 +61,42 @@ jobs:
           echo "Image tag: $channel"
 
   image:
-    name: Image (${{ matrix.arch }})
+    name: Image (${{ matrix.label }})
     needs: channel
     permissions:
       contents: read
       packages: write
+    # The NVIDIA image waits on Universal Blue's modules for each new kernel; until they are out it
+    # fails, and that must not hold back the default image's multi-arch tag or its disks.
+    continue-on-error: ${{ matrix.image == 'herald-os-nvidia' }}
     env:
       CHANNEL: ${{ needs.channel.outputs.channel }}
+      # The image name is also the Containerfile's --target. The default image goes out as one tag
+      # per architecture, joined by the manifest job; the NVIDIA image, x86_64 only, as the channel's.
+      REPO: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+      TAG: ${{ needs.channel.outputs.channel }}${{ matrix.suffix }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
+            label: amd64
+            image: herald-os
+            suffix: -amd64
             shell: x64
             runner: ubuntu-24.04
           - arch: arm64
+            label: arm64
+            image: herald-os
+            suffix: -arm64
             shell: arm64
             runner: ubuntu-24.04-arm
+          - arch: amd64
+            label: amd64, NVIDIA
+            image: herald-os-nvidia
+            suffix: ''
+            shell: x64
+            runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -124,14 +144,40 @@ jobs:
           npm ci
           npm run dist:linux --workspace apps/desktop -- --${{ matrix.shell }}
           cp apps/desktop/release/herald-os-*-linux-${{ matrix.shell }}.tar.gz herald-os-linux.tar.gz
+      - name: Pin the base and the NVIDIA modules to one kernel
+        if: matrix.image == 'herald-os-nvidia'
+        # Universal Blue builds the modules for one kernel and tags them by it. The base goes in by
+        # digest, so its kernel cannot move between this step and the build.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          base=quay.io/fedora/fedora-bootc:44
+          inspect="$(skopeo inspect "docker://$base")"
+          digest="$(jq -r .Digest <<<"$inspect")"
+          kernel="$(jq -r '.Labels["ostree.linux"]' <<<"$inspect")"
+          akmods="main-44-$kernel"
+          for repo in akmods akmods-nvidia-open; do
+            if ! skopeo inspect --raw "docker://ghcr.io/ublue-os/$repo:$akmods" >/dev/null; then
+              echo "::error::Universal Blue has not published ghcr.io/ublue-os/$repo:$akmods for kernel $kernel yet; the default image is not affected."
+              exit 1
+            fi
+          done
+          echo "Base ${base%:*}@$digest, kernel $kernel, modules $akmods"
+          { echo "FEDORA_BOOTC=${base%:*}@$digest"; echo "AKMODS_TAG=$akmods"; } >>"$GITHUB_ENV"
       - name: Build the image
         run: |
-          sudo podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz \
-            -t "$IMAGE:$CHANNEL-${{ matrix.arch }}" .
+          args=(--target "${{ matrix.image }}" --build-arg SHELL_TARBALL=herald-os-linux.tar.gz)
+          if [[ -n "${FEDORA_BOOTC:-}" ]]; then
+            args+=(--build-arg "FEDORA_BOOTC=$FEDORA_BOOTC" --build-arg "AKMODS_TAG=$AKMODS_TAG")
+          fi
+          sudo podman build -f linux/image/Containerfile "${args[@]}" -t "$REPO:$TAG" .
       - name: Push it
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
-          sudo podman push --digestfile digest.txt "$IMAGE:$CHANNEL-${{ matrix.arch }}"
+          sudo podman push --digestfile digest.txt "$REPO:$TAG"
+          # An image without per-architecture tags has no manifest job to give a release its version tag.
+          if [[ -z "${{ matrix.suffix }}" && "$GITHUB_REF" == refs/tags/v* ]]; then
+            sudo podman push "$REPO:$TAG" "docker://$REPO:${GITHUB_REF_NAME#v}"
+          fi
       - name: Sign it with the project's key
         if: env.SIGNING == 'true'
         env:
@@ -140,7 +186,7 @@ jobs:
         run: |
           echo "${{ github.token }}" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
           # A key, not keyless: no identity or entry goes to the public transparency log.
-          cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$IMAGE@$(cat digest.txt)"
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$REPO@$(cat digest.txt)"
 
   manifest:
     name: Multi-arch tag

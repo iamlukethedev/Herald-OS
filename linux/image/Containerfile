@@ -4,7 +4,23 @@
 # the shell tarball for the same architecture next to it:
 #
 #   podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz -t herald-os .
-FROM quay.io/fedora/fedora-bootc:44
+#
+# The NVIDIA image (x86_64 only, ADR-029) is the same image with NVIDIA's driver on top:
+#
+#   podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz \
+#     --target herald-os-nvidia -t herald-os-nvidia .
+#
+# Its kernel modules are Universal Blue's prebuilt nvidia-open akmods, signed with their key. They
+# are built for one kernel, so FEDORA_BOOTC and AKMODS_TAG must name the same one: the workflow pins
+# the base by digest and picks the akmods tag for its kernel (main-44-<kernel>); nvidia.sh refuses a
+# mismatch. The default image never pulls the akmods images.
+ARG FEDORA_BOOTC=quay.io/fedora/fedora-bootc:44
+ARG AKMODS_TAG=main-44
+
+FROM ghcr.io/ublue-os/akmods:${AKMODS_TAG} AS akmods
+FROM ghcr.io/ublue-os/akmods-nvidia-open:${AKMODS_TAG} AS akmods-nvidia
+
+FROM ${FEDORA_BOOTC} AS herald-os
 
 ARG SHELL_TARBALL=herald-os-linux.tar.gz
 COPY linux /tmp/herald-os/linux
@@ -21,3 +37,20 @@ LABEL org.opencontainers.image.title="Herald OS" \
       containers.bootc="1"
 
 RUN bootc container lint
+
+FROM herald-os AS herald-os-nvidia
+
+COPY linux/image/nvidia.sh linux/image/kargs-nvidia.toml /tmp/herald-os/
+RUN --mount=type=bind,from=akmods,src=/rpms/ublue-os,dst=/tmp/akmods \
+    --mount=type=bind,from=akmods-nvidia,src=/rpms,dst=/tmp/akmods-nvidia \
+    bash /tmp/herald-os/nvidia.sh /tmp/akmods /tmp/akmods-nvidia \
+ && dnf clean all \
+ && rm -rf /tmp/herald-os /var/cache/* /var/log/* /var/lib/dnf
+
+LABEL org.opencontainers.image.title="Herald OS (NVIDIA)" \
+      org.opencontainers.image.description="An AI-native desktop built around Hermes Agent, with NVIDIA's driver and CUDA"
+
+RUN bootc container lint
+
+# Last, so a build without --target is the default image.
+FROM herald-os
