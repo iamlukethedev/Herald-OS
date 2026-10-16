@@ -43,6 +43,13 @@ function useIdleFlyover(): { up: boolean; flown: number; land: () => void } {
     return () => clearTimeout(timer)
   }, [off, up])
 
+  // Turning flyovers off ends a flight that is up rather than hiding it, so turning them on does not replay it.
+  useEffect(() => {
+    if (off) {
+      setUp(false)
+    }
+  }, [off])
+
   return { up: up && !off, flown: flown.current, land: () => setUp(false) }
 }
 

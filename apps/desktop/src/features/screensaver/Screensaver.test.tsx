@@ -15,7 +15,14 @@ vi.mock('../../shell/Wallpaper.tsx', () => ({ Wallpaper: () => null }))
 vi.mock('../room/screensaver.ts', () => ({ useRoomScreensaver: () => choice.room }))
 vi.mock('../room/RoomScreensaver.tsx', () => ({ RoomScreensaver: () => <div data-testid="room-scene" /> }))
 vi.mock('../pet/hooks.ts', () => ({ useReducedMotion: () => choice.reduced }))
-vi.mock('../roadster/RoadsterFlight.tsx', () => ({ RoadsterFlight: ({ onDone }: { onDone: () => void }) => <button type="button" data-testid="roadster" onClick={onDone} /> }))
+const flight = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }))
+vi.mock('../roadster/RoadsterFlight.tsx', () => ({
+  RoadsterFlight: (props: { onDone: () => void }) => {
+    flight.props = props
+
+    return <button type="button" data-testid="roadster" onClick={props.onDone} />
+  }
+}))
 
 let host: HTMLDivElement
 let root: Root
@@ -140,5 +147,40 @@ describe('the screensaver', () => {
 
     act(() => $prefs.set({ ...$prefs.get(), flyovers: false }))
     expect(roadster()).toBeNull()
+  })
+
+  it('ends a flight that is up when Flyover animations are turned off, so turning them on does not replay it', async () => {
+    vi.useFakeTimers()
+    await show(vi.fn())
+    const roadster = () => host.querySelector('[data-testid="roadster"]')
+
+    await act(async () => vi.advanceTimersByTime(FLYOVER_FIRST_MS))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(roadster()).not.toBeNull()
+
+    act(() => $prefs.set({ ...$prefs.get(), flyovers: false }))
+    act(() => $prefs.set({ ...$prefs.get(), flyovers: true }))
+    expect(roadster()).toBeNull()
+
+    await act(async () => vi.advanceTimersByTime(FLYOVER_EVERY_MS - 1))
+    expect(roadster()).toBeNull()
+    await act(async () => vi.advanceTimersByTime(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(roadster()).not.toBeNull()
+  })
+
+  it('lets the press that ends the screensaver’s flight end the screensaver too', async () => {
+    vi.useFakeTimers()
+    await show(vi.fn())
+    await act(async () => vi.advanceTimersByTime(FLYOVER_FIRST_MS))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(flight.props).not.toHaveProperty('claimsClick')
   })
 })
