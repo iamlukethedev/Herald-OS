@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Whether this computer has an NVIDIA GPU that the Herald OS image it runs has no driver for. The
+# default image drives it with nouveau, which runs the screen but has no CUDA, so local models get no
+# GPU; the NVIDIA image (ghcr.io/iamlukethedev/herald-os-nvidia, ADR-029) has NVIDIA's driver. When
+# that is so, says how to switch; otherwise, and anywhere but on the image, says nothing.
+#
+#   herald-os-gpu-check            print the advice (the first boot writes it to the journal)
+#   herald-os-gpu-check --notify   also show it as a notification (herald-os-session, once a user)
+set -euo pipefail
+
+SYSFS="${HERALD_OS_SYSFS:-/sys}"
+MODULES="${HERALD_OS_MODULES:-/usr/lib/modules}"
+OS_RELEASE="${HERALD_OS_OS_RELEASE:-/usr/lib/os-release}"
+ARCH="${HERALD_OS_ARCH:-$(uname -m)}"
+NVIDIA_IMAGE=ghcr.io/iamlukethedev/herald-os-nvidia
+
+herald_image() { grep -Eqx 'IMAGE_ID="?herald-os"?' "$OS_RELEASE" 2>/dev/null; }
+
+# A display controller (PCI class 0x03xxxx: VGA, 3D or other) from NVIDIA (vendor 0x10de).
+nvidia_gpu() {
+  local dev vendor class
+  for dev in "$SYSFS"/bus/pci/devices/*; do
+    vendor="$(cat "$dev/vendor" 2>/dev/null)" || continue
+    class="$(cat "$dev/class" 2>/dev/null)" || continue
+    [[ "$vendor" == 0x10de && "$class" == 0x03* ]] && return 0
+  done
+  return 1
+}
+
+nvidia_driver() { compgen -G "$MODULES/*/extra/nvidia/nvidia.ko*" >/dev/null; }
+
+if [[ "$ARCH" != x86_64 ]] || ! herald_image || ! nvidia_gpu || nvidia_driver; then
+  exit 0
+fi
+
+channel="$(herald-os channel 2>/dev/null || true)"
+[[ "$channel" == stable || "$channel" == edge ]] || channel=stable
+title="NVIDIA graphics found"
+body="This computer has an NVIDIA GPU, which this Herald OS image drives without CUDA, so local models do not use it. The NVIDIA image has NVIDIA's driver: run \`sudo bootc switch $NVIDIA_IMAGE:$channel\` in a terminal and restart. With Secure Boot on, enroll its key first (docs/LINUX.md, \"The NVIDIA image\")."
+echo "$title: $body"
+if [[ "${1:-}" == --notify ]]; then
+  herald-os notify "$title" "$body" || true
+fi

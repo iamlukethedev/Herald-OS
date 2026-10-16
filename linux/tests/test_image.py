@@ -90,6 +90,7 @@ def test_the_image_build_names_the_image_in_os_release():
 
 # The NVIDIA image (ADR-029): a stage of the same Containerfile, a leg of the image workflow.
 
+FIRSTBOOT_SCRIPT = ROOT / "linux" / "image" / "firstboot.sh"
 CONTAINERFILE = ROOT / "linux" / "image" / "Containerfile"
 NVIDIA = ROOT / "linux" / "image" / "nvidia.sh"
 
@@ -182,3 +183,67 @@ def test_the_nvidia_layer_leaves_xorg_out_and_puts_the_driver_in_the_initramfs()
     assert "--excludepath=/etc/yum.repos.d" in script
     kargs = (ROOT / "linux" / "image" / "kargs-nvidia.toml").read_text()
     assert '"rd.driver.blacklist=nouveau"' in kargs and 'match-architectures = ["x86_64"]' in kargs
+
+
+# herald-os-gpu-check: an NVIDIA GPU on the default image is told how to switch to the NVIDIA image.
+
+GPU_CHECK = ROOT / "linux" / "bin" / "herald-os-gpu-check"
+NVIDIA_VGA = ("0x10de", "0x030000")
+NVIDIA_3D = ("0x10de", "0x030200")
+NVIDIA_AUDIO = ("0x10de", "0x040300")
+INTEL_VGA = ("0x8086", "0x030000")
+
+
+def gpu_check(tmp_path: Path, devices, release=HERALD, driver=False, arch="x86_64", channel="edge", notify=False):
+    sysfs = tmp_path / "sys"
+    for i, (vendor, cls) in enumerate(devices):
+        dev = sysfs / "bus" / "pci" / "devices" / f"0000:0{i}:00.0"
+        dev.mkdir(parents=True)
+        (dev / "vendor").write_text(vendor + "\n")
+        (dev / "class").write_text(cls + "\n")
+    modules = tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia"
+    modules.mkdir(parents=True)
+    if driver:
+        (modules / "nvidia.ko.xz").write_text("")
+    (tmp_path / "os-release").write_text(release)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "herald-os").write_text(f'#!/bin/sh\n[ "$1" = channel ] && {{ echo {channel}; exit 0; }}\necho "$@" >>"{tmp_path / "notified"}"\n')
+    (bin_dir / "herald-os").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HERALD_OS_SYSFS": str(sysfs), "HERALD_OS_MODULES": str(tmp_path / "modules"),
+           "HERALD_OS_OS_RELEASE": str(tmp_path / "os-release"), "HERALD_OS_ARCH": arch}
+    argv = ["bash", str(GPU_CHECK)] + (["--notify"] if notify else [])
+    result = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    notified = tmp_path / "notified"
+    return result.stdout, notified.read_text() if notified.exists() else ""
+
+
+@pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
+def test_an_nvidia_gpu_on_the_default_image_is_told_how_to_switch(tmp_path, devices):
+    out, notified = gpu_check(tmp_path, devices, notify=True)
+    assert "sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge" in out
+    assert notified.startswith("notify NVIDIA graphics found ") and "herald-os-nvidia:edge" in notified
+
+
+@pytest.mark.parametrize("case", ["no nvidia", "nvidia audio only", "nvidia image", "not the image", "arm"])
+def test_nothing_is_said_where_there_is_nothing_to_switch_to(tmp_path, case):
+    args = {
+        "no nvidia": dict(devices=[INTEL_VGA]),
+        "nvidia audio only": dict(devices=[INTEL_VGA, NVIDIA_AUDIO]),
+        "nvidia image": dict(devices=[NVIDIA_VGA], driver=True),
+        "not the image": dict(devices=[NVIDIA_VGA], release=FEDORA),
+        "arm": dict(devices=[NVIDIA_VGA], arch="aarch64"),
+    }[case]
+    assert gpu_check(tmp_path, notify=True, **args) == ("", "")
+
+
+def test_without_a_channel_the_advice_is_stable(tmp_path):
+    out, notified = gpu_check(tmp_path, [NVIDIA_VGA], channel="")
+    assert "herald-os-nvidia:stable" in out and notified == ""
+
+
+def test_the_first_boot_and_the_session_run_the_gpu_check():
+    assert "herald-os-gpu-check || true" in FIRSTBOOT_SCRIPT.read_text()
+    session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
+    assert 'herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1 && touch "$LOG_DIR/gpu-check-done"' in session

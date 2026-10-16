@@ -58,6 +58,15 @@ if [[ "$HERALD_OS_SHELL_MODE" == "panels" ]]; then
   fi
 fi
 
+# An NVIDIA GPU on the default image: say once, after the shell is up, how to switch to the NVIDIA
+# image (linux/bin/herald-os-gpu-check).
+if command -v herald-os-gpu-check >/dev/null && [[ ! -f "$LOG_DIR/gpu-check-done" ]]; then
+  (
+    sleep 60
+    herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1 && touch "$LOG_DIR/gpu-check-done"
+  ) &
+fi
+
 # The shell is a source checkout run through its Electron (the dev VM), or a packaged build: the
 # release tarball in /opt/herald-os (Arch) or /usr/share/herald-os/app on the Herald OS image.
 APP="${HERALD_OS_APP:-}"
