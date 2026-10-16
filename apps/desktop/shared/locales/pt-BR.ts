@@ -421,6 +421,7 @@ export const ptBR: Translation = {
   'settings.agents.connecting': 'Conectando',
   'settings.agents.connectionError': 'Erro de conexão',
   'settings.agents.disconnected': 'Desconectado',
+  'settings.agents.gatewayNotConnected': 'Ainda sem conexão com o Hermes. O Herald OS continua tentando.',
   'settings.agents.account': 'Conta',
   'settings.agents.modelPerformance': 'Modelo e desempenho',
   'settings.agents.privacyControl': 'Privacidade e controle',

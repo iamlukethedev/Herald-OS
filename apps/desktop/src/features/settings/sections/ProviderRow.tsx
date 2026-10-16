@@ -155,7 +155,7 @@ export function ModelProviderRow() {
     ? !online
       ? t('menuBar.waitingForHermes')
       : options.error
-        ? t('settings.agents.provider.unreadable', { error: options.error })
+        ? t('settings.agents.provider.unreadable', { error: errorText(options.error) })
         : t('settings.agents.provider.checking')
     : !current
       ? t('settings.agents.provider.none')
@@ -264,7 +264,7 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
           </label>
           <div className="flex max-h-[360px] flex-col gap-3 overflow-y-auto px-2 pb-2">
             {loading && choices.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.provider.loading')}</div>}
-            {error && <div className="px-1 py-2 text-[12px] text-danger">{error}</div>}
+            {error && <div className="px-1 py-2 text-[12px] text-danger">{errorText(error)}</div>}
             {!loading && !error && shown.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.provider.noMatch')}</div>}
             {groups.map(group => (
               <section key={group.title}>

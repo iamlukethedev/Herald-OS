@@ -165,7 +165,7 @@ function AutonomyBlock({ ready }: { ready: boolean }) {
           </GlassButton>
         </GlassCard>
       )}
-      {setting.error && <InlineNote tone="danger">{t('settings.agents.autonomyUnreadable', { error: setting.error })}</InlineNote>}
+      {setting.error && <InlineNote tone="danger">{t('settings.agents.autonomyUnreadable', { error: errorText(setting.error) })}</InlineNote>}
     </SettingsBlock>
   )
 }
@@ -247,7 +247,7 @@ function PreferredModelRow({ ready }: { ready: boolean }) {
             </label>
             <div className="flex max-h-[360px] flex-col gap-3 overflow-y-auto px-2 pb-2">
               {options.loading && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.loadingModels')}</div>}
-              {options.error && <div className="px-1 py-2 text-[12px] text-danger">{options.error}</div>}
+              {options.error && <div className="px-1 py-2 text-[12px] text-danger">{errorText(options.error)}</div>}
               {!options.loading && !options.error && providers.length === 0 && <div className="px-1 py-2 text-[12px] text-fg-4">{t('settings.agents.noModels')}</div>}
               {providers.map(p => (
                 <section key={p.slug}>

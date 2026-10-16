@@ -415,6 +415,8 @@ export const en = {
   'settings.agents.connecting': 'Connecting',
   'settings.agents.connectionError': 'Connection error',
   'settings.agents.disconnected': 'Disconnected',
+  // Shown in place of the gateway client's own "gateway not connected", which is English.
+  'settings.agents.gatewayNotConnected': 'Not connected to Hermes yet. Herald OS keeps trying.',
   'settings.agents.account': 'Account',
   'settings.agents.modelPerformance': 'Model & performance',
   'settings.agents.privacyControl': 'Privacy & control',

@@ -405,6 +405,7 @@ export const zhCN: Translation = {
   'settings.agents.connecting': '正在连接',
   'settings.agents.connectionError': '连接错误',
   'settings.agents.disconnected': '已断开连接',
+  'settings.agents.gatewayNotConnected': '尚未连接到 Hermes。Herald OS 会继续尝试。',
   'settings.agents.account': '账户',
   'settings.agents.modelPerformance': '模型与性能',
   'settings.agents.privacyControl': '隐私与控制',
