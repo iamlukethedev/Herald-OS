@@ -517,7 +517,7 @@ def deployments(booted: dict | None = None, staged: dict | None = None, rollback
 
 
 def switching(tmp_path: Path, boot_size: int = 2000 * MIB, boot_free: int = 1500 * MIB, status="clean",
-              args=("switch",), release=HERALD, arch="x86_64"):
+              args=("switch",), release=HERALD, arch="x86_64", key: bool = False, policy=None):
     """herald-os-gpu-check switch with df, sudo and rpm-ostree stand-ins; what sudo was asked to run."""
     gpu = Gpu(tmp_path, [NVIDIA_VGA], release=release, arch=arch)
     bin_dir = tmp_path / "bin"
@@ -535,7 +535,12 @@ def switching(tmp_path: Path, boot_size: int = 2000 * MIB, boot_free: int = 1500
     for name, body in stubs.items():
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
         (bin_dir / name).chmod(0o755)
-    result = subprocess.run(["bash", str(GPU_CHECK), *args], env=gpu.env, capture_output=True, text=True, check=False)
+    env = {**gpu.env, "HERALD_OS_SIGNING_KEY": str(tmp_path / "herald-os.pub"), "HERALD_OS_POLICY": str(tmp_path / "policy.json")}
+    if key:
+        (tmp_path / "herald-os.pub").write_text("-----BEGIN PUBLIC KEY-----\n")
+    if policy is not None:
+        (tmp_path / "policy.json").write_text(policy if isinstance(policy, str) else json.dumps(policy))
+    result = subprocess.run(["bash", str(GPU_CHECK), *args], env=env, capture_output=True, text=True, check=False)
     ran = (tmp_path / "sudo").read_text().splitlines() if (tmp_path / "sudo").exists() else []
     return result, ran
 
@@ -607,15 +612,16 @@ def test_switch_without_room_in_boot_changes_nothing(tmp_path):
     assert "has 300 MiB free" in result.stderr and "about 352 MiB" in result.stderr
 
 
-@pytest.mark.parametrize("size", [1024, 1800 - 1], ids=["1 GiB", "just under 2 GiB"])
+@pytest.mark.parametrize("size", [1200, 1536, 1800 - 1], ids=["1.2 GiB", "1.5 GiB", "just under 2 GiB"])
 def test_switch_with_a_boot_between_1_and_2_gib_warns_and_goes_on(tmp_path, size):
     result, ran = switching(tmp_path, boot_size=size * MIB, boot_free=600 * MIB)
     assert result.returncode == 0 and ran == bootc()
     assert f"WARNING: /boot is {size} MiB" in result.stderr
 
 
-@pytest.mark.parametrize("size", [512, 900 - 1], ids=["512 MiB", "just under 900 MiB"])
-def test_switch_with_a_boot_under_1_gib_is_refused_unless_forced(tmp_path, size):
+# A 1 GiB /boot as df shows it (974 MiB on ext4), and either side of it.
+@pytest.mark.parametrize("size", [512, 974, 1024, 1200 - 1], ids=["512 MiB", "a 1 GiB partition", "1024 MiB", "just under 1.2 GiB"])
+def test_switch_with_a_boot_of_1_gib_or_less_is_refused_unless_forced(tmp_path, size):
     result, ran = switching(tmp_path / "refused", boot_size=size * MIB, boot_free=450 * MIB)
     assert result.returncode == 1 and ran == []
     assert f"/boot is {size} MiB" in result.stderr and "--force switches anyway" in result.stderr
@@ -645,6 +651,63 @@ def shell_function(path: Path, name: str) -> str | None:
                     reason="herald-os-update has no local_modifications until #156 is merged")
 def test_the_switch_and_the_update_agree_on_rpm_ostree_changes():
     assert shell_function(GPU_CHECK, "local_modifications") == shell_function(UPDATE, "local_modifications")
+
+
+SIGNED_POLICY = {"default": [{"type": "insecureAcceptAnything"}], "transports": {"docker": {
+    f"ghcr.io/iamlukethedev/{repo}": [{"type": "sigstoreSigned", "keyPath": "KEY", "signedIdentity": {"type": "matchRepository"}}]
+    for repo in ("herald-os", "herald-os-nvidia")}}}
+
+
+def policy_with(tmp_path: Path, default=None, repos=("herald-os", "herald-os-nvidia"), key_path=None) -> dict:
+    policy = json.loads(json.dumps(SIGNED_POLICY).replace('"KEY"', json.dumps(key_path or str(tmp_path / "herald-os.pub"))))
+    if default is not None:
+        policy["default"] = default
+    policy["transports"]["docker"] = {r: v for r, v in policy["transports"]["docker"].items() if r.rsplit("/", 1)[1] in repos}
+    return policy
+
+
+LAYERED = deployments(booted={"requested-packages": ["htop"]})
+
+
+def test_without_the_projects_key_rpm_ostree_rebases_unverified(tmp_path):
+    result, ran = switching(tmp_path, status=LAYERED)
+    assert result.returncode == 0 and ran == rebase()
+
+
+def test_with_the_key_and_fedoras_default_policy_rebases_unverified_which_still_applies_the_policy(tmp_path):
+    # ostree-image-signed refuses any pull while the default is insecureAcceptAnything (checked in the
+    # image: "containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage"),
+    # and ostree-unverified-registry still enforces the repository's sigstoreSigned entry (checked in the
+    # image: a wrong key gets "None of the signatures were accepted").
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy_with(tmp_path))
+    assert result.returncode == 0 and ran == rebase()
+
+
+@pytest.mark.parametrize("default", [[{"type": "reject"}], []], ids=["reject", "none"])
+def test_with_the_key_and_a_stricter_default_rebases_signed(tmp_path, default):
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy_with(tmp_path, default=default))
+    assert result.returncode == 0
+    assert ran == [f"rpm-ostree rebase ostree-image-signed:docker://{NVIDIA_REF}:edge"]
+
+
+@pytest.mark.parametrize("case", ["no entry for the nvidia image", "another key", "no policy", "unreadable policy"])
+def test_with_the_key_but_no_requirement_for_it_nothing_is_switched(tmp_path, case):
+    policy = {
+        "no entry for the nvidia image": policy_with(tmp_path, repos=("herald-os",)),
+        "another key": policy_with(tmp_path, key_path="/etc/pki/containers/other.pub"),
+        "no policy": None,
+        "unreadable policy": "{not json",
+    }[case]
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy)
+    assert result.returncode == 1 and ran == []
+    assert "nothing was changed" in result.stderr
+
+
+def test_the_switch_reads_the_key_and_policy_packages_sh_writes():
+    packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
+    script = GPU_CHECK.read_text()
+    assert "/etc/pki/containers/herald-os.pub" in packages and 'SIGNING_KEY="${HERALD_OS_SIGNING_KEY:-/etc/pki/containers/herald-os.pub}"' in script
+    assert 'path = "/etc/containers/policy.json"' in packages and 'POLICY="${HERALD_OS_POLICY:-/etc/containers/policy.json}"' in script
 
 
 @pytest.mark.parametrize("keys,driver,kmod", [

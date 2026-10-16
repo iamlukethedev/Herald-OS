@@ -13,7 +13,7 @@
 #   herald-os-gpu-check --notify          also show it as a notification, once each (herald-os-session)
 #   herald-os-gpu-check switch [--force] [stable|edge]
 #                                         switch to the NVIDIA image, once /boot has room for it (a
-#                                         /boot under 1 GiB only with --force): bootc switch, or
+#                                         /boot of 1 GiB or less only with --force): bootc switch, or
 #                                         rpm-ostree rebase where rpm-ostree changed the system
 set -euo pipefail
 
@@ -27,13 +27,16 @@ KEY=/etc/pki/akmods/certs/akmods-ublue.der
 # The UEFI global variable: four bytes of attributes, then 1 while Secure Boot is on.
 SECURE_BOOT="$SYSFS/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 BOOT="${HERALD_OS_BOOT:-/boot}"
+# The project's image-signing key and the policy packages.sh writes with it, once cosign.pub ships.
+SIGNING_KEY="${HERALD_OS_SIGNING_KEY:-/etc/pki/containers/herald-os.pub}"
+POLICY="${HERALD_OS_POLICY:-/etc/containers/policy.json}"
 # An NVIDIA deployment's kernel and initramfs take about 352 MiB of /boot (docs/LINUX.md), and the
 # system keeps up to three deployments: a 2 GiB /boot holds them (df shows a little less than 2 GiB).
-# Under about 1 GiB (df shows a 1 GiB /boot as a little less), the NVIDIA deployment and the one to
-# go back to leave no room for an update's: switching is refused unless --force.
+# A /boot of 1 GiB or less (df shows a 1 GiB one as about 960 to 1000 MiB): the NVIDIA deployment and
+# the one to go back to leave no room for an update's, so switching is refused unless --force.
 BOOT_FREE_MIN=$((400 * 1024 * 1024))
 BOOT_SIZE_MIN=$((1800 * 1024 * 1024))
-BOOT_SIZE_REFUSE=$((900 * 1024 * 1024))
+BOOT_SIZE_REFUSE=$((1200 * 1024 * 1024))
 
 herald_image() { grep -Eqx 'IMAGE_ID="?herald-os"?' "$OS_RELEASE" 2>/dev/null; }
 
@@ -157,8 +160,34 @@ print(found)
 '
 }
 
+# The transport rpm-ostree rebases with. Without the project's key there is no policy to check yet:
+# ostree-unverified-registry, as on any system. With it, the policy must require the key for the
+# NVIDIA image's repository, or nothing is switched. rpm-ostree applies that requirement under
+# ostree-unverified-registry too ("unverified" skips only ostree's own signatures, not
+# containers-policy.json), while ostree-image-signed refuses any pull while the policy's default is
+# insecureAcceptAnything, which is Fedora's and the image's; so ostree-image-signed:docker:// only
+# where the default is stricter.
+rebase_transport() {
+  [[ -f "$SIGNING_KEY" ]] || { echo "ostree-unverified-registry:"; return 0; }
+  python3 - "$POLICY" "$SIGNING_KEY" "$NVIDIA_IMAGE" <<'PY'
+import json, sys
+path, key, repo = sys.argv[1:]
+try:
+    policy = json.load(open(path))
+except (OSError, ValueError) as error:
+    sys.exit(f"{path} cannot be read ({error}): nothing was changed")
+required = [r for r in (policy.get("transports", {}).get("docker", {}).get(repo) or [])
+            if r.get("type") == "sigstoreSigned" and r.get("keyPath") == key]
+if not required:
+    sys.exit(f"{key} is here, but {path} does not require it for {repo}: nothing was changed")
+default = policy.get("default") or []
+print("ostree-unverified-registry:" if any(r.get("type") == "insecureAcceptAnything" for r in default)
+      else "ostree-image-signed:docker://")
+PY
+}
+
 switch() {
-  local force=0 channel="" size avail target changes
+  local force=0 channel="" size avail target changes transport
   while (( $# )); do
     case "$1" in
       --force) force=1 ;;
@@ -185,7 +214,8 @@ switch() {
   target="$NVIDIA_IMAGE:$channel"
   if changes="$(local_modifications)"; then
     echo "==> this system has rpm-ostree changes ($changes), so rpm-ostree switches it, keeping them: $target"
-    sudo rpm-ostree rebase "ostree-unverified-registry:$target"
+    transport="$(rebase_transport)" || exit 1
+    sudo rpm-ostree rebase "$transport$target"
   else
     echo "==> switching to $target"
     sudo bootc switch "$target"
