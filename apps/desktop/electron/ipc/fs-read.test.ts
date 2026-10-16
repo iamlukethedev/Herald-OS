@@ -64,6 +64,7 @@ registerOfficeIpc(() => null)
 registerCaptureIpc(() => {})
 registerThemeIpc({ panels: false, broadcast: () => {}, backend: {} as never })
 registerAppsIpc()
+const realOpenFile = WebViews.prototype.openFile
 const openFile = vi.spyOn(WebViews.prototype, 'openFile').mockReturnValue('web-1')
 registerWebIpc(false)
 
@@ -1604,5 +1605,14 @@ describe.runIf(process.platform !== 'win32')('FIFOs and other special files', ()
     expect(await invoke(IPC.canvasExists, fifo('Pictures/pipe.png'))).toBeNull()
     expect(await invoke(IPC.canvasExists, `${home}/notes.md`)).toBe('file')
     expect(await invoke(IPC.canvasExists, `${home}/Projects`)).toBe('directory')
+  })
+
+  it('opens only regular files in a viewer, not a FIFO or a folder', () => {
+    const views = new WebViews(false)
+    write('Documents/data.unknownext', 'x')
+
+    expect(() => realOpenFile.call(views, sender as never, fifo('Documents/report.pdf'), {})).toThrow(/is not a file/)
+    expect(() => realOpenFile.call(views, sender as never, `${home}/Documents`, {})).toThrow(/is not a file/)
+    expect(() => realOpenFile.call(views, sender as never, `${home}/Documents/data.unknownext`, {})).toThrow(/cannot display/)
   })
 })
