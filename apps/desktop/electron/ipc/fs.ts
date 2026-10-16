@@ -553,6 +553,9 @@ export async function assertWritable(target: string, options: WritableOptions = 
   return (await checkWritable(target, options)).path
 }
 
+/** Opens of a checked path before one that keeps changing is refused: a save that renames a new file into place (as Hermes saves memory) can land between the open and its check. */
+export const OPEN_ATTEMPTS = 3
+
 /**
  * Open a checked path through its resolved form, without following a symlink put in its place after the check, and
  * make sure the file opened is the one checked. A folder on the way swapped for a symlink between the check and the
@@ -560,26 +563,39 @@ export async function assertWritable(target: string, options: WritableOptions = 
  * again and comparing the file there with the one open, which leaves only a swap undone and redone in between.
  */
 export async function openChecked(checked: CheckedPath, flags: number): Promise<fs.FileHandle> {
-  const handle = await fs.open(checked.real, flags | (fsConstants.O_NOFOLLOW ?? 0))
+  for (let attempt = 1; ; attempt++) {
+    const handle = await fs.open(checked.real, flags | (fsConstants.O_NOFOLLOW ?? 0))
+    let verified: boolean
 
-  try {
-    if (!(await opensChecked(handle, checked))) {
+    try {
+      verified = await opensChecked(handle, checked, flags)
+    } catch (error) {
+      await handle.close()
+      throw error
+    }
+
+    if (verified) {
+      return handle
+    }
+
+    await handle.close()
+
+    if (attempt >= OPEN_ATTEMPTS) {
       throw new Error(`${checked.path} changed while it was being opened`)
     }
-  } catch (error) {
-    await handle.close()
-    throw error
   }
-
-  return handle
 }
 
-async function opensChecked(handle: fs.FileHandle, checked: CheckedPath): Promise<boolean> {
+const writes = (flags: number): boolean => (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) !== 0
+
+async function opensChecked(handle: fs.FileHandle, checked: CheckedPath, flags: number): Promise<boolean> {
   if (process.platform === 'linux') {
-    const opened = await fs.realpath(`/proc/self/fd/${handle.fd}`).catch(() => null)
+    const opened = await fs.readlink(`/proc/self/fd/${handle.fd}`).catch(() => null)
 
     if (opened !== null) {
-      return opened === checked.real
+      // Replaced by a rename after the open, the checked file shows as "<path> (deleted)". Reading it is still reading
+      // the checked file; a file really named so keeps its links. Writing to it would be lost, so a write opens again.
+      return opened === checked.real || (opened === `${checked.real} (deleted)` && !writes(flags) && (await handle.stat()).nlink === 0)
     }
   }
 

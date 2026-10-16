@@ -39,7 +39,7 @@ vi.mock('electron', () => ({
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
-const { ENV_SEARCH_LIMIT, HOME_SECRETS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
+const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
 const { WebViews, registerWebIpc, servableFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
@@ -987,18 +987,99 @@ describe('opening checked paths', () => {
     expect(fs.readFileSync(`${home}/.ssh/a.txt`, 'utf8')).toBe('PRIVATE')
   })
 
-  it('refuses a file opened while its folder was swapped and swapped back', async () => {
+  const realOpen = fsp.open
+  const contentOf = async (handle: fsp.FileHandle): Promise<string> => {
+    try {
+      return await handle.readFile('utf8')
+    } finally {
+      await handle.close()
+    }
+  }
+
+  it('refuses a file opened while its folder was swapped and swapped back, however often it is tried', async () => {
     write('dir/a.txt', 'public')
     const checked = await assertReadable(`${home}/dir/a.txt`)
-    const realOpen = fsp.open
-    const swapped = () => vi.spyOn(fsp, 'open').mockImplementationOnce((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
+    const swapped = () => vi.spyOn(fsp, 'open').mockImplementation((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
 
-    swapped()
-    await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
-    await onPlatform('darwin', async () => {
-      swapped()
+    try {
+      const open = swapped()
       await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+      expect(open).toHaveBeenCalledTimes(OPEN_ATTEMPTS)
+      await onPlatform('darwin', async () => {
+        await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+      })
+    } finally {
+      vi.mocked(fsp.open).mockRestore()
+    }
+  })
+
+  it('opens again after a swap that was undone, and gets the checked file', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+
+    for (const platform of ['linux', 'darwin'] as const) {
+      await onPlatform(platform, async () => {
+        const open = vi.spyOn(fsp, 'open').mockImplementationOnce((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
+
+        expect(await contentOf(await openChecked(checked, fs.constants.O_RDONLY))).toBe('public')
+        expect(open).toHaveBeenCalledTimes(2)
+        open.mockRestore()
+      })
+    }
+  })
+
+  /** Open the file, then save a new version over it by renaming, as Hermes saves memory files. */
+  const replacedWhileOpening = (file: string, next: string) =>
+    vi.spyOn(fsp, 'open').mockImplementationOnce(async (target, flags) => {
+      const handle = await realOpen(target, flags)
+      fs.writeFileSync(`${file}.tmp`, next)
+      fs.renameSync(`${file}.tmp`, file)
+
+      return handle
     })
+
+  it.runIf(process.platform === 'linux')('reads a file replaced by a rename while it was being opened, as the version it opened', async () => {
+    write('.hermes/memories/MEMORY.md', 'old')
+    const checked = await assertReadable(`${hermes}/memories/MEMORY.md`)
+    const open = replacedWhileOpening(`${hermes}/memories/MEMORY.md`, 'new')
+
+    expect(await contentOf(await openChecked(checked, fs.constants.O_RDONLY))).toBe('old')
+    expect(open).toHaveBeenCalledTimes(1)
+    open.mockRestore()
+  })
+
+  it('opens again when a file is replaced by a rename while it is being opened elsewhere than Linux', async () => {
+    write('.hermes/memories/MEMORY.md', 'old')
+    const checked = await assertReadable(`${hermes}/memories/MEMORY.md`)
+
+    await onPlatform('darwin', async () => {
+      const open = replacedWhileOpening(`${hermes}/memories/MEMORY.md`, 'new')
+
+      expect(await contentOf(await openChecked(checked, fs.constants.O_RDONLY))).toBe('new')
+      expect(open).toHaveBeenCalledTimes(2)
+      open.mockRestore()
+    })
+  })
+
+  it('writes to the new file, not the replaced one, when a file is replaced while a write opens it', async () => {
+    write('.hermes/memories/MEMORY.md', 'old')
+    const checked = await checkWritable(`${hermes}/memories/MEMORY.md`)
+    const open = replacedWhileOpening(`${hermes}/memories/MEMORY.md`, 'new')
+
+    await writeChecked(checked, 'written')
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(fs.readFileSync(`${hermes}/memories/MEMORY.md`, 'utf8')).toBe('written')
+    open.mockRestore()
+  })
+
+  it.runIf(process.platform === 'linux')('does not take a file named like a replaced one for it', async () => {
+    write('dir/a.txt (deleted)', 'other')
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    const open = vi.spyOn(fsp, 'open').mockImplementation((_file, flags) => realOpen(`${home}/dir/a.txt (deleted)`, flags))
+
+    await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+    open.mockRestore()
   })
 
   it('opens and writes a checked path that did not change, on Linux and macOS alike', async () => {
