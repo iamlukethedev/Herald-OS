@@ -178,6 +178,30 @@ export const HOME_SECRETS = [
   'Library/Cookies',
   'Library/Messages',
   'Library/Application Support/com.apple.TCC',
+  '.pgpass',
+  '.my.cnf',
+  '.s3cfg',
+  '.boto',
+  '.fly',
+  '.wrangler',
+  '.config/hub',
+  '.config/heroku',
+  '.config/doctl',
+  'Library/Application Support/doctl',
+  '.config/stripe',
+  '.python_history',
+  '.psql_history',
+  '.mysql_history',
+  // Password managers.
+  '.config/1Password',
+  'Library/Application Support/1Password',
+  'Library/Containers/com.agilebits.onepassword7',
+  'Library/Containers/com.1password.1password',
+  // Editor and assistant tool tokens.
+  '.config/Code/User/globalStorage',
+  'Library/Application Support/Code/User/globalStorage',
+  '.config/github-copilot',
+  '.ollama/id_ed25519',
   // Browser profiles: saved passwords, cookies and session tokens.
   '.config/google-chrome',
   '.config/google-chrome-beta',
@@ -185,6 +209,8 @@ export const HOME_SECRETS = [
   '.config/chromium',
   '.config/BraveSoftware',
   '.config/microsoft-edge',
+  '.config/microsoft-edge-beta',
+  '.config/microsoft-edge-dev',
   '.config/vivaldi',
   '.config/opera',
   '.mozilla/firefox',
@@ -200,6 +226,8 @@ export const HOME_SECRETS = [
   'Library/Application Support/Chromium',
   'Library/Application Support/BraveSoftware',
   'Library/Application Support/Microsoft Edge',
+  'Library/Application Support/Microsoft Edge Beta',
+  'Library/Application Support/Microsoft Edge Dev',
   'Library/Application Support/Arc',
   'Library/Application Support/Vivaldi',
   'Library/Application Support/com.operasoftware.Opera',
@@ -208,7 +236,7 @@ export const HOME_SECRETS = [
 ]
 
 /** Credential stores whose folder name varies: `*` matches within one name, without regard to case. */
-export const HOME_SECRET_PATTERNS = ['Library/Group Containers/*1password*']
+export const HOME_SECRET_PATTERNS = ['Library/Group Containers/*1password*', 'Library/Group Containers/*agilebits*']
 
 const patternExpression = (pattern: string): RegExp => new RegExp(`^${pattern.split('*').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}(?:/|$)`, 'i')
 const SECRET_EXPRESSIONS = HOME_SECRET_PATTERNS.map(patternExpression)
