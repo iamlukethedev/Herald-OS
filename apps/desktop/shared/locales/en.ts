@@ -127,7 +127,6 @@ export const en = {
   'commandBar.fun': 'Just for fun',
   'commandBar.roadster': 'Take the roadster for a flight',
 
-  'roadster.label': 'A white roadster lifts off on jets of cold vapor, flips backwards over a truck and flies off into the night',
   'roadster.skip': 'Press any key or click to skip',
 
   'notifications.title': 'Notifications',

@@ -9,12 +9,18 @@ vi.hoisted(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 })
 
-const loaded = vi.hoisted(() => ({ count: 0 }))
+const loaded = vi.hoisted(() => ({ count: 0, props: null as Record<string, unknown> | null }))
 
 vi.mock('./RoadsterFlight.tsx', () => {
   loaded.count += 1
 
-  return { RoadsterFlight: ({ onDone }: { onDone: () => void }) => <button type="button" data-testid="flight" onClick={onDone} /> }
+  return {
+    RoadsterFlight: (props: { onDone: () => void }) => {
+      loaded.props = props
+
+      return <button type="button" data-testid="flight" onClick={props.onDone} />
+    }
+  }
 })
 
 let host: HTMLDivElement
@@ -56,6 +62,9 @@ describe('the roadster host', () => {
     const flight = host.querySelector<HTMLElement>('[data-testid="flight"]')
     expect(flight).not.toBeNull()
     expect(loaded.count).toBe(1)
+    // Asked for, over the whole window: the press that ends it goes on to the app.
+    expect(loaded.props).not.toHaveProperty('claimsClick')
+    expect(loaded.props).not.toHaveProperty('contained')
 
     act(() => flight!.click())
 

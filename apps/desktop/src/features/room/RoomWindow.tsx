@@ -152,7 +152,7 @@ export function RoomWindow({ active = true }: { active?: boolean }) {
       />
       {flyover.flight !== 0 && flyovers && (
         <Suspense fallback={null}>
-          <RoadsterFlight key={flyover.flight} contained onDone={flyover.land} />
+          <RoadsterFlight key={flyover.flight} contained claimsClick onDone={flyover.land} />
         </Suspense>
       )}
     </div>

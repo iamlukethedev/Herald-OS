@@ -10,6 +10,29 @@ export interface RoadsterFlightProps {
   onDone: () => void
   /** Over its container (the Pet Room) rather than the whole window. */
   contained?: boolean
+  /**
+   * The flight was not asked for (the Pet Room's): the press that ends it is taken, with the click
+   * that follows, so it does nothing in the app. Asked-for flights let the press through.
+   */
+  claimsClick?: boolean
+}
+
+/** A taken press's click comes after the flight is gone; if none comes by then, nothing waits for it. */
+export const CLAIMED_CLICK_MS = 1000
+
+/** Take the one click that follows a taken press. */
+function claimFollowingClick(): void {
+  const take = (event: MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    release()
+  }
+  const release = () => {
+    clearTimeout(timer)
+    window.removeEventListener('click', take, true)
+  }
+  const timer = setTimeout(release, CLAIMED_CLICK_MS)
+  window.addEventListener('click', take, true)
 }
 
 interface Puff {
@@ -58,8 +81,8 @@ const JETS = [
 
 const transformOf = (pose: RoadsterPose): string => `translate(${pose.x.toFixed(1)} ${pose.y.toFixed(1)}) rotate(${pose.angle.toFixed(2)})`
 
-/** The night scene and its roadster, alone in the window or over the Room, which nothing in it can be clicked. */
-export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProps) {
+/** The night scene and its roadster, alone in the window or over the Room: decorative, so hidden from assistive technology, and nothing in it can be clicked. */
+export function RoadsterFlight({ onDone, contained = false, claimsClick = false }: RoadsterFlightProps) {
   const t = useT()
   const reduced = useReducedMotion()
   // Decided once: a flight does not turn still, or start moving, part of the way through.
@@ -99,7 +122,7 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
       frame = requestAnimationFrame(tick)
     }
 
-    // The input that ends the flight still reaches the app under it, except Escape, which was meant for the flight.
+    // The input that ends an asked-for flight still reaches the app under it, except Escape, which was meant for the flight.
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat) {
         return
@@ -112,17 +135,26 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
 
       end()
     }
+    const onPointer = (event: PointerEvent) => {
+      if (claimsClick) {
+        event.preventDefault()
+        event.stopPropagation()
+        claimFollowingClick()
+      }
+
+      end()
+    }
     window.addEventListener('keydown', onKey, true)
-    window.addEventListener('pointerdown', end, true)
+    window.addEventListener('pointerdown', onPointer, true)
 
     return () => {
       ended = true
       clearTimeout(timer)
       cancelAnimationFrame(frame)
       window.removeEventListener('keydown', onKey, true)
-      window.removeEventListener('pointerdown', end, true)
+      window.removeEventListener('pointerdown', onPointer, true)
     }
-  }, [still])
+  }, [still, claimsClick])
 
   const url = (name: string) => `url(#${name}-${ids})`
 
@@ -132,8 +164,9 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
       className={cn('roadster pointer-events-none inset-0 overflow-hidden', contained ? 'absolute z-30' : 'fixed z-(--z-overlay)')}
       style={{ opacity: start.opacity }}
       data-roadster={still ? 'still' : 'flying'}
+      aria-hidden="true"
     >
-      <svg role="img" aria-label={t('roadster.label')} viewBox={`0 0 ${SCENE.width} ${SCENE.height}`} preserveAspectRatio="xMidYMax slice" className="absolute inset-0 h-full w-full">
+      <svg viewBox={`0 0 ${SCENE.width} ${SCENE.height}`} preserveAspectRatio="xMidYMax slice" className="absolute inset-0 h-full w-full">
         <defs>
           <linearGradient id={`sky-${ids}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" className="roadster-stop-night" stopOpacity="0.96" />
@@ -164,7 +197,7 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
 
         <rect width={SCENE.width} height={SCENE.height} fill={url('sky')} />
 
-        <g aria-hidden="true">
+        <g>
           <rect x={TRUCK.left} y={TRUCK.top} width="212" height="186" rx="6" className="roadster-fill-truck" />
           <rect x={TRUCK.left + 10} y={TRUCK.top + 12} width="192" height="2" className="roadster-fill-truck-shade" />
           <rect x={TRUCK.left + 10} y={TRUCK.top + 166} width="192" height="2" className="roadster-fill-truck-shade" />
@@ -180,7 +213,7 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
           ))}
         </g>
 
-        <g ref={carRef} transform={transformOf(start)} aria-hidden="true">
+        <g ref={carRef} transform={transformOf(start)}>
           <g ref={jetsRef} opacity={start.jets}>
             {JETS.map(jet => (
               <path
@@ -216,7 +249,7 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
         {/* The ground goes over the car, so the jets stop where they meet it. */}
         <rect y={SCENE.ground} width={SCENE.width} height={SCENE.height - SCENE.ground} className="roadster-fill-ground" />
 
-        <g aria-hidden="true">
+        <g>
           {STRIPS.map((x, i) => (
             <g key={x} className="roadster-strip-light" style={{ animationDelay: `${(i % 5) * 140}ms` }}>
               <rect x={x} y="771" width="30" height="4" rx="2" className="roadster-fill-strip" filter={url('glow')} />
@@ -225,13 +258,13 @@ export function RoadsterFlight({ onDone, contained = false }: RoadsterFlightProp
           ))}
         </g>
 
-        <g aria-hidden="true">
+        <g>
           {PUFFS.map((puff, i) => (
             <circle key={i} className="roadster-puff" cx={puff.cx} cy={puff.cy} r={puff.r} fill={url('smoke')} style={puff.style} />
           ))}
         </g>
 
-        <g aria-hidden="true">
+        <g>
           {BEAMS.map(beam => (
             <polygon
               key={beam.from.join(',')}

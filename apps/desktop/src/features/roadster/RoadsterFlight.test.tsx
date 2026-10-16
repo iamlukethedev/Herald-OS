@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { RoadsterFlight } from './RoadsterFlight.tsx'
+import { CLAIMED_CLICK_MS, RoadsterFlight } from './RoadsterFlight.tsx'
 import { FLIGHT_MS, STILL_MS } from './timeline.ts'
 
 vi.hoisted(() => {
@@ -16,8 +16,8 @@ vi.mock('../pet/hooks.ts', () => ({ useReducedMotion: () => motion.reduced }))
 let host: HTMLDivElement
 let root: Root
 
-function show(onDone: () => void, contained = false): HTMLElement {
-  act(() => root.render(<RoadsterFlight onDone={onDone} contained={contained} />))
+function show(onDone: () => void, contained = false, claimsClick = false): HTMLElement {
+  act(() => root.render(<RoadsterFlight onDone={onDone} contained={contained} claimsClick={claimsClick} />))
 
   return host.querySelector<HTMLElement>('.roadster')!
 }
@@ -45,7 +45,8 @@ describe('the roadster flyover', () => {
 
     expect(scene.dataset.roadster).toBe('flying')
     expect(scene.classList.contains('pointer-events-none')).toBe(true)
-    expect(scene.querySelector('svg')?.getAttribute('aria-label')).toMatch(/roadster/)
+    expect(scene.getAttribute('aria-hidden')).toBe('true')
+    expect(scene.querySelector('[role="img"], [aria-label]')).toBeNull()
     expect(scene.textContent).toContain('Press any key or click to skip')
     expect(frame).toHaveBeenCalled()
 
@@ -142,5 +143,88 @@ describe('the roadster flyover', () => {
     expect(show(vi.fn()).classList.contains('fixed')).toBe(true)
     act(() => root.render(<div />))
     expect(show(vi.fn(), true).classList.contains('absolute')).toBe(true)
+  })
+
+  describe('the press that ends it', () => {
+    let button: HTMLButtonElement
+    let pressed: ReturnType<typeof vi.fn<(event: Event) => void>>
+    let clicked: ReturnType<typeof vi.fn<(event: Event) => void>>
+    const press = () => {
+      const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
+      button.dispatchEvent(event)
+
+      return event
+    }
+    const click = () => button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    beforeEach(() => {
+      button = document.createElement('button')
+      pressed = vi.fn<(event: Event) => void>()
+      clicked = vi.fn<(event: Event) => void>()
+      button.addEventListener('pointerdown', pressed)
+      button.addEventListener('click', clicked)
+      document.body.append(button)
+    })
+
+    afterEach(() => {
+      button.remove()
+    })
+
+    it('reaches the app under an asked-for flight, click and all', () => {
+      const onDone = vi.fn()
+      show(onDone)
+
+      const event = press()
+      act(() => root.render(<div />))
+      click()
+
+      expect(onDone).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(false)
+      expect(pressed).toHaveBeenCalledTimes(1)
+      expect(clicked).toHaveBeenCalledTimes(1)
+    })
+
+    it('is taken by an unasked flight, with the click that follows it once the flight is gone', () => {
+      const onDone = vi.fn()
+      show(onDone, true, true)
+
+      const event = press()
+      act(() => root.render(<div />))
+      click()
+
+      expect(onDone).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(true)
+      expect(pressed).not.toHaveBeenCalled()
+      expect(clicked).not.toHaveBeenCalled()
+
+      click()
+      expect(clicked).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops waiting for that click soon, so a later click is never lost', () => {
+      const removed = vi.spyOn(window, 'removeEventListener')
+      show(vi.fn(), true, true)
+
+      press()
+      act(() => root.render(<div />))
+      act(() => vi.advanceTimersByTime(CLAIMED_CLICK_MS))
+      click()
+
+      expect(clicked).toHaveBeenCalledTimes(1)
+      expect(removed).toHaveBeenCalledWith('click', expect.any(Function), true)
+    })
+
+    it('takes nothing once an unasked flight has ended by itself', () => {
+      show(vi.fn(), true, true)
+      act(() => vi.advanceTimersByTime(FLIGHT_MS))
+      act(() => root.render(<div />))
+
+      const event = press()
+      click()
+
+      expect(event.defaultPrevented).toBe(false)
+      expect(pressed).toHaveBeenCalledTimes(1)
+      expect(clicked).toHaveBeenCalledTimes(1)
+    })
   })
 })
