@@ -133,6 +133,9 @@ export const ptBR: Translation = {
   'commandBar.untitledSession': 'Sessão sem título',
   'commandBar.failed': 'Não foi possível fazer isso',
 
+  'roadster.label': 'Um roadster branco decola com jatos de vapor frio, dá um mortal para trás sobre um caminhão e voa noite adentro',
+  'roadster.skip': 'Pressione qualquer tecla ou clique para pular',
+
   'notifications.title': 'Notificações',
   'notifications.close': 'Fechar notificações',
   'notifications.clearAll': 'Limpar tudo',

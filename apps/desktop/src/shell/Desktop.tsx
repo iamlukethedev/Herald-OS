@@ -23,6 +23,7 @@ import { VoiceOrb } from '../features/voice/VoiceOrb.tsx'
 import { FirstRunSetup } from '../features/setup/FirstRunSetup.tsx'
 import { WidgetWindow } from '../features/plugins/PluginSlots.tsx'
 import { PetOverlay } from '../features/pet/PetOverlay.tsx'
+import { RoadsterHost } from '../features/roadster/RoadsterHost.tsx'
 
 const TerminalSurface = lazy(() => import('../features/terminal/TerminalSurface.tsx').then(m => ({ default: m.TerminalSurface })))
 const SystemSurface = lazy(() => import('../features/system/SystemSurface.tsx').then(m => ({ default: m.SystemSurface })))
@@ -140,6 +141,7 @@ export function Desktop() {
       {commandBarOpen && <CommandBar />}
       <AskOverlay />
       <EmojiOverlay />
+      <RoadsterHost />
       {screensaverUp && <Screensaver onDismiss={() => $screensaverUp.set(false)} />}
     </div>
   )

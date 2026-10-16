@@ -18,6 +18,7 @@ import { HermesLoginCard } from '../../features/auth/HermesLoginCard.tsx'
 import { ActionHud, OsHighlighter } from '../../features/voice/ActionHud.tsx'
 import { VoiceOrb } from '../../features/voice/VoiceOrb.tsx'
 import { FirstRunSetup } from '../../features/setup/FirstRunSetup.tsx'
+import { RoadsterHost } from '../../features/roadster/RoadsterHost.tsx'
 
 const ApplicationsOverlay = lazy(() => import('../../features/applications/ApplicationsOverlay.tsx').then(m => ({ default: m.ApplicationsOverlay })))
 
@@ -116,6 +117,7 @@ export function MainSurface() {
           </Suspense>
         )}
         {commandBarOpen && <CommandBar />}
+        <RoadsterHost />
       </div>
       {bootVisible && <BootScreen state={backend} leaving={!bootOnly} />}
     </div>

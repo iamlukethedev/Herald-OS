@@ -1,0 +1,101 @@
+/*
+ * The roadster flyover's scene. Its colours come from the theme's fixed paper and ink (which stay
+ * white and black in every theme) and its danger and info hues; it loads with the scene, never with
+ * the shell.
+ */
+.roadster {
+  --roadster-body: var(--color-paper);
+  --roadster-body-shade: color-mix(in srgb, var(--color-paper) 78%, var(--color-ink));
+  --roadster-glass: var(--color-ink);
+  --roadster-glint: color-mix(in srgb, var(--color-paper) 28%, transparent);
+  --roadster-tyre: var(--color-ink);
+  --roadster-rim: color-mix(in srgb, var(--color-paper) 16%, var(--color-ink));
+  --roadster-head: var(--color-paper);
+  --roadster-tail: var(--color-danger);
+  --roadster-vapor: color-mix(in srgb, var(--color-paper) 80%, var(--color-info));
+  --roadster-smoke: var(--color-paper);
+  --roadster-night: color-mix(in srgb, var(--color-ink) 84%, var(--color-bg));
+  --roadster-sky: color-mix(in srgb, var(--color-ink) 62%, var(--color-bg));
+  --roadster-ground: color-mix(in srgb, var(--color-ink) 90%, var(--color-bg));
+  --roadster-strip: var(--color-danger);
+  --roadster-beam: var(--color-paper);
+  --roadster-truck: color-mix(in srgb, var(--color-paper) 34%, var(--color-ink));
+  --roadster-truck-shade: color-mix(in srgb, var(--color-paper) 22%, var(--color-ink));
+  --roadster-truck-glass: color-mix(in srgb, var(--color-info) 30%, var(--color-ink));
+}
+
+.roadster-fill-body { fill: var(--roadster-body); }
+.roadster-fill-body-shade { fill: var(--roadster-body-shade); }
+.roadster-fill-glass { fill: var(--roadster-glass); }
+.roadster-stroke-glint { fill: none; stroke: var(--roadster-glint); stroke-width: 1.4; stroke-linecap: round; }
+.roadster-fill-tyre { fill: var(--roadster-tyre); }
+.roadster-stroke-rim { fill: none; stroke: var(--roadster-rim); stroke-width: 3; }
+.roadster-fill-head { fill: var(--roadster-head); }
+.roadster-fill-tail { fill: var(--roadster-tail); }
+.roadster-fill-ground { fill: var(--roadster-ground); }
+.roadster-fill-strip { fill: var(--roadster-strip); }
+.roadster-fill-truck { fill: var(--roadster-truck); }
+.roadster-fill-truck-shade { fill: var(--roadster-truck-shade); }
+.roadster-fill-truck-glass { fill: var(--roadster-truck-glass); }
+
+.roadster-stop-vapor { stop-color: var(--roadster-vapor); }
+.roadster-stop-smoke { stop-color: var(--roadster-smoke); }
+.roadster-stop-beam { stop-color: var(--roadster-beam); }
+.roadster-stop-night { stop-color: var(--roadster-night); }
+.roadster-stop-sky { stop-color: var(--roadster-sky); }
+.roadster-stop-head { stop-color: var(--roadster-head); }
+
+.roadster-plume {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  animation: roadster-plume 90ms ease-in-out infinite alternate;
+}
+.roadster-plume:nth-child(2n) {
+  animation-duration: 70ms;
+}
+@keyframes roadster-plume {
+  from { transform: scale(0.94, 0.9); }
+  to { transform: scale(1.04, 1.06); }
+}
+
+/* Each puff starts small at the car and rolls out along the ground, where it stays until the end. */
+.roadster-puff {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: 0;
+  animation: roadster-billow var(--puff-ms, 2400ms) cubic-bezier(0.15, 0.6, 0.3, 1) var(--puff-delay, 0ms) both;
+}
+@keyframes roadster-billow {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.3); }
+  18% { opacity: var(--puff-opacity, 0.85); }
+  100% { opacity: var(--puff-opacity, 0.85); transform: translate(var(--puff-dx), var(--puff-dy)) scale(var(--puff-scale)); }
+}
+
+.roadster-beam {
+  transform-box: view-box;
+  animation: roadster-sweep 3600ms ease-in-out both;
+}
+@keyframes roadster-sweep {
+  from { transform: rotate(calc(var(--beam-sweep, 4deg) * -1)); }
+  to { transform: rotate(var(--beam-sweep, 4deg)); }
+}
+
+.roadster-strip-light {
+  animation: roadster-strip 900ms ease-in-out infinite alternate;
+}
+@keyframes roadster-strip {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+/* Reduced motion: one still frame, the smoke already out along the ground. */
+.roadster[data-roadster='still'] .roadster-puff {
+  animation: none;
+  opacity: var(--puff-opacity, 0.85);
+  transform: translate(var(--puff-dx), var(--puff-dy)) scale(var(--puff-scale));
+}
+.roadster[data-roadster='still'] .roadster-beam,
+.roadster[data-roadster='still'] .roadster-strip-light,
+.roadster[data-roadster='still'] .roadster-plume {
+  animation: none;
+}

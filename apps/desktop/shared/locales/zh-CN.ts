@@ -127,6 +127,9 @@ export const zhCN: Translation = {
   'commandBar.untitledSession': '未命名会话',
   'commandBar.failed': '无法完成此操作',
 
+  'roadster.label': '一辆白色敞篷跑车借冷气喷流升空，在一辆卡车上方后空翻，飞入夜色',
+  'roadster.skip': '按任意键或点击以跳过',
+
   'notifications.title': '通知',
   'notifications.close': '关闭通知',
   'notifications.clearAll': '全部清除',

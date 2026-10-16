@@ -124,6 +124,9 @@ export const en = {
   'commandBar.untitledSession': 'Untitled session',
   'commandBar.failed': 'Could not do that',
 
+  'roadster.label': 'A white roadster lifts off on jets of cold vapor, flips backwards over a truck and flies off into the night',
+  'roadster.skip': 'Press any key or click to skip',
+
   'notifications.title': 'Notifications',
   'notifications.close': 'Close notifications',
   'notifications.clearAll': 'Clear all',
