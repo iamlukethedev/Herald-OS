@@ -1,12 +1,42 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { Wallpaper } from '../../shell/Wallpaper.tsx'
+import { useReducedMotion } from '../pet/hooks.ts'
 import { useRoomScreensaver } from '../room/screensaver.ts'
 
 const RoomScreensaver = lazy(() => import('../room/RoomScreensaver.tsx').then(m => ({ default: m.RoomScreensaver })))
+const RoadsterFlight = lazy(() => import('../roadster/RoadsterFlight.tsx').then(m => ({ default: m.RoadsterFlight })))
 
 /** Input in the first moment after it appears is the tail of whatever the person was doing. */
 const GRACE_MS = 1200
+/** The roadster flies over the screensaver this long after it appears, then again this often. */
+export const FLYOVER_FIRST_MS = 45_000
+export const FLYOVER_EVERY_MS = 4 * 60_000
+
+/** Whether the idle flyover is up: never under reduced motion, where a scene popping up unasked is what the person turned off. */
+function useIdleFlyover(): { up: boolean; flown: number; land: () => void } {
+  const reduced = useReducedMotion()
+  const [up, setUp] = useState(false)
+  const flown = useRef(0)
+
+  useEffect(() => {
+    if (reduced || up) {
+      return
+    }
+
+    const timer = setTimeout(
+      () => {
+        flown.current += 1
+        setUp(true)
+      },
+      flown.current === 0 ? FLYOVER_FIRST_MS : FLYOVER_EVERY_MS
+    )
+
+    return () => clearTimeout(timer)
+  }, [reduced, up])
+
+  return { up: up && !reduced, flown: flown.current, land: () => setUp(false) }
+}
 
 function Clock() {
   const [now, setNow] = useState(() => new Date())
@@ -30,9 +60,10 @@ function Clock() {
   )
 }
 
-/** The living wallpaper with a large clock, or the Pet Room when the person picked it; the first key, click or pointer move ends it. */
+/** The living wallpaper with a large clock, or the Pet Room when the person picked it, and now and then the roadster; the first key, click or pointer move ends it. */
 export function Screensaver({ onDismiss }: { onDismiss: () => void }) {
   const room = useRoomScreensaver()
+  const flyover = useIdleFlyover()
 
   useEffect(() => {
     const shownAt = Date.now()
@@ -61,6 +92,11 @@ export function Screensaver({ onDismiss }: { onDismiss: () => void }) {
       {room && (
         <Suspense fallback={null}>
           <RoomScreensaver />
+        </Suspense>
+      )}
+      {flyover.up && (
+        <Suspense fallback={null}>
+          <RoadsterFlight key={flyover.flown} contained onDone={flyover.land} />
         </Suspense>
       )}
     </div>

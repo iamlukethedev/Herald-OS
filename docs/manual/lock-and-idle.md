@@ -47,6 +47,9 @@ Settings > Pet Room can show [the Pet Room](room.md#the-room-as-the-screensaver)
 clock: Hermes's work as pets, with no names or words. While Herald Slides presents, or while the
 desktop pet is put away for a screen share, the clock shows instead.
 
+Now and then a white roadster flies over the screensaver: first after 45 seconds, then every four
+minutes. With Reduce Motion on it does not.
+
 ## Night light
 
 Night light warms the screen's colours for the evening: `Super+Ctrl+N`, Settings > General >
