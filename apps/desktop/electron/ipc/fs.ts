@@ -150,24 +150,60 @@ export const HOME_SECRETS = [
   '.git-credentials',
   '.npmrc',
   '.pypirc',
+  '.yarnrc.yml',
+  '.vault-token',
+  '.cargo/credentials',
+  '.cargo/credentials.toml',
+  '.terraform.d/credentials.tfrc.json',
+  '.gem/credentials',
+  '.m2/settings.xml',
   '.config/gcloud',
   '.config/gh',
+  '.config/rclone',
+  '.config/op',
   '.local/share/keyrings',
+  '.claude/.credentials.json',
+  '.codex/auth.json',
+  '.zsh_history',
+  '.bash_history',
   'Library/Keychains',
   'Library/Cookies',
+  'Library/Messages',
+  'Library/Application Support/com.apple.TCC',
   // Browser profiles: saved passwords, cookies and session tokens.
   '.config/google-chrome',
+  '.config/google-chrome-beta',
+  '.config/google-chrome-unstable',
   '.config/chromium',
   '.config/BraveSoftware',
   '.config/microsoft-edge',
+  '.config/vivaldi',
+  '.config/opera',
   '.mozilla/firefox',
+  'snap/firefox/common/.mozilla/firefox',
+  'snap/chromium/common/chromium',
+  '.var/app/org.mozilla.firefox/.mozilla/firefox',
+  '.var/app/com.google.Chrome/config/google-chrome',
+  '.var/app/com.brave.Browser/config/BraveSoftware',
+  'Library/Safari',
   'Library/Application Support/Google/Chrome',
+  'Library/Application Support/Google/Chrome Beta',
+  'Library/Application Support/Google/Chrome Canary',
   'Library/Application Support/Chromium',
   'Library/Application Support/BraveSoftware',
   'Library/Application Support/Microsoft Edge',
+  'Library/Application Support/Arc',
+  'Library/Application Support/Vivaldi',
+  'Library/Application Support/com.operasoftware.Opera',
   'Library/Application Support/Firefox',
   'Library/Containers/com.apple.Safari/Data/Library/Cookies'
 ]
+
+/** Credential stores whose folder name varies: `*` matches within one name, without regard to case. */
+export const HOME_SECRET_PATTERNS = ['Library/Group Containers/*1password*']
+
+const patternExpression = (pattern: string): RegExp => new RegExp(`^${pattern.split('*').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}(?:/|$)`, 'i')
+const SECRET_EXPRESSIONS = HOME_SECRET_PATTERNS.map(patternExpression)
 
 const TEMP_ROOTS = ['/tmp', '/private/tmp']
 const SYSTEM_ROOTS = ['/System', '/usr', '/bin', '/sbin', '/private/etc', '/Library']
@@ -231,18 +267,38 @@ async function hermesKeys(hermes: string): Promise<string[]> {
   return [...dirs.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')]), ...found.flat()]
 }
 
+/** The folders on disk that a {@link HOME_SECRET_PATTERNS} entry names in `home`. */
+async function patternStores(home: string): Promise<string[]> {
+  const found = await Promise.all(
+    HOME_SECRET_PATTERNS.map(async (pattern, index) => {
+      const parent = path.join(home, path.dirname(pattern))
+
+      return (await names(parent)).map(name => path.join(parent, name)).filter(file => SECRET_EXPRESSIONS[index].test(path.relative(home, file)))
+    })
+  )
+
+  return found.flat()
+}
+
 async function resolvedPlaces(): Promise<Places> {
   const withReal = async (dirs: string[]) => [...new Set([...dirs, ...(await Promise.all(dirs.map(dir => realpathDeep(dir).catch(() => dir))))])]
   const [homes, hermes, temps] = await Promise.all([withReal([os.homedir()]), withReal(hermesHomes()), withReal([...TEMP_ROOTS, os.tmpdir()])])
-  const keys = (await Promise.all(hermes.map(hermesKeys))).flat()
-  const secrets = await withReal([...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...keys])
+  const [keys, patterned] = await Promise.all([Promise.all(hermes.map(hermesKeys)), Promise.all(homes.map(patternStores))])
+  const secrets = await withReal([...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...keys.flat(), ...patterned.flat()])
 
   return { homes, hermes, temps, secrets }
 }
 
-/** A credential store: a {@link HOME_SECRETS} entry or a Hermes key file, as written or where it resolves, or any `.env` under a Hermes home. */
+/**
+ * A credential store: a {@link HOME_SECRETS} entry, a {@link HOME_SECRET_PATTERNS} match or a Hermes key file, as
+ * written or where it resolves, or any `.env` under a Hermes home.
+ */
 function isSecret(file: string, places: Places): boolean {
-  return places.secrets.some(secret => within(file, secret)) || places.hermes.some(hermes => within(file, hermes) && path.relative(comparable(hermes), comparable(file)).split(path.sep).some(isEnvFile))
+  return (
+    places.secrets.some(secret => within(file, secret)) ||
+    places.homes.some(home => within(file, home) && SECRET_EXPRESSIONS.some(expression => expression.test(path.relative(home, file)))) ||
+    places.hermes.some(hermes => within(file, hermes) && path.relative(comparable(hermes), comparable(file)).split(path.sep).some(isEnvFile))
+  )
 }
 
 /** Whether a path under `root` (as the caller wrote it) is a credential store, by its spelling or by where it resolves. */

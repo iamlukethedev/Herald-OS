@@ -614,3 +614,57 @@ describe('project folders for the Studio tree and its watcher', () => {
     await expect(invoke(IPC.fsListTree, `${home}/Projects/../../../../../../etc`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
   })
 })
+
+describe('more credential stores', () => {
+  const stores = [
+    '.netrc',
+    '.kube/config',
+    '.docker/config.json',
+    '.npmrc',
+    '.vault-token',
+    '.cargo/credentials.toml',
+    '.terraform.d/credentials.tfrc.json',
+    '.config/rclone/rclone.conf',
+    '.gem/credentials',
+    '.m2/settings.xml',
+    '.yarnrc.yml',
+    '.claude/.credentials.json',
+    '.codex/auth.json',
+    '.zsh_history',
+    '.bash_history',
+    '.config/op/config',
+    'Library/Messages/chat.db',
+    'Library/Application Support/com.apple.TCC/TCC.db',
+    'Library/Safari/History.db',
+    'Library/Application Support/Arc/User Data/Default/Cookies',
+    'Library/Application Support/Google/Chrome Beta/Default/Cookies',
+    'Library/Application Support/Google/Chrome Canary/Default/Cookies',
+    'Library/Application Support/Vivaldi/Default/Cookies',
+    'Library/Application Support/com.operasoftware.Opera/Cookies',
+    '.config/vivaldi/Default/Cookies',
+    '.config/opera/Cookies',
+    '.config/google-chrome-beta/Default/Cookies',
+    'snap/firefox/common/.mozilla/firefox/abcd.default/logins.json',
+    '.var/app/org.mozilla.firefox/.mozilla/firefox/abcd.default/logins.json',
+    '.var/app/com.google.Chrome/config/google-chrome/Default/Cookies',
+    '.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default/Cookies',
+    'Library/Group Containers/2BUA8C4S2C.com.1password/Library/Application Support/1Password/Data/1password.sqlite'
+  ]
+
+  it.each(stores)('refuses to read or write ~/%s', async file => {
+    write(file, 'secret')
+
+    await expect(readFile(path.join(home, file))).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsWriteText, path.join(home, file), 'x')).rejects.toThrow(PROTECTED)
+  })
+
+  it('refuses a 1Password group container behind a symlink, and leaves other group containers readable', async () => {
+    write('Library/Group Containers/2BUA8C4S2C.com.1password/data.sqlite', 'vault')
+    write('Library/Group Containers/group.com.apple.notes/notes.json', '{}')
+    moveBehindLink('Library/Group Containers/2BUA8C4S2C.com.1password', 'vault/op')
+
+    await expect(readFile(`${home}/vault/op/data.sqlite`)).rejects.toThrow(PROTECTED)
+    await expect(readFile(`${home}/Library/Group Containers/2BUA8C4S2C.com.1PASSWORD/data.sqlite`)).rejects.toThrow(PROTECTED)
+    expect((await readFile(`${home}/Library/Group Containers/group.com.apple.notes/notes.json`)).content).toBe('{}')
+  })
+})
