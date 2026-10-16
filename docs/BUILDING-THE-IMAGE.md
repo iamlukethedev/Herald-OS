@@ -21,7 +21,8 @@ installer and disks, signing and switching another bootc system to it; the
 | [`linux/plymouth/herald-os/`](../linux/plymouth/herald-os/) | The boot splash. |
 | [`linux/image/disk.toml`](../linux/image/disk.toml), [`iso.toml`](../linux/image/iso.toml) | bootc-image-builder settings for the VM disk (`qcow2`, a root of at least 40 GiB) and the installer ISO (`anaconda-iso`). |
 | [`linux/vm/package-disk.sh`](../linux/vm/package-disk.sh) | Names, compresses, converts and checksums bootc-image-builder's output for a release. |
-| [`.github/workflows/image.yml`](../.github/workflows/image.yml) | CI: builds the image per architecture, pushes it to GHCR, joins the multi-arch tag, signs it when the key is set up, and makes the ISO and disks for tags and on request. |
+| [`linux/image/Containerfile.nvidia`](../linux/image/Containerfile.nvidia), [`nvidia.sh`](../linux/image/nvidia.sh) | The NVIDIA image (x86_64 only): the default image with NVIDIA's open kernel modules from Universal Blue's akmods images, negativo17's driver and CUDA libraries and NVIDIA's container toolkit on top. Its header has the commands to build it locally, pinned by digest ([docs/LINUX.md](LINUX.md#the-nvidia-image)). |
+| [`.github/workflows/image.yml`](../.github/workflows/image.yml) | CI: builds the image per architecture, pushes it to GHCR, joins the multi-arch tag, signs it when the key is set up, and makes the ISO and disks for tags and on request. An NVIDIA leg on x86_64 builds the default image from a base pinned by digest, then `Containerfile.nvidia` on it, and pushes `herald-os-nvidia` under the channel's tag; it may fail (until Universal Blue publishes modules for a new kernel) without holding back the default image. |
 
 `linux/dev/build.sh` is not part of the image. It builds the shell from a checkout inside the
 development VM, where `linux/provision.sh` installs it as `herald-os-build`: it runs
@@ -34,7 +35,9 @@ for working on the shell, and the image for trying the system as it ships.
 ### What `packages.sh --image` does
 
 Six of the eight steps print a `--- <step>` line in the build log; the image's name (4) and the
-signature policy (6) print none. The script ends with `==> system half done (--image)`.
+signature policy (6) print none. The script ends with `==> system half done (--image)`. The NVIDIA
+image's layer, `nvidia.sh`, prints four `--- <step>` lines of its own and ends with
+`==> NVIDIA layer done (<driver version>)`.
 
 1. **SELinux permissive** (ADR-012).
 2. **Packages.** `dnf -y install --setopt=install_weak_deps=False` with everything in
@@ -114,7 +117,8 @@ sudo podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-
 ```
 
 This is the command at the top of the Containerfile, with `sudo` as in CI. It runs seven steps,
-and step 5 is `packages.sh` with its `--- <step>` lines. The end of a successful build looks like
+and step 5 is `packages.sh` with its `--- <step>` lines. The NVIDIA image is a second build on top
+of this one, with `linux/image/Containerfile.nvidia`. The end of a successful build looks like
 this:
 
 ```
@@ -317,15 +321,16 @@ Settings > About > Branding or `herald-os branding set`
 ### Signing
 
 `packages.sh` installs a signature policy only when `linux/image/cosign.pub` exists, and that policy
-names `ghcr.io/iamlukethedev/herald-os`. Without the file, as today, a build accepts updates
+names `ghcr.io/iamlukethedev/herald-os` and `ghcr.io/iamlukethedev/herald-os-nvidia`, so either
+image accepts signed updates of itself and of the other. Without the file, as today, a build accepts updates
 without a signature check. With it committed, the image workflow stops unless `COSIGN_PRIVATE_KEY`
 is set and matches it. [docs/LINUX.md](LINUX.md#the-herald-os-image-fedora-bootc) has the
 maintainer's steps for turning signing on.
 
 ### An NVIDIA variant
 
-No NVIDIA variant yet; [#154](https://github.com/iamlukethedev/Herald-OS/issues/154) tracks NVIDIA
-drivers for x86_64.
+The NVIDIA image, which GPUs it is for, switching to it and Secure Boot are in
+[The NVIDIA image](LINUX.md#the-nvidia-image) in docs/LINUX.md.
 
 ## Checking a change
 

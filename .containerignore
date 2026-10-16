@@ -1,6 +1,6 @@
 # The image build's context (podman build ... . from the repository root). linux/image/Containerfile
-# copies only linux/ and the shell tarball, so the rest need not be sent; the tarball must not sit
-# in a folder left out here.
+# copies only linux/ and the shell tarball, and Containerfile.nvidia files from linux/image/, so the
+# rest need not be sent; the tarball must not sit in a folder left out here.
 .git
 **/node_modules
 **/dist
