@@ -5,12 +5,15 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 UPDATE = ROOT / "linux" / "bin" / "herald-os-update"
+# The bash that runs the updater: macOS has bash 3.2, which can be built and named here elsewhere.
+BASH = os.environ.get("HERALD_OS_TEST_BASH", "bash")
 
 # What a deployment adds to the image, as `rpm-ostree status --json` reports it. The requested-* keys
 # come from the origin as names; what rpm-ostree derived comes from GVariant tuples:
@@ -56,6 +59,7 @@ if [ "$1" = -n ]; then
   fi
 else
   echo "asked for a password: $*" >>"$HOME/sudo.log"
+  [ "$1" = -v ] && exit 0
 fi
 SUDO_USER=tester exec "$@\"""",
     # Like bootc, refuses when the booted or the staged deployment has local changes.
@@ -77,10 +81,19 @@ exit 0""",
     "rpm-ostree": """[ "$1" = status ] && exec cat "$HOME/status.json"
 echo "rpm-ostree $*" >>"$HOME/calls.log"
 if [ "$2" = --check ]; then
+  [ -t 0 ] && echo "rpm-ostree check read a terminal" >>"$HOME/calls.log"
   [ -n "$SUDO_USER" ] && exit "$(cat "$HOME/check-exit-root" 2>/dev/null || echo 0)"
   exit "$(cat "$HOME/check-exit" 2>/dev/null || echo 0)"
 fi
 exit "$(cat "$HOME/rpm-ostree-exit" 2>/dev/null || echo 0)\"""",
+    # Passes the command through, or with ~/timeout-expires gives up on it as timeout does (124).
+    "timeout": """echo "timeout $*" >>"$HOME/calls.log"
+# With text in it, only commands that contain the text run out of time.
+if [ -e "$HOME/timeout-expires" ] && { [ ! -s "$HOME/timeout-expires" ] || echo "$*" | grep -qF "$(cat "$HOME/timeout-expires")"; }; then
+  exit 124
+fi
+shift
+exec "$@\"""",
     # The user installation's refs are in ~/refs, the system one's in ~/system-refs. Updating a whole
     # installation fails when one of its refs is in ~/broken-refs, and so does updating that ref alone.
     "flatpak": """echo "flatpak $*" >>"$HOME/calls.log"
@@ -134,6 +147,7 @@ def machine(tmp_path):
         "HERALD_OS_OSTREE_BOOTED": str(tmp_path / "ostree-booted"),
         "HERALD_OS_IMAGE_SHELL": str(tmp_path / "app.asar"),
         "HERALD_OS_TESTING": "1",
+        "HERALD_OS_MIGRATIONS_DONE": str(tmp_path / "migrations-done"),
         "PATH": os.pathsep.join([str(stubs), "/usr/bin", "/bin"]),
     }
     deploy(home)
@@ -153,7 +167,7 @@ def deploy(home: Path, booted: dict | None = None, staged: dict | None = None, r
 
 
 def run(env, *args, prefix=()):
-    return subprocess.run([*prefix, "bash", str(UPDATE), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    return subprocess.run([*prefix, BASH, str(UPDATE), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
 
 
 def calls(home: Path) -> list[str]:
@@ -395,12 +409,15 @@ def test_skipped_steps_are_listed_even_when_another_step_fails(machine):
     home, env = machine
     (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
     (home / "no-sudo").write_text("")
-    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "broken.sh").write_text("exit 1\n")
-    done = run(env)
+    build = Path(env["HERALD_OS_REPO"]) / "linux" / "dev" / "build.sh"
+    build.parent.mkdir(parents=True)
+    build.write_text("exit 1\n")
+    build.chmod(0o755)
+    done = run({**env, "HERALD_OS_FORCE_REBUILD": "1"})
     assert done.returncode == 1
     assert "skipped: system system-flatpaks (run sudo herald-os update to update them)" in done.stdout
-    assert "failed: migration:broken.sh" in done.stderr
-    assert problems(home) == "migration:broken.sh"
+    assert "failed: build" in done.stderr
+    assert problems(home) == "build"
 
 
 def test_a_failed_system_upgrade_fails_the_update(machine):
@@ -585,12 +602,12 @@ def test_a_system_upgrade_that_runs_and_fails_still_fails_the_update(machine):
     assert problems(home) == "system"
 
 
-@pytest.mark.skipif(shutil.which("script") is None, reason="needs script (util-linux) for a terminal")
+@pytest.mark.skipif(sys.platform != "linux" or shutil.which("script") is None, reason="needs script from util-linux for a terminal")
 def test_in_a_terminal_sudo_asks_for_the_password_and_everything_updates(machine):
     home, env = machine
     (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
     (home / "no-sudo").write_text("")
-    command = f"bash {UPDATE} --no-hermes"
+    command = f"{BASH} {UPDATE} --no-hermes"
     done = subprocess.run(["script", "-qec", command, "/dev/null"], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     output = done.stdout.replace("\r\n", "\n")
     assert done.returncode == 0, output
@@ -683,3 +700,204 @@ def test_as_the_user_a_forced_rebuild_counts(machine):
     unflagged = {key: value for key, value in env.items() if key not in ("HERALD_OS_TESTING", "HERALD_OS_REPO")}
     run({**unflagged, "HERALD_OS_FORCE_REBUILD": "1"})
     assert mark.exists()
+
+
+TERMINAL = pytest.mark.skipif(sys.platform != "linux" or shutil.which("script") is None, reason="needs script from util-linux for a terminal")
+
+
+def in_a_terminal(env: dict, *args: str) -> str:
+    command = " ".join([BASH, str(UPDATE), "--no-hermes", *args])
+    done = subprocess.run(["script", "-qec", command, "/dev/null"], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    return done.stdout.replace("\r\n", "\n")
+
+
+@pytest.mark.parametrize("layered", [True, False], ids=["layered", "as-built"])
+def test_every_update_check_runs_under_timeout_120(machine, layered):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]} if layered else {})
+    (home / "check-exit").write_text("1")
+    check(home, env)
+    fallback = "timeout 120 sudo -n rpm-ostree upgrade --check" if layered else "timeout 120 sudo -n bootc upgrade --check"
+    assert "timeout 120 rpm-ostree upgrade --check" in calls(home)
+    assert fallback in calls(home)
+
+
+def test_a_check_that_runs_out_of_time_is_unknown_without_a_second_try(machine):
+    home, env = machine
+    (home / "timeout-expires").write_text("")
+    out, state, reported = check(home, env)
+    assert out == "system updates not checked" and state["packagesUnknown"] is True
+    assert reported == "0 system updates not checked"
+    assert [call for call in calls(home) if call.startswith("timeout")] == ["timeout 120 rpm-ostree upgrade --check"]
+    assert not sudo_calls(home)
+
+
+@pytest.mark.parametrize("layered", [True, False], ids=["layered", "as-built"])
+def test_a_sudo_check_that_runs_out_of_time_is_unknown(machine, layered):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]} if layered else {})
+    (home / "check-exit").write_text("1")
+    (home / "timeout-expires").write_text("sudo")
+    out, state, _ = check(home, env)
+    assert out == "system updates not checked" and state["packagesUnknown"] is True
+
+
+@TERMINAL
+def test_the_check_never_reads_the_terminal(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]})
+    (home / "check-exit").write_text("1")
+    in_a_terminal(env, "--check")
+    assert "rpm-ostree upgrade --check" in calls(home)
+    assert "rpm-ostree check read a terminal" not in calls(home)
+
+
+@pytest.mark.skipif(shutil.which("rpm-ostree") is not None, reason="this machine has rpm-ostree of its own")
+@pytest.mark.parametrize("up_to_date", [False, True], ids=["update", "no-update"])
+def test_without_rpm_ostree_the_check_asks_bootc(machine, tmp_path, up_to_date):
+    home, env = machine
+    (tmp_path / "stubs" / "rpm-ostree").unlink()
+    if up_to_date:
+        (home / "bootc-up-to-date").write_text("")
+    out, state, _ = check(home, env)
+    assert out == ("up to date" if up_to_date else "1 package")
+    assert "timeout 120 sudo -n bootc upgrade --check" in calls(home)
+
+
+def with_marking_migration(env: dict) -> Path:
+    """A migration that counts its runs in ~/migration-runs."""
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "count.sh").write_text('echo run >>"$HOME/migration-runs"\n')
+    return Path(env["HOME"]) / "migration-runs"
+
+
+def runs(path: Path) -> int:
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+
+def test_without_root_pending_migrations_wait_with_one_notice(machine):
+    home, env = machine
+    counted = with_marking_migration(env)
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert runs(counted) == 0
+    assert done.stdout.count("==> migrations: skipped (needs root: run sudo herald-os update)") == 1
+    assert "a password is required" not in done.stderr
+    assert summary(done.stdout)["migrations"] == "skipped (needs root: run sudo herald-os update)"
+    assert "skipped: migrations system" in done.stdout
+    assert problems(home) == "none"
+
+
+def test_with_root_a_migration_runs_once_and_is_recorded(machine, tmp_path):
+    home, env = machine
+    counted = with_marking_migration(env)
+    run(env)
+    run(env)
+    assert runs(counted) == 1
+    assert (tmp_path / "migrations-done" / "count.sh").exists()
+    assert "sudo -n touch " + str(tmp_path / "migrations-done" / "count.sh") in calls(home)
+
+
+def test_migrations_already_done_need_no_root_and_give_no_notice(machine, tmp_path):
+    home, env = machine
+    counted = with_marking_migration(env)
+    (tmp_path / "migrations-done").mkdir()
+    (tmp_path / "migrations-done" / "count.sh").write_text("")
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert runs(counted) == 0
+    assert "migrations" not in done.stdout
+
+
+def test_migrate_alone_without_root_skips_and_succeeds(machine):
+    home, env = machine
+    counted = with_marking_migration(env)
+    (home / "no-sudo").write_text("")
+    done = run(env, "--migrate")
+    assert done.returncode == 0
+    assert runs(counted) == 0
+    assert "==> migrations: skipped (needs root: run sudo herald-os update)" in done.stdout
+
+
+@TERMINAL
+def test_in_a_terminal_sudo_asks_once_before_the_migrations(machine, tmp_path):
+    home, env = machine
+    counted = with_marking_migration(env)
+    (home / "no-sudo").write_text("")
+    in_a_terminal(env)
+    assert runs(counted) == 1
+    assert "asked for a password: -v" in (home / "sudo.log").read_text()
+    assert (tmp_path / "migrations-done" / "count.sh").exists()
+
+
+def test_the_tests_never_touch_var_lib(machine):
+    home, env = machine
+    with_marking_migration(env)
+    run(env)
+    assert not [call for call in calls(home) if "/var/lib" in call]
+
+
+@pytest.mark.parametrize("value", [1, "true", "yes"])
+def test_a_regenerate_initramfs_that_is_true_but_not_a_boolean_counts(machine, value):
+    home, env = machine
+    deploy(home, booted={"regenerate-initramfs": value})
+    done = run(env)
+    assert "rpm-ostree upgrade" in calls(home) and not ran(home, "bootc")
+    assert "initramfs: regenerated" in summary(done.stdout)["system"]
+
+
+@pytest.mark.parametrize("value", [0, "", None])
+def test_a_regenerate_initramfs_that_is_false_does_not_count(machine, value):
+    home, env = machine
+    deploy(home, booted={"regenerate-initramfs": value})
+    (home / "layered").write_text("")
+    assert run(env).returncode == 0
+    assert "bootc upgrade" in calls(home) and not ran(home, "rpm-ostree upgrade")
+
+
+def on_arch(env: dict, tmp_path: Path, helper: str | None) -> dict:
+    """Arch: no image, pacman, and an AUR helper or none; all of them log their calls."""
+    stubs = tmp_path / "stubs"
+    for name in ["pacman", *([helper] if helper else [])]:
+        (stubs / name).write_text(f'#!/bin/sh\necho "{name} $*" >>"$HOME/calls.log"\n')
+        (stubs / name).chmod(0o755)
+    return {**env, "HERALD_OS_OSTREE_BOOTED": str(tmp_path / "not-booted"), "HERALD_OS_IMAGE_SHELL": str(tmp_path / "no-shell")}
+
+
+@pytest.mark.skipif(any(shutil.which(name) for name in ("yay", "paru", "omarchy-update")), reason="this machine has an AUR helper or Omarchy of its own")
+def test_pacman_without_an_aur_helper_needs_root(machine, tmp_path):
+    home, env = machine
+    (home / "no-sudo").write_text("")
+    done = run(on_arch(env, tmp_path, None))
+    assert "==> system (pacman)" in done.stdout
+    assert summary(done.stdout)["system"] == "skipped (pacman needs root: run sudo herald-os update)"
+    assert not ran(home, "pacman")
+
+
+@pytest.mark.skipif(any(shutil.which(name) for name in ("yay", "paru", "omarchy-update")), reason="this machine has an AUR helper or Omarchy of its own")
+def test_pacman_with_an_aur_helper_lets_the_helper_ask_for_root(machine, tmp_path):
+    home, env = machine
+    (home / "no-sudo").write_text("")
+    done = run(on_arch(env, tmp_path, "yay"))
+    assert summary(done.stdout)["system"] == "ok (pacman)"
+    assert "yay -Syu --noconfirm" in calls(home)
+    assert not ran(home, "pacman")
+
+
+@TERMINAL
+def test_without_timeout_the_check_still_never_reads_the_terminal(machine, tmp_path):
+    """macOS has no timeout: the check then runs as it is, but still without the terminal."""
+    home, env = machine
+    (tmp_path / "stubs" / "timeout").unlink()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for folder in ("/usr/bin", "/bin"):
+        for tool in Path(folder).iterdir():
+            if tool.name != "timeout" and not (tools / tool.name).exists():
+                (tools / tool.name).symlink_to(tool)
+    env = {**env, "PATH": os.pathsep.join([str(tmp_path / "stubs"), str(tools)])}
+    deploy(home, booted={"requested-packages": ["htop"]})
+    in_a_terminal(env, "--check")
+    assert "rpm-ostree upgrade --check" in calls(home)
+    assert not [call for call in calls(home) if call.startswith("timeout")]
+    assert "rpm-ostree check read a terminal" not in calls(home)
