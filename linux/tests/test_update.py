@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,9 @@ def machine(tmp_path):
     for name, body in STUBS.items():
         (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
         (stubs / name).chmod(0o755)
+    if BASH != "bash":
+        # Migrations run under whatever `bash` is on PATH, as on macOS, where that is bash 3.2 too.
+        (stubs / "bash").symlink_to(shutil.which(BASH) or BASH)
     (tmp_path / "ostree-booted").write_text("")
     (tmp_path / "app.asar").write_text("")
     (home / "refs").write_text(f"{GOOD}\n{BROKEN}\n")
@@ -1438,14 +1442,22 @@ def test_a_newer_release_is_reported_with_nothing_failed_before_it(machine, tmp_
 
 # Round 9: no descriptor of the updater reaches a migration, and none sees the terminal under sudo.
 
+# Which descriptors from 3 to 254 a migration inherited, asked of a program it starts: whatever it
+# inherited survives exec into that program too, while the shell's own descriptors do not. Bash
+# cannot be asked itself: to apply `<&10` bash 3.2 first saves stdin on the first free descriptor
+# from 10, which is 10, so `true <&10` (or `exec <&10`) succeeds with nothing open on 10.
+OPEN_FDS = """{python} -I -S -c 'import os
+def is_open(fd):
+    try:
+        os.fstat(fd)
+        return True
+    except OSError:
+        return False
+print(" ".join(str(fd) for fd in range(3, 255) if is_open(fd)))' >"$TEST_HOME/open-fds-{name}"
+"""
+
 GREEDY = """# Runs as: {kind}
-# Each test in a subshell: a redirection on the loop or the eval would itself hold descriptors.
-open=""
-for fd in $(seq 3 254); do
-  if (eval "true <&$fd") 2>/dev/null; then open="$open $fd"; fi
-done
-echo "$open" >"$TEST_HOME/open-fds-{name}"
-cat >/dev/null
+""" + OPEN_FDS + """cat >/dev/null
 for fd in $(seq 3 255); do
   eval "cat <&$fd" >/dev/null 2>&1
 done
@@ -1456,7 +1468,7 @@ echo run >>"$HOME/runs-{name}"
 def greedy(folder: Path, name: str, kind: str = "user") -> None:
     """A migration that reads all of its input and every descriptor from 3 to 255, after noting which
     of 3 to 254 were open (255 is its own shell's script)."""
-    (folder / f"{name}.sh").write_text(GREEDY.format(kind=kind, name=name))
+    (folder / f"{name}.sh").write_text(GREEDY.format(kind=kind, name=name, python=shlex.quote(sys.executable)))
 
 
 def test_a_greedy_migration_cannot_stop_the_ones_after_it(machine):
