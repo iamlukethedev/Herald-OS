@@ -1,0 +1,19 @@
+# The image build's context (podman build ... . from the repository root). linux/image/Containerfile
+# copies only linux/ and the shell tarball, so the rest need not be sent; the tarball must not sit
+# in a folder left out here.
+.git
+**/node_modules
+**/dist
+apps/desktop/release
+upstream/hermes-agent
+output
+linux/vm/build
+packaging/arch/*/src
+packaging/arch/*/pkg
+packaging/arch/*/herald-os
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/*.qcow2
+**/*.raw
+**/*.iso

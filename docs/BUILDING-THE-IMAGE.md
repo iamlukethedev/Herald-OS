@@ -95,7 +95,9 @@ cp apps/desktop/release/herald-os-*-linux-x64.tar.gz herald-os-linux.tar.gz   # 
 with the bridge plugin and the icon under `resources/`. The Containerfile copies the
 tarball from the build context, so it has to be inside the repository; `herald-os-linux.tar.gz` at
 the root is the name it expects and is ignored by git. `--build-arg SHELL_TARBALL=<path>` names
-another file in the repository.
+another file in the repository, outside the folders `.containerignore` leaves out of the build
+context (`apps/desktop/release` among them, with `.git`, `node_modules`, `output` and the VM
+disks), which keeps the context to `linux/`, the tarball and a few small files.
 
 ### 2. Build the image
 
