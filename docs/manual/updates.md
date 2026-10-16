@@ -45,11 +45,13 @@ Herald OS's one-shot migrations bring an older installation up to date, each onc
 on your own settings, so they always run as you, even under `sudo herald-os update`, and never in
 root's home. They remember in your `~/.local/state/herald-os` that they ran, so every account on the
 computer gets them once. The few that change system files run as root, once for the computer, and
-wait like the system does when there is no root. The ones that need both run once sudo works for
-you: under `sudo herald-os update` in a terminal, sudo asks for your password for them if it does not
-remember it. Logged in as root itself, there is no one to run your migrations as, so they are
-skipped until you update from your own account; the same goes when your account has no home folder.
-A migration never reads from your terminal.
+wait like the system does when there is no root. The ones that need both run as you and take their
+system steps through your own sudo, so they run when you update without sudo in a terminal
+(`herald-os update`), where sudo asks for your password once. Under `sudo herald-os update` they
+wait for that, with a notice: there your password does not reach them. Logged in as root itself,
+there is no one to run your migrations as, so they are skipped until you update from your own
+account; the same goes when your account has no home folder. A migration never reads from your
+terminal. If sudo refuses your password, the summary says so, and nothing else asks again.
 
 `herald-os update` exits with 1 when the system or Herald OS itself (its shell, release, one-shot
 migrations or rebuild) did not update. Flatpaks and Hermes Agent that did not update are reported in
