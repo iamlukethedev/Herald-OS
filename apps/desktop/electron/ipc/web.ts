@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type WebOpenOptions, type WebViewBounds, type WebViewEvent } from '../../shared/ipc.ts'
 import { isViewable } from '../../shared/viewer.ts'
 import { log } from '../log.ts'
-import { assertPreviewFolder, assertReadable, openChecked } from './fs.ts'
+import { READ_FLAGS, assertPreviewFolder, assertReadable, openChecked } from './fs.ts'
 
 /*
  * Embedded web pages. Herald OS is a whole environment, so a web page (the provider sign-in portal,
@@ -480,7 +480,8 @@ export interface Servable {
 
 /**
  * The file a confined file:// request is served from, or null: never a credential store, only what `allows` accepts,
- * and opened through openChecked, so what is served is the file that was checked.
+ * and opened through openChecked, so what is served is the file that was checked. Only regular files are served; the
+ * open does not wait on a FIFO.
  */
 export async function servableFile(url: string, allows: (file: string) => boolean): Promise<Servable | null> {
   let checked
@@ -496,7 +497,7 @@ export async function servableFile(url: string, allows: (file: string) => boolea
     return null
   }
 
-  const handle = await openChecked(checked, fs.constants.O_RDONLY).catch(() => null)
+  const handle = await openChecked(checked, READ_FLAGS).catch(() => null)
   const stat = await handle?.stat().catch(() => null)
 
   if (!handle || !stat?.isFile()) {

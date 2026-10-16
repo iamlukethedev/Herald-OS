@@ -94,52 +94,91 @@ export async function readDir(target: string): Promise<DirEntry[]> {
   return entries
 }
 
+/** Up to `max` bytes of an open file from `position`, read until the end of the file: as many as there are, never padded. */
+async function readFrom(handle: fs.FileHandle, position: number, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let total = 0
+
+  while (total < max) {
+    const chunk = Buffer.alloc(Math.min(READ_CHUNK, max - total))
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, position + total)
+
+    if (bytesRead === 0) {
+      break
+    }
+
+    chunks.push(chunk.subarray(0, bytesRead))
+    total += bytesRead
+  }
+
+  return Buffer.concat(chunks, total)
+}
+
+const READ_CHUNK = 64 * 1024
+const BINARY_PROBE = 8192
+
+/** Opening for a read never waits on a FIFO with no writer; regular files read the same either way. */
+export const READ_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0)
+
+/**
+ * A preview of a file. Its kind and size come from the opened file, and only the bytes read are kept, so a file swapped
+ * for a shorter or longer one after the check is read as it is, never padded with NULs or cut short. A folder answers
+ * as one; anything else that is not a regular file (a FIFO, a socket, a device) is refused.
+ */
 export async function readFile(target: string): Promise<FilePreview> {
   const checked = await assertReadable(target)
-  const { path: file, real } = checked
-  const stat = await fs.stat(real)
-
-  if (stat.isDirectory()) {
-    return { path: file, kind: 'directory', size: 0 }
-  }
-
-  const ext = path.extname(file).toLowerCase()
-  const imageMime = IMAGE_MIME[ext]
-
-  if (imageMime) {
-    if (stat.size > IMAGE_LIMIT) {
-      return { path: file, kind: 'too-large', size: stat.size, mime: imageMime }
-    }
-
-    const image = await openChecked(checked, fsConstants.O_RDONLY)
-    let data: Buffer
-
-    try {
-      data = await image.readFile()
-    } finally {
-      await image.close()
-    }
-
-    return { path: file, kind: 'image', size: stat.size, mime: imageMime, content: `data:${imageMime};base64,${data.toString('base64')}` }
-  }
-
-  const looksText = TEXT_EXTENSIONS.has(ext) || ext === '' || /^\.[a-z0-9]{1,6}rc$/.test(ext)
-  const handle = await openChecked(checked, fsConstants.O_RDONLY)
+  const file = checked.path
+  let handle: fs.FileHandle
 
   try {
-    const probe = Buffer.alloc(Math.min(8192, stat.size))
-    await handle.read(probe, 0, probe.length, 0)
-    const binary = !looksText && probe.includes(0)
-
-    if (binary || (!looksText && probe.includes(0))) {
-      return { path: file, kind: 'binary', size: stat.size }
+    handle = await openChecked(checked, READ_FLAGS)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
+      return { path: file, kind: 'directory', size: 0 }
     }
 
-    const readable = Math.min(stat.size, TEXT_LIMIT)
-    const buffer = Buffer.alloc(readable)
-    await handle.read(buffer, 0, readable, 0)
+    throw error
+  }
 
-    return { path: file, kind: 'text', size: stat.size, content: buffer.toString('utf8'), truncated: stat.size > TEXT_LIMIT }
+  try {
+    const stat = await handle.stat()
+
+    if (stat.isDirectory()) {
+      return { path: file, kind: 'directory', size: 0 }
+    }
+
+    if (!stat.isFile()) {
+      throw new Error(`${file} is not a regular file`)
+    }
+
+    const ext = path.extname(file).toLowerCase()
+    const imageMime = IMAGE_MIME[ext]
+
+    if (imageMime) {
+      if (stat.size > IMAGE_LIMIT) {
+        return { path: file, kind: 'too-large', size: stat.size, mime: imageMime }
+      }
+
+      const data = await readFrom(handle, 0, IMAGE_LIMIT + 1)
+
+      if (data.length > IMAGE_LIMIT) {
+        return { path: file, kind: 'too-large', size: Math.max(data.length, (await handle.stat()).size), mime: imageMime }
+      }
+
+      return { path: file, kind: 'image', size: data.length, mime: imageMime, content: `data:${imageMime};base64,${data.toString('base64')}` }
+    }
+
+    const looksText = TEXT_EXTENSIONS.has(ext) || ext === '' || /^\.[a-z0-9]{1,6}rc$/.test(ext)
+    const head = await readFrom(handle, 0, BINARY_PROBE)
+
+    if (!looksText && head.includes(0)) {
+      return { path: file, kind: 'binary', size: Math.max(stat.size, head.length) }
+    }
+
+    const data = head.length < BINARY_PROBE ? head : Buffer.concat([head, await readFrom(handle, head.length, TEXT_LIMIT + 1 - head.length)])
+    const truncated = data.length > TEXT_LIMIT
+
+    return { path: file, kind: 'text', size: truncated ? Math.max(stat.size, data.length) : data.length, content: data.subarray(0, TEXT_LIMIT).toString('utf8'), truncated }
   } finally {
     await handle.close()
   }
