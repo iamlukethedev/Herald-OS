@@ -18,7 +18,7 @@ import {
   type CanvasWrite,
   IPC
 } from '../../shared/ipc.ts'
-import { assertWritable, normalizeUserPath } from '../ipc/fs.ts'
+import { assertReadable, assertWritable } from '../ipc/fs.ts'
 import { whileOpen, WindowWatches } from '../ipc/watches.ts'
 import { log } from '../log.ts'
 import { convertToPng } from './convert.ts'
@@ -63,6 +63,13 @@ export function projectPath(target: string): string {
   }
 
   return dir
+}
+
+/** A file or project Herald may read: writable, and readable once its symlinks resolve (a link into `~/.aws` is not). */
+async function readable(file: string): Promise<string> {
+  await assertReadable(file)
+
+  return file
 }
 
 /** An image Herald may open as a new project. */
@@ -164,7 +171,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasRead, async (_event, target: string) => {
-    const dir = projectPath(target)
+    const dir = await readable(projectPath(target))
 
     return toProject(dir, await readPackage(dir))
   })
@@ -172,7 +179,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.canvasReadAsset, async (_event, target: string, name: string) => {
     const asset = String(name)
 
-    const bytes = await readAsset(projectPath(target), asset)
+    const bytes = await readAsset(await readable(projectPath(target)), asset)
 
     return asset.endsWith('.png') ? pixelsOrBytes(bytes, asset.endsWith('.mask.png') ? 1 : 4) : bytes
   })
@@ -187,7 +194,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadImage, async (_event, target: string) => {
-    const file = imagePath(target)
+    const file = await readable(imagePath(target))
     const stat = await fs.stat(file)
 
     if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
@@ -203,7 +210,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadTable, async (_event, target: string): Promise<Uint8Array> => {
-    const file = assertWritable(String(target))
+    const file = await readable(assertWritable(String(target)))
 
     if (path.extname(file).toLowerCase() !== '.cube') {
       throw new Error(`${path.basename(file)} is not a .cube colour table`)
@@ -219,7 +226,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadPart, async (_event, target: string, offset: number, length: number): Promise<CanvasFilePart> => {
-    const file = layeredPath(target)
+    const file = await readable(layeredPath(target))
     const handle = await fs.open(file, 'r')
 
     try {
@@ -318,7 +325,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasWatch, async (event, target: string, loaded?: string) => {
-    const dir = projectPath(target)
+    const dir = await readable(projectPath(target))
     const owner = event.sender
     const watchId = crypto.randomUUID()
     const contents = await readPackage(dir)
@@ -345,8 +352,9 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasExists, async (_event, target: string) => {
+    // Outside the readable places, and in credential stores, everything looks missing.
     try {
-      const stat = await fs.stat(normalizeUserPath(String(target)))
+      const stat = await fs.stat((await assertReadable(String(target))).real)
 
       return stat.isDirectory() ? 'directory' : 'file'
     } catch {

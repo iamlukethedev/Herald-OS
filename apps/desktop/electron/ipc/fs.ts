@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { type DirEntry, type FileLockResult, type FilePreview, IPC, type TreeEntry, type WriteTextOptions } from '../../shared/ipc.ts'
+import { hermesHome } from '../paths.ts'
 import { allowAttachments, readAttachment } from '../attachments.ts'
 import { writeTextAtomic } from '../atomic-write.ts'
 import { type FileLock, lockFile } from '../file-lock.ts'
@@ -41,9 +42,9 @@ export function normalizeUserPath(input: string): string {
   return path.normalize(expanded)
 }
 
-async function readDir(target: string): Promise<DirEntry[]> {
-  const dir = normalizeUserPath(target)
-  const dirents = await fs.readdir(dir, { withFileTypes: true })
+export async function readDir(target: string): Promise<DirEntry[]> {
+  const { path: dir, real } = await assertReadable(target)
+  const dirents = await fs.readdir(real, { withFileTypes: true })
   const entries = await Promise.all(
     dirents.map(async dirent => {
       const full = path.join(dir, dirent.name)
@@ -52,7 +53,7 @@ async function readDir(target: string): Promise<DirEntry[]> {
       let kind: DirEntry['kind'] = dirent.isDirectory() ? 'directory' : dirent.isFile() ? 'file' : dirent.isSymbolicLink() ? 'symlink' : 'other'
 
       try {
-        const stat = await fs.stat(full)
+        const stat = await fs.stat(path.join(real, dirent.name))
         size = stat.size
         modifiedAt = stat.mtimeMs
 
@@ -86,9 +87,9 @@ async function readDir(target: string): Promise<DirEntry[]> {
   return entries
 }
 
-async function readFile(target: string): Promise<FilePreview> {
-  const file = normalizeUserPath(target)
-  const stat = await fs.stat(file)
+export async function readFile(target: string): Promise<FilePreview> {
+  const { path: file, real } = await assertReadable(target)
+  const stat = await fs.stat(real)
 
   if (stat.isDirectory()) {
     return { path: file, kind: 'directory', size: 0 }
@@ -102,13 +103,13 @@ async function readFile(target: string): Promise<FilePreview> {
       return { path: file, kind: 'too-large', size: stat.size, mime: imageMime }
     }
 
-    const data = await fs.readFile(file)
+    const data = await fs.readFile(real)
 
     return { path: file, kind: 'image', size: stat.size, mime: imageMime, content: `data:${imageMime};base64,${data.toString('base64')}` }
   }
 
   const looksText = TEXT_EXTENSIONS.has(ext) || ext === '' || /^\.[a-z0-9]{1,6}rc$/.test(ext)
-  const handle = await fs.open(file, 'r')
+  const handle = await fs.open(real, 'r')
 
   try {
     const probe = Buffer.alloc(Math.min(8192, stat.size))
@@ -139,15 +140,135 @@ export function assertWritable(target: string): string {
     throw new Error('Herald OS only edits files inside your home folder')
   }
 
-  if (protectedRoots.some(root => file === root || file.startsWith(root + path.sep))) {
+  if (protectedRoots.some(root => file === root || file.startsWith(root + path.sep)) || isSecret(file, lexicalPlaces())) {
     throw new Error(`${file} is a protected location`)
   }
 
   return file
 }
 
+/** Credential stores under the home folder (and the bridge's `BUILTIN_PROTECTED` secrets): never read, listed, watched or written by the shell. */
+export const HOME_SECRETS = [
+  '.ssh',
+  '.gnupg',
+  '.aws',
+  '.azure',
+  '.kube',
+  '.docker',
+  '.password-store',
+  '.netrc',
+  '.git-credentials',
+  '.npmrc',
+  '.pypirc',
+  '.config/gcloud',
+  '.config/gh',
+  '.local/share/keyrings',
+  'Library/Keychains',
+  'Library/Cookies'
+]
+
+const TEMP_ROOTS = ['/tmp', '/private/tmp']
+
+/** The home folder, the Hermes homes and the temporary folders, each as written and with its symlinks resolved. */
+interface Places {
+  homes: string[]
+  hermes: string[]
+  temps: string[]
+}
+
+/** macOS and Windows file systems ignore case, so `~/.SSH` is `~/.ssh` there. */
+const foldCase = process.platform === 'darwin' || process.platform === 'win32'
+const comparable = (file: string): string => (foldCase ? file.toLowerCase() : file)
+
+const within = (file: string, root: string): boolean => {
+  const [a, b] = [comparable(file), comparable(root)]
+
+  return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep)
+}
+
+/** `$HERMES_HOME` and the default `~/.hermes`: a profile that moved its home still leaves keys in the old one. */
+const hermesHomes = (): string[] => [hermesHome(), path.join(os.homedir(), '.hermes')]
+
+function lexicalPlaces(): Places {
+  return { homes: [os.homedir()], hermes: hermesHomes(), temps: [...TEMP_ROOTS, os.tmpdir()] }
+}
+
+/** The path with every symlink resolved; for a path that does not exist (yet), its nearest existing folder's. */
+async function realpathDeep(file: string): Promise<string> {
+  const rest: string[] = []
+  let head = file
+
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(head), ...rest)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const parent = path.dirname(head)
+
+      if ((code !== 'ENOENT' && code !== 'ENOTDIR') || parent === head) {
+        throw error
+      }
+
+      rest.unshift(path.basename(head))
+      head = parent
+    }
+  }
+}
+
+async function resolvedPlaces(): Promise<Places> {
+  const lexical = lexicalPlaces()
+  const withReal = async (dirs: string[]) => [...new Set([...dirs, ...(await Promise.all(dirs.map(dir => realpathDeep(dir).catch(() => dir))))])]
+
+  return { homes: await withReal(lexical.homes), hermes: await withReal(lexical.hermes), temps: await withReal(lexical.temps) }
+}
+
+const isEnvFile = (name: string): boolean => comparable(name) === '.env' || comparable(name).startsWith('.env.')
+
+/** A credential store: a {@link HOME_SECRETS} entry, `auth.json` in a Hermes home, or any `.env` anywhere under one. */
+function isSecret(file: string, places: Places): boolean {
+  if (places.homes.some(home => HOME_SECRETS.some(secret => within(file, path.join(home, secret))))) {
+    return true
+  }
+
+  return places.hermes.some(hermes => within(file, path.join(hermes, 'auth.json')) || (within(file, hermes) && path.relative(comparable(hermes), comparable(file)).split(path.sep).some(isEnvFile)))
+}
+
+const withoutTrailingSeparator = (file: string): string => (file.length > 1 ? file.replace(/[\\/]+$/, '') || path.sep : file)
+
+/** A path the shell may read, as the caller wrote it (normalized) and with its symlinks resolved. Read through `real`. */
+export interface ReadablePath {
+  path: string
+  real: string
+}
+
+/**
+ * Paths the shell may read, list, stat or watch: the home folder, the Hermes home and the temporary folders, judged
+ * after symlinks resolve. Credential stores ({@link isSecret}) are refused wherever a path or its target lands.
+ */
+export async function assertReadable(target: string): Promise<ReadablePath> {
+  const file = withoutTrailingSeparator(normalizeUserPath(target))
+  const places = await resolvedPlaces()
+
+  // Judged before touching the disk, so a protected path is refused the same whether it exists or not.
+  if (isSecret(file, places)) {
+    throw new Error(`${file} is a protected location`)
+  }
+
+  const real = await realpathDeep(file)
+
+  if (![...places.homes, ...places.hermes, ...places.temps].some(root => within(real, root))) {
+    throw new Error('Herald OS only reads files inside your home folder')
+  }
+
+  if (isSecret(real, places)) {
+    throw new Error(`${file} is a protected location`)
+  }
+
+  return { path: file, real }
+}
+
 async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number; files: number; complete: boolean }> {
-  const root = normalizeUserPath(target)
+  const root = (await assertReadable(target)).real
   const deadline = Date.now() + budgetMs
   let bytes = 0
   let files = 0
@@ -315,12 +436,12 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.fsRecent, (_event, limit: number) => hostPlatform().recentFiles(Math.max(1, Math.min(200, Number(limit) || 30))))
   ipcMain.handle(IPC.fsFind, (_event, query: string, limit: number) => hostPlatform().findFiles(String(query ?? '').slice(0, 200), Math.max(1, Math.min(50, Number(limit) || 10))))
   ipcMain.handle(IPC.fsThumbnail, async (_event, target: string, size: number) => {
-    const png = await hostPlatform().thumbnail(normalizeUserPath(target), Math.max(64, Math.min(1024, Number(size) || 512)))
+    const png = await hostPlatform().thumbnail((await assertReadable(target)).real, Math.max(64, Math.min(1024, Number(size) || 512)))
 
     return png ? `data:image/png;base64,${png.toString('base64')}` : null
   })
   ipcMain.handle(IPC.fsImageInfo, async (_event, target: string) => {
-    const file = normalizeUserPath(target)
+    const file = (await assertReadable(target)).real
     const result = await run('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', file], 5000)
     const width = Number(/pixelWidth:\s*(\d+)/.exec(result.stdout)?.[1])
     const height = Number(/pixelHeight:\s*(\d+)/.exec(result.stdout)?.[1])

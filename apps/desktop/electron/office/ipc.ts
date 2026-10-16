@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { dialogFilters, extensionOf, OFFICE_APP_NAMES, OFFICE_APPS, OFFICE_NOUNS, type OfficeAbilities, type OfficeApp, openFormats, saveFormats } from '../../shared/office/files.ts'
 import { IPC, type OfficeChangedEvent, type OfficeFileData, type OfficePdfRequest, type OfficePresence, type OfficePrintRequest, type OfficePrintResult, type OfficeRunReply, type OfficeRunRequest, type OfficeSaveTarget, type OfficeWriteResult } from '../../shared/ipc.ts'
-import { assertWritable } from '../ipc/fs.ts'
+import { assertReadable, assertWritable } from '../ipc/fs.ts'
 import { log } from '../log.ts'
 import { heraldOsDataDir } from '../paths.ts'
 import { OfficeBackups } from './backups.ts'
@@ -150,6 +150,7 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(IPC.officeRead, async (_event, target: string): Promise<OfficeFileData> => {
     const file = officePath(target)
+    await assertReadable(file)
     const stat = await fs.stat(file)
 
     if (!stat.isFile()) {
@@ -193,6 +194,7 @@ export function registerOfficeIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(IPC.officeWatch, async (event, target: string, loaded?: string | null): Promise<string> => {
     const file = officePath(target)
+    await assertReadable(file)
     const owner = event.sender
     const watchId = crypto.randomUUID()
     const current = await stampOf(file)

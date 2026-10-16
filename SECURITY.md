@@ -37,7 +37,11 @@ These are the guarantees Herald OS aims for. Breaking one of them is a vulnerabi
 - **Shell windows stay on the shell.** They run with context isolation, the Chromium sandbox and
   no Node integration, and reach the system only through the preload API. They cannot navigate
   to any page but the shell's own, so a dropped file or a link cannot gain that API. Links open in
-  your browser, and only http(s) links open at all. Only the shell may use the microphone.
+  your browser, and only http(s) links open at all. Only the shell may use the microphone. What
+  they read through that API (listings, previews, thumbnails, `exists`, watches) stays in the home
+  folder, the Hermes home and the temporary folders, judged after symlinks resolve, and never
+  reaches a credential store: `~/.ssh`, `~/.gnupg`, `~/.aws`, keychains, and `.env` files and
+  `auth.json` in the Hermes home, among others.
 - **Web content is contained.** Web windows, file viewers and the Studio preview have no preload,
   run in their own storage partitions, are denied every permission, cannot download files and
   cannot open pop-ups. The Studio preview loads web pages and files inside the project folder,
