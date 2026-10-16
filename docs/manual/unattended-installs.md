@@ -38,6 +38,28 @@ It creates no account: the first start does that, and the first-start setup asks
 for, as in [Setting it up for someone else](setup-and-reset.md). Choose "For someone else" on each
 machine to leave them waiting for their owners.
 
+## The account and SSH
+
+The second `%pre` section, at the very end of the file, has three settings, all empty to start with:
+
+- `ACCOUNT=""`: the name of the account the first start makes (lowercase letters, digits, `-` and
+  `_`, starting with a letter or `_`). Empty, it is `hermes`, as without a kickstart.
+- `SSH_KEYS=""`: public keys that may sign in to that account over SSH, one a line between the
+  quotes, as `~/.ssh/id_ed25519.pub` has them.
+- `GITHUB_KEYS=""`: GitHub accounts, separated by spaces, whose public keys may sign in
+  (`https://github.com/<name>.keys`). The installer reads them while it is online, so the PC does not
+  need GitHub later.
+
+With any key, the first start turns SSH on for those keys only, with `herald-os setup ssh` (see
+[Security](security.md#ssh)): no passwords, never root, and at most four new connections a minute
+through the firewall. With none, SSH stays off. A name or key that is not usable, or a GitHub
+account that cannot be read or has no keys, stops the install before it erases anything, and
+`/tmp/herald-os-account.log` says why.
+
+The account still has no password until someone sets one in the first-start setup, as without a
+kickstart: over SSH, set it with `passwd`. Resetting the PC (`herald-os reset`) turns SSH off again
+and forgets the keys from the kickstart.
+
 ## Running it
 
 1. Copy `unattended.ks`, edit it, and put it where the PCs can download it over the network, for

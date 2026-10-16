@@ -3,8 +3,8 @@
 # root and is safe to re-run. The shell's first-boot setup then lets the person choose a name and a
 # password, join Wi-Fi and sign in to Hermes.
 #
-#   firstboot.sh system   the user, the home folder, Hermes Agent: before the login screen
-#                         (herald-os-firstboot.service)
+#   firstboot.sh system   the user, the home folder, SSH when an unattended install gave keys,
+#                         Hermes Agent: before the login screen (herald-os-firstboot.service)
 #   firstboot.sh hermes   Hermes Agent alone, when the first boot could not install it: waits for
 #                         the network, then installs and sets it up (herald-os-hermes.service)
 #   firstboot.sh apps     the omakase Flatpaks, after the login screen is up
@@ -16,7 +16,6 @@
 set -euo pipefail
 
 PHASE="${1:-all}"
-HERMES_USER="${HERMES_USER:-hermes}"
 STATE=/var/lib/herald-os
 # There on a system switched to Herald OS from another bootc system, which brought accounts of its
 # own; written the first time it is seen, so it stays so through `herald-os reset`.
@@ -45,7 +44,31 @@ HERMES_UNIT=/usr/lib/systemd/system/herald-os-hermes.service
 BRIDGE=/usr/share/herald-os/bridge
 OFFLINE_WAIT=30
 RETRY_WAIT=600
+# What an unattended install chose (linux/image/unattended.ks writes both): the session user's name
+# as user=<name>, and the SSH public keys that may sign in to it, one a line.
+INSTALL_CONF=/etc/herald-os/install.conf
+SSH_KEYS=/etc/herald-os/ssh-keys
 mkdir -p "$STATE"
+
+# The session user's name from the install, when it is one. A name that is not a plain account name,
+# or that a system account has, is not used: greetd would sign that account in.
+configured_user() {
+  local name uid min max pattern='^[a-z_][a-z0-9_-]{0,31}$'
+  name="$(sed -n 's/^user=//p' "$INSTALL_CONF" 2>/dev/null | tail -n 1)"
+  [[ -n "$name" ]] || return 1
+  if [[ ! "$name" =~ $pattern ]]; then
+    echo "firstboot: $INSTALL_CONF names the user '$name', which is not an account name; using hermes" >&2
+    return 1
+  fi
+  min="$(awk '$1 == "UID_MIN" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
+  max="$(awk '$1 == "UID_MAX" { print $2 }' "$LOGIN_DEFS" 2>/dev/null || true)"
+  if uid="$(id -u "$name" 2>/dev/null)" && (( uid < ${min:-1000} || uid > ${max:-60000} )); then
+    echo "firstboot: $INSTALL_CONF names the user '$name', a system account's name; using hermes" >&2
+    return 1
+  fi
+  echo "$name"
+}
+HERMES_USER="${HERMES_USER:-$(configured_user || echo hermes)}"
 
 step() { echo; echo "--- $*"; }
 # Through pipes: run from a unit, what the command writes straight to the journal never gets there
@@ -343,6 +366,9 @@ system_phase() {
   as_user herald-os keymap apply || install -m 0644 -o "$HERMES_USER" -g "$HERMES_USER" "$SHARE/niri/config.kdl" "$HOME_DIR/.config/niri/herald-os.kdl"
   install -m 0644 -o "$HERMES_USER" -g "$HERMES_USER" "$SHARE/session/swaylock.conf" "$HOME_DIR/.config/swaylock/config"
 
+  step "SSH"
+  ssh_keys
+
   if hermes_step; then
     rm -f "$PENDING"
   else
@@ -353,6 +379,18 @@ system_phase() {
     hermes_linger
   fi
   date -Is >"$FIRSTBOOT_DONE"
+}
+
+# SSH for an install that gave public keys: on for those keys only, through the command people use,
+# before Hermes's install, which can wait long for a network. Without keys it stays off, as the image
+# ships it, and so does it when the command refuses.
+ssh_keys() {
+  if ! grep -q '[^[:space:]]' "$SSH_KEYS" 2>/dev/null; then
+    echo "no SSH keys from the install: SSH stays off"
+    return 0
+  fi
+  herald-os setup ssh --user "$HERMES_USER" --keys-file "$SSH_KEYS" ||
+    echo "WARNING: SSH did not turn on, so it stays off (see above; herald-os setup ssh --status)"
 }
 
 # Hermes Agent for the session user: installed unless it is there already, in whichever layout

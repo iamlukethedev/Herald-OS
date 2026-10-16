@@ -1,9 +1,13 @@
 """linux/image/unattended.ks erases one disk, the one its %pre picks, and leaves every other disk alone."""
 
+import base64
 import os
 import re
+import shlex
 import shutil
+import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -238,7 +242,7 @@ def command_lines() -> list[tuple[str, str]]:
 def test_the_include_is_one_top_level_command_before_the_storage_commands():
     commands = [line for section, line in command_lines() if section == ""]
     includes = [line for _, line in command_lines() if line.lstrip().startswith("%include")]
-    assert includes == [f"%include {INCLUDE}"]
+    assert includes == [f"%include {INCLUDE}", f"%include {ACCOUNT_INCLUDE}"]
     words = [line.split()[0] for line in commands]
     at = words.index("%include")
     assert words[at : at + 3] == ["%include", "zerombr", "autopart"]
@@ -271,19 +275,19 @@ BASH_4_ONLY = {
 }
 
 
-@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+@pytest.mark.parametrize("script", ["%pre", "account %pre", "lsblk", "findmnt", "readlink"])
 def test_the_scripts_need_only_bash_3_2(script):
-    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    text = {"%pre": PRE, "account %pre": ACCOUNT_PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     found = {name for name, pattern in BASH_4_ONLY.items() if re.search(pattern, code)}
     assert found == set()
 
 
-@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+@pytest.mark.parametrize("script", ["%pre", "account %pre", "lsblk", "findmnt", "readlink"])
 def test_the_scripts_pass_shellcheck(script, tmp_path):
     if not shutil.which("shellcheck"):
         pytest.skip("shellcheck is not installed")
-    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    text = {"%pre": PRE, "account %pre": ACCOUNT_PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
     path = tmp_path / "script.sh"
     path.write_text(text if text.startswith("#!") else "#!/usr/bin/env bash\n" + text)
     found = subprocess.run(["shellcheck", "--shell=bash", str(path)], capture_output=True, text=True, check=False)
@@ -439,11 +443,163 @@ def test_anaconda_reads_it_as_one_disk(tmp_path):
 
     found, out, _ = run_pre(tmp_path, TWO_DISKS, with_disk(BY_ID), links=[f"{BY_ID} /dev/vdb"])
     assert found.returncode == 0, found.stderr
+    account = tmp_path / "account.ks"
+    account.write_text("# nothing chosen\n")
     handler = makeVersion("F44")
-    parser_module.KickstartParser(handler).readKickstartFromString(KICKSTART.replace(INCLUDE, str(out)))
+    parser_module.KickstartParser(handler).readKickstartFromString(KICKSTART.replace(INCLUDE, str(out)).replace(ACCOUNT_INCLUDE, str(account)))
     assert handler.ignoredisk.onlyuse == ["vdb"]
     assert handler.clearpart.type == CLEARPART_TYPE_ALL
     assert handler.clearpart.drives == ["vdb"]
     assert handler.zerombr.zerombr
     assert handler.autopart.autopart and handler.autopart.encrypted
-    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash"]
+    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash"]
+
+
+# The account %pre: the account's name and the SSH keys that may sign in to it, checked (and GitHub's
+# keys read) before anything is erased, and written into the installed system by a %post it makes.
+ACCOUNT_INCLUDE = "/tmp/herald-os-account.ks"
+ACCOUNT_PRE = re.search(r"^%pre [^\n]*--log=/tmp/herald-os-account\.log\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
+
+
+def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None) -> str:
+    name = (data_kind or kind).encode()
+    body = bytes([seed]) * 32
+    blob = struct.pack(">I", len(name)) + name + struct.pack(">I", len(body)) + body
+    return f"{kind} {base64.b64encode(blob).decode()} {comment}".strip()
+
+
+def with_settings(pre: str = ACCOUNT_PRE, **settings: str) -> str:
+    for name, value in settings.items():
+        assert f'\n{name}=""\n' in pre
+        pre = pre.replace(f'\n{name}=""\n', f"\n{name}={shlex.quote(value)}\n", 1)
+    return pre
+
+
+def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    """The account %pre, with a stand-in curl that answers for github.com from `github`."""
+    bin_dir, pages = tmp_path / "bin", tmp_path / "pages"
+    bin_dir.mkdir()
+    pages.mkdir()
+    (bin_dir / "bash").symlink_to(BASH)
+    (bin_dir / "python3").symlink_to(sys.executable)
+    for name, text in (github or {}).items():
+        (pages / f"{name}.keys").write_text(text)
+    (bin_dir / "curl").write_text('#!/usr/bin/env bash\nurl="${!#}"\npage="$PAGES/${url##*/}"\n[[ -f "$page" ]] || exit 22\ncat "$page"\n')
+    (bin_dir / "curl").chmod(0o755)
+    out, console = tmp_path / "account.ks", tmp_path / "console"
+    console.write_text("")
+    found = subprocess.run(
+        ["bash", "-c", pre.replace(ACCOUNT_INCLUDE, str(out)).replace("/dev/console", str(console))],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "PAGES": str(pages)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return found, out, console
+
+
+def installed(tmp_path: Path, include: Path) -> dict[str, str]:
+    """What the %post the account %pre wrote leaves in the installed system's /etc/herald-os."""
+    post = re.search(r"^%post [^\n]*\n(.*?)^%end$", include.read_text(), re.M | re.S)
+    if not post:
+        return {}
+    etc = tmp_path / "etc"
+    found = subprocess.run(["bash", "-euc", post.group(1).replace("/etc/herald-os", str(etc / "herald-os"))], capture_output=True, text=True, check=False)
+    assert found.returncode == 0, found.stderr
+    return {path.name: path.read_text() for path in sorted((etc / "herald-os").iterdir())}
+
+
+def account_refused(found: subprocess.CompletedProcess, out: Path, console: Path, *said: str) -> bool:
+    told = [found.stderr, console.read_text()]
+    return found.returncode != 0 and not out.exists() and all("nothing was erased" in text for text in told) and all(words in text for words in said for text in told)
+
+
+def test_with_nothing_chosen_the_install_writes_nothing_and_ssh_stays_off(tmp_path):
+    found, out, _ = run_account_pre(tmp_path)
+    assert found.returncode == 0, found.stderr
+    assert "%post" not in out.read_text() and installed(tmp_path, out) == {}
+    assert "the account: hermes; SSH: off" in found.stderr
+
+
+def test_the_chosen_name_and_keys_reach_the_installed_system(tmp_path):
+    one, two = public_key(seed=1), public_key("ecdsa-sha2-nistp256", seed=2, comment="it's \"mine\" HERALD_OS_KEYS")
+    pre = with_settings(ACCOUNT="luke", SSH_KEYS=f"# laptop\n  {one}\n\n{two}\n")
+    found, out, _ = run_account_pre(tmp_path, pre)
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": "user=luke\n", "ssh-keys": f"{one}\n{two}\n"}
+    assert "the account: luke; SSH: on at the first start, for 2 key(s) only" in found.stderr
+
+
+def test_keys_alone_are_for_hermes(tmp_path):
+    found, out, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key()))
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{public_key()}\n"}
+
+
+def test_github_keys_are_read_while_the_installer_is_online_and_marked(tmp_path):
+    one, two = public_key(comment="", seed=1), public_key(comment="", seed=2)
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": f"{one}\n{two}\nssh-dss AAAA\n"})
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{one} github:octocat\n{two} github:octocat\n"}
+
+
+@pytest.mark.parametrize("name", ["root", "Luke", "1luke", "lu ke", "luke;reboot", "a" * 33])
+def test_an_unusable_account_name_stops_the_install_before_any_disk_is_erased(tmp_path, name):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), "is not an account name")
+
+
+@pytest.mark.parametrize("key", [public_key("ssh-dss"), f"restrict {public_key()}", "ssh-ed25519 AAAA", public_key(data_kind="ssh-rsa"), "hello"])
+def test_a_line_that_is_not_a_public_key_stops_the_install(tmp_path, key):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{public_key()}\n{key}")), "not an SSH public key")
+
+
+def test_a_github_account_that_cannot_be_read_or_has_no_keys_stops_the_install(tmp_path):
+    for name, (github, said) in {
+        "missing": ({}, "could not read https://github.com/missing.keys"),
+        "empty": ({"empty": "\n"}, "empty has no SSH keys on GitHub"),
+        "-bad-": ({}, "is not a GitHub user name"),
+    }.items():
+        attempt = tmp_path / name
+        attempt.mkdir()
+        assert account_refused(*run_account_pre(attempt, with_settings(GITHUB_KEYS=name), github), said), name
+
+
+def test_anaconda_reads_the_account_s_post(tmp_path):
+    parser_module = pytest.importorskip("pykickstart.parser")
+    from pykickstart.constants import KS_SCRIPT_POST
+    from pykickstart.version import makeVersion
+
+    (tmp_path / "disk").mkdir()
+    (tmp_path / "account").mkdir()
+    disk, disk_out, _ = run_pre(tmp_path / "disk", ["vda disk 0 0 "])
+    found, out, _ = run_account_pre(tmp_path / "account", with_settings(ACCOUNT="luke", SSH_KEYS=public_key()))
+    assert disk.returncode == 0 and found.returncode == 0, found.stderr
+    handler = makeVersion("F44")
+    text = KICKSTART.replace(INCLUDE, str(disk_out)).replace(ACCOUNT_INCLUDE, str(out))
+    parser_module.KickstartParser(handler).readKickstartFromString(text)
+    posts = [script for script in handler.scripts if script.type == KS_SCRIPT_POST]
+    assert len(posts) == 1 and posts[0].interp == "/usr/bin/bash" and posts[0].errorOnFail and posts[0].inChroot
+    assert "user=luke" in posts[0].script and "/etc/herald-os/ssh-keys" in posts[0].script
+
+
+def test_the_account_pre_stops_on_error_and_logs_where_the_installer_keeps_logs():
+    header = next(line for line in KICKSTART.splitlines() if line.startswith("%pre ") and "herald-os-account" in line)
+    assert "--erroronfail" in header and "--log=/tmp/herald-os-account.log" in header
+    everything = [line for _, line in command_lines()]
+    assert everything.index(f"%include {ACCOUNT_INCLUDE}") > everything.index("reboot")
+
+
+@pytest.mark.parametrize("check, old, new, settings", [
+    ("account name", '[[ "$ACCOUNT" =~ $account_pattern && "$ACCOUNT" != root ]] ||', "true ||", {"ACCOUNT": "luke;reboot"}),
+    ("root", ' && "$ACCOUNT" != root ]]', " ]]", {"ACCOUNT": "root"}),
+    ("key", '  valid_key "$line" ||\n', "  true ||\n", {"SSH_KEYS": f'command="sh" {public_key()}'}),
+    ("key data", "blob[4:4 + size] == fields[0].encode()", "True", {"SSH_KEYS": public_key(data_kind="ssh-rsa")}),
+    ("github name", '[[ "$name" =~ $github_pattern ]] ||', "true ||", {"GITHUB_KEYS": "-bad-"}),
+])
+def test_each_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings):
+    assert ACCOUNT_PRE.count(old) == 1, f"the account %pre no longer has exactly one {old!r}"
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mutant").mkdir()
+    github = {"-bad-": public_key()}
+    assert account_refused(*run_account_pre(tmp_path / "real", with_settings(**settings), github))
+    assert not account_refused(*run_account_pre(tmp_path / "mutant", with_settings(ACCOUNT_PRE.replace(old, new), **settings), github)), check

@@ -991,3 +991,154 @@ def test_greetd_s_config_is_replaced_through_a_rename():
     script = FIRSTBOOT.read_text()
     assert 'install -m 0644 "$SHARE/session/greetd-login.toml" "$GREETD.herald-os-new"' in script
     assert 'mv -f "$GREETD.herald-os-new" "$GREETD"' in script
+
+
+# An unattended install's choices (linux/image/unattended.ks writes them): the session user's name,
+# and SSH for the public keys it gave. Each check also has a mutant, firstboot.sh with that check
+# taken out, which its scenario must catch.
+USER_LINE = re.search(r'^HERMES_USER="\$\{HERMES_USER:-.*$', FIRSTBOOT.read_text(), re.M).group(0)
+
+
+def function_in(script: str, name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}$", script, re.M | re.S)
+    assert match, f"firstboot.sh has no {name}()"
+    return match.group(0) + "\n"
+
+
+def session_user(tmp_path: Path, conf: str | None = None, accounts: str = "", env_user: str | None = None, script: str | None = None) -> tuple[str, str]:
+    """The session user firstboot.sh picks, and what it said about it."""
+    bin_dir = tmp_path / "bin"
+    executable(bin_dir / "id", 'while read -r name uid; do [ "$2" = "$name" ] && { echo "$uid"; exit 0; }; done <"$WORLD/accounts"; exit 1')
+    (tmp_path / "accounts").write_text(accounts)
+    defs, install = tmp_path / "login.defs", tmp_path / "install.conf"
+    defs.write_text("UID_MIN 1000\nUID_MAX 60000\n")
+    if conf is not None:
+        install.write_text(conf)
+    body = (
+        "set -euo pipefail\n"
+        f"INSTALL_CONF={shlex.quote(str(install))} LOGIN_DEFS={shlex.quote(str(defs))}\n"
+        + function_in(script or FIRSTBOOT.read_text(), "configured_user")
+        + USER_LINE
+        + '\necho "$HERMES_USER"\n'
+    )
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "WORLD": str(tmp_path), **({"HERMES_USER": env_user} if env_user else {})}
+    result = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip(), result.stderr
+
+
+def test_without_an_install_s_choice_the_session_user_is_hermes(tmp_path):
+    assert session_user(tmp_path) == ("hermes", "")
+    assert session_user(tmp_path, conf="# nothing chosen\n")[0] == "hermes"
+
+
+def test_the_session_user_is_the_name_the_install_chose_before_and_after_it_exists(tmp_path):
+    assert session_user(tmp_path, conf="user=luke\n")[0] == "luke"
+    assert session_user(tmp_path, conf="user=luke\n", accounts="luke 1000\n")[0] == "luke"
+
+
+def test_hermes_user_from_the_environment_still_wins(tmp_path):
+    assert session_user(tmp_path, conf="user=luke\n", env_user="dev")[0] == "dev"
+
+
+@pytest.mark.parametrize("name", ["Luke", "1luke", "lu ke", "luke;reboot", "-luke", "a" * 33, "../luke"])
+def test_a_name_that_is_not_an_account_name_is_not_used(tmp_path, name):
+    user, said = session_user(tmp_path, conf=f"user={name}\n")
+    assert user == "hermes" and "not an account name" in said
+
+
+@pytest.mark.parametrize("name, uid", [("root", 0), ("bin", 1), ("greetd", 976), ("nobody", 65534)])
+def test_a_system_account_s_name_is_not_used(tmp_path, name, uid):
+    user, said = session_user(tmp_path, conf=f"user={name}\n", accounts=f"{name} {uid}\n")
+    assert user == "hermes" and "system account" in said
+
+
+def first_boot_ssh(tmp_path: Path, keys: str | None, fails: bool = False, script: str | None = None) -> tuple[subprocess.CompletedProcess, str]:
+    """firstboot.sh's SSH step, with a stand-in herald-os that writes down how it was asked."""
+    bin_dir, calls = tmp_path / "bin", tmp_path / "calls"
+    calls.write_text("")
+    executable(bin_dir / "herald-os", f'echo "herald-os $*" >>"$CALLS"; exit {1 if fails else 0}')
+    given = tmp_path / "ssh-keys"
+    if keys is not None:
+        given.write_text(keys)
+    body = (
+        "set -euo pipefail\n"
+        f"HERMES_USER=luke SSH_KEYS={shlex.quote(str(given))}\n"
+        + function_in(script or FIRSTBOOT.read_text(), "ssh_keys")
+        + "ssh_keys\necho done\n"
+    )
+    result = subprocess.run(["bash", "-c", body], env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls)}, capture_output=True, text=True, timeout=30, check=False)
+    return result, calls.read_text()
+
+
+@pytest.mark.parametrize("keys", [None, "", " \n\n\t\n"])
+def test_without_keys_from_the_install_ssh_stays_off(tmp_path, keys):
+    result, calls = first_boot_ssh(tmp_path, keys)
+    assert result.returncode == 0 and "SSH stays off" in result.stdout and calls == ""
+
+
+def test_keys_from_the_install_turn_ssh_on_for_the_session_user_through_setup_ssh(tmp_path):
+    result, calls = first_boot_ssh(tmp_path, "ssh-ed25519 AAAA me@laptop\n")
+    assert result.returncode == 0
+    assert calls == f"herald-os setup ssh --user luke --keys-file {tmp_path / 'ssh-keys'}\n"
+
+
+def test_when_setup_ssh_refuses_the_first_boot_goes_on_with_ssh_off(tmp_path):
+    result, calls = first_boot_ssh(tmp_path, "ssh-ed25519 AAAA me@laptop\n", fails=True)
+    assert result.returncode == 0 and "done" in result.stdout
+    assert "WARNING: SSH did not turn on, so it stays off" in result.stdout and calls
+
+
+def test_ssh_is_set_up_after_the_home_folder_and_before_hermes_which_can_wait_long():
+    phase = function_in(FIRSTBOOT.read_text(), "system_phase")
+    assert phase.index("session_account") < phase.index("ssh_keys") < phase.index("hermes_step")
+    script = FIRSTBOOT.read_text()
+    assert "INSTALL_CONF=/etc/herald-os/install.conf" in script and "SSH_KEYS=/etc/herald-os/ssh-keys" in script
+
+
+def test_a_reset_turns_ssh_off_and_forgets_the_install_s_keys():
+    helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
+    apply = helper.split("  apply)", 1)[1].split(";;", 1)[0]
+    assert "rm -f /etc/herald-os/ssh-keys" in apply and "herald-os setup ssh --off" in apply
+    assert apply.index("herald-os setup ssh --off") < apply.index('rm -f "$STATE/firstboot-done"')
+
+
+def firstboot_mutant(old: str, new: str) -> str:
+    script = FIRSTBOOT.read_text()
+    assert script.count(old) == 1, f"firstboot.sh no longer has exactly one {old!r}"
+    return script.replace(old, new)
+
+
+def keeps_odd_names_out(tmp_path: Path, script: str | None) -> bool:
+    return session_user(tmp_path, conf="user=luke;reboot\n", script=script)[0] == "hermes"
+
+
+def keeps_system_accounts_out(tmp_path: Path, script: str | None) -> bool:
+    return session_user(tmp_path, conf="user=bin\n", accounts="bin 1\n", script=script)[0] == "hermes"
+
+
+def ssh_off_without_keys(tmp_path: Path, script: str | None) -> bool:
+    result, calls = first_boot_ssh(tmp_path, None, script=script)
+    return result.returncode == 0 and calls == ""
+
+
+def first_boot_survives_a_refusal(tmp_path: Path, script: str | None) -> bool:
+    result, _ = first_boot_ssh(tmp_path, "ssh-ed25519 AAAA me\n", fails=True, script=script)
+    return result.returncode == 0 and "done" in result.stdout
+
+
+FIRSTBOOT_MUTANTS = {
+    "any name": (keeps_odd_names_out, 'if [[ ! "$name" =~ $pattern ]]; then', "if false; then"),
+    "system accounts": (keeps_system_accounts_out, "(( uid < ${min:-1000} || uid > ${max:-60000} ))", "false"),
+    "ssh without keys": (ssh_off_without_keys, "if ! grep -q '[^[:space:]]' \"$SSH_KEYS\" 2>/dev/null; then", "if false; then"),
+    "a refusal stops the first boot": (first_boot_survives_a_refusal, ' ||\n    echo "WARNING: SSH did not turn on', '\n    echo "WARNING: SSH did not turn on'),
+}
+
+
+@pytest.mark.parametrize("name", FIRSTBOOT_MUTANTS)
+def test_each_first_boot_check_is_caught_when_taken_out(tmp_path, name):
+    scenario, old, new = FIRSTBOOT_MUTANTS[name]
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mutant").mkdir()
+    assert scenario(tmp_path / "real", None)
+    assert not scenario(tmp_path / "mutant", firstboot_mutant(old, new))

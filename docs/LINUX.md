@@ -292,7 +292,14 @@ switching to it, and changing its packages, Flatpaks and branding.
   several internal disks and no `DISK=`, or a `DISK=` that fails those checks, it stops before
   erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
   `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.
-  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output.
+  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output. A second `%pre`
+  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (GitHub's keys are read there,
+  while the installer is online) and writes `/tmp/herald-os-account.ks`, a `%post` that leaves
+  `/etc/herald-os/install.conf` (`user=<name>`) and `/etc/herald-os/ssh-keys` in the installed
+  system. `firstboot.sh` names the session user from the first (env `HERMES_USER` still wins; a
+  name that is not an account name or belongs to a system account is ignored) and, when there are
+  keys, runs `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys` before
+  installing Hermes. `reset-helper apply` deletes the keys file and runs `herald-os setup ssh --off`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle

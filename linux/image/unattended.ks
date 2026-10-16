@@ -3,6 +3,8 @@
 # The %pre at the end picks the disk: DISK if set there, else the PC's only internal disk. With
 # several internal disks it stops and erases nothing until DISK is set. Every other disk is left
 # alone: ignoredisk hides them from zerombr, clearpart and autopart.
+# The last %pre names the account and the SSH keys that may sign in to it; left empty, the first
+# start makes the account hermes and SSH stays off.
 text
 lang en_US.UTF-8
 keyboard us
@@ -12,11 +14,13 @@ zerombr
 autopart --type=btrfs --encrypted --passphrase=change-me
 # The image itself; the installer ISO points this at the image it was built from.
 ostreecontainer --url=ghcr.io/iamlukethedev/herald-os:stable
-# The first boot creates the session user; the shell's setup sets the name and password.
+# The first boot creates the session user; the shell's setup sets its password.
 rootpw --lock
 # The login screen needs graphical.target, which Anaconda does not pick for greetd by itself.
 xconfig --startxonboot
 reboot
+# A %post that writes the account's name and SSH keys into the installed system, when set below.
+%include /tmp/herald-os-account.ks
 
 %pre --interpreter=/usr/bin/bash --erroronfail --log=/tmp/herald-os-disk.log
 # The disk to erase: a name from lsblk (nvme0n1, sda, vda) or /dev/disk/by-id/<id> for an exact
@@ -125,4 +129,99 @@ say "erasing $disk, and only $disk"
   echo "ignoredisk --only-use=$disk"
   echo "clearpart --all --drives=$disk --initlabel --disklabel=gpt"
 } >/tmp/herald-os-disk.ks
+%end
+
+%pre --interpreter=/usr/bin/bash --erroronfail --log=/tmp/herald-os-account.log
+# The account the first start makes, and who may sign in to it over SSH. All of it is optional: left
+# empty, the first start makes the account hermes, Herald OS's setup asks for its password, and SSH
+# stays off. Anything here that is not usable stops the install before a disk is erased, and
+# /tmp/herald-os-account.log says why.
+#
+# The account's name: lowercase letters, digits, - and _, starting with a letter or _. Empty: hermes.
+ACCOUNT=""
+# Public keys that may sign in to the account over SSH, one a line between the quotes (the contents
+# of ~/.ssh/id_ed25519.pub), and GitHub accounts, separated by spaces, whose public keys may
+# (github.com/<name>.keys, read now, while the installer is online). With any key, the first start
+# turns SSH on for keys only, never passwords or root (herald-os setup ssh); with none, it stays off.
+SSH_KEYS=""
+GITHUB_KEYS=""
+
+say() {
+  echo "herald-os: $*" >&2
+  { echo "herald-os: $*" >>/dev/console; } 2>/dev/null || true
+}
+
+refuse() {
+  local line
+  for line in "$@"; do say "$line"; done
+  exit 1
+}
+
+# A public key sshd takes: a type it accepts, then key data that names the same type.
+valid_key() {
+  python3 -c '
+import base64, sys
+types = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+         "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com")
+fields = sys.argv[1].split()
+try:
+    blob = base64.b64decode(fields[1], validate=True)
+    size = int.from_bytes(blob[:4], "big")
+    sys.exit(0 if fields[0] in types and len(blob) > 4 + size and blob[4:4 + size] == fields[0].encode() else 1)
+except (IndexError, ValueError):
+    sys.exit(1)
+' "$1"
+}
+
+account_pattern='^[a-z_][a-z0-9_-]{0,31}$'
+github_pattern='^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'
+if [[ -n "$ACCOUNT" ]]; then
+  [[ "$ACCOUNT" =~ $account_pattern && "$ACCOUNT" != root ]] ||
+    refuse "ACCOUNT=\"$ACCOUNT\" is not an account name, so nothing was erased." \
+      "Use lowercase letters, digits, - and _, starting with a letter or _ (and not root)."
+fi
+
+keys=""
+while IFS= read -r line; do
+  line="${line#"${line%%[![:space:]]*}"}"
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  valid_key "$line" ||
+    refuse "SSH_KEYS has a line that is not an SSH public key (${line:0:40}...), so nothing was erased." \
+      "Put one public key on each line, as ~/.ssh/id_ed25519.pub has it."
+  keys+="$line"$'\n'
+done <<<"$SSH_KEYS"
+for name in $GITHUB_KEYS; do
+  [[ "$name" =~ $github_pattern ]] ||
+    refuse "GITHUB_KEYS names \"$name\", which is not a GitHub user name, so nothing was erased."
+  found="$(curl -fsSL --retry 3 --max-time 30 "https://github.com/$name.keys")" ||
+    refuse "could not read https://github.com/$name.keys, so nothing was erased." \
+      "Check the name and the network, or put the keys in SSH_KEYS instead."
+  count=0
+  while IFS= read -r line; do
+    if [[ -z "$line" ]] || ! valid_key "$line"; then continue; fi
+    [[ "$line" == *" "*" "* ]] || line="$line github:$name"
+    keys+="$line"$'\n'
+    count=$((count + 1))
+  done <<<"$found"
+  (( count > 0 )) ||
+    refuse "$name has no SSH keys on GitHub (https://github.com/$name.keys), so nothing was erased."
+done
+
+say "the account: ${ACCOUNT:-hermes}; SSH: $([[ -n "$keys" ]] && echo "on at the first start, for $(grep -c . <<<"$keys") key(s) only" || echo off)"
+# The keys go through base64, so nothing in a comment can end the here-document early.
+{
+  echo "# The account %pre in unattended.ks wrote this."
+  if [[ -n "$ACCOUNT" || -n "$keys" ]]; then
+    echo "%post --interpreter=/usr/bin/bash --erroronfail"
+    echo "mkdir -p /etc/herald-os"
+    [[ -z "$ACCOUNT" ]] || echo "echo 'user=$ACCOUNT' >/etc/herald-os/install.conf"
+    if [[ -n "$keys" ]]; then
+      echo "base64 -d >/etc/herald-os/ssh-keys <<'HERALD_OS_KEYS'"
+      printf %s "$keys" | base64
+      echo "HERALD_OS_KEYS"
+      echo "chmod 0644 /etc/herald-os/ssh-keys"
+    fi
+    echo "%end"
+  fi
+} >/tmp/herald-os-account.ks
 %end
