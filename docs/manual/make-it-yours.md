@@ -59,11 +59,13 @@ views); leave a field empty for the default. "Use the font Inter" works too. On 
 
 ## Language
 
-Settings > General > Language shows Herald OS in English or in Simplified Chinese (简体中文), each
-listed under its own name, and the change takes effect at once. Until you pick one it follows the
-system: the first of your preferred languages (on a Mac, System Settings > General > Language &
-Region) that Herald has. Traditional Chinese shows English for now. "Switch to Chinese", "use
-English" and "use the system language" work too.
+Settings > General > Language shows Herald OS in English, in Brazilian Portuguese (Português
+(Brasil)) or in Simplified Chinese (简体中文), each listed under its own name, and the change takes
+effect at once. Until you pick one it follows the system: the first of your preferred languages (on
+a Mac, System Settings > General > Language & Region) that Herald has. Any Portuguese (Portugal's,
+Angola's) shows Brazilian Portuguese, and Traditional Chinese shows English for now. "Switch to
+Portuguese", "switch to Chinese", "use English" and "use the system language" work too; the voice
+phrases stay in English.
 
 The menus Herald builds, the menu bar, the Overview, the command bar, the notifications panel and
 Settings' sections and General page are translated so far; the rest is still in English and follows

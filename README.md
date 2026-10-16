@@ -353,7 +353,7 @@ abilities as a regular Hermes plugin, `herald-os-bridge`.
   conversation, folder and files; its suggested next step starts only when you click it.
 - **A command bar** for every action in the OS: open pages and apps, add memories, run automations,
   start missions.
-- **Your language**: English or Simplified Chinese (简体中文), following the system's language
+- **Your language**: English, Brazilian Portuguese (Português (Brasil)) or Simplified Chinese (简体中文), following the system's language
   unless you pick one in Settings > General. The menus, menu bar, Overview, command bar and Settings'
   main pages are translated so far, and more follows; see [docs/TRANSLATING.md](docs/TRANSLATING.md)
   to help.

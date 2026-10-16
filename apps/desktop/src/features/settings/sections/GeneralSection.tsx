@@ -19,7 +19,8 @@ import { $commentName, loadCommentName, setCommentName } from '../../office/comm
 import { errorText, markSaved, MenuDropdown, SectionTitle, SettingsGroup, SettingsRow, Stepper } from './shared.tsx'
 
 // Words for "language" in every language Herald has, so whoever is lost in another one can search for it.
-const LANGUAGE_KEYWORDS = 'language locale translation english chinese 语言 中文 简体中文 英文'
+const LANGUAGE_KEYWORDS =
+  'language locale translation english chinese portuguese 语言 中文 简体中文 英文 idioma língua lingua tradução traducao inglês ingles chinês chines português portugues brasil'
 
 export function GeneralSection() {
   const t = useT()

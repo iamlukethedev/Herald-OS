@@ -1,4 +1,5 @@
 import { en } from './locales/en.ts'
+import { ptBR } from './locales/pt-BR.ts'
 import { zhCN } from './locales/zh-CN.ts'
 
 /*
@@ -8,13 +9,14 @@ import { zhCN } from './locales/zh-CN.ts'
  * says how to add strings and languages.
  */
 
-export type Language = 'en' | 'zh-CN'
+export type Language = 'en' | 'pt-BR' | 'zh-CN'
 /** What the person chose in Settings; `system` (the default) follows the system's languages. */
 export type LanguageSetting = 'system' | Language
 
 /** Each language under its own name, so anyone can find theirs whatever Herald is showing. */
 export const LANGUAGES: readonly { id: Language; name: string }[] = [
   { id: 'en', name: 'English' },
+  { id: 'pt-BR', name: 'Português (Brasil)' },
   { id: 'zh-CN', name: '简体中文' }
 ]
 
@@ -40,7 +42,7 @@ export type ValuesFor<K extends MessageKey> = keyof Values<(typeof en)[K]> exten
 /** A key whose message takes no values, for tables of labels. */
 export type TextKey = { [K in MessageKey]: ValuesFor<K> extends [] ? K : never }[MessageKey]
 
-const CATALOGS: Record<Language, Translation> = { en, 'zh-CN': zhCN }
+const CATALOGS: Record<Language, Translation> = { en, 'pt-BR': ptBR, 'zh-CN': zhCN }
 const pluralRules = new Map<Language, Intl.PluralRules>()
 
 function pluralCategory(language: Language, count: number): Intl.LDMLPluralRule {
@@ -90,12 +92,19 @@ function isChinese(tag: string): boolean {
   return localeTag(tag)?.toLowerCase().split('-')[0] === 'zh'
 }
 
-/** Herald's language for a language tag (`en-AU`, `zh-Hans-CN`, `zh_SG.UTF-8`), or null when Herald has none for it. */
+/**
+ * Herald's language for a language tag (`en-AU`, `zh-Hans-CN`, `zh_SG.UTF-8`), or null when Herald
+ * has none for it. Every Portuguese (`pt-PT`, `pt-AO`) reads Brazilian Portuguese, the one Herald has.
+ */
 export function tagLanguage(tag: string): Language | null {
   const parts = localeTag(tag)?.toLowerCase().split('-') ?? []
 
   if (parts[0] === 'en') {
     return 'en'
+  }
+
+  if (parts[0] === 'pt') {
+    return 'pt-BR'
   }
 
   if (parts[0] !== 'zh') {

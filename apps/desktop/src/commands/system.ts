@@ -185,13 +185,26 @@ export const systemCommands: readonly OsCommand[] = [
   {
     id: 'language.set',
     title: 'Set the language',
-    description: 'Show Herald OS in English or in Simplified Chinese (简体中文), or follow the system languages again (the default).',
+    description: 'Show Herald OS in English, Brazilian Portuguese (Português (Brasil)) or Simplified Chinese (简体中文), or follow the system languages again (the default).',
     tier: 'mutate',
-    args: [{ name: 'language', type: 'string', description: 'system, en (English) or zh-CN (Simplified Chinese)', required: true, enum: ['system', 'en', 'zh-CN'] }],
+    // pt-BR: its phrases stay English, like every voice phrase.
+    args: [
+      {
+        name: 'language',
+        type: 'string',
+        description: 'system, en (English), pt-BR (Brazilian Portuguese) or zh-CN (Simplified Chinese)',
+        required: true,
+        enum: ['system', 'en', 'pt-BR', 'zh-CN']
+      }
+    ],
     phrases: [
       { phrase: 'switch to english', args: { language: 'en' } },
       { phrase: 'use english', args: { language: 'en' } },
       { phrase: 'set the language to english', args: { language: 'en' } },
+      { phrase: 'switch to portuguese', args: { language: 'pt-BR' } },
+      { phrase: 'use portuguese', args: { language: 'pt-BR' } },
+      { phrase: 'set the language to portuguese', args: { language: 'pt-BR' } },
+      { phrase: 'switch to brazilian portuguese', args: { language: 'pt-BR' } },
       { phrase: 'switch to chinese', args: { language: 'zh-CN' } },
       { phrase: 'use chinese', args: { language: 'zh-CN' } },
       { phrase: 'set the language to chinese', args: { language: 'zh-CN' } },

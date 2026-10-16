@@ -31,6 +31,14 @@ describe('translate', () => {
     expect(translate('zh-CN', 'overview.memory.remembered', { count: 3 })).toBe('3 entries remembered')
   })
 
+  it('fills slots and picks plural forms in Brazilian Portuguese', () => {
+    expect(translate('pt-BR', 'menuBar.battery', { percent: 85 })).toBe('Bateria 85%')
+    expect(translate('pt-BR', 'commandBar.ask', { text: 'o que tenho hoje' })).toBe('Perguntar ao Hermes: “o que tenho hoje”')
+    expect(translate('pt-BR', 'overview.mission.files', { count: 1 })).toBe('1 arquivo')
+    expect(translate('pt-BR', 'overview.mission.files', { count: 3 })).toBe('3 arquivos')
+    expect(translate('pt-BR', 'menuBar.updates', { count: 1200 })).toBe('1.200 atualizações')
+  })
+
   it('takes exactly the values a message has slots for', () => {
     // @ts-expect-error A message with slots needs its values.
     translate('en', 'menuBar.battery')
@@ -49,6 +57,10 @@ describe('the language for a tag', () => {
     expect(['zh-CN', 'zh-SG', 'zh-Hans', 'zh-Hans-CN', 'zh-Hans-FI', 'zh_CN.UTF-8', 'zh'].map(tagLanguage)).toEqual(Array(7).fill('zh-CN'))
   })
 
+  it('reads every Portuguese as Brazilian Portuguese, glibc tags included', () => {
+    expect(['pt', 'pt-BR', 'pt-PT', 'pt-AO', 'pt_BR.UTF-8', 'pt_PT.UTF-8@euro'].map(tagLanguage)).toEqual(Array(6).fill('pt-BR'))
+  })
+
   it('has none for Traditional Chinese, other languages, or no locale at all', () => {
     expect(['zh-TW', 'zh-HK', 'zh-MO', 'zh-Hant', 'zh-Hant-TW', 'zh-Hant-CN', 'zh_TW.UTF-8', 'ja-JP', 'fr', 'C', 'POSIX', ''].map(tagLanguage)).toEqual(Array(12).fill(null))
   })
@@ -64,6 +76,15 @@ describe('resolveLanguage', () => {
   it('uses the language the person chose, whatever the system speaks', () => {
     expect(resolveLanguage('en', ['zh-Hans-CN'])).toBe('en')
     expect(resolveLanguage('zh-CN', ['en-US'])).toBe('zh-CN')
+    expect(resolveLanguage('pt-BR', ['en-US'])).toBe('pt-BR')
+    expect(resolveLanguage('en', ['pt-BR'])).toBe('en')
+  })
+
+  it('follows a Portuguese system', () => {
+    expect(resolveLanguage('system', ['pt-BR', 'en-US'])).toBe('pt-BR')
+    expect(resolveLanguage(undefined, ['pt_PT.UTF-8'])).toBe('pt-BR')
+    expect(resolveLanguage('system', ['de-DE', 'pt-AO'])).toBe('pt-BR')
+    expect(resolveLanguage('system', ['en-US', 'pt-BR'])).toBe('en')
   })
 
   it('follows the first of the system languages Herald has', () => {
@@ -87,6 +108,8 @@ describe('formatLocale', () => {
     expect(formatLocale('system', 'zh-CN', ['zh-CN', 'zh-Hans-CN'])).toBe('zh-CN')
     expect(formatLocale('en', 'en', ['zh-CN', 'zh-Hans-CN', 'en-AU'])).toBe('en-AU')
     expect(formatLocale('zh-CN', 'zh-CN', ['en_AU.UTF-8', 'zh_SG.UTF-8'])).toBe('zh-SG')
+    expect(formatLocale('system', 'pt-BR', ['pt_PT.UTF-8'])).toBe('pt-PT')
+    expect(formatLocale('pt-BR', 'pt-BR', ['en-GB'])).toBe('pt-BR')
   })
 
   it("formats in the chosen language when nothing the system lists is in it, and keeps the system's format otherwise", () => {
@@ -99,7 +122,7 @@ describe('formatLocale', () => {
 
 describe('languageSetting', () => {
   it('keeps a setting Herald knows and drops anything else, which then follows the system', () => {
-    expect(['system', 'en', 'zh-CN'].map(languageSetting)).toEqual(['system', 'en', 'zh-CN'])
-    expect(['fr', 'zh', 'ZH-CN', 42, null, undefined].map(languageSetting)).toEqual(Array(6).fill(undefined))
+    expect(['system', 'en', 'pt-BR', 'zh-CN'].map(languageSetting)).toEqual(['system', 'en', 'pt-BR', 'zh-CN'])
+    expect(['fr', 'zh', 'ZH-CN', 'pt', 'pt-PT', 42, null, undefined].map(languageSetting)).toEqual(Array(8).fill(undefined))
   })
 })

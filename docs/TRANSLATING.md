@@ -1,6 +1,7 @@
 # Translating Herald OS
 
-Herald OS can show itself in English or in Simplified Chinese (简体中文). So far that covers the
+Herald OS can show itself in English, in Brazilian Portuguese (Português (Brasil)) or in Simplified
+Chinese (简体中文). So far that covers the
 menus Herald builds, the menu bar, the Overview, the command bar, the notifications panel, and
 Settings' navigation, section titles and General section; the rest of the shell is English until its
 strings move into the catalogs. This page says how the strings work, how to translate them, and how
@@ -11,6 +12,7 @@ to add a language.
 | File | Holds |
 | --- | --- |
 | `apps/desktop/shared/locales/en.ts` | English: the source of every message, and what shows when a language lacks one |
+| `apps/desktop/shared/locales/pt-BR.ts` | Brazilian Portuguese, which every Portuguese system tag (`pt-PT`, `pt-AO`) also gets |
 | `apps/desktop/shared/locales/zh-CN.ts` | Simplified Chinese |
 | `apps/desktop/shared/i18n.ts` | The languages, how one is chosen from the setting and the system, `translate` |
 

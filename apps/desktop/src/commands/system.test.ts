@@ -57,6 +57,16 @@ describe('the language command', () => {
     expect($language.get()).toBe('zh-CN')
   })
 
+  it('switches to Brazilian Portuguese, and follows a Portuguese system', async () => {
+    expect(await command('language.set').run({ language: 'pt-BR' }, UI)).toMatchObject({ ok: true, summary: 'Herald OS is in Português (Brasil)' })
+    expect($prefs.get().language).toBe('pt-BR')
+    expect($language.get()).toBe('pt-BR')
+
+    $env.set({ ...ENV, languages: ['pt-PT', 'en-US'] })
+    expect(await command('language.set').run({ language: 'system' }, UI)).toMatchObject({ ok: true, summary: 'Herald OS follows the system language: Português (Brasil)' })
+    expect($language.get()).toBe('pt-BR')
+  })
+
   it('opens the language setting under General', () => {
     command('settings.open').run({ section: 'language' }, UI)
 
@@ -74,6 +84,9 @@ describe('the language on the voice fast path', () => {
     expect(matchIntent('switch to chinese')).toMatchObject({ command: 'language.set', args: { language: 'zh-CN' } })
     expect(matchIntent('Hey Hermes, set the language to english')).toMatchObject({ command: 'language.set', args: { language: 'en' } })
     expect(matchIntent('use the system language')).toMatchObject({ command: 'language.set', args: { language: 'system' } })
+    expect(matchIntent('switch to portuguese')).toMatchObject({ command: 'language.set', args: { language: 'pt-BR' } })
+    expect(matchIntent('Hey Hermes, set the language to portuguese')).toMatchObject({ command: 'language.set', args: { language: 'pt-BR' } })
+    expect(matchIntent('switch to brazilian portuguese')).toMatchObject({ command: 'language.set', args: { language: 'pt-BR' } })
     expect(matchIntent('switch to missions')).toMatchObject({ command: 'page.open' })
   })
 })
