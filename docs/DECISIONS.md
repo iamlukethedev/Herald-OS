@@ -1564,3 +1564,37 @@ nothing was left to try: the voice went quiet, and every reply showed the raw er
   pull it in as well, so listing it adds nothing to the image, but the voice no longer depends on
   them. It speaks English, so it stands in only for an English locale. espeak-ng would cover other
   languages for about 24 MiB installed (9.4 MiB to download), and is not in the image.
+
+## ADR-029: NVIDIA's driver comes in an image of its own, built on Universal Blue's signed modules
+
+**Status: Accepted.** Supersedes the decision in #62, which closed an NVIDIA image as not planned.
+
+Local models want CUDA, and the default image drives NVIDIA GPUs with nouveau, which has none. The
+driver's kernel modules are built for one kernel and, for Secure Boot, signed; a bootc image can
+neither build them on the person's machine (akmods writes to `/usr`) nor sign them with a key it
+does not hold.
+
+- **A second image, not a choice inside one.** `ghcr.io/iamlukethedev/herald-os-nvidia` is the
+  default image plus `linux/image/nvidia.sh`, a stage of the same Containerfile
+  (`--target herald-os-nvidia`), so the two cannot drift. Everyone else keeps an image without
+  NVIDIA's proprietary userspace, its 1 GiB, or a second signing key. x86_64 only.
+- **Universal Blue's prebuilt modules.** `ghcr.io/ublue-os/akmods-nvidia-open` publishes NVIDIA's
+  open modules for each Fedora kernel, signed with their key, with negativo17's driver to match;
+  Bluefin, Aurora and Bazzite ship the same ones. Building and signing them here would mean a
+  kernel-module key of our own for people to enrol, and a build per kernel; theirs is already
+  enrolled on machines switched from those systems.
+- **Rejected: a Universal Blue base image.** Their NVIDIA images start from Silverblue's desktop
+  base, not `fedora-bootc`, and would change everything under Herald, not only the driver.
+- **One kernel.** The workflow pins the base by digest and picks the akmods tag for its kernel, and
+  `nvidia.sh` refuses a mismatch. When Universal Blue has not caught up with a new kernel, the NVIDIA
+  build fails on its own and the default image is not held back.
+- **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image's first boot
+  says how to switch (`herald-os-gpu-check`). Switching is a `bootc switch`, `herald-os channel`
+  keeps to the image, and both repositories are in the signature policy.
+- **Turing and newer.** The open modules need a GSP, so GTX 900 and 1000 cards stay on nouveau;
+  NVIDIA's 580 legacy driver (`akmods-nvidia-lts`) could be a third image if they turn out to matter.
+- **Firmware in every image.** Fedora's `linux-firmware` only recommends the Wi-Fi, GPU and audio
+  firmware split out of it, and the image installs without weak dependencies, so `packages.txt`
+  names them. `fedora-bootc:44` ships most today; what it lacked was Sound Open Firmware, ALSA's UCM
+  profiles (Intel laptops' speakers and microphones) and the older Intel Wi-Fi firmware, about
+  13 MiB in all. The default image stays lean: the NVIDIA driver's 1.6 GB is only in its own image.

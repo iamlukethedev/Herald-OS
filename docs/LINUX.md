@@ -247,7 +247,11 @@ VM's provisioner also runs, so the VM and the image cannot drift apart:
 - **`linux/image/packages.sh`, at image build:** the packages in `linux/image/packages.txt` (and the
   omakase set), the session and CLIs under `/usr`, the prebuilt shell in `/usr/share/herald-os/app`,
   the boot splash and its initramfs, Flathub, the services. `--dev` does the same for the VM under
-  `/usr/local`, with the build tools from `packages-dev.txt`.
+  `/usr/local`, with the build tools from `packages-dev.txt`. It installs without weak
+  dependencies, and Fedora's `linux-firmware` only recommends the firmware split out of it, so
+  `packages.txt` names each part: Wi-Fi and Bluetooth (Intel, Atheros, Broadcom, MediaTek, Realtek,
+  NXP), the AMD, Intel and NVIDIA GPUs, AMD microcode, and laptop sound: Sound Open Firmware
+  (`alsa-sof-firmware`) with ALSA's UCM profiles, and Intel's and Cirrus's audio firmware.
 - **`linux/image/firstboot.sh`, on the first boot:** the session user, its niri config, theme and
   update timer, and Hermes Agent (`herald-os-firstboot.service`, before the login screen), then the
   omakase Flatpaks (`herald-os-firstboot-apps.service`, while the session is up). Hermes Agent comes
@@ -322,7 +326,8 @@ switched from another bootc system is different: it gets a login screen and a lo
 
 - **Firewall:** firewalld with a `herald-os` zone that refuses incoming connections except LocalSend
   (port 53317) and mDNS. SSH is off in release images; the development VM's zone allows it.
-- **Secure Boot:** works through Fedora's signed shim.
+- **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
+  ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
   pam-u2f) enrol it and turn it on for the lock screen and sudo: through authselect on Fedora and
   the image, by adding the rule to `/etc/pam.d/sudo` and `/etc/pam.d/swaylock` on Arch (each file
@@ -332,7 +337,8 @@ switched from another bootc system is different: it gets a login screen and a lo
 - **Image signatures:** the image workflow signs each image with the project's cosign key, never
   keyless (which would publish to a transparency log) and without a log upload. Once
   `linux/image/cosign.pub` is in the repository, the image only accepts signed updates of itself
-  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os`). Turning signing on is a
+  (a `sigstoreSigned` policy for `ghcr.io/iamlukethedev/herald-os` and
+  `ghcr.io/iamlukethedev/herald-os-nvidia`, so switching between them is checked too). Turning signing on is a
   maintainer step, in this order, so no image ever carries the policy without a matching signature:
   1. Generate the key pair: `cosign generate-key-pair` (keep `cosign.key` and its password offline).
   2. Set the repository secrets `COSIGN_PRIVATE_KEY` (the contents of `cosign.key`) and
@@ -346,6 +352,62 @@ switched from another bootc system is different: it gets a login screen and a lo
      if `COSIGN_PRIVATE_KEY` is missing or does not match it, and CI fails if `SIGNING_ENABLED` is
      not `true`.
 - **SELinux** stays permissive for now (ADR-012).
+
+### The NVIDIA image
+
+There are two images of the same Herald OS (ADR-029). Pick by the graphics:
+
+| Image | For |
+| --- | --- |
+| `ghcr.io/iamlukethedev/herald-os` | Every PC and VM, x86_64 and aarch64: Intel and AMD graphics, and NVIDIA on nouveau (the screen, no CUDA). The ISO and the VM disks are this image. |
+| `ghcr.io/iamlukethedev/herald-os-nvidia` | x86_64 PCs with an NVIDIA GPU from the GeForce GTX 16 and RTX 20 series (Turing) on, to run local models on it. |
+
+The NVIDIA image is the default one plus `linux/image/nvidia.sh`, built from the same Containerfile
+(`--target herald-os-nvidia`): NVIDIA's open kernel modules, prebuilt by
+[Universal Blue](https://github.com/ublue-os/akmods) for the image's kernel and signed with their
+key, negativo17's driver and CUDA libraries to match (`nvidia-smi`, `libcuda`, NVENC and VA-API),
+and NVIDIA's container toolkit, so `podman run --device nvidia.com/gpu=all` reaches the GPU too. The
+driver loads from the initramfs, after the integrated GPU's driver on hybrid laptops, and nouveau is
+kept out. It leaves out the 32-bit libraries (Steam's Flatpak brings its own) and the X11 tools.
+GPUs older than Turing (GTX 900 and 1000) need NVIDIA's 580 legacy driver, which it does not have:
+those stay on the default image.
+
+There is no NVIDIA installer: install from the ISO, then switch and restart. The default image says
+so on an NVIDIA GPU, in a notification after the first sign-in and in the first boot's journal
+(`linux/bin/herald-os-gpu-check`).
+
+```bash
+sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:stable    # or :edge
+systemctl reboot
+nvidia-smi                                                         # once it is up
+```
+
+`herald-os channel` and `herald-os update` keep to the image you are on, and the previous one stays
+in the boot menu. To go back: `sudo bootc switch ghcr.io/iamlukethedev/herald-os:stable`.
+
+**Secure Boot.** The modules are signed with Universal Blue's key, not Fedora's, so with Secure Boot
+on (`mokutil --sb-state`) the kernel refuses them until that key is enrolled, and the screen runs
+without acceleration. A system switched from Bluefin, Aurora or Bazzite has it already. Otherwise,
+once the NVIDIA image is up:
+
+```bash
+sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der    # choose a one-time password
+systemctl reboot    # the blue MOK manager: Enroll MOK, Continue, Yes, that password
+```
+
+**How it is built.** The image workflow builds it next to the default image, x86_64 only, into its
+own package with the channel's tag itself (`herald-os-nvidia:edge`, `:stable` and a release's
+version; no per-architecture tags and no disks). The modules are built for one kernel, so the
+workflow pins `quay.io/fedora/fedora-bootc:44` by digest and picks the akmods tag for its kernel
+(`main-44-<kernel>`), and `nvidia.sh` stops the build when the two differ. Universal Blue publishes
+modules for each new Fedora kernel some time after Fedora does; until then the NVIDIA leg fails on its own
+(`continue-on-error`), the default image goes out as usual and the NVIDIA tags keep the last build.
+Locally:
+
+```bash
+podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz \
+  --target herald-os-nvidia --build-arg AKMODS_TAG=main-44-<kernel> -t herald-os-nvidia .
+```
 
 ### Switching a bootc system to Herald OS
 

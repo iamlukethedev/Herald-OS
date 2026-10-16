@@ -12,6 +12,9 @@ much real hardware, so try it on a computer you can spare and keep backups.
 - A USB stick of 8 GB or more (it is erased).
 - A wired network for the first start helps: it installs Hermes Agent from the internet. Without one,
   the desktop comes up first and Hermes installs once you join Wi-Fi.
+- Wi-Fi, Bluetooth and laptop sound (including the Sound Open Firmware most recent Intel laptops
+  need) work out of the box. An NVIDIA graphics card works too, on the open-source driver; to run
+  local models on it, switch to the NVIDIA image after installing ([NVIDIA graphics](#nvidia-graphics)).
 
 ## 1. Download and join the installer
 
@@ -78,6 +81,24 @@ The installer's disk screen can install Herald OS next to Windows on the same di
 in Windows, Disk Management's "Shrink Volume" frees space at the end of the Windows partition, and a
 backup beforehand is wise. Afterwards, the PC's boot menu, or the menu Herald OS shows at power-on,
 picks which system starts. Herald OS's updates leave the Windows partition alone.
+
+## NVIDIA graphics
+
+The installer puts the standard image on every PC. It runs an NVIDIA card's screen with the
+open-source driver, which has no CUDA, so local models do not use the card. If the PC has one, a
+notification after the first sign-in says so. The NVIDIA image has NVIDIA's own driver, for the
+GeForce GTX 16 and RTX 20 series and newer. In a terminal:
+
+```bash
+sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:stable
+systemctl reboot
+```
+
+With Secure Boot on, the NVIDIA driver also needs Universal Blue's signing key once the NVIDIA image
+is running: `sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der`, choose a one-time password,
+restart, and in the blue screen that appears pick Enroll MOK, Continue, Yes and type that password.
+`nvidia-smi` then lists the card. [The NVIDIA image](../LINUX.md#the-nvidia-image) has the details,
+and how to go back.
 
 ## The disk password and your keyboard
 
