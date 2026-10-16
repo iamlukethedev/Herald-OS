@@ -182,10 +182,13 @@ IMAGE_CHANGES=""
 [[ $SYSTEM_KIND == image ]] && IMAGE_CHANGES="$(local_modifications)"
 
 # Runs an update check so that it cannot hold the daily timer up: at most 120 seconds (then exit
-# 124), never waiting on input. Without timeout (macOS has none) it only gets no input.
+# 124), never waiting on input. macOS has no timeout, but Homebrew's coreutils has gtimeout; with
+# neither, the check only gets no input.
 bounded() {
-  if command -v timeout >/dev/null; then
-    timeout 120 "$@" </dev/null
+  local limit
+  limit="$(command -v timeout || command -v gtimeout || true)"
+  if [[ -n "$limit" ]]; then
+    "$limit" 120 "$@" </dev/null
   else
     "$@" </dev/null
   fi
@@ -260,10 +263,26 @@ admin_access() {
 }
 as_root() {
   if [[ $ADMIN == terminal ]]; then
-    sudo "$@"
+    have_root && sudo "$@"
   else
     sudo -n "$@"
   fi
+}
+
+# Whether this run can act as root, asking for the password (in a terminal) the first time only.
+# sudo then remembers it for a few minutes; a background `sudo -n -v` keeps that fresh until the
+# update ends, so a long system upgrade does not leave the steps after it asking again.
+have_root() {
+  [[ -n "${ADMIN:-}" ]] || ADMIN="$(admin_access)"
+  case $ADMIN in
+    root | nopasswd) return 0 ;;
+    none) return 1 ;;
+  esac
+  [[ -n "${SUDO_KEPT:-}" ]] && return 0
+  sudo -v || return 1
+  SUDO_KEPT=1
+  (while kill -0 $$ 2>/dev/null; do sleep 50; sudo -n -v || exit; done) </dev/null >/dev/null 2>&1 &
+  return 0
 }
 NEEDS_ROOT="needs root: run sudo herald-os update"
 skipped=()
@@ -323,8 +342,68 @@ failed=()
 warnings=()
 step() { summary+=("$(printf '  %-16s %s' "$1" "$2")"); }
 
-# One-shot migrations, tracked by file name so each runs exactly once per machine. Appends failures
-# to `failed`.
+# One-shot migrations, run in file-name order, each once. Their "# Runs as:" line says whose they are:
+#   root             system files. Runs as root, and is recorded once for the machine in
+#                    $MIGRATIONS_DONE, which only root can write; without root it waits for a run
+#                    with it.
+#   user             the person's home and user units (systemctl --user). Runs as the person, never
+#                    as root: root's home is not theirs. Recorded in their own
+#                    ~/.local/state/herald-os/migrations, which they can write without root, so it
+#                    runs once for each account, and every account gets it.
+#   user, with sudo  the same, plus system steps it takes through sudo -n, so it also waits until sudo
+#                    works for the person.
+# A migration without the line is a user one. Appends failures to `failed`.
+migration_kind() {
+  case "$(sed -n 's/^# Runs as: *//p' "$1" | head -n 1)" in
+    root) echo root ;;
+    "user, with sudo") echo user-sudo ;;
+    *) echo user ;;
+  esac
+}
+
+# Whose user migrations are: this account's, or as root under sudo the account that ran sudo. As
+# root without sudo (a root login) there is no person to run them as.
+migration_user() {
+  if [[ $EUID -ne 0 ]]; then
+    echo self
+  elif [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
+    echo sudo
+  else
+    echo none
+  fi
+}
+as_user() {
+  if [[ $MIGRATION_USER == self ]]; then
+    "$@"
+  else
+    sudo -n -u "$SUDO_USER" -H "$@"
+  fi
+}
+# `user_marker check|write NAME`, in the person's own state folder.
+user_marker() {
+  # shellcheck disable=SC2016 # $HOME is the person's, expanded in their shell.
+  as_user sh -c 'd="$HOME/.local/state/herald-os/migrations"; if [ "$1" = check ]; then test -f "$d/$2"; else mkdir -p "$d" && touch "$d/$2"; fi' sh "$1" "$2"
+}
+# Runs a user migration as the person. Under sudo, their checkout and user units are theirs: no
+# REPO from root (the migration finds ~/Herald-OS itself), and their runtime folder for systemctl --user.
+run_as_user() {
+  local uid=""
+  if [[ $MIGRATION_USER == self ]]; then
+    REPO="$REPO" bash "$1"
+  else
+    uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
+    as_user env ${uid:+XDG_RUNTIME_DIR="/run/user/$uid"} bash "$1"
+  fi
+}
+# Whether the person's own sudo -n works, for a "user, with sudo" migration.
+user_has_sudo() {
+  if [[ $MIGRATION_USER == self ]]; then
+    have_root
+  else
+    as_user sudo -n true 2>/dev/null
+  fi
+}
+
 run_migrations() {
   # A checkout's migrations, the ones that came with this command (a link into /opt/herald-os), or the
   # installed package's (/usr/share/herald-os/migrations).
@@ -332,36 +411,53 @@ run_migrations() {
   [[ -d "$dir" ]] || dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../migrations"
   [[ -d "$dir" ]] || dir=/usr/share/herald-os/migrations
   [[ -d "$dir" ]] || return 0
-  local migration name pending=()
+  MIGRATION_USER="$(migration_user)"
+  local migration name kind waiting=() no_user=()
   for migration in "$dir"/*.sh; do
     [[ -f "$migration" ]] || continue
-    [[ -f "$MIGRATIONS_DONE/$(basename "$migration")" ]] || pending+=("$migration")
-  done
-  [[ ${#pending[@]} -gt 0 ]] || return 0
-  # The done markers are root's, and migrations take their root steps through sudo -n. Without a
-  # way to root, each of those would print sudo's "a password is required", and with no marker
-  # written every migration would run again on the next update; so they wait for one with root.
-  [[ -n "${ADMIN:-}" ]] || ADMIN="$(admin_access)"
-  if [[ $ADMIN == none ]]; then
-    echo "==> migrations: skipped ($NEEDS_ROOT)"
-    skipped+=(migrations)
-    step migrations "skipped ($NEEDS_ROOT)"
-    return 0
-  fi
-  # In a terminal sudo asks here, once, and the migrations' own sudo -n steps find it remembered.
-  if [[ $ADMIN == terminal ]]; then
-    sudo -v
-  fi
-  as_root mkdir -p "$MIGRATIONS_DONE"
-  for migration in "${pending[@]}"; do
     name="$(basename "$migration")"
+    kind="$(migration_kind "$migration")"
+    if [[ $kind == root ]]; then
+      [[ -f "$MIGRATIONS_DONE/$name" ]] && continue
+      # Without root, sudo would print "a password is required" at each step, and nothing would
+      # be recorded, so it would run again next time: it waits for a run with root instead.
+      if ! have_root; then
+        waiting+=("$name")
+        continue
+      fi
+      echo "==> migration $name (as root)"
+      if as_root env REPO="$REPO" bash "$migration"; then
+        as_root mkdir -p "$MIGRATIONS_DONE" && as_root touch "$MIGRATIONS_DONE/$name"
+      else
+        failed+=("migration:$name")
+      fi
+      continue
+    fi
+    if [[ $MIGRATION_USER == none ]]; then
+      no_user+=("$name")
+      continue
+    fi
+    user_marker check "$name" && continue
+    if [[ $kind == user-sudo ]] && ! user_has_sudo; then
+      waiting+=("$name")
+      continue
+    fi
     echo "==> migration $name"
-    if REPO="$REPO" bash "$migration"; then
-      as_root touch "$MIGRATIONS_DONE/$name"
+    if run_as_user "$migration"; then
+      user_marker write "$name"
     else
       failed+=("migration:$name")
     fi
   done
+  if [[ ${#waiting[@]} -gt 0 ]]; then
+    echo "==> migrations: skipped ($NEEDS_ROOT)"
+    skipped+=(migrations)
+    step migrations "skipped ${waiting[*]} ($NEEDS_ROOT)"
+  fi
+  if [[ ${#no_user[@]} -gt 0 ]]; then
+    echo "==> user migrations: skipped (they run as a person, not as root: run herald-os update from your account)"
+    step user-migrations "skipped ${no_user[*]} (run herald-os update from your account)"
+  fi
 }
 
 if [[ $MIGRATE -eq 1 ]]; then

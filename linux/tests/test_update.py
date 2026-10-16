@@ -48,28 +48,43 @@ GOOD, BROKEN = "app/org.example.Good/x86_64/stable", "app/org.example.Broken/x86
 SYSTEM_APP = "app/org.example.System/x86_64/stable"
 
 STUBS = {
-    "herald-os": 'echo "$@" >>"$HOME/herald-os.log"',
-    # With ~/no-sudo, sudo needs a password: `sudo -n` fails, and plain sudo (in a terminal) gets one.
-    "sudo": """echo "sudo $*" >>"$HOME/calls.log"
-if [ "$1" = -n ]; then
-  shift
-  if [ -e "$HOME/no-sudo" ]; then
+    "herald-os": 'echo "$@" >>"$TEST_HOME/herald-os.log"',
+    # With ~/no-sudo the account needs a password: `sudo -n` fails until plain sudo (in a terminal)
+    # has asked once, which sudo then remembers. Root is never asked. `-u NAME -H` runs as the
+    # person NAME, whose home is ~/people/NAME.
+    "sudo": """echo "sudo $*" >>"$TEST_HOME/calls.log"
+n=; v=; who=
+while :; do
+  case "$1" in
+    -n) n=1; shift ;;
+    -v) v=1; shift ;;
+    -H) shift ;;
+    -u) who="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+if [ "$(id -u)" != 0 ] && [ -e "$TEST_HOME/no-sudo" ] && [ ! -e "$TEST_HOME/sudo-remembered" ]; then
+  if [ -n "$n" ]; then
     echo "sudo: a password is required" >&2
     exit 1
   fi
-else
-  echo "asked for a password: $*" >>"$HOME/sudo.log"
-  [ "$1" = -v ] && exit 0
+  echo "asked for a password: $*" >>"$TEST_HOME/sudo.log"
+  touch "$TEST_HOME/sudo-remembered"
+fi
+[ -n "$v" ] && exit 0
+if [ -n "$who" ]; then
+  HOME="$TEST_HOME/people/$who"
+  export HOME
 fi
 SUDO_USER=tester exec "$@\"""",
     # Like bootc, refuses when the booted or the staged deployment has local changes.
-    "bootc": """echo "bootc $*" >>"$HOME/calls.log"
-if [ -s "$HOME/layered" ]; then
+    "bootc": """echo "bootc $*" >>"$TEST_HOME/calls.log"
+if [ -s "$TEST_HOME/layered" ]; then
   echo "error: Upgrading: Deployment contains local rpm-ostree modifications; cannot upgrade via bootc" >&2
   exit 1
 fi
 if [ "$2" = --check ]; then
-  if [ -e "$HOME/bootc-up-to-date" ]; then
+  if [ -e "$TEST_HOME/bootc-up-to-date" ]; then
     echo "No changes in: ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable"
   else
     echo "Update available for: ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable"
@@ -78,50 +93,50 @@ fi
 exit 0""",
     # `upgrade --check` exits with ~/check-exit for the user (polkit) and ~/check-exit-root through
     # sudo: 0 for an update, 77 for none, anything else when it cannot tell.
-    "rpm-ostree": """[ "$1" = status ] && exec cat "$HOME/status.json"
-echo "rpm-ostree $*" >>"$HOME/calls.log"
+    "rpm-ostree": """[ "$1" = status ] && exec cat "$TEST_HOME/status.json"
+echo "rpm-ostree $*" >>"$TEST_HOME/calls.log"
 if [ "$2" = --check ]; then
-  [ -t 0 ] && echo "rpm-ostree check read a terminal" >>"$HOME/calls.log"
-  [ -n "$SUDO_USER" ] && exit "$(cat "$HOME/check-exit-root" 2>/dev/null || echo 0)"
-  exit "$(cat "$HOME/check-exit" 2>/dev/null || echo 0)"
+  [ -t 0 ] && echo "rpm-ostree check read a terminal" >>"$TEST_HOME/calls.log"
+  [ -n "$SUDO_USER" ] && exit "$(cat "$TEST_HOME/check-exit-root" 2>/dev/null || echo 0)"
+  exit "$(cat "$TEST_HOME/check-exit" 2>/dev/null || echo 0)"
 fi
-exit "$(cat "$HOME/rpm-ostree-exit" 2>/dev/null || echo 0)\"""",
+exit "$(cat "$TEST_HOME/rpm-ostree-exit" 2>/dev/null || echo 0)\"""",
     # Passes the command through, or with ~/timeout-expires gives up on it as timeout does (124).
-    "timeout": """echo "timeout $*" >>"$HOME/calls.log"
+    "timeout": """echo "timeout $*" >>"$TEST_HOME/calls.log"
 # With text in it, only commands that contain the text run out of time.
-if [ -e "$HOME/timeout-expires" ] && { [ ! -s "$HOME/timeout-expires" ] || echo "$*" | grep -qF "$(cat "$HOME/timeout-expires")"; }; then
+if [ -e "$TEST_HOME/timeout-expires" ] && { [ ! -s "$TEST_HOME/timeout-expires" ] || echo "$*" | grep -qF "$(cat "$TEST_HOME/timeout-expires")"; }; then
   exit 124
 fi
 shift
 exec "$@\"""",
     # The user installation's refs are in ~/refs, the system one's in ~/system-refs. Updating a whole
     # installation fails when one of its refs is in ~/broken-refs, and so does updating that ref alone.
-    "flatpak": """echo "flatpak $*" >>"$HOME/calls.log"
-refs="$HOME/refs"
-case " $* " in *" --system "*) refs="$HOME/system-refs" ;; esac
+    "flatpak": """echo "flatpak $*" >>"$TEST_HOME/calls.log"
+refs="$TEST_HOME/refs"
+case " $* " in *" --system "*) refs="$TEST_HOME/system-refs" ;; esac
 case "$1" in
   list) cat "$refs" 2>/dev/null ;;
   remote-ls) ;;
   update)
-    if [ -e "$HOME/remote-down" ]; then
+    if [ -e "$TEST_HOME/remote-down" ]; then
       echo "error: Unable to load summary from remote flathub: Could not resolve hostname" >&2
       exit 1
     fi
     for arg in "$@"; do last="$arg"; done
     if [ "$last" = --user ] || [ "$last" = --system ]; then
-      if [ -s "$HOME/broken-refs" ] && grep -qxFf "$HOME/broken-refs" "$refs" 2>/dev/null; then
+      if [ -s "$TEST_HOME/broken-refs" ] && grep -qxFf "$TEST_HOME/broken-refs" "$refs" 2>/dev/null; then
         echo "Error: Failed to update some refs" >&2
         exit 1
       fi
-      echo "Updated everything $last" >>"$HOME/updated.log"
+      echo "Updated everything $last" >>"$TEST_HOME/updated.log"
       exit 0
     fi
-    if grep -qx "$last" "$HOME/broken-refs" 2>/dev/null; then
+    if grep -qx "$last" "$TEST_HOME/broken-refs" 2>/dev/null; then
       echo "Looking for updates..." >&2
       echo "error: Failed to install $last: No space left on device" >&2
       exit 1
     fi
-    echo "Updated $last" >>"$HOME/updated.log"
+    echo "Updated $last" >>"$TEST_HOME/updated.log"
     ;;
 esac""",
 }
@@ -143,6 +158,7 @@ def machine(tmp_path):
     (home / "refs").write_text(f"{GOOD}\n{BROKEN}\n")
     env = {
         "HOME": str(home),
+        "TEST_HOME": str(home),
         "HERALD_OS_REPO": str(repo),
         "HERALD_OS_OSTREE_BOOTED": str(tmp_path / "ostree-booted"),
         "HERALD_OS_IMAGE_SHELL": str(tmp_path / "app.asar"),
@@ -613,9 +629,8 @@ def test_in_a_terminal_sudo_asks_for_the_password_and_everything_updates(machine
     assert done.returncode == 0, output
     assert "bootc upgrade" in calls(home)
     assert system_flatpak_updates(home)
-    asked = (home / "sudo.log").read_text()
-    assert "asked for a password: bootc upgrade" in asked
-    assert "asked for a password: flatpak update -y --noninteractive --system" in asked
+    assert len((home / "sudo.log").read_text().splitlines()) == 1
+    assert "sudo bootc upgrade" in calls(home)
     assert "sudo flatpak update -y --noninteractive --system" in calls(home)
     steps = summary(output)
     assert steps["system"] == "ok (bootc upgrade)"
@@ -655,7 +670,7 @@ def test_as_root_only_testing_flag_1_counts(machine, flag):
 
 def with_migration(env: dict) -> Path:
     """A migration in the HERALD_OS_REPO checkout that leaves a mark when it runs."""
-    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "mark.sh").write_text('touch "$HOME/migration-ran"\n')
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "mark.sh").write_text('# Runs as: root\ntouch "$HOME/migration-ran"\n')
     return Path(env["HOME"]) / "migration-ran"
 
 
@@ -764,75 +779,141 @@ def test_without_rpm_ostree_the_check_asks_bootc(machine, tmp_path, up_to_date):
     assert "timeout 120 sudo -n bootc upgrade --check" in calls(home)
 
 
-def with_marking_migration(env: dict) -> Path:
-    """A migration that counts its runs in ~/migration-runs."""
-    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "count.sh").write_text('echo run >>"$HOME/migration-runs"\n')
-    return Path(env["HOME"]) / "migration-runs"
+def migration(env: dict, name: str, kind: str | None) -> str:
+    """A migration of a kind ("root", "user", "user, with sudo" or none) that counts its runs in
+    $HOME/runs-NAME, $HOME being whoever it ran as."""
+    header = f"# Runs as: {kind}\n" if kind else ""
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / f"{name}.sh").write_text(f'#!/bin/sh\n{header}echo run >>"$HOME/runs-{name}"\n')
+    return name
 
 
-def runs(path: Path) -> int:
+def runs(home: Path, name: str) -> int:
+    path = home / f"runs-{name}"
     return len(path.read_text().splitlines()) if path.exists() else 0
 
 
-def test_without_root_pending_migrations_wait_with_one_notice(machine):
+def user_marker(home: Path, name: str) -> Path:
+    return home / ".local" / "state" / "herald-os" / "migrations" / f"{name}.sh"
+
+
+def three_kinds(env: dict) -> None:
+    migration(env, "a-root", "root")
+    migration(env, "b-user", "user")
+    migration(env, "c-mixed", "user, with sudo")
+
+
+def test_from_the_menu_user_migrations_run_as_the_user_and_the_rest_wait(machine, tmp_path):
     home, env = machine
-    counted = with_marking_migration(env)
+    three_kinds(env)
+    migration(env, "d-untagged", None)
     (home / "no-sudo").write_text("")
     done = run(env)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert runs(counted) == 0
+    assert runs(home, "b-user") == 1 and runs(home, "d-untagged") == 1
+    assert runs(home, "a-root") == 0 and runs(home, "c-mixed") == 0
+    assert user_marker(home, "b-user").exists() and not (tmp_path / "migrations-done").exists()
     assert done.stdout.count("==> migrations: skipped (needs root: run sudo herald-os update)") == 1
+    assert summary(done.stdout)["migrations"] == "skipped a-root.sh c-mixed.sh (needs root: run sudo herald-os update)"
     assert "a password is required" not in done.stderr
-    assert summary(done.stdout)["migrations"] == "skipped (needs root: run sudo herald-os update)"
-    assert "skipped: migrations system" in done.stdout
+    assert problems(home) == "none"
+    run(env)
+    assert runs(home, "b-user") == 1
+
+
+def test_with_sudo_every_kind_runs_where_it_belongs(machine, tmp_path):
+    home, env = machine
+    three_kinds(env)
+    run(env)
+    run(env)
+    assert runs(home, "a-root") == runs(home, "b-user") == runs(home, "c-mixed") == 1
+    assert (tmp_path / "migrations-done" / "a-root.sh").exists()
+    assert user_marker(home, "b-user").exists() and user_marker(home, "c-mixed").exists()
+    assert not (tmp_path / "migrations-done" / "b-user.sh").exists()
+    assert any(call.startswith("sudo -n env REPO=") and call.endswith("a-root.sh") for call in calls(home))
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+def test_as_root_under_sudo_user_migrations_run_as_that_person_with_their_home(machine, tmp_path):
+    home, env = machine
+    alice = home / "people" / "alice"
+    alice.mkdir(parents=True)
+    three_kinds(env)
+    done = run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert runs(alice, "b-user") == 1 and runs(alice, "c-mixed") == 1
+    assert runs(home, "b-user") == 0 and runs(home, "c-mixed") == 0
+    assert runs(home, "a-root") == 1 and runs(alice, "a-root") == 0
+    assert user_marker(alice, "b-user").exists() and not user_marker(home, "b-user").exists()
+    assert any(call.startswith("sudo -n -u alice -H env bash ") and call.endswith("b-user.sh") for call in calls(home))
+    run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"))
+    assert runs(alice, "b-user") == 1
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+@pytest.mark.parametrize("sudo_user", [None, "root"], ids=["root-login", "sudo-from-root"])
+def test_as_root_without_a_person_user_migrations_are_skipped_not_run_as_root(machine, sudo_user):
+    home, env = machine
+    three_kinds(env)
+    env = {key: value for key, value in env.items() if key != "SUDO_USER"}
+    if sudo_user:
+        env["SUDO_USER"] = sudo_user
+    done = run(env, prefix=("unshare", "-r"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert runs(home, "b-user") == 0 and runs(home, "c-mixed") == 0
+    assert runs(home, "a-root") == 1
+    assert not user_marker(home, "b-user").exists()
+    assert "==> user migrations: skipped (they run as a person, not as root: run herald-os update from your account)" in done.stdout
+    assert summary(done.stdout)["user-migrations"] == "skipped b-user.sh c-mixed.sh (run herald-os update from your account)"
     assert problems(home) == "none"
 
 
-def test_with_root_a_migration_runs_once_and_is_recorded(machine, tmp_path):
+def test_migrate_alone_from_the_menu_runs_user_migrations_and_leaves_the_rest(machine):
     home, env = machine
-    counted = with_marking_migration(env)
-    run(env)
-    run(env)
-    assert runs(counted) == 1
-    assert (tmp_path / "migrations-done" / "count.sh").exists()
-    assert "sudo -n touch " + str(tmp_path / "migrations-done" / "count.sh") in calls(home)
-
-
-def test_migrations_already_done_need_no_root_and_give_no_notice(machine, tmp_path):
-    home, env = machine
-    counted = with_marking_migration(env)
-    (tmp_path / "migrations-done").mkdir()
-    (tmp_path / "migrations-done" / "count.sh").write_text("")
-    (home / "no-sudo").write_text("")
-    done = run(env)
-    assert runs(counted) == 0
-    assert "migrations" not in done.stdout
-
-
-def test_migrate_alone_without_root_skips_and_succeeds(machine):
-    home, env = machine
-    counted = with_marking_migration(env)
+    three_kinds(env)
     (home / "no-sudo").write_text("")
     done = run(env, "--migrate")
     assert done.returncode == 0
-    assert runs(counted) == 0
+    assert runs(home, "b-user") == 1 and runs(home, "a-root") == 0
     assert "==> migrations: skipped (needs root: run sudo herald-os update)" in done.stdout
 
 
-@TERMINAL
-def test_in_a_terminal_sudo_asks_once_before_the_migrations(machine, tmp_path):
+def test_a_failing_user_migration_is_a_problem_and_runs_again(machine):
     home, env = machine
-    counted = with_marking_migration(env)
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "broken.sh").write_text("# Runs as: user\nexit 1\n")
+    done = run(env)
+    assert done.returncode == 1
+    assert problems(home) == "migration:broken.sh"
+    assert not user_marker(home, "broken").exists()
+
+
+@TERMINAL
+def test_in_a_terminal_sudo_asks_once_for_migrations_and_the_system(machine, tmp_path):
+    home, env = machine
+    three_kinds(env)
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
     (home / "no-sudo").write_text("")
-    in_a_terminal(env)
-    assert runs(counted) == 1
-    assert "asked for a password: -v" in (home / "sudo.log").read_text()
-    assert (tmp_path / "migrations-done" / "count.sh").exists()
+    output = in_a_terminal(env)
+    assert runs(home, "a-root") == runs(home, "b-user") == runs(home, "c-mixed") == 1
+    assert len((home / "sudo.log").read_text().splitlines()) == 1
+    assert calls(home).count("sudo -v") == 1
+    assert summary(output)["system"] == "ok (bootc upgrade)"
+    assert summary(output)["system-flatpaks"] == "ok"
+
+
+def test_every_shipped_migration_says_whose_it_is():
+    for path in sorted((ROOT / "linux" / "migrations").glob("*.sh")):
+        text = path.read_text()
+        kind = re.search(r"^# Runs as: (.+)$", text, re.M)
+        assert kind, f"{path.name} has no '# Runs as:' line"
+        touches_the_person = "$HOME" in text or "systemctl --user" in text or "herald-os-theme" in text or "herald-os keymap" in text
+        assert not (touches_the_person and kind.group(1) == "root"), f"{path.name} works on the person's files but runs as root"
+        if "sudo -n" in text:
+            assert kind.group(1) in ("root", "user, with sudo"), f"{path.name} takes root steps but says {kind.group(1)}"
 
 
 def test_the_tests_never_touch_var_lib(machine):
     home, env = machine
-    with_marking_migration(env)
+    three_kinds(env)
     run(env)
     assert not [call for call in calls(home) if "/var/lib" in call]
 
@@ -859,7 +940,7 @@ def on_arch(env: dict, tmp_path: Path, helper: str | None) -> dict:
     """Arch: no image, pacman, and an AUR helper or none; all of them log their calls."""
     stubs = tmp_path / "stubs"
     for name in ["pacman", *([helper] if helper else [])]:
-        (stubs / name).write_text(f'#!/bin/sh\necho "{name} $*" >>"$HOME/calls.log"\n')
+        (stubs / name).write_text(f'#!/bin/sh\necho "{name} $*" >>"$TEST_HOME/calls.log"\n')
         (stubs / name).chmod(0o755)
     return {**env, "HERALD_OS_OSTREE_BOOTED": str(tmp_path / "not-booted"), "HERALD_OS_IMAGE_SHELL": str(tmp_path / "no-shell")}
 
@@ -901,3 +982,21 @@ def test_without_timeout_the_check_still_never_reads_the_terminal(machine, tmp_p
     assert "rpm-ostree upgrade --check" in calls(home)
     assert not [call for call in calls(home) if call.startswith("timeout")]
     assert "rpm-ostree check read a terminal" not in calls(home)
+
+
+def test_without_timeout_the_check_uses_gtimeout(machine, tmp_path):
+    """macOS with Homebrew's coreutils: gtimeout instead of timeout."""
+    home, env = machine
+    stubs = tmp_path / "stubs"
+    (stubs / "timeout").rename(stubs / "gtimeout")
+    (stubs / "gtimeout").write_text((stubs / "gtimeout").read_text().replace('echo "timeout $*"', 'echo "gtimeout $*"'))
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for folder in ("/usr/bin", "/bin"):
+        for tool in Path(folder).iterdir():
+            if tool.name not in ("timeout", "gtimeout") and not (tools / tool.name).exists():
+                (tools / tool.name).symlink_to(tool)
+    env = {**env, "PATH": os.pathsep.join([str(stubs), str(tools)])}
+    out, _, _ = check(home, env)
+    assert out == "1 package"
+    assert "gtimeout 120 rpm-ostree upgrade --check" in calls(home)

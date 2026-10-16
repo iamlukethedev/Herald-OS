@@ -15,7 +15,7 @@ linux/
   themes/                 whole-desktop themes (shell, niri, terminal, wallpaper): herald-*
   omakase/                the default app set: dnf packages, Flatpaks, web apps
   plymouth/herald-os/     boot splash
-  migrations/             one-shot upgrade steps herald-os-update runs once per machine
+  migrations/             one-shot upgrade steps herald-os-update runs once (per account or per machine)
   dev/                    push.sh and vm-ssh.sh (Mac -> VM); build.sh, sync.sh, restart-shell.sh,
                           shot.sh (inside the VM)
   vm/                     download-image.sh, make-seed.sh (cloud-init), run-qemu.sh, run-vf.sh

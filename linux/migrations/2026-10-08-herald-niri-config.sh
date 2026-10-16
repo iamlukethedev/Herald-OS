@@ -4,6 +4,7 @@
 # of config.kdl (recognised by its first line) into an include of it: a niri still running with the
 # old path reloads into the same config, and `niri validate -c ~/.config/niri/config.kdl` still
 # checks Herald's. A config.kdl of the person's own is left alone. Safe to re-run.
+# Runs as: user
 set -euo pipefail
 
 HEADER="// Herald OS: niri compositor configuration."

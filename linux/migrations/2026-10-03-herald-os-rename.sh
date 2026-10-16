@@ -2,6 +2,7 @@
 # Migration: Hermes OS became Herald OS. Runs as the session user (root steps through sudo -n) after
 # linux/dev/build.sh has installed the new session files, commands and units. Moves per-user state,
 # points greetd and Plymouth at the new names and retires the old files. Safe to re-run.
+# Runs as: user, with sudo
 set -uo pipefail
 
 REPO="${REPO:-$HOME/Herald-OS}"
