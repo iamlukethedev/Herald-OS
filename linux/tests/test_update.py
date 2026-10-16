@@ -57,7 +57,9 @@ fi""",
     # has asked once, which sudo then remembers; with ~/wrong-password the asking fails. Root is never
     # asked. `-u NAME -H` runs as the person NAME (an account if listed in ~/accounts or with a home
     # in ~/people/NAME), whose own sudo needs a password with ~/person-needs-password. As a person,
-    # `test -r` fails for the paths listed in ~/unreadable.
+    # `test -r` fails for the paths listed in ~/unreadable. With ~/use-pty (Fedora's Defaults use_pty)
+    # every `sudo -u` runs in a new pseudo-terminal, where the person's remembered password does not
+    # count: their `sudo -n` fails even right after they typed it.
     "sudo": """echo "sudo $*" >>"$TEST_HOME/calls.log"
 n=; v=; who=
 while :; do
@@ -73,13 +75,14 @@ if [ -n "$who" ] && ! grep -qx "$who" "$TEST_HOME/accounts" 2>/dev/null && [ ! -
   echo "sudo: unknown user $who" >&2
   exit 1
 fi
-needs=; remembered=
+needs=; remembered=; pty=
 if [ -n "${STUB_PERSON:-}" ]; then
   needs="$TEST_HOME/person-needs-password"; remembered="$TEST_HOME/person-remembered"
+  [ -e "$TEST_HOME/use-pty" ] && pty=1
 elif [ "$(id -u)" != 0 ]; then
   needs="$TEST_HOME/no-sudo"; remembered="$TEST_HOME/sudo-remembered"
 fi
-if [ -n "$needs" ] && [ -e "$needs" ] && [ ! -e "$remembered" ]; then
+if [ -n "$needs" ] && [ -e "$needs" ] && { [ -n "$pty" ] || [ ! -e "$remembered" ]; }; then
   if [ -n "$n" ]; then
     echo "sudo: a password is required" >&2
     exit 1
@@ -881,8 +884,9 @@ def test_as_root_under_sudo_user_migrations_run_as_that_person_with_their_home(m
     migration(env, "c-mixed", "user, with sudo", folder)
     done = run({**env, "SUDO_USER": "alice"}, prefix=("unshare", "-r"), script=script)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert runs(alice, "b-user") == 1 and runs(alice, "c-mixed") == 1
+    assert runs(alice, "b-user") == 1 and runs(alice, "c-mixed") == 0
     assert runs(home, "b-user") == 0 and runs(home, "c-mixed") == 0
+    assert summary(done.stdout)["migrations"] == "skipped c-mixed.sh (run herald-os update, without sudo, in a terminal)"
     assert runs(home, "a-root") == 1 and runs(alice, "a-root") == 0
     assert user_marker(alice, "b-user").exists() and not user_marker(home, "b-user").exists()
     assert any(call.startswith("sudo -n -u alice -H env bash ") and call.endswith("b-user.sh") for call in calls(home))
@@ -1262,34 +1266,55 @@ def test_a_person_without_a_home_folder_gets_one_notice(machine, tmp_path):
     assert not (home / "people" / "bob").exists()
 
 
+def mixed(folder: Path, name: str) -> None:
+    """A "user, with sudo" migration whose system step goes through the person's own sudo -n, as
+    the rename migration's do; it fails when that does."""
+    (folder / f"{name}.sh").write_text(f'# Runs as: user, with sudo\nsudo -n true || exit 1\necho run >>"$HOME/runs-{name}"\n')
+
+
 @ROOT_NS
-def test_under_sudo_a_mixed_migration_without_the_persons_sudo_does_not_send_them_back_to_sudo(machine, tmp_path):
+@pytest.mark.parametrize("terminal", [False, True], ids=["no-terminal", "terminal"])
+def test_under_sudo_mixed_migrations_wait_for_the_persons_own_run_with_one_notice(machine, tmp_path, terminal):
+    """On stock Fedora (use_pty) the password typed for sudo herald-os update does not reach the
+    person's own sudo -n inside sudo -u, so running them there could only fail."""
+    if terminal and (sys.platform != "linux" or shutil.which("script") is None):
+        pytest.skip("needs script from util-linux for a terminal")
     home, env = machine
     alice = person(home)
     script, folder = installed(tmp_path)
-    migration(env, "c-mixed", "user, with sudo", folder)
-    (home / "person-needs-password").write_text("")
-    done = as_root_under_sudo(env, script=script)
-    assert done.returncode == 0
-    assert runs(alice, "c-mixed") == 0
-    assert "sudo -n -u alice -H sudo -n true" in calls(home)
-    assert "==> migrations: skipped (they need alice's own sudo: run herald-os update, without sudo, in a terminal)" in done.stdout
-    assert "run sudo herald-os update" not in summary(done.stdout)["migrations"]
+    mixed(folder, "c-mixed")
+    mixed(folder, "d-mixed")
+    migration(env, "b-user", "user", folder)
+    for marker in ("person-needs-password", "use-pty", "person-remembered"):
+        (home / marker).write_text("")
+    env = {**env, "SUDO_USER": "alice"}
+    if terminal:
+        done = subprocess.run(["script", "-qec", f"unshare -r {BASH} {script} --no-hermes", "/dev/null"], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        output = done.stdout.replace("\r\n", "\n")
+    else:
+        done = run(env, prefix=("unshare", "-r"), script=script)
+        output = done.stdout
+    assert done.returncode == 0, output + done.stderr
+    assert runs(alice, "c-mixed") == runs(alice, "d-mixed") == 0 and runs(alice, "b-user") == 1
+    assert output.count("==> migrations: skipped c-mixed.sh d-mixed.sh (they take system steps as alice: run herald-os update, without sudo, in a terminal)") == 1
+    assert summary(output)["migrations"] == "skipped c-mixed.sh d-mixed.sh (run herald-os update, without sudo, in a terminal)"
+    assert "FAILED" not in output and problems(home) == "none"
+    assert not (home / "sudo.log").exists()
+    assert not [call for call in calls(home) if call.startswith("sudo -n -u alice -H sudo")]
 
 
-@ROOT_NS
 @TERMINAL
-def test_under_sudo_in_a_terminal_a_mixed_migration_asks_for_the_persons_password_once(machine, tmp_path):
+def test_the_persons_own_run_asks_once_and_runs_their_mixed_migrations(machine):
     home, env = machine
-    alice = person(home)
-    script, folder = installed(tmp_path)
-    migration(env, "c-mixed", "user, with sudo", folder)
-    migration(env, "d-mixed", "user, with sudo", folder)
-    (home / "person-needs-password").write_text("")
-    command = f"unshare -r {BASH} {script} --no-hermes"
-    subprocess.run(["script", "-qec", command, "/dev/null"], env={**env, "SUDO_USER": "alice"}, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
-    assert runs(alice, "c-mixed") == 1 and runs(alice, "d-mixed") == 1
+    folder = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    mixed(folder, "c-mixed")
+    mixed(folder, "d-mixed")
+    (home / "no-sudo").write_text("")
+    (home / "use-pty").write_text("")
+    output = in_a_terminal(env)
+    assert runs(home, "c-mixed") == runs(home, "d-mixed") == 1, output
     assert len((home / "sudo.log").read_text().splitlines()) == 1
+    assert problems(home) == "none"
 
 
 @TERMINAL
@@ -1303,9 +1328,10 @@ def test_a_wrong_password_means_no_root_for_the_rest_of_the_update(machine):
     assert len((home / "sudo.log").read_text().splitlines()) == 1
     assert runs(home, "a-root") == 0
     steps = summary(output)
-    assert steps["migrations"] == "skipped a-root.sh (needs root: run sudo herald-os update)"
-    assert steps["system"].startswith("skipped")
-    assert steps["system-flatpaks"].startswith("skipped")
+    assert steps["migrations"] == "password refused (a-root.sh not run)"
+    assert steps["system"] == "password refused (bootc upgrade not run)"
+    assert steps["system-flatpaks"] == "password refused"
+    assert "==> system: password refused" in output
 
 
 def test_with_sudo_that_needs_no_password_nothing_asks(machine):
@@ -1408,3 +1434,68 @@ def test_a_newer_release_is_reported_with_nothing_failed_before_it(machine, tmp_
     tarball.chmod(0o755)
     done = run(env)
     assert summary(done.stdout)["herald-os"] == ("0.2.0 installed" if installs else "FAILED: 0.2.0 did not install")
+
+
+# Round 9: no descriptor of the updater reaches a migration, and none sees the terminal under sudo.
+
+GREEDY = """# Runs as: {kind}
+# Each test in a subshell: a redirection on the loop or the eval would itself hold descriptors.
+open=""
+for fd in $(seq 3 254); do
+  if (eval "true <&$fd") 2>/dev/null; then open="$open $fd"; fi
+done
+echo "$open" >"$TEST_HOME/open-fds-{name}"
+cat >/dev/null
+for fd in $(seq 3 255); do
+  eval "cat <&$fd" >/dev/null 2>&1
+done
+echo run >>"$HOME/runs-{name}"
+"""
+
+
+def greedy(folder: Path, name: str, kind: str = "user") -> None:
+    """A migration that reads all of its input and every descriptor from 3 to 255, after noting which
+    of 3 to 254 were open (255 is its own shell's script)."""
+    (folder / f"{name}.sh").write_text(GREEDY.format(kind=kind, name=name))
+
+
+def test_a_greedy_migration_cannot_stop_the_ones_after_it(machine):
+    home, env = machine
+    folder = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    greedy(folder, "a-greedy")
+    greedy(folder, "b-greedy-root", "root")
+    migration(env, "c-user", "user")
+    migration(env, "d-user", "user")
+    done = run(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert started(done.stdout) == ["a-greedy.sh", "b-greedy-root.sh", "c-user.sh", "d-user.sh"]
+    assert runs(home, "c-user") == runs(home, "d-user") == 1
+    assert (home / "open-fds-a-greedy").read_text().split() == []
+    assert (home / "open-fds-b-greedy-root").read_text().split() == []
+
+
+@ROOT_NS
+def test_under_sudo_a_greedy_migration_cannot_stop_the_ones_after_it(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    greedy(folder, "a-greedy")
+    migration(env, "b-user", "user", folder)
+    done = as_root_under_sudo(env, script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert runs(alice, "a-greedy") == runs(alice, "b-user") == 1
+    assert (home / "open-fds-a-greedy").read_text().split() == []
+
+
+@ROOT_NS
+@TERMINAL
+def test_under_sudo_migrations_get_no_terminal(machine, tmp_path):
+    home, env = machine
+    person(home)
+    script, folder = installed(tmp_path)
+    body = 'if [ -t 0 ]; then echo terminal; else echo no-terminal; fi >"$TEST_HOME/seen-{0}"\n'
+    (folder / "b-user.sh").write_text("# Runs as: user\n" + body.format("b-user"))
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "a-root.sh").write_text("# Runs as: root\n" + body.format("a-root"))
+    subprocess.run(["script", "-qec", f"unshare -r {BASH} {script} --no-hermes", "/dev/null"], env={**env, "SUDO_USER": "alice"}, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert (home / "seen-b-user").read_text().strip() == "no-terminal"
+    assert (home / "seen-a-root").read_text().strip() == "no-terminal"

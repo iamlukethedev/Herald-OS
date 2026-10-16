@@ -295,6 +295,7 @@ have_root() {
   # than asking again at every step.
   if ! sudo -v; then
     ADMIN=none
+    PASSWORD_REFUSED=1
     return 1
   fi
   SUDO_KEPT=1
@@ -311,6 +312,19 @@ have_root() {
   return 0
 }
 NEEDS_ROOT="needs root: run sudo herald-os update"
+# How a step that needs root says it did not run: skipped for want of root, or, after sudo refused
+# the password in a terminal, refused. `not_run LABEL STEP NAMES TOOL` says it and records it in
+# the summary; NAMES are what did not run (migrations), TOOL what would have run it.
+not_run() {
+  local label="$1" name="$2" names="$3" tool="$4" what="${3:-$4}"
+  if [[ -n "${PASSWORD_REFUSED:-}" ]]; then
+    echo "==> $label: password refused"
+    step "$name" "password refused${what:+ ($what not run)}"
+  else
+    echo "==> $label: skipped (${tool:+$tool }$NEEDS_ROOT)"
+    step "$name" "skipped${names:+ $names} (${tool:+$tool }$NEEDS_ROOT)"
+  fi
+}
 skipped=()
 
 # Whether update_system runs its updater as root (an AUR helper asks for root itself).
@@ -433,24 +447,10 @@ person_ready() {
 run_as_user() {
   local uid=""
   if [[ $MIGRATION_USER == self ]]; then
-    REPO="$REPO" bash "$1" </dev/null 3<&-
+    REPO="$REPO" bash "$1" </dev/null
   else
     uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
-    as_user env ${uid:+XDG_RUNTIME_DIR="/run/user/$uid"} bash "$1" </dev/null 3<&-
-  fi
-}
-# Whether the person's own sudo -n works, for a "user, with sudo" migration. Under sudo it often
-# does (sudo remembers the password they just typed); when not, in a terminal sudo asks them once.
-user_has_sudo() {
-  if [[ $MIGRATION_USER == self ]]; then
-    have_root
-  elif as_user sudo -n true 2>/dev/null; then
-    return 0
-  elif [[ -t 0 ]]; then
-    echo "A migration takes system steps as $SUDO_USER through sudo; sudo asks for $SUDO_USER's password once."
-    as_user sudo -v
-  else
-    return 1
+    as_user env ${uid:+XDG_RUNTIME_DIR="/run/user/$uid"} bash "$1" </dev/null
   fi
 }
 
@@ -513,9 +513,14 @@ run_migrations() {
   if [[ $MIGRATION_USER == sudo ]]; then
     mine="$(migrations_dir)" || mine=""
   fi
-  local migration name kind waiting=() waiting_person=() no_user=()
-  # The list comes in on fd 3: stdin stays the terminal, for sudo and admin_access.
-  while IFS=$'\t' read -r name migration kind <&3; do
+  local migration name kind entry entries=() waiting=() waiting_person=() no_user=()
+  # The whole list is read before any migration runs, so that none of them inherits the pipe it
+  # came through (or any other descriptor of this loop) and can swallow the rest of it.
+  while IFS= read -r entry; do
+    entries+=("$entry")
+  done < <(migration_list "$dir" "$mine" | sort -t "$(printf '\t')" -k 1,1)
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    IFS=$'\t' read -r name migration kind <<<"$entry"
     [[ -n "$name" ]] || continue
     if [[ $kind == root ]]; then
       [[ -f "$MIGRATIONS_DONE/$name" ]] && continue
@@ -526,7 +531,7 @@ run_migrations() {
         continue
       fi
       echo "==> migration $name (as root)"
-      if as_root env REPO="$REPO" bash "$migration" </dev/null 3<&-; then
+      if as_root env REPO="$REPO" bash "$migration" </dev/null; then
         as_root mkdir -p "$MIGRATIONS_DONE" && as_root touch "$MIGRATIONS_DONE/$name"
       else
         failed+=("migration:$name")
@@ -538,13 +543,16 @@ run_migrations() {
       continue
     fi
     user_marker check "$name" && continue
-    if [[ $kind == user-sudo ]] && ! user_has_sudo; then
-      # As the person, root fixes it; under sudo, only their own sudo does.
-      if [[ $MIGRATION_USER == sudo ]]; then
-        waiting_person+=("$name")
-      else
-        waiting+=("$name")
-      fi
+    # A "user, with sudo" migration runs as the person and takes its system steps through their
+    # own sudo -n. Under sudo that cannot work: sudo -u gives it a new pseudo-terminal (Fedora's
+    # use_pty), where the password typed for this run is not remembered. So it waits for the
+    # person's own run in a terminal, where sudo asks them once and remembers it.
+    if [[ $kind == user-sudo && $MIGRATION_USER == sudo ]]; then
+      waiting_person+=("$name")
+      continue
+    fi
+    if [[ $kind == user-sudo ]] && ! have_root; then
+      waiting+=("$name")
       continue
     fi
     if ! as_user test -r "$migration"; then
@@ -559,14 +567,13 @@ run_migrations() {
     else
       failed+=("migration:$name")
     fi
-  done 3< <(migration_list "$dir" "$mine" | sort -t "$(printf '\t')" -k 1,1)
+  done
   if [[ ${#waiting[@]} -gt 0 ]]; then
-    echo "==> migrations: skipped ($NEEDS_ROOT)"
     skipped+=(migrations)
-    step migrations "skipped ${waiting[*]} ($NEEDS_ROOT)"
+    not_run migrations migrations "${waiting[*]}" ""
   fi
   if [[ ${#waiting_person[@]} -gt 0 ]]; then
-    echo "==> migrations: skipped (they need $SUDO_USER's own sudo: run herald-os update, without sudo, in a terminal)"
+    echo "==> migrations: skipped ${waiting_person[*]} (they take system steps as $SUDO_USER: run herald-os update, without sudo, in a terminal)"
     step migrations "skipped ${waiting_person[*]} (run herald-os update, without sudo, in a terminal)"
   fi
   if [[ ${#no_user[@]} -gt 0 ]]; then
@@ -751,9 +758,8 @@ if [[ $SYSTEM -eq 1 ]]; then
   # Without a way to root (from the menu) the system step is skipped rather than failed, and stays
   # out of problems= and the exit status: `sudo herald-os update` updates it.
   if system_needs_root && [[ $ADMIN == none ]]; then
-    echo "==> system: skipped ($system_tool $NEEDS_ROOT)"
     skipped+=(system)
-    step system "skipped ($system_tool $NEEDS_ROOT)"
+    not_run system system "" "$system_tool"
   else
     update_system
     rc=$?
@@ -771,9 +777,8 @@ if [[ $SYSTEM -eq 1 ]]; then
     # skipped the same way.
     if [[ -n "$(flatpak list --system --columns=ref 2>/dev/null)" ]]; then
       if [[ $ADMIN == none ]]; then
-        echo "==> system flatpaks: skipped ($NEEDS_ROOT)"
         skipped+=(system-flatpaks)
-        step system-flatpaks "skipped ($NEEDS_ROOT)"
+        not_run "system flatpaks" system-flatpaks "" ""
       else
         echo "==> system flatpaks"
         flatpak_step system-flatpaks --system as_root
