@@ -1193,8 +1193,24 @@ describe('the Studio preview', () => {
 
     const page = await fetchFile(`${home}/Projects/site/index.html`)
     expect(page.status).toBe(200)
-    expect(page.headers.get('content-type')).toBe('text/html')
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8')
     expect(await page.text()).toBe('<h1>hi</h1>')
+
+    for (const [file, type] of [
+      ['app.js', 'text/javascript; charset=utf-8'],
+      ['app.mjs', 'text/javascript; charset=utf-8'],
+      ['style.css', 'text/css; charset=utf-8'],
+      ['data.json', 'application/json; charset=utf-8'],
+      ['site.webmanifest', 'application/manifest+json; charset=utf-8'],
+      ['notes.txt', 'text/plain; charset=utf-8'],
+      ['logo.png', 'image/png'],
+      ['blob.bin', 'application/octet-stream']
+    ]) {
+      write(`Projects/site/${file}`, 'x')
+      const response = await fetchFile(`${home}/Projects/site/${file}`)
+      expect(response.headers.get('content-type')).toBe(type)
+      await response.arrayBuffer()
+    }
 
     const part = await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=2-5' })
     expect(part.status).toBe(206)

@@ -508,21 +508,21 @@ export async function servableFile(url: string, allows: (file: string) => boolea
   return { real: checked.real, handle, size: stat.size }
 }
 
-/** Content types for what previews and viewers load; anything else is sent as bytes. */
+/** Content types for what previews and viewers load, text in UTF-8; anything else is sent as bytes. */
 const WEB_TYPES: Record<string, string> = {
-  '.html': 'text/html',
-  '.htm': 'text/html',
-  '.js': 'text/javascript',
-  '.mjs': 'text/javascript',
-  '.cjs': 'text/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.map': 'application/json',
-  '.webmanifest': 'application/manifest+json',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.cjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.xml': 'application/xml',
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.csv': 'text/csv',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
