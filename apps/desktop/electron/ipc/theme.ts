@@ -4,6 +4,7 @@ import { type HeraldOSPrefs, IPC } from '../../shared/ipc.ts'
 import { HERALD_SKIN, type ThemeSpec } from '../../shared/theme.ts'
 import type { BackendManager } from '../backend/manager.ts'
 import { events } from '../events/bus.ts'
+import { assertReadable } from './fs.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { writePrefs } from '../prefs.ts'
@@ -89,9 +90,9 @@ function sampleImage(target: string): string | null {
 
 export function registerThemeIpc(deps: ThemeIpcDeps): void {
   ipcMain.handle(IPC.themeList, () => listThemes())
-  ipcMain.handle(IPC.themeSample, (_event, target: string) => sampleImage(String(target)))
+  ipcMain.handle(IPC.themeSample, async (_event, target: string) => sampleImage((await assertReadable(String(target).replace(/^file:\/\//, ''))).real))
   ipcMain.handle(IPC.themeApply, (_event, name: string) => applyTheme(String(name), deps))
-  ipcMain.handle(IPC.themeSave, (_event, spec: ThemeSpec, imagePath?: string) => saveTheme(spec, imagePath ? String(imagePath) : undefined))
+  ipcMain.handle(IPC.themeSave, async (_event, spec: ThemeSpec, imagePath?: string) => saveTheme(spec, imagePath ? (await assertReadable(String(imagePath))).real : undefined))
   ipcMain.handle(IPC.themeInstall, (_event, url: string) => installTheme(String(url)))
   ipcMain.handle(IPC.fontsList, () => listFonts())
 }

@@ -13,7 +13,13 @@ vi.mock('electron', () => ({
   ClipboardItem: class {},
   dialog: {},
   ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler), on: () => {} },
-  nativeImage: { createFromPath: (file: string) => ({ toDataURL: () => `data:${file}`, isEmpty: () => false, toPNG: () => Buffer.alloc(0) }) },
+  nativeImage: {
+    createFromPath: (file: string) => {
+      const image = { toDataURL: () => `data:${file}`, isEmpty: () => false, toPNG: () => Buffer.alloc(0), getSize: () => ({ width: 1, height: 1 }), resize: () => image }
+
+      return image
+    }
+  },
   shell: { trashItem },
   systemPreferences: {},
   webContents: { getAllWebContents: () => [] },
@@ -25,12 +31,14 @@ const { HOME_SECRETS, assertProjectFolder, assertReadable, assertWritable, readD
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { registerOfficeIpc } = await import('../office/ipc.ts')
 const { registerCaptureIpc } = await import('./capture.ts')
+const { registerThemeIpc } = await import('./theme.ts')
 const { IPC } = await import('../../shared/ipc.ts')
 
 registerFsIpc(() => null)
 registerCanvasIpc(() => null)
 registerOfficeIpc(() => null)
 registerCaptureIpc(() => {})
+registerThemeIpc({ panels: false, broadcast: () => {}, backend: {} as never })
 
 const owner = () => Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() })
 let sender = owner()
@@ -475,6 +483,23 @@ describe('browser profiles', () => {
 
     expect(await names(`${home}/Library/Application Support`)).toEqual(['Google', 'Notes'])
     expect((await readFile(`${home}/Library/Application Support/Notes/notes.json`)).content).toBe('{}')
+  })
+})
+
+describe('theme images', () => {
+  it('refuses to sample or save a theme image that is, or links to, a credential store', async () => {
+    write('.ssh/wall.png', 'png')
+    link('.ssh/wall.png', 'Pictures/wall.png')
+
+    await expect(invoke(IPC.themeSample, `${home}/.ssh/wall.png`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.themeSample, `file://${home}/Pictures/wall.png`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.themeSave, { name: 'Leak' }, `${home}/Pictures/wall.png`)).rejects.toThrow(PROTECTED)
+  })
+
+  it('still samples a picture in the home folder', async () => {
+    write('Pictures/beach.png', 'png')
+
+    expect(await invoke(IPC.themeSample, `file://${home}/Pictures/beach.png`)).toBe(`data:${home}/Pictures/beach.png`)
   })
 })
 
