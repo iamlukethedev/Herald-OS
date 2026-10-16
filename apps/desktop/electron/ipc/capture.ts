@@ -8,7 +8,7 @@ import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, typ
 import { describeQr } from '../../shared/qr.ts'
 import { privacyPaneUrl } from '../../shared/privacy-panes.ts'
 import { allowAttachments } from '../attachments.ts'
-import { assertReadable } from './fs.ts'
+import { assertReadable, checkWritable, writeChecked } from './fs.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
@@ -454,16 +454,15 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
     }
   })
   ipcMain.handle(IPC.captureReadImage, async (_event, target: string) => nativeImage.createFromPath(await readableImage(target)).toDataURL())
-  ipcMain.handle(IPC.captureSaveImage, (_event, target: string, dataUrl: string) => {
-    const file = userImagePath(target)
+  ipcMain.handle(IPC.captureSaveImage, async (_event, target: string, dataUrl: string) => {
+    const { path: file, real } = await checkWritable(userImagePath(target))
     const match = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl))
 
     if (!match) {
       throw new Error('The image must be a PNG')
     }
 
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, Buffer.from(match[1], 'base64'))
+    await writeChecked(real, Buffer.from(match[1], 'base64'))
 
     return file
   })

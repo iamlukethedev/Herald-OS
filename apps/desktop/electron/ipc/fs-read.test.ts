@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>())
+const trashItem = vi.hoisted(() => vi.fn(async (_file: string) => undefined))
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
@@ -13,14 +14,14 @@ vi.mock('electron', () => ({
   dialog: {},
   ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler), on: () => {} },
   nativeImage: { createFromPath: (file: string) => ({ toDataURL: () => `data:${file}`, isEmpty: () => false, toPNG: () => Buffer.alloc(0) }) },
-  shell: {},
+  shell: { trashItem },
   systemPreferences: {},
   webContents: { getAllWebContents: () => [] },
   app: { getPath: () => '/tmp', on: () => {} }
 }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 
-const { HOME_SECRETS, assertProjectFolder, assertReadable, readDir, readFile, registerFsIpc } = await import('./fs.ts')
+const { HOME_SECRETS, assertProjectFolder, assertReadable, assertWritable, readDir, readFile, registerFsIpc } = await import('./fs.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { registerOfficeIpc } = await import('../office/ipc.ts')
 const { registerCaptureIpc } = await import('./capture.ts')
@@ -36,6 +37,7 @@ let sender = owner()
 const invoke = (channel: string, ...args: unknown[]): Promise<unknown> => Promise.resolve(handlers.get(channel)!({ sender }, ...args))
 const PROTECTED = /is a protected location/
 const CONFINED = /only looks through folders inside your home folder/
+const EDITS = /only edits files inside your home folder/
 const PROJECT_OUTSIDE = /project folders must be inside your home folder/
 
 let home: string
@@ -67,6 +69,7 @@ beforeEach(() => {
   hermes = path.join(home, '.hermes')
   vi.stubEnv('HOME', home)
   vi.stubEnv('HERMES_HOME', '')
+  trashItem.mockClear()
 
   write('.ssh/id_rsa', 'PRIVATE KEY')
   write('.gnupg/private-keys-v1.d/key.key', 'GPG')
@@ -283,6 +286,102 @@ describe('credential stores behind symlinks', () => {
     await expect(readFile(`${home}/Projects/../.ssh/id_rsa`)).rejects.toThrow(PROTECTED)
     await expect(readFile('~/Downloads/../.hermes/.env')).rejects.toThrow(PROTECTED)
     expect((await readFile(`${home}/Projects/../notes.md`)).content).toBe('notes')
+  })
+})
+
+describe('writes through links', () => {
+  const content = (file: string): string => fs.readFileSync(path.join(home, file), 'utf8')
+
+  it('refuses writes into credential stores, as written', async () => {
+    await expect(assertWritable(`${home}/.aws/credentials`)).rejects.toThrow(PROTECTED)
+    await expect(assertWritable(`${hermes}/.env`)).rejects.toThrow(PROTECTED)
+    await expect(assertWritable(`${home}/.ssh/authorized_keys`)).rejects.toThrow(PROTECTED)
+    await expect(assertWritable(`${hermes}/memories/MEMORY.md`)).resolves.toBe(`${hermes}/memories/MEMORY.md`)
+  })
+
+  it('refuses ~/innocent/authorized_keys when innocent links to ~/.ssh', async () => {
+    link('.ssh', 'innocent')
+
+    await expect(invoke(IPC.fsWriteText, `${home}/innocent/authorized_keys`, 'ssh-ed25519 attacker')).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsWriteText, `${home}/innocent/authorized_keys`, 'x', { atomic: true })).rejects.toThrow(PROTECTED)
+    expect(fs.existsSync(`${home}/.ssh/authorized_keys`)).toBe(false)
+  })
+
+  it('refuses ~/proj/cfg/gh/hosts.yml when cfg links to ~/.config', async () => {
+    link('.config', 'proj/cfg')
+
+    await expect(invoke(IPC.fsWriteText, `${home}/proj/cfg/gh/hosts.yml`, 'oauth_token: attacker')).rejects.toThrow(PROTECTED)
+    expect(content('.config/gh/hosts.yml')).toBe('oauth_token: x')
+  })
+
+  it('refuses writes where a linked ~/.ssh leads', async () => {
+    moveBehindLink('.ssh', 'dotfiles/ssh')
+
+    await expect(invoke(IPC.fsWriteText, `${home}/dotfiles/ssh/authorized_keys`, 'x')).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsWriteText, `${home}/.ssh/config`, 'x')).rejects.toThrow(PROTECTED)
+  })
+
+  it('refuses a write through a link out of the home folder', async () => {
+    link('/etc', 'etc')
+
+    await expect(invoke(IPC.fsWriteText, `${home}/etc/hosts`, 'x')).rejects.toThrow(EDITS)
+    await expect(invoke(IPC.fsMkdir, `${home}/etc/new`)).rejects.toThrow(EDITS)
+  })
+
+  it('refuses mkdir, rename (both ends), trash and lock through a link to a secret', async () => {
+    link('.ssh', 'innocent')
+
+    await expect(invoke(IPC.fsMkdir, `${home}/innocent/new`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsRename, `${home}/notes.md`, `${home}/innocent/notes.md`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsRename, `${home}/innocent/id_rsa`, `${home}/id_rsa`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsTrash, [`${home}/innocent/id_rsa`])).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsLock, `${home}/innocent/config.lock`, 0)).rejects.toThrow(PROTECTED)
+    expect(trashItem).not.toHaveBeenCalled()
+    expect(fs.existsSync(`${home}/notes.md`)).toBe(true)
+  })
+
+  it('refuses to move or trash the folder a linked ~/.ssh leads to', async () => {
+    moveBehindLink('.ssh', 'dotfiles/ssh')
+
+    await expect(invoke(IPC.fsRename, `${home}/dotfiles/ssh`, `${home}/dotfiles/old-ssh`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsTrash, [`${home}/dotfiles/ssh/id_rsa`])).rejects.toThrow(PROTECTED)
+  })
+
+  it('moves and trashes a symlink itself, not what it points to', async () => {
+    link('.ssh', 'innocent')
+
+    await invoke(IPC.fsRename, `${home}/innocent`, `${home}/renamed`)
+    expect(fs.lstatSync(`${home}/renamed`).isSymbolicLink()).toBe(true)
+    await invoke(IPC.fsTrash, [`${home}/renamed`])
+    expect(trashItem).toHaveBeenCalledWith(`${home}/renamed`)
+  })
+
+  it('refuses Canvas, Office and capture writes through a link to a secret', async () => {
+    link('.ssh', 'innocent')
+
+    await expect(invoke(IPC.canvasWriteFile, `${home}/innocent/picture.png`, new Uint8Array([1]))).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.canvasStreamBegin, `${home}/innocent/picture.png`, { kind: 'bytes' })).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.officeWrite, `${home}/innocent/letter.docx`, new Uint8Array([1]), { backup: false })).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.captureSaveImage, `${home}/innocent/shot.png`, 'data:image/png;base64,AA==')).rejects.toThrow(PROTECTED)
+    expect(fs.readdirSync(`${home}/.ssh`)).toEqual(['id_rsa'])
+  })
+
+  it('still writes through links that stay in ordinary places', async () => {
+    link('Projects/site', 'site-link')
+    link('notes.md', 'notes-link.md')
+
+    await invoke(IPC.fsWriteText, `${home}/site-link/about.html`, 'about')
+    await invoke(IPC.fsWriteText, `${home}/notes-link.md`, 'edited')
+    await invoke(IPC.fsWriteText, `${home}/Projects/new/deep/file.txt`, 'new')
+    await invoke(IPC.canvasWriteFile, `${home}/Pictures/out.png`, new Uint8Array([1, 2]))
+    await invoke(IPC.captureSaveImage, `${home}/Pictures/shot.png`, 'data:image/png;base64,AA==')
+
+    expect(content('Projects/site/about.html')).toBe('about')
+    expect(content('notes.md')).toBe('edited')
+    expect(fs.lstatSync(`${home}/notes-link.md`).isSymbolicLink()).toBe(true)
+    expect(content('Projects/new/deep/file.txt')).toBe('new')
+    expect(fs.readFileSync(`${home}/Pictures/out.png`)).toEqual(Buffer.from([1, 2]))
+    expect(fs.readFileSync(`${home}/Pictures/shot.png`)).toEqual(Buffer.from([0]))
   })
 })
 

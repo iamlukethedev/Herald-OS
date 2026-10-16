@@ -18,7 +18,7 @@ import {
   type CanvasWrite,
   IPC
 } from '../../shared/ipc.ts'
-import { assertReadable, assertWritable } from '../ipc/fs.ts'
+import { assertReadable, assertWritable, checkWritable, writeChecked } from '../ipc/fs.ts'
 import { whileOpen, WindowWatches } from '../ipc/watches.ts'
 import { log } from '../log.ts'
 import { convertToPng } from './convert.ts'
@@ -55,8 +55,8 @@ function pixelsOrBytes(bytes: Uint8Array, channels: 1 | 4): CanvasRawImage | Uin
 }
 
 /** A project Herald may read and write: a `.comp` folder in the home folder (or /tmp), outside protected places. */
-export function projectPath(target: string): string {
-  const dir = assertWritable(String(target)).replace(/[/\\]+$/, '')
+export async function projectPath(target: string): Promise<string> {
+  const dir = (await assertWritable(String(target))).replace(/[/\\]+$/, '')
 
   if (!isProjectPath(dir)) {
     throw new Error(`A Herald Canvas project is a folder whose name ends in ${PROJECT_EXTENSION}`)
@@ -65,16 +65,9 @@ export function projectPath(target: string): string {
   return dir
 }
 
-/** A file or project Herald may read: writable, and readable once its symlinks resolve (a link into `~/.aws` is not). */
-async function readable(file: string): Promise<string> {
-  await assertReadable(file)
-
-  return file
-}
-
 /** An image Herald may open as a new project. */
-function imagePath(target: string): string {
-  const file = assertWritable(String(target))
+async function imagePath(target: string): Promise<string> {
+  const file = await assertWritable(String(target))
 
   if (!CANVAS_IMAGE_EXTENSIONS.has(path.extname(file).toLowerCase())) {
     throw new Error(`Herald Canvas does not open ${path.extname(file) || 'this kind of file'}`)
@@ -86,8 +79,8 @@ function imagePath(target: string): string {
 const toProject = (dir: string, contents: PackageContents): CanvasProject => ({ path: dir, manifest: contents.manifest, assets: contents.assets, digest: contents.digest })
 
 /** A layered file Herald may read (a PSD or PSB in the home folder or /tmp). */
-function layeredPath(target: string): string {
-  const file = assertWritable(String(target))
+async function layeredPath(target: string): Promise<string> {
+  const file = await assertWritable(String(target))
 
   if (!isLayeredImage(file)) {
     throw new Error(`${path.basename(file)} is not a Photoshop document`)
@@ -171,7 +164,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasRead, async (_event, target: string) => {
-    const dir = await readable(projectPath(target))
+    const dir = await projectPath(target)
 
     return toProject(dir, await readPackage(dir))
   })
@@ -179,13 +172,13 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.canvasReadAsset, async (_event, target: string, name: string) => {
     const asset = String(name)
 
-    const bytes = await readAsset(await readable(projectPath(target)), asset)
+    const bytes = await readAsset(await projectPath(target), asset)
 
     return asset.endsWith('.png') ? pixelsOrBytes(bytes, asset.endsWith('.mask.png') ? 1 : 4) : bytes
   })
 
   ipcMain.handle(IPC.canvasWrite, async (event, target: string, request: CanvasWrite) => {
-    const dir = projectPath(target)
+    const dir = await projectPath(target)
     const write = () => writePackage(dir, { manifest: parseManifest(request.manifest), assets: request.assets ?? {}, preview: request.preview })
     // This window's own save is not an outside change for it; other windows on the project still reload.
     const own = watches.find(event.sender, watch => watch.dir === dir)
@@ -194,7 +187,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadImage, async (_event, target: string) => {
-    const file = await readable(imagePath(target))
+    const file = await imagePath(target)
     const stat = await fs.stat(file)
 
     if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
@@ -210,7 +203,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadTable, async (_event, target: string): Promise<Uint8Array> => {
-    const file = await readable(assertWritable(String(target)))
+    const file = await assertWritable(String(target))
 
     if (path.extname(file).toLowerCase() !== '.cube') {
       throw new Error(`${path.basename(file)} is not a .cube colour table`)
@@ -226,7 +219,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasReadPart, async (_event, target: string, offset: number, length: number): Promise<CanvasFilePart> => {
-    const file = await readable(layeredPath(target))
+    const file = await layeredPath(target)
     const handle = await fs.open(file, 'r')
 
     try {
@@ -248,7 +241,7 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle(IPC.canvasStreamBegin, async (event, target: string, kind: CanvasStreamKind) => {
-    const file = assertWritable(String(target))
+    const file = await assertWritable(String(target))
     await fs.mkdir(path.dirname(file), { recursive: true })
     const id = crypto.randomUUID()
     const partial = `${file}.${id.slice(0, 8)}.part`
@@ -316,16 +309,15 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.canvasStreamAbort, (_event, id: string) => abortStream(String(id)))
 
   ipcMain.handle(IPC.canvasWriteFile, async (_event, target: string, data: Uint8Array | CanvasRawImage, ppi?: number) => {
-    const file = assertWritable(String(target))
+    const { path: file, real } = await checkWritable(String(target))
     const bytes = data instanceof Uint8Array ? data : encodePng(data as CanvasRawImage & { channels: 1 | 4 }, ppi)
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await fs.writeFile(file, bytes)
+    await writeChecked(real, bytes)
 
     return file
   })
 
   ipcMain.handle(IPC.canvasWatch, async (event, target: string, loaded?: string) => {
-    const dir = await readable(projectPath(target))
+    const dir = await projectPath(target)
     const owner = event.sender
     const watchId = crypto.randomUUID()
     const contents = await readPackage(dir)

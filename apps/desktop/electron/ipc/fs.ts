@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
-import { type FSWatcher, watch as watchFs } from 'node:fs'
+import { constants as fsConstants, type FSWatcher, watch as watchFs } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -103,13 +103,20 @@ export async function readFile(target: string): Promise<FilePreview> {
       return { path: file, kind: 'too-large', size: stat.size, mime: imageMime }
     }
 
-    const data = await fs.readFile(real)
+    const image = await openChecked(real, fsConstants.O_RDONLY)
+    let data: Buffer
+
+    try {
+      data = await image.readFile()
+    } finally {
+      await image.close()
+    }
 
     return { path: file, kind: 'image', size: stat.size, mime: imageMime, content: `data:${imageMime};base64,${data.toString('base64')}` }
   }
 
   const looksText = TEXT_EXTENSIONS.has(ext) || ext === '' || /^\.[a-z0-9]{1,6}rc$/.test(ext)
-  const handle = await fs.open(real, 'r')
+  const handle = await openChecked(real, fsConstants.O_RDONLY)
 
   try {
     const probe = Buffer.alloc(Math.min(8192, stat.size))
@@ -128,23 +135,6 @@ export async function readFile(target: string): Promise<FilePreview> {
   } finally {
     await handle.close()
   }
-}
-
-/** Paths the shell may write to directly (user-initiated edits). Everything else goes through the audited bridge. */
-export function assertWritable(target: string): string {
-  const file = normalizeUserPath(target)
-  const home = os.homedir()
-  const protectedRoots = [path.join(home, '.ssh'), path.join(home, 'Library', 'Keychains'), '/System', '/usr', '/bin', '/sbin', '/private/etc', '/Library']
-
-  if (!file.startsWith(home + path.sep) && !file.startsWith('/tmp/') && !file.startsWith('/private/tmp/')) {
-    throw new Error('Herald OS only edits files inside your home folder')
-  }
-
-  if (protectedRoots.some(root => file === root || file.startsWith(root + path.sep)) || isSecret(file, lexicalPlaces())) {
-    throw new Error(`${file} is a protected location`)
-  }
-
-  return file
 }
 
 /** Credential stores under the home folder (and the bridge's `BUILTIN_PROTECTED` secrets): never read, listed, watched or written by the shell. */
@@ -168,6 +158,7 @@ export const HOME_SECRETS = [
 ]
 
 const TEMP_ROOTS = ['/tmp', '/private/tmp']
+const SYSTEM_ROOTS = ['/System', '/usr', '/bin', '/sbin', '/private/etc', '/Library']
 
 /**
  * The home folder, the Hermes homes, the temporary folders and the credential stores, each as written and with its
@@ -226,15 +217,6 @@ async function hermesKeys(hermes: string): Promise<string[]> {
   const found = await Promise.all(dirs.map(async dir => (await names(dir)).filter(name => isEnvFile(name) || name === 'auth.json').map(name => path.join(dir, name))))
 
   return [...dirs.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')]), ...found.flat()]
-}
-
-/** The places as written, for a check that cannot wait on the disk. */
-function lexicalPlaces(): Places {
-  const homes = [os.homedir()]
-  const hermes = hermesHomes()
-  const secrets = [...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...hermes.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')])]
-
-  return { homes, hermes, temps: [...TEMP_ROOTS, os.tmpdir()], secrets }
 }
 
 async function resolvedPlaces(): Promise<Places> {
@@ -324,6 +306,61 @@ export async function assertProjectFolder(target: string): Promise<string> {
   }
 
   return root
+}
+
+export interface WritableOptions {
+  /** The entry itself (a rename or a trash moves a symlink, not what it points to): only its folder is resolved. */
+  entry?: boolean
+}
+
+/**
+ * Paths the shell may write to directly (user-initiated edits): inside the home folder or a temporary folder, as
+ * written and once symlinks resolve (the nearest existing folder's, for a new file), and never a system folder or a
+ * credential store. Everything else goes through the audited bridge.
+ */
+export async function checkWritable(target: string, options: WritableOptions = {}): Promise<CheckedPath> {
+  const file = normalizeUserPath(target)
+  const places = await resolvedPlaces()
+  const editable = [...places.homes, ...places.temps]
+  const inside = (candidate: string) => editable.some(root => within(candidate, root) && comparable(candidate) !== comparable(root))
+
+  if (!inside(file)) {
+    throw new Error('Herald OS only edits files inside your home folder')
+  }
+
+  const real = await outsideSecrets(file, places, async entry => (options.entry ? path.join(await realpathDeep(path.dirname(entry)), path.basename(entry)) : realpathDeep(entry)))
+
+  if (!inside(real)) {
+    throw new Error('Herald OS only edits files inside your home folder')
+  }
+
+  if ([file, real].some(candidate => SYSTEM_ROOTS.some(root => within(candidate, root)))) {
+    throw new Error(`${file} is a protected location`)
+  }
+
+  return { path: file, real }
+}
+
+/** {@link checkWritable}, as the caller wrote the path. */
+export async function assertWritable(target: string, options: WritableOptions = {}): Promise<string> {
+  return (await checkWritable(target, options)).path
+}
+
+/** Open a checked, resolved path without following a symlink put in its place after the check. */
+export function openChecked(real: string, flags: number): Promise<fs.FileHandle> {
+  return fs.open(real, flags | (fsConstants.O_NOFOLLOW ?? 0))
+}
+
+/** Write a whole file at a checked, resolved path, creating its folder. */
+export async function writeChecked(real: string, data: string | Uint8Array): Promise<void> {
+  await fs.mkdir(path.dirname(real), { recursive: true })
+  const handle = await openChecked(real, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC)
+
+  try {
+    await handle.writeFile(data)
+  } finally {
+    await handle.close()
+  }
 }
 
 async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number; files: number; complete: boolean }> {
@@ -519,19 +556,18 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null
   })
   ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string, options?: WriteTextOptions) => {
-    const file = assertWritable(target)
+    const { path: file, real } = await checkWritable(target)
 
     if (options?.atomic) {
       return writeTextAtomic(file, String(content), options.expect === undefined ? {} : { expect: options.expect === null ? null : String(options.expect) })
     }
 
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await fs.writeFile(file, String(content), 'utf8')
+    await writeChecked(real, String(content))
 
     return true
   })
   ipcMain.handle(IPC.fsLock, async (event, target: string, timeoutMs: number): Promise<FileLockResult> => {
-    const file = assertWritable(target)
+    const file = await assertWritable(target)
     await fs.mkdir(path.dirname(file), { recursive: true })
     const outcome = await lockFile(file, Math.max(0, Math.min(LOCK_WAIT_MAX_MS, Number(timeoutMs) || 0)))
 
@@ -556,11 +592,11 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     await held?.lock.release()
   })
   ipcMain.handle(IPC.fsMkdir, async (_event, target: string) => {
-    await fs.mkdir(assertWritable(target), { recursive: true })
+    await fs.mkdir(await assertWritable(target), { recursive: true })
   })
   ipcMain.handle(IPC.fsRename, async (_event, from: string, to: string) => {
-    const source = assertWritable(from)
-    const dest = assertWritable(to)
+    const source = await assertWritable(from, { entry: true })
+    const dest = await assertWritable(to, { entry: true })
 
     try {
       await fs.access(dest)
@@ -575,7 +611,7 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
   })
   ipcMain.handle(IPC.fsTrash, async (_event, targets: string[]) => {
     for (const target of targets) {
-      await shell.trashItem(assertWritable(target))
+      await shell.trashItem(await assertWritable(target, { entry: true }))
     }
   })
   ipcMain.handle(IPC.fsExportPdf, async (_event, html: string, suggestedName: string) => {
@@ -596,7 +632,7 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     try {
       await printer.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(String(html))}`)
       const pdf = await printer.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 } })
-      await fs.writeFile(assertWritable(picked.filePath), pdf)
+      await writeChecked((await checkWritable(picked.filePath)).real, pdf)
 
       return picked.filePath
     } finally {
