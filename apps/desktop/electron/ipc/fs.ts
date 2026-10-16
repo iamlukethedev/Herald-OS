@@ -557,14 +557,17 @@ export async function assertWritable(target: string, options: WritableOptions = 
  * Opens of a checked path before one that keeps changing is refused: a save that renames a new file into place (as
  * Hermes saves memory, sometimes many times a second) can land between the open and its check. The handle is closed
  * between attempts. A failed check means a rename has just landed, and a saver writes its next file before the next
- * rename, so the first OPEN_IMMEDIATE_RETRIES opens again at once; after that the wait grows from OPEN_BACKOFF_MS to
- * OPEN_BACKOFF_MAX_MS, with jitter. No attempt starts once OPEN_RETRY_BUDGET_MS have passed since the first, waits,
- * opens and checks included, so a slow disk refuses in bounded time too.
+ * rename, so the first OPEN_IMMEDIATE_RETRIES opens again at once. The last four wait, doubling from OPEN_BACKOFF_MS
+ * to OPEN_BACKOFF_MAX_MS (5, 10, 20 and 40 ms, each between half and all of it), 75 ms at most in all.
+ *
+ * No new attempt starts once OPEN_RETRY_BUDGET_MS have passed since the first, waits, opens and checks included, so
+ * retrying on a slow disk stops too. The budget is checked between attempts only: a single open or check that does
+ * not return (a stalled network disk, a FIFO with no writer) is not cut short.
  */
-export const OPEN_ATTEMPTS = 8
+export const OPEN_ATTEMPTS = 10
 export const OPEN_IMMEDIATE_RETRIES = 5
 export const OPEN_BACKOFF_MS = 5
-export const OPEN_BACKOFF_MAX_MS = 50
+export const OPEN_BACKOFF_MAX_MS = 40
 export const OPEN_RETRY_BUDGET_MS = 300
 
 /**

@@ -49,7 +49,7 @@ vi.mock('electron', () => ({
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
-const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, OPEN_IMMEDIATE_RETRIES, OPEN_RETRY_BUDGET_MS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openBackoff, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
+const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, OPEN_BACKOFF_MAX_MS, OPEN_IMMEDIATE_RETRIES, OPEN_RETRY_BUDGET_MS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openBackoff, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
 const { WebViews, confineFiles, registerWebIpc, servableFile, serveOpenFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
@@ -1097,9 +1097,17 @@ describe('opening checked paths', () => {
       expect(openBackoff(attempt, () => 1)).toBe(0)
     }
 
-    expect([1, 2, 3, 4, 5].map(step => openBackoff(OPEN_IMMEDIATE_RETRIES + step, () => 1))).toEqual([5, 10, 20, 40, 50])
+    expect([1, 2, 3, 4, 5].map(step => openBackoff(OPEN_IMMEDIATE_RETRIES + step, () => 1))).toEqual([5, 10, 20, 40, 40])
     expect([1, 2, 3].map(step => openBackoff(OPEN_IMMEDIATE_RETRIES + step, () => 0))).toEqual([2.5, 5, 10])
-    expect(openBackoff(OPEN_IMMEDIATE_RETRIES + 20, () => 0.5)).toBe(37.5)
+    expect(openBackoff(OPEN_IMMEDIATE_RETRIES + 20, () => 0.5)).toBe(30)
+  })
+
+  it('waits before each retry it makes, reaching every step and the cap, within the budget', () => {
+    const waits = Array.from({ length: OPEN_ATTEMPTS - 1 }, (_, index) => openBackoff(index + 1, () => 1))
+
+    expect(waits).toEqual([0, 0, 0, 0, 0, 5, 10, 20, 40])
+    expect(Math.max(...waits)).toBe(OPEN_BACKOFF_MAX_MS)
+    expect(waits.reduce((sum, wait) => sum + wait, 0)).toBeLessThan(OPEN_RETRY_BUDGET_MS)
   })
 
   it('closes every handle it does not return, and refuses a swap that persists within the retry budget', async () => {
