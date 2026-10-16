@@ -126,6 +126,8 @@ export const zhCN: Translation = {
   'commandBar.recentSessions': '最近的会话',
   'commandBar.untitledSession': '未命名会话',
   'commandBar.failed': '无法完成此操作',
+  'commandBar.fun': '娱乐一下',
+  'commandBar.roadster': '开着敞篷跑车飞一圈',
 
   'roadster.label': '一辆白色敞篷跑车借冷气喷流升空，在一辆卡车上方后空翻，飞入夜色',
   'roadster.skip': '按任意键或点击以跳过',

@@ -132,6 +132,8 @@ export const ptBR: Translation = {
   'commandBar.recentSessions': 'Sessões recentes',
   'commandBar.untitledSession': 'Sessão sem título',
   'commandBar.failed': 'Não foi possível fazer isso',
+  'commandBar.fun': 'Só por diversão',
+  'commandBar.roadster': 'Dar uma volta voando de roadster',
 
   'roadster.label': 'Um roadster branco decola com jatos de vapor frio, dá um mortal para trás sobre um caminhão e voa noite adentro',
   'roadster.skip': 'Pressione qualquer tecla ou clique para pular',

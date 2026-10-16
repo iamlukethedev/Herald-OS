@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { IconArrowRight, IconBolt, IconMessage, IconSlash } from '@tabler/icons-react'
+import { IconArrowRight, IconBolt, IconCar, IconMessage, IconSlash } from '@tabler/icons-react'
 import { Command } from 'cmdk'
 import { useMemo, useState } from 'react'
 import { AppGlyph, HermesAvatar } from '../components/app-icon.tsx'
@@ -18,6 +18,9 @@ import { $applicationsOpen, $commandBarOpen, toggleCommandBar } from '../store/s
 import { openApp, showPage } from '../store/windows.ts'
 import { appName, LAUNCHABLE_APPS } from './apps.ts'
 import { useSlashCatalog } from '../features/chat/use-slash-catalog.ts'
+import { isRoadsterWord } from '../features/roadster/flight.ts'
+
+const ROADSTER_COMMAND = 'roadster.fly'
 
 /**
  * The global command bar (Cmd+K): type to talk to Hermes, or jump to a page, session, app or slash
@@ -107,6 +110,8 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
   const trimmed = query.trim()
   const isSlash = trimmed.startsWith('/')
   const needle = trimmed.toLowerCase()
+  // The easter egg: "fly" or "roadster" on its own comes first, so Enter takes off.
+  const roadster = !isSlash && isRoadsterWord(trimmed)
   const matches = (label: string) => !needle || label.toLowerCase().includes(needle)
   // English names match too, so "settings" still finds Settings in any language.
   const filteredApps = useMemo(() => (isSlash ? [] : LAUNCHABLE_APPS.filter(app => matches(app.name) || matches(appName(app)))), [isSlash, needle])
@@ -134,11 +139,15 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
     }
 
     return listCommands()
-      .filter(command => !command.hidden && !command.args.some(arg => arg.required))
+      .filter(command => !command.hidden && !command.args.some(arg => arg.required) && !(roadster && command.id === ROADSTER_COMMAND))
       .filter(command => command.title.toLowerCase().includes(needle) || command.phrases.some(phrase => (typeof phrase === 'string' ? phrase : phrase.phrase).toLowerCase().includes(needle)))
       .slice(0, 6)
-  }, [isSlash, needle, trimmed.length])
-  const intent = useMemo(() => (trimmed.length >= 3 && !isSlash ? matchIntent(trimmed) : null), [isSlash, trimmed])
+  }, [isSlash, needle, roadster, trimmed.length])
+  const intent = useMemo(() => {
+    const match = trimmed.length >= 3 && !isSlash ? matchIntent(trimmed) : null
+
+    return roadster && match?.command === ROADSTER_COMMAND ? null : match
+  }, [isSlash, roadster, trimmed])
 
   const runRegistry = async (id: string, args: Record<string, unknown>) => {
     close()
@@ -176,9 +185,17 @@ export function CommandPalette({ onClose, standalone = false, onApplications, cl
       </div>
       <div className="h-px bg-line" />
       <Command.List className="max-h-[420px] overflow-y-auto p-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:text-fg-3 [&_[cmdk-group-heading]]:uppercase">
+        {roadster && (
+          <Command.Group heading={t('commandBar.fun')}>
+            <Item value="fun:roadster" onSelect={() => void runRegistry(ROADSTER_COMMAND, {})} icon={<IconCar size={15} />} hint="↵">
+              {t('commandBar.roadster')}
+            </Item>
+          </Command.Group>
+        )}
+
         {trimmed && (
           <Command.Group heading={t('app.hermes')}>
-            <Item value={`ask:${trimmed}`} onSelect={() => void ask(trimmed)} icon={<IconMessage size={15} />} hint="↵">
+            <Item value={`ask:${trimmed}`} onSelect={() => void ask(trimmed)} icon={<IconMessage size={15} />} hint={roadster ? undefined : '↵'}>
               {isSlash ? t('commandBar.run', { command: trimmed }) : t('commandBar.ask', { text: trimmed })}
             </Item>
           </Command.Group>

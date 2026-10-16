@@ -123,6 +123,9 @@ export const en = {
   'commandBar.recentSessions': 'Recent sessions',
   'commandBar.untitledSession': 'Untitled session',
   'commandBar.failed': 'Could not do that',
+  // The command bar's easter egg, offered when the query is "fly" or "roadster" alone (those words stay English).
+  'commandBar.fun': 'Just for fun',
+  'commandBar.roadster': 'Take the roadster for a flight',
 
   'roadster.label': 'A white roadster lifts off on jets of cold vapor, flips backwards over a truck and flies off into the night',
   'roadster.skip': 'Press any key or click to skip',
