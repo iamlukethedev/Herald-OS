@@ -332,16 +332,17 @@ class Gpu:
 @pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
 def test_an_nvidia_gpu_on_the_default_image_is_told_how_to_switch(tmp_path, devices):
     gpu = Gpu(tmp_path, devices)
-    assert "sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge" in gpu.run()
+    out = gpu.run()
+    assert "herald-os-gpu-check switch edge" in out and "restart, then, with Secure Boot on, enroll" in out
     [shown] = gpu.notified()
-    assert shown.startswith("notify NVIDIA graphics found ") and "herald-os-nvidia:edge" in shown
+    assert shown.startswith("notify NVIDIA graphics found ") and "herald-os-gpu-check switch edge" in shown
 
 
 @pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
 def test_the_nvidia_image_with_secure_boot_and_no_driver_loaded_is_told_how_to_enroll_the_key(tmp_path, devices):
     gpu = Gpu(tmp_path, devices, driver=True, secure_boot=True)
     out = gpu.run()
-    assert ENROLL in out and "Enroll MOK, Continue, Yes" in out and "bootc switch" not in out
+    assert ENROLL in out and "Enroll MOK, Continue, Yes" in out and "switch" not in out
     [shown] = gpu.notified()
     assert shown.startswith("notify The NVIDIA driver did not load ") and ENROLL in shown
 
@@ -384,12 +385,12 @@ def test_a_switch_notice_shown_by_the_earlier_session_is_not_shown_again(tmp_pat
     gpu = Gpu(tmp_path, [NVIDIA_VGA])
     gpu.state.mkdir()
     (gpu.state / "gpu-check-done").write_text("")
-    assert "bootc switch" in gpu.run() and gpu.notified() == []
+    assert "herald-os-gpu-check switch" in gpu.run() and gpu.notified() == []
 
 
 def test_without_a_channel_the_advice_is_stable(tmp_path):
     gpu = Gpu(tmp_path, [NVIDIA_VGA], channel="")
-    assert "herald-os-nvidia:stable" in gpu.run(notify=False) and gpu.notified() == []
+    assert "herald-os-gpu-check switch stable" in gpu.run(notify=False) and gpu.notified() == []
 
 
 def test_the_first_boot_and_every_session_run_the_gpu_check():
@@ -403,3 +404,73 @@ def test_the_session_and_the_gpu_check_keep_state_in_one_folder():
     session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
     assert 'LOG_DIR="$HOME/.local/state/herald-os"' in session
     assert 'STATE="${HERALD_OS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/herald-os}"' in GPU_CHECK.read_text()
+
+
+MIB = 1024 * 1024
+
+
+def switching(tmp_path: Path, boot_size: int, boot_free: int, status: dict | None = None, args=("switch",),
+              release=HERALD, arch="x86_64"):
+    """herald-os-gpu-check switch with df, sudo and rpm-ostree stand-ins; what sudo was asked to run."""
+    gpu = Gpu(tmp_path, [NVIDIA_VGA], release=release, arch=arch)
+    bin_dir = tmp_path / "bin"
+    stubs = {
+        "df": f'echo "     1B-blocks        Avail"; echo " {boot_size} {boot_free}"',
+        "sudo": f'echo "$*" >>"{tmp_path / "sudo"}"',
+    }
+    if status == "fails":
+        stubs["rpm-ostree"] = 'echo "error: Could not connect" >&2; exit 1'
+    elif status is not None:
+        (tmp_path / "status.json").write_text(__import__("json").dumps(status))
+        stubs["rpm-ostree"] = f'[ "$1 $2" = "status --json" ] && cat "{tmp_path / "status.json"}"'
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    result = subprocess.run(["bash", str(GPU_CHECK), *args], env=gpu.env, capture_output=True, text=True, check=False)
+    ran = (tmp_path / "sudo").read_text().splitlines() if (tmp_path / "sudo").exists() else []
+    return result, ran
+
+
+def deployment(**requested) -> dict:
+    return {"deployments": [{"booted": False, "requested-packages": ["vim"]},
+                            {"booted": True, "requested-packages": [], "requested-local-packages": [], **requested}]}
+
+
+def test_switch_follows_the_channel_with_bootc(tmp_path):
+    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status=deployment())
+    assert result.returncode == 0, result.stderr
+    assert ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
+    assert "enroll Universal Blue's key after that" in result.stdout and "WARNING" not in result.stderr
+
+
+@pytest.mark.parametrize("requested", [{"requested-packages": ["htop"]}, {"requested-local-packages": ["x.rpm"]},
+                                       {"requested-base-removals": ["firefox"]}], ids=["layered", "local", "removed"])
+def test_switch_with_rpm_ostree_changes_rebases_through_rpm_ostree(tmp_path, requested):
+    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status=deployment(**requested), args=("switch", "stable"))
+    assert result.returncode == 0, result.stderr
+    assert ran == ["rpm-ostree rebase ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os-nvidia:stable"]
+
+
+def test_switch_without_room_in_boot_changes_nothing(tmp_path):
+    result, ran = switching(tmp_path, 2000 * MIB, 300 * MIB, status=deployment())
+    assert result.returncode == 1 and ran == []
+    assert "has 300 MiB free" in result.stderr and "about 352 MiB" in result.stderr
+
+
+def test_switch_with_a_small_boot_warns_and_goes_on(tmp_path):
+    result, ran = switching(tmp_path, 1024 * MIB, 600 * MIB)
+    assert result.returncode == 0 and ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
+    assert "WARNING: /boot is 1024 MiB" in result.stderr
+
+
+@pytest.mark.parametrize("kind", ["not the image", "arm", "bad channel"])
+def test_switch_refuses_where_there_is_no_nvidia_image(tmp_path, kind):
+    args = {"not the image": dict(release=FEDORA), "arm": dict(arch="aarch64"), "bad channel": dict(args=("switch", "beta"))}[kind]
+    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, **args)
+    assert result.returncode == 2 and ran == []
+
+
+def test_switch_tries_bootc_when_the_rpm_ostree_status_cannot_be_read(tmp_path):
+    result, ran = switching(tmp_path, 2000 * MIB, 1500 * MIB, status="fails")
+    assert result.returncode == 0 and ran == ["bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge"]
+    assert "Traceback" not in result.stderr

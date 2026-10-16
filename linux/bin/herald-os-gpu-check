@@ -9,8 +9,10 @@
 #
 # Anywhere but on the Herald OS image, or with nothing to say, says nothing.
 #
-#   herald-os-gpu-check            print the notice (the first boot writes it to the journal)
-#   herald-os-gpu-check --notify   also show it as a notification, once each (herald-os-session)
+#   herald-os-gpu-check                   print the notice (the first boot writes it to the journal)
+#   herald-os-gpu-check --notify          also show it as a notification, once each (herald-os-session)
+#   herald-os-gpu-check switch [channel]  switch to the NVIDIA image, once /boot has room for it:
+#                                         bootc switch, or rpm-ostree rebase where packages are layered
 set -euo pipefail
 
 SYSFS="${HERALD_OS_SYSFS:-/sys}"
@@ -22,6 +24,11 @@ NVIDIA_IMAGE=ghcr.io/iamlukethedev/herald-os-nvidia
 KEY=/etc/pki/akmods/certs/akmods-ublue.der
 # The UEFI global variable: four bytes of attributes, then 1 while Secure Boot is on.
 SECURE_BOOT="$SYSFS/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+BOOT="${HERALD_OS_BOOT:-/boot}"
+# An NVIDIA deployment's kernel and initramfs take about 352 MiB of /boot (docs/LINUX.md), and the
+# system keeps up to three deployments: a 2 GiB /boot holds them (df shows a little less than 2 GiB).
+BOOT_FREE_MIN=$((400 * 1024 * 1024))
+BOOT_SIZE_MIN=$((1800 * 1024 * 1024))
 
 herald_image() { grep -Eqx 'IMAGE_ID="?herald-os"?' "$OS_RELEASE" 2>/dev/null; }
 
@@ -53,17 +60,66 @@ notice() {
   : >"$STATE/gpu-notice-$kind"
 }
 
+current_channel() {
+  local channel
+  channel="$(herald-os channel 2>/dev/null || true)"
+  [[ "$channel" == stable || "$channel" == edge ]] || channel=stable
+  echo "$channel"
+}
+
+# Whether the booted deployment has packages layered, removed or replaced through rpm-ostree:
+# bootc refuses to switch those ("Deployment contains local rpm-ostree modifications"). When the
+# status cannot be read, bootc is tried, and says so itself.
+layered() {
+  local status
+  command -v rpm-ostree >/dev/null || return 1
+  status="$(rpm-ostree status --json 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+booted = [d for d in json.loads(sys.argv[1]).get("deployments", []) if d.get("booted")]
+keys = ("requested-packages", "requested-local-packages", "requested-base-removals",
+        "requested-base-local-replacements", "requested-base-remote-replacements")
+sys.exit(0 if booted and any(booted[0].get(key) for key in keys) else 1)' "$status"
+}
+
+switch() {
+  local channel="${1:-$(current_channel)}" size avail target
+  [[ "$channel" == stable || "$channel" == edge ]] || { echo "usage: herald-os-gpu-check switch [stable|edge]" >&2; exit 2; }
+  herald_image || { echo "this is not the Herald OS image: nothing to switch" >&2; exit 2; }
+  [[ "$ARCH" == x86_64 ]] || { echo "the NVIDIA image is x86_64 only" >&2; exit 2; }
+  read -r size avail < <(df -B1 --output=size,avail "$BOOT" | tail -n 1)
+  if (( avail < BOOT_FREE_MIN )); then
+    echo "$BOOT has $((avail / 1048576)) MiB free, and the NVIDIA image's kernel and initramfs need about 352 MiB (docs/LINUX.md, \"Space in /boot\"): nothing was changed" >&2
+    exit 1
+  fi
+  if (( size < BOOT_SIZE_MIN )); then
+    echo "WARNING: $BOOT is $((size / 1048576)) MiB; the NVIDIA image needs a 2 GiB /boot to keep three deployments (the running one, the one to go back to and an update)" >&2
+  fi
+  target="$NVIDIA_IMAGE:$channel"
+  if layered; then
+    echo "==> packages are layered on this system, so rpm-ostree switches it: $target"
+    sudo rpm-ostree rebase "ostree-unverified-registry:$target"
+  else
+    echo "==> switching to $target"
+    sudo bootc switch "$target"
+  fi
+  echo "Restart to start the NVIDIA image. With Secure Boot on, enroll Universal Blue's key after that (docs/LINUX.md, \"The NVIDIA image\")."
+}
+
 NOTIFY=0
-[[ "${1:-}" != --notify ]] || NOTIFY=1
+case "${1:-}" in
+  --notify) NOTIFY=1 ;;
+  switch) shift; switch "$@"; exit ;;
+  "") ;;
+  *) echo "usage: herald-os-gpu-check [--notify | switch [stable|edge]]" >&2; exit 2 ;;
+esac
 
 if [[ "$ARCH" != x86_64 ]] || ! herald_image || ! nvidia_gpu; then
   exit 0
 fi
 
 if ! nvidia_driver; then
-  channel="$(herald-os channel 2>/dev/null || true)"
-  [[ "$channel" == stable || "$channel" == edge ]] || channel=stable
-  notice switch "NVIDIA graphics found" "This computer has an NVIDIA GPU, which this Herald OS image drives without CUDA, so local models do not use it. The NVIDIA image has NVIDIA's driver: run \`sudo bootc switch $NVIDIA_IMAGE:$channel\` in a terminal and restart. With Secure Boot on, it then asks to enroll a key once (docs/LINUX.md, \"The NVIDIA image\")."
+  notice switch "NVIDIA graphics found" "This computer has an NVIDIA GPU, which this Herald OS image drives without CUDA, so local models do not use it. The NVIDIA image has NVIDIA's driver: run \`herald-os-gpu-check switch $(current_channel)\` in a terminal (it checks /boot has room first), restart, then, with Secure Boot on, enroll Universal Blue's key once (docs/LINUX.md, \"The NVIDIA image\")."
 elif ! nvidia_loaded && secure_boot; then
   notice secure-boot "The NVIDIA driver did not load" "Secure Boot is on, and it loads the driver only once Universal Blue's key is enrolled; until then the NVIDIA GPU is not used. Run \`sudo mokutil --import $KEY\` in a terminal, choose a one-time password, restart, and in MOK Manager pick Enroll MOK, Continue, Yes, type that password, then Reboot (docs/LINUX.md, \"The NVIDIA image\")."
 fi
