@@ -65,9 +65,11 @@ PY
 # any key the system's database has. kmod-nvidia is Universal Blue's build and carries no RPM
 # signature: only its digests are checked here, and the cosign signature on the akmods-nvidia image,
 # checked by digest in the image workflow, is what vouches for it.
+# The key database is removed however the check ends: a refused RPM exits from here.
 verify_rpms() {
-  local keys rpm out
+  local rpm out
   keys="$(mktemp -d)"
+  trap 'rm -rf "$keys"' EXIT
   rpm --dbpath "$keys" --import "$HERE/negativo17.asc"
   out="$(rpm --dbpath "$keys" -q gpg-pubkey --qf '%{VERSION}\n')"
   [[ "$out" == "$NEGATIVO17_KEY" ]] || { echo "the driver RPMs' key database holds ${out//$'\n'/ }, not $NEGATIVO17_KEY alone" >&2; exit 1; }
@@ -78,6 +80,7 @@ verify_rpms() {
   out="$(rpm --dbpath "$keys" -K "$KMOD" || true)"
   [[ "$out" == *": digests OK" || "$out" == *": digests signatures OK" ]] || { echo "${KMOD##*/} fails its digests: ${out##*: }" >&2; exit 1; }
   rm -rf "$keys"
+  trap - EXIT
 }
 
 [[ "$(uname -m)" == x86_64 ]] || { echo "the NVIDIA image is x86_64 only" >&2; exit 1; }

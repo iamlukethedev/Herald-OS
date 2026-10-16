@@ -271,7 +271,9 @@ def verify(tmp_path: Path, keys: str, driver: str = "negativo17", kmod: str = "u
     function = re.search(r"^verify_rpms\(\) \{\n.*?^\}\n", script, re.M | re.S).group(0)
     pinned = re.search(r"^NEGATIVO17_KEY=\S+$", script, re.M).group(0)
     body = f'HERE="{tmp_path}"\n{pinned}\nRPMS=("{tmp_path}/nvidia-driver.rpm")\nKMOD="{tmp_path}/kmod-nvidia.rpm"\n{function}verify_rpms'
-    return subprocess.run(["bash", "-c", body], env={"PATH": f"{bin_dir}:/usr/bin:/bin"}, capture_output=True, text=True, check=False)
+    (tmp_path / "tmp").mkdir()
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path / "tmp")}
+    return subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True, check=False)
 
 
 NEGATIVO17_FPR = "0c5d0f470484ae2fc40a9b6597f3008993e8909b"
@@ -643,3 +645,14 @@ def shell_function(path: Path, name: str) -> str | None:
                     reason="herald-os-update has no local_modifications until #156 is merged")
 def test_the_switch_and_the_update_agree_on_rpm_ostree_changes():
     assert shell_function(GPU_CHECK, "local_modifications") == shell_function(UPDATE, "local_modifications")
+
+
+@pytest.mark.parametrize("keys,driver,kmod", [
+    (NEGATIVO17_FPR, "negativo17", "unsigned"),
+    (NVIDIA_FPR, "negativo17", "unsigned"),
+    (NEGATIVO17_FPR, "unsigned", "unsigned"),
+    (NEGATIVO17_FPR, "negativo17", "corrupt"),
+], ids=["passes", "wrong key", "driver unsigned", "kmod corrupt"])
+def test_verify_rpms_leaves_no_key_database_behind(tmp_path, keys, driver, kmod):
+    result = verify(tmp_path, keys, driver, kmod)
+    assert list((tmp_path / "tmp").iterdir()) == [], result.stderr
