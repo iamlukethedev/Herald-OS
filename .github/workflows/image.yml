@@ -71,8 +71,8 @@ jobs:
     continue-on-error: ${{ matrix.image == 'herald-os-nvidia' }}
     env:
       CHANNEL: ${{ needs.channel.outputs.channel }}
-      # The image name is also the Containerfile's --target. The default image goes out as one tag
-      # per architecture, joined by the manifest job; the NVIDIA image, x86_64 only, as the channel's.
+      # The default image goes out as one tag per architecture, joined by the manifest job; the
+      # NVIDIA image, x86_64 only, as the channel's.
       REPO: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
       TAG: ${{ needs.channel.outputs.channel }}${{ matrix.suffix }}
     strategy:
@@ -102,6 +102,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Make room for the NVIDIA image
+        # Two images (the default one it starts from, then the NVIDIA one) and the akmods images.
+        if: matrix.image == 'herald-os-nvidia'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
       - name: Refuse to ship the signature policy without signing
         # With linux/image/cosign.pub in the tree, the image only accepts signed updates of itself, so an
         # unsigned build would stop installed machines from updating (#18).
@@ -111,7 +117,8 @@ jobs:
             exit 1
           fi
       - uses: sigstore/cosign-installer@v3
-        if: env.SIGNING == 'true'
+        # The NVIDIA leg also checks Universal Blue's signatures on the akmods images.
+        if: env.SIGNING == 'true' || matrix.image == 'herald-os-nvidia'
       - name: Check the signing key matches cosign.pub
         # Signing with a key other than the committed one ships signatures that installed machines reject.
         if: env.SIGNING == 'true'
@@ -146,30 +153,41 @@ jobs:
           cp apps/desktop/release/herald-os-*-linux-${{ matrix.shell }}.tar.gz herald-os-linux.tar.gz
       - name: Pin the base and the NVIDIA modules to one kernel
         if: matrix.image == 'herald-os-nvidia'
-        # Universal Blue builds the modules for one kernel and tags them by it. The base goes in by
-        # digest, so its kernel cannot move between this step and the build.
+        # Universal Blue builds the modules for one kernel and tags them by it. All three images go in
+        # by digest, so nothing can move between this step and the build, and the akmods images only
+        # once their signature checks out against Universal Blue's key, committed in the repository.
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           base=quay.io/fedora/fedora-bootc:44
           inspect="$(skopeo inspect "docker://$base")"
           digest="$(jq -r .Digest <<<"$inspect")"
           kernel="$(jq -r '.Labels["ostree.linux"]' <<<"$inspect")"
-          akmods="main-44-$kernel"
+          echo "FEDORA_BOOTC=${base%:*}@$digest" >>"$GITHUB_ENV"
+          echo "Base ${base%:*}@$digest, kernel $kernel"
           for repo in akmods akmods-nvidia-open; do
-            if ! skopeo inspect --raw "docker://ghcr.io/ublue-os/$repo:$akmods" >/dev/null; then
-              echo "::error::Universal Blue has not published ghcr.io/ublue-os/$repo:$akmods for kernel $kernel yet; the default image is not affected."
+            tag="ghcr.io/ublue-os/$repo:main-44-$kernel"
+            if ! inspect="$(skopeo inspect "docker://$tag")"; then
+              echo "::error::Universal Blue has not published $tag for kernel $kernel yet; the default image is not affected."
               exit 1
             fi
+            ref="ghcr.io/ublue-os/$repo@$(jq -r .Digest <<<"$inspect")"
+            cosign verify --key linux/image/ublue-os-akmods-cosign.pub "$ref" >/dev/null
+            echo "$tag is $ref (signature verified)"
+            name="AKMODS_REF"
+            [[ "$repo" == akmods ]] || name="AKMODS_NVIDIA_REF"
+            echo "$name=$ref" >>"$GITHUB_ENV"
           done
-          echo "Base ${base%:*}@$digest, kernel $kernel, modules $akmods"
-          { echo "FEDORA_BOOTC=${base%:*}@$digest"; echo "AKMODS_TAG=$akmods"; } >>"$GITHUB_ENV"
       - name: Build the image
         run: |
-          args=(--target "${{ matrix.image }}" --build-arg SHELL_TARBALL=herald-os-linux.tar.gz)
-          if [[ -n "${FEDORA_BOOTC:-}" ]]; then
-            args+=(--build-arg "FEDORA_BOOTC=$FEDORA_BOOTC" --build-arg "AKMODS_TAG=$AKMODS_TAG")
+          base=(--build-arg SHELL_TARBALL=herald-os-linux.tar.gz)
+          if [[ "${{ matrix.image }}" != herald-os-nvidia ]]; then
+            sudo podman build -f linux/image/Containerfile "${base[@]}" -t "$REPO:$TAG" .
+            exit 0
           fi
-          sudo podman build -f linux/image/Containerfile "${args[@]}" -t "$REPO:$TAG" .
+          # The default image from the pinned base, then the NVIDIA layer on it.
+          sudo podman build -f linux/image/Containerfile "${base[@]}" --build-arg "FEDORA_BOOTC=$FEDORA_BOOTC" \
+            -t localhost/herald-os .
+          sudo podman build -f linux/image/Containerfile.nvidia --build-arg HERALD_OS=localhost/herald-os \
+            --build-arg "AKMODS_REF=$AKMODS_REF" --build-arg "AKMODS_NVIDIA_REF=$AKMODS_NVIDIA_REF" -t "$REPO:$TAG" .
       - name: Push it
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -187,6 +205,13 @@ jobs:
           echo "${{ github.token }}" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
           # A key, not keyless: no identity or entry goes to the public transparency log.
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$REPO@$(cat digest.txt)"
+      - name: Say that the NVIDIA image did not go out
+        # continue-on-error keeps the run green, so the failure would otherwise go unseen.
+        if: failure() && matrix.image == 'herald-os-nvidia'
+        run: |
+          msg="The NVIDIA image ($REPO:$TAG) was not built or pushed; its tags keep the last build. Usually Universal Blue has no modules for the new kernel yet; the log of this job says."
+          echo "::warning title=NVIDIA image not published::$msg"
+          echo "- :warning: $msg" >>"$GITHUB_STEP_SUMMARY"
 
   manifest:
     name: Multi-arch tag

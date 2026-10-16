@@ -1,0 +1,39 @@
+# The NVIDIA image (x86_64 only, ADR-029): the default image (linux/image/Containerfile) with
+# NVIDIA's driver on top, from linux/image/nvidia.sh. A file of its own, so the default image's
+# build never refers to the akmods images, whatever the builder does with unused stages.
+#
+# The kernel modules are Universal Blue's prebuilt nvidia-open akmods, built for one kernel, so the
+# default image must be built from the base with that kernel. The image workflow pins all three by
+# digest and checks Universal Blue's cosign signatures (linux/image/ublue-os-akmods-cosign.pub);
+# nvidia.sh refuses a kernel mismatch. Locally, from the repo root:
+#
+#   base=quay.io/fedora/fedora-bootc:44
+#   kernel="$(skopeo inspect "docker://$base" | jq -r '.Labels["ostree.linux"]')"
+#   digest="$(skopeo inspect "docker://$base" | jq -r .Digest)"
+#   podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz \
+#     --build-arg "FEDORA_BOOTC=quay.io/fedora/fedora-bootc@$digest" -t localhost/herald-os .
+#   podman build -f linux/image/Containerfile.nvidia --build-arg HERALD_OS=localhost/herald-os \
+#     --build-arg "AKMODS_REF=ghcr.io/ublue-os/akmods:main-44-$kernel" \
+#     --build-arg "AKMODS_NVIDIA_REF=ghcr.io/ublue-os/akmods-nvidia-open:main-44-$kernel" \
+#     -t herald-os-nvidia .
+ARG HERALD_OS=localhost/herald-os
+ARG AKMODS_REF=ghcr.io/ublue-os/akmods:main-44
+ARG AKMODS_NVIDIA_REF=ghcr.io/ublue-os/akmods-nvidia-open:main-44
+
+FROM ${AKMODS_REF} AS akmods
+FROM ${AKMODS_NVIDIA_REF} AS akmods-nvidia
+
+FROM ${HERALD_OS}
+
+COPY linux/image/nvidia.sh linux/image/kargs-nvidia.toml linux/image/negativo17.asc \
+     linux/image/nvidia-container-toolkit.asc /tmp/herald-os/
+RUN --mount=type=bind,from=akmods,src=/rpms/ublue-os,dst=/tmp/akmods \
+    --mount=type=bind,from=akmods-nvidia,src=/rpms,dst=/tmp/akmods-nvidia \
+    bash /tmp/herald-os/nvidia.sh /tmp/akmods /tmp/akmods-nvidia \
+ && dnf clean all \
+ && rm -rf /tmp/herald-os /var/cache/* /var/log/* /var/lib/dnf
+
+LABEL org.opencontainers.image.title="Herald OS (NVIDIA)" \
+      org.opencontainers.image.description="An AI-native desktop built around Hermes Agent, with NVIDIA's driver and CUDA"
+
+RUN bootc container lint

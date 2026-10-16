@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -88,38 +89,41 @@ def test_the_image_build_names_the_image_in_os_release():
     assert "echo 'IMAGE_ID=herald-os' >>/usr/lib/os-release" in packages
 
 
-# The NVIDIA image (ADR-029): a stage of the same Containerfile, a leg of the image workflow.
+# The NVIDIA image (ADR-029): Containerfile.nvidia on top of the default image, a leg of the workflow.
 
 FIRSTBOOT_SCRIPT = ROOT / "linux" / "image" / "firstboot.sh"
 CONTAINERFILE = ROOT / "linux" / "image" / "Containerfile"
+CONTAINERFILE_NVIDIA = ROOT / "linux" / "image" / "Containerfile.nvidia"
 NVIDIA = ROOT / "linux" / "image" / "nvidia.sh"
+UBLUE_COSIGN = ROOT / "linux" / "image" / "ublue-os-akmods-cosign.pub"
 
 
-def stages() -> list[tuple[str, str]]:
-    """Each FROM in the Containerfile: what it starts from, and the stage's name ('' without one)."""
-    found = re.findall(r"^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", CONTAINERFILE.read_text(), re.M)
-    return [(base, name) for base, name in found]
+def froms(path: Path) -> list[tuple[str, str]]:
+    """Each FROM: what it starts from, and the stage's name ('' without one)."""
+    return re.findall(r"^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", path.read_text(), re.M)
 
 
-def test_a_build_without_a_target_is_the_default_image():
-    assert stages()[-1] == ("herald-os", "")
-    named = dict((name, base) for base, name in stages() if name)
-    assert named["herald-os"] == "${FEDORA_BOOTC}"
-    assert named["herald-os-nvidia"] == "herald-os"
-    # Only the NVIDIA stage reads the akmods images, so the default build never pulls them.
-    default = CONTAINERFILE.read_text().split("FROM herald-os AS herald-os-nvidia")[0].split("AS herald-os\n", 1)[1]
-    assert "akmods" not in default
+def test_the_default_image_never_refers_to_the_akmods_images():
+    # One stage, so no builder's handling of unused stages can make the default build pull them.
+    assert froms(CONTAINERFILE) == [("${FEDORA_BOOTC}", "")]
+    assert "ARG FEDORA_BOOTC=quay.io/fedora/fedora-bootc:44" in CONTAINERFILE.read_text()
+    assert "akmods" not in CONTAINERFILE.read_text().split("ARG FEDORA_BOOTC", 1)[1]
 
 
-def test_the_akmods_images_follow_one_tag():
-    text = CONTAINERFILE.read_text()
-    assert "FROM ghcr.io/ublue-os/akmods:${AKMODS_TAG} AS akmods" in text
-    assert "FROM ghcr.io/ublue-os/akmods-nvidia-open:${AKMODS_TAG} AS akmods-nvidia" in text
+def test_the_nvidia_image_starts_from_the_default_one_and_the_akmods_images_it_is_given():
+    assert froms(CONTAINERFILE_NVIDIA) == [("${AKMODS_REF}", "akmods"), ("${AKMODS_NVIDIA_REF}", "akmods-nvidia"), ("${HERALD_OS}", "")]
+    text = CONTAINERFILE_NVIDIA.read_text()
+    for name in ("nvidia.sh", "kargs-nvidia.toml", "negativo17.asc", "nvidia-container-toolkit.asc"):
+        assert f"linux/image/{name}" in text and (ROOT / "linux" / "image" / name).is_file()
 
 
 def image_job() -> dict:
     import yaml
     return yaml.safe_load((ROOT / ".github" / "workflows" / "image.yml").read_text())["jobs"]["image"]
+
+
+def step(name: str) -> dict:
+    return next(s for s in image_job()["steps"] if s.get("name") == name)
 
 
 def test_the_workflow_builds_the_nvidia_image_next_to_the_default_one():
@@ -130,21 +134,58 @@ def test_the_workflow_builds_the_nvidia_image_next_to_the_default_one():
     assert legs[("herald-os", "amd64")]["suffix"] == "-amd64" and legs[("herald-os", "arm64")]["suffix"] == "-arm64"
     assert legs[("herald-os", "amd64")]["label"] == "amd64" and legs[("herald-os", "arm64")]["label"] == "arm64"
     assert legs[("herald-os-nvidia", "amd64")]["suffix"] == ""
-    # Every image is a stage, built by its name.
-    names = {name for _, name in stages()}
-    assert {image for image, _ in legs} <= names
-    build = next(step for step in job["steps"] if step.get("name") == "Build the image")["run"]
-    assert '--target "${{ matrix.image }}"' in build
-    # A missing NVIDIA module build never holds back the default image.
+    build = step("Build the image")["run"]
+    assert build.count("-f linux/image/Containerfile ") == 2 and "-f linux/image/Containerfile.nvidia" in build
+    assert '--build-arg "AKMODS_REF=$AKMODS_REF" --build-arg "AKMODS_NVIDIA_REF=$AKMODS_NVIDIA_REF"' in build
+    assert '--build-arg "FEDORA_BOOTC=$FEDORA_BOOTC"' in build
+    # A missing NVIDIA module build never holds back the default image, and does not go unseen.
     assert job["continue-on-error"] == "${{ matrix.image == 'herald-os-nvidia' }}"
     assert job["env"]["REPO"].endswith("/${{ matrix.image }}")
+    said = step("Say that the NVIDIA image did not go out")
+    assert said["if"] == "failure() && matrix.image == 'herald-os-nvidia'"
+    assert "::warning" in said["run"] and '>>"$GITHUB_STEP_SUMMARY"' in said["run"]
 
 
-def test_the_nvidia_leg_pins_the_base_and_the_modules_to_one_kernel():
-    pin = next(step for step in image_job()["steps"] if step.get("name") == "Pin the base and the NVIDIA modules to one kernel")
+def test_the_nvidia_leg_makes_room_first_and_says_how_much_there_is():
+    names = [s.get("name") or s.get("uses") for s in image_job()["steps"]]
+    assert names[:2] == ["actions/checkout@v7", "Make room for the NVIDIA image"]
+    room = step("Make room for the NVIDIA image")
+    assert room["if"] == "matrix.image == 'herald-os-nvidia'" and room["run"].rstrip().endswith("df -h .")
+
+
+def test_the_nvidia_leg_pins_every_image_by_digest_and_checks_universal_blues_signatures():
+    pin = step("Pin the base and the NVIDIA modules to one kernel")
+    run = pin["run"]
     assert pin["if"] == "matrix.image == 'herald-os-nvidia'"
-    assert '.Labels["ostree.linux"]' in pin["run"] and 'akmods="main-44-$kernel"' in pin["run"]
-    assert 'echo "FEDORA_BOOTC=${base%:*}@$digest"' in pin["run"]
+    assert '.Labels["ostree.linux"]' in run and 'tag="ghcr.io/ublue-os/$repo:main-44-$kernel"' in run
+    assert 'echo "FEDORA_BOOTC=${base%:*}@$digest"' in run
+    assert 'ref="ghcr.io/ublue-os/$repo@$(jq -r .Digest <<<"$inspect")"' in run
+    assert 'cosign verify --key linux/image/ublue-os-akmods-cosign.pub "$ref"' in run
+    assert 'echo "$tag is $ref (signature verified)"' in run and "AKMODS_NVIDIA_REF" in run
+    # cosign is there for this leg even while the project does not sign its own images.
+    installer = next(s for s in image_job()["steps"] if s.get("uses", "").startswith("sigstore/cosign-installer"))
+    assert installer["if"] == "env.SIGNING == 'true' || matrix.image == 'herald-os-nvidia'"
+    assert image_job()["steps"].index(installer) < image_job()["steps"].index(pin)
+
+
+def test_universal_blues_cosign_key_is_the_one_they_publish():
+    # https://github.com/ublue-os/akmods/raw/main/cosign.pub, as fetched; a change here is a review item.
+    import hashlib
+    data = UBLUE_COSIGN.read_bytes()
+    assert data.startswith(b"-----BEGIN PUBLIC KEY-----")
+    assert hashlib.sha256(data).hexdigest() == "af78ecfda6eb21c35195af3739341715e9cfc3f2f5911dd9c10b0670547bf6e8"
+    # Not the project's own cosign.pub, which turns on the image's signature policy.
+    assert UBLUE_COSIGN.name != "cosign.pub"
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="needs gpg to read the committed keys")
+@pytest.mark.parametrize("name,variable", [("negativo17.asc", "NEGATIVO17_KEY"), ("nvidia-container-toolkit.asc", "NVIDIA_KEY")])
+def test_the_committed_repository_keys_are_the_ones_nvidia_sh_pins(tmp_path, name, variable):
+    shown = subprocess.run(["gpg", "--homedir", str(tmp_path), "--show-keys", "--with-colons", str(ROOT / "linux" / "image" / name)],
+                           capture_output=True, text=True, check=True).stdout
+    primary = next(line.split(":")[9] for line in shown.splitlines() if line.startswith("fpr:"))
+    pinned = re.search(rf"^{variable}=([0-9a-f]{{40}})$", NVIDIA.read_text(), re.M).group(1)
+    assert primary.lower() == pinned
 
 
 def test_the_signature_policy_covers_both_images():
@@ -172,7 +213,7 @@ def test_nvidia_modules_for_another_kernel_stop_the_build_before_it_installs_any
     result = fake_build(tmp_path, "7.2.11-200.fc44.x86_64", "7.2.10-200.fc44.x86_64")
     assert result.returncode == 1
     assert "built for kernel 7.2.10-200.fc44.x86_64, and this image has 7.2.11-200.fc44.x86_64" in result.stderr
-    assert "AKMODS_TAG=main-44-7.2.11-200.fc44.x86_64" in result.stderr
+    assert "main-44-7.2.11-200.fc44.x86_64" in result.stderr
     assert not (tmp_path / "calls").exists()
 
 
@@ -183,6 +224,55 @@ def test_the_nvidia_layer_leaves_xorg_out_and_puts_the_driver_in_the_initramfs()
     assert "--excludepath=/etc/yum.repos.d" in script
     kargs = (ROOT / "linux" / "image" / "kargs-nvidia.toml").read_text()
     assert '"rd.driver.blacklist=nouveau"' in kargs and 'match-architectures = ["x86_64"]' in kargs
+
+
+def test_the_nvidia_layer_checks_the_key_people_enroll_and_what_it_installs():
+    script = NVIDIA.read_text()
+    assert "KEY_SHA256=4e5c68474cb133fd8984d9599762cece9100c3e6cd8a9709aeaabd85dd9e70d1" in script
+    assert 'echo "$KEY_SHA256  $KEY" | sha256sum --quiet -c -' in script
+    assert '--setopt="fedora-nvidia.gpgkey=file://$HERE/negativo17.asc"' in script
+    assert '--setopt="nvidia-container-toolkit.gpgkey=file://$HERE/nvidia-container-toolkit.asc"' in script
+    assert "rpm -K \"$rpm\" | grep -q ' signatures OK$'" in script
+
+
+# The repository files as ublue-os-nvidia-addons ships them (0.15), trimmed to what the checks read.
+ADDON_REPOS = {
+    "negativo17-fedora-nvidia.repo": "[fedora-nvidia]\nenabled=0\ngpgcheck=1\nrepo_gpgcheck=0\n"
+                                     "[fedora-nvidia-source]\nenabled=0\ngpgcheck=1\n[fedora-nvidia-debug]\nenabled=0\ngpgcheck=1\n",
+    "negativo17-fedora-nvidia-lts.repo": "[fedora-nvidia-lts]\nenabled=0\ngpgcheck=1\n",
+    "nvidia-container-toolkit.repo": "[nvidia-container-toolkit]\nrepo_gpgcheck=1\ngpgcheck=1\nenabled=0\n"
+                                     "[nvidia-container-toolkit-experimental]\nrepo_gpgcheck=1\ngpgcheck=1\nenabled=0\n",
+}
+
+
+def repo_check(tmp_path: Path, check: str, change=None) -> subprocess.CompletedProcess:
+    repos = tmp_path / "yum.repos.d"
+    repos.mkdir(parents=True)
+    for name, text in ADDON_REPOS.items():
+        (repos / name).write_text(text)
+    if change:
+        change(repos)
+    script = NVIDIA.read_text()
+    function = re.search(rf"^{check}\(\) \{{\n.*?^\}}\n", script, re.M | re.S).group(0)
+    return subprocess.run(["bash", "-c", f'REPOS="{repos}"\n{function}{check}'], capture_output=True, text=True, check=False)
+
+
+def test_the_addon_repositories_as_shipped_are_signed_and_stay_disabled(tmp_path):
+    assert repo_check(tmp_path / "a", "repos_signed").returncode == 0
+    assert repo_check(tmp_path / "b", "repos_disabled").returncode == 0
+
+
+@pytest.mark.parametrize("check,change,said", [
+    ("repos_signed", lambda d: (d / "negativo17-fedora-nvidia.repo").write_text("[fedora-nvidia]\ngpgcheck=0\n"), "[fedora-nvidia] has no gpgcheck=1"),
+    ("repos_signed", lambda d: (d / "nvidia-container-toolkit.repo").write_text("[nvidia-container-toolkit]\ngpgcheck=1\nrepo_gpgcheck=0\n"), "no repo_gpgcheck=1"),
+    ("repos_signed", lambda d: (d / "nvidia-container-toolkit.repo").unlink(), "nvidia-container-toolkit.repo is missing"),
+    ("repos_disabled", lambda d: (d / "negativo17-fedora-nvidia.repo").write_text("[fedora-nvidia]\nenabled=1\n"), "negativo17-fedora-nvidia.repo [fedora-nvidia]"),
+    ("repos_disabled", lambda d: (d / "nvidia-container-toolkit.repo").write_text("[nvidia-container-toolkit]\ngpgcheck=1\n"), "[nvidia-container-toolkit]"),
+    ("repos_disabled", lambda d: (d / "_copr_ublue-os-akmods.repo").write_text("[copr]\nenabled=1\n"), "_copr_ublue-os-akmods.repo"),
+], ids=["negativo17 unsigned", "toolkit metadata unsigned", "toolkit missing", "negativo17 enabled", "enabled by default", "copr"])
+def test_the_repository_checks_stop_the_build(tmp_path, check, change, said):
+    result = repo_check(tmp_path, check, change)
+    assert result.returncode != 0 and said in result.stderr
 
 
 # herald-os-gpu-check: an NVIDIA GPU on the default image is told how to switch to the NVIDIA image,
