@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { $roadsterFlight, isRoadsterWord, landRoadster, launchRoadster, ROADSTER_WORDS } from './flight.ts'
+import { $roadsterFlight, flyoversOn, isRoadsterWord, landRoadster, launchRoadster, ROADSTER_WORDS } from './flight.ts'
 
 afterEach(() => {
   $roadsterFlight.set(0)
@@ -40,5 +40,13 @@ describe('the flight store', () => {
 
     landRoadster(second)
     expect($roadsterFlight.get()).toBe(0)
+  })
+})
+
+describe('the Flyover animations setting', () => {
+  it('is on until the person turns it off', () => {
+    expect(flyoversOn({})).toBe(true)
+    expect(flyoversOn({ flyovers: true })).toBe(true)
+    expect(flyoversOn({ flyovers: false })).toBe(false)
   })
 })

@@ -6,6 +6,7 @@ import type { RoomAgent, RoomHandoff } from '../room/model/types.ts'
  * that spawned it (a `result` handoff, from `subagent.complete`); when the work completed, the
  * roadster flies over the Room. Handoffs already there when the Room first hears from Hermes are
  * history and fly nothing, and flights keep a gap between them so a burst of helpers flies once.
+ * With Flyover animations off nothing flies, and what finished meanwhile does not fly later.
  */
 
 /** At least this long between two flyovers in the Room. */
@@ -23,6 +24,8 @@ export interface FlyoverFeed {
   settled: boolean
   /** The Room is on screen and live (not minimized, hidden or replaying). */
   live: boolean
+  /** Flyover animations are on in Settings. */
+  enabled: boolean
   /** A flight is up already. */
   flying: boolean
   now: number
@@ -34,7 +37,7 @@ export function createFlyoverWatch(gapMs: number = ROOM_FLYOVER_GAP_MS): { feed:
   let lastAt = Number.NEGATIVE_INFINITY
 
   return {
-    feed({ handoffs, agents, settled, live, flying, now }) {
+    feed({ handoffs, agents, settled, live, enabled, flying, now }) {
       if (!settled) {
         return false
       }
@@ -42,7 +45,7 @@ export function createFlyoverWatch(gapMs: number = ROOM_FLYOVER_GAP_MS): { feed:
       const before = seen
       seen = new Set(handoffs.map(handoff => handoff.id))
 
-      if (!before || !live || flying || now - lastAt < gapMs || completedHandoffs(handoffs, agents, before).length === 0) {
+      if (!before || !live || !enabled || flying || now - lastAt < gapMs || completedHandoffs(handoffs, agents, before).length === 0) {
         return false
       }
 
@@ -53,20 +56,26 @@ export function createFlyoverWatch(gapMs: number = ROOM_FLYOVER_GAP_MS): { feed:
   }
 }
 
-/** The Room's flyover: the flight on screen (0 when none) and how to end it. */
+/** The Room's flyover: the flight on screen (0 when none) and how to end it; turning flyovers off ends one that is up. */
 export function useRoomFlyover(input: Omit<FlyoverFeed, 'flying' | 'now'>): { flight: number; land: () => void } {
   const watch = useRef<ReturnType<typeof createFlyoverWatch> | null>(null)
   const [flight, setFlight] = useState(0)
   const flying = flight !== 0
-  const { handoffs, agents, settled, live } = input
+  const { handoffs, agents, settled, live, enabled } = input
 
   watch.current ??= createFlyoverWatch()
 
   useEffect(() => {
-    if (watch.current?.feed({ handoffs, agents, settled, live, flying, now: Date.now() })) {
+    if (watch.current?.feed({ handoffs, agents, settled, live, enabled, flying, now: Date.now() })) {
       setFlight(Date.now())
     }
-  }, [handoffs, agents, settled, live, flying])
+  }, [handoffs, agents, settled, live, enabled, flying])
+
+  useEffect(() => {
+    if (!enabled) {
+      setFlight(0)
+    }
+  }, [enabled])
 
   const land = useCallback(() => setFlight(0), [])
 

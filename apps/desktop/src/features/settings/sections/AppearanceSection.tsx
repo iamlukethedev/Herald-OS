@@ -7,6 +7,7 @@ import { cn } from '../../../lib/cn.ts'
 import { $prefs, updatePrefs } from '../../../store/backend.ts'
 import { notify } from '../../../store/notifications.ts'
 import { $themes, applyTheme, generateTheme, installThemes, loadThemes } from '../../../store/themes.ts'
+import { FlyoverRow } from './FlyoverRow.tsx'
 import { MenuBarSettings } from './MenuBarSettings.tsx'
 import { useT } from '../../../store/i18n.ts'
 import { errorText, Filterable, InlineNote, markSaved, SectionTitle, SettingsGroup, SettingsRow } from './shared.tsx'
@@ -98,6 +99,7 @@ export function AppearanceSection() {
         <SettingsRow icon={<IconSparkles />} label="Reduce motion" description="Collapse non-essential animation across the shell." keywords="animation accessibility">
           <Toggle checked={prefs.reduceMotion} onChange={next => void save({ reduceMotion: next })} label="Reduce motion" />
         </SettingsRow>
+        <FlyoverRow />
       </SettingsGroup>
     </>
   )

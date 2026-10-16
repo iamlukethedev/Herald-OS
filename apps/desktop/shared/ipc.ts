@@ -620,6 +620,8 @@ export interface HeraldOSPrefs {
   sidebar?: { width: number; collapsed: boolean }
   /** Slide the Dock off-screen until the cursor reaches the bottom edge (default on). */
   dockAutoHide?: boolean
+  /** The roadster flies over the Pet Room when a helper's work completes and over the screensaver now and then (default on); the command bar's "fly" always flies. */
+  flyovers?: boolean
   /** The name on the comments and notes the person adds in Herald Office, once they confirmed it; unset until then. */
   commentName?: string
   /** The desktop pet as Herald shows it (which pet, its size and on or off are Hermes's settings). */

@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { roadsterCommands } from '../commands/roadster.ts'
 import { $roadsterFlight } from '../features/roadster/flight.ts'
+import { $prefs } from '../store/backend.ts'
 import { defineCommands, resetCommands } from '../store/os-commands.ts'
 import { CommandPalette } from './CommandBar.tsx'
 
@@ -61,6 +62,7 @@ afterEach(() => {
   host.remove()
   resetCommands()
   $roadsterFlight.set(0)
+  $prefs.set({ ...$prefs.get(), flyovers: undefined })
   vi.clearAllMocks()
 })
 
@@ -86,6 +88,18 @@ describe('the command bar’s roadster easter egg', () => {
     await type(text)
 
     expect(items()).not.toContain('fun:roadster')
+  })
+
+  it('still takes off with Flyover animations off: the person asked for this one', async () => {
+    $prefs.set({ ...$prefs.get(), flyovers: false })
+    await open()
+    await type('roadster')
+
+    expect(selected()).toBe('fun:roadster')
+
+    await enter()
+
+    expect($roadsterFlight.get()).toBeGreaterThan(0)
   })
 
   it('in its own window, hands the flight to the Hermes window', async () => {

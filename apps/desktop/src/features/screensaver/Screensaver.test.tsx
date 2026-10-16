@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { $prefs } from '../../store/backend.ts'
 import { FLYOVER_EVERY_MS, FLYOVER_FIRST_MS, Screensaver } from './Screensaver.tsx'
 
 vi.hoisted(() => {
@@ -42,6 +43,7 @@ afterEach(() => {
   vi.useRealTimers()
   choice.room = true
   choice.reduced = false
+  $prefs.set({ ...$prefs.get(), flyovers: undefined })
 })
 
 describe('the screensaver', () => {
@@ -118,5 +120,25 @@ describe('the screensaver', () => {
 
     expect(host.querySelector('[data-testid="roadster"]')).toBeNull()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('never flies the roadster with Flyover animations off, and takes one that is up away when they are turned off', async () => {
+    vi.useFakeTimers()
+    $prefs.set({ ...$prefs.get(), flyovers: false })
+    await show(vi.fn())
+    const roadster = () => host.querySelector('[data-testid="roadster"]')
+
+    await act(async () => vi.advanceTimersByTime(FLYOVER_FIRST_MS + FLYOVER_EVERY_MS * 3))
+    expect(roadster()).toBeNull()
+
+    act(() => $prefs.set({ ...$prefs.get(), flyovers: true }))
+    await act(async () => vi.advanceTimersByTime(FLYOVER_FIRST_MS))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(roadster()).not.toBeNull()
+
+    act(() => $prefs.set({ ...$prefs.get(), flyovers: false }))
+    expect(roadster()).toBeNull()
   })
 })

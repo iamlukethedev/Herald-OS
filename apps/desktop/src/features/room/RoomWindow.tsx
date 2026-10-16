@@ -2,11 +2,13 @@ import type { ApprovalChoice } from '@herald-os/client'
 import { useStore } from '@nanostores/react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { liveOutside } from '../../../shared/room.ts'
+import { $prefs } from '../../store/backend.ts'
 import { $connection } from '../../store/gateway.ts'
 import { runCommand } from '../../store/os-commands.ts'
 import { isMainSurface, openSurface, relayToMain } from '../../store/shell.ts'
 import { useDocumentVisible, useReducedMotion } from '../pet/hooks.ts'
 import { $petInfo } from '../pet/info.ts'
+import { flyoversOn } from '../roadster/flight.ts'
 import { useRoomFlyover } from '../roadster/room-flyover.ts'
 import { useRoomAssignment } from './assignment.ts'
 import { roomBridge } from './bridge.ts'
@@ -116,7 +118,8 @@ export function RoomWindow({ active = true }: { active?: boolean }) {
   const desks = useMemo(() => Object.values(state.desks ?? {}), [state.desks])
   const total = useMemo(() => (prefs.costTotal ? roomTotal(state) : null), [prefs.costTotal, state])
   const logged = useLogged(prefs.log)
-  const flyover = useRoomFlyover({ handoffs: state.handoffs, agents: state.agents, settled: state.updatedAt > 0, live: live && !replaying })
+  const flyovers = flyoversOn(useStore($prefs))
+  const flyover = useRoomFlyover({ handoffs: state.handoffs, agents: state.agents, settled: state.updatedAt > 0, live: live && !replaying, enabled: flyovers })
 
   if (replaying) {
     return <RoomReplay active={active} onExit={() => setReplaying(false)} />
@@ -147,7 +150,7 @@ export function RoomWindow({ active = true }: { active?: boolean }) {
         onPetSettings={openPetSettings}
         onTimeLapse={logged ? () => setReplaying(true) : undefined}
       />
-      {flyover.flight !== 0 && (
+      {flyover.flight !== 0 && flyovers && (
         <Suspense fallback={null}>
           <RoadsterFlight key={flyover.flight} contained onDone={flyover.land} />
         </Suspense>

@@ -1,11 +1,18 @@
 import { atom } from 'nanostores'
+import type { HeraldOSPrefs } from '../../../shared/ipc.ts'
 
 /*
  * The roadster flyover: a short night scene in which a white roadster lifts off on cold vapor,
  * flips backwards over a box truck and leaves through the top right. Three things start it: the
  * command bar's easter egg (`roadster.fly`), a helper in the Pet Room handing back finished work,
- * and now and then the screensaver.
+ * and now and then the screensaver. Settings > Appearance > Flyover animations turns the last two
+ * off; the easter egg is asked for, so it always flies.
  */
+
+/** Flyovers nobody asked for (the Pet Room's and the screensaver's) are on unless the person turned them off. */
+export function flyoversOn(prefs: Pick<HeraldOSPrefs, 'flyovers'>): boolean {
+  return prefs.flyovers !== false
+}
 
 /** What the command bar takes as the easter egg, typed on its own. */
 export const ROADSTER_WORDS = ['fly', 'roadster'] as const

@@ -307,6 +307,10 @@ export const en = {
 
   'settings.general.subtitle': 'How Herald OS starts and where it works.',
   'settings.appearance.subtitle': 'Theme, accent, wallpaper, fonts and the menu bar.',
+  // "fly" is the command bar's easter egg word, which stays English.
+  'settings.appearance.flyovers': 'Flyover animations',
+  'settings.appearance.flyoversHint': 'A white roadster flies over the Pet Room when a helper’s work completes, and over the screensaver now and then. Typing “fly” in the command bar flies it either way.',
+  'settings.appearance.flyoversFailed': 'Could not change flyover animations',
   'settings.pet.subtitle':
     "Hermes's petdex mascot on the desktop: it shows what Hermes is doing, holds up approvals, takes questions and files, and stays out of the way. Which pet, its size and on or off are Hermes's own settings, the same in the Hermes CLI, the TUI and Hermes's desktop app.",
   'settings.room.subtitle':

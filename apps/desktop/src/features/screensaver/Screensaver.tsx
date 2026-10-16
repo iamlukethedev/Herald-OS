@@ -1,8 +1,11 @@
+import { useStore } from '@nanostores/react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { Wallpaper } from '../../shell/Wallpaper.tsx'
+import { $prefs } from '../../store/backend.ts'
 import { useReducedMotion } from '../pet/hooks.ts'
 import { useRoomScreensaver } from '../room/screensaver.ts'
+import { flyoversOn } from '../roadster/flight.ts'
 
 const RoomScreensaver = lazy(() => import('../room/RoomScreensaver.tsx').then(m => ({ default: m.RoomScreensaver })))
 const RoadsterFlight = lazy(() => import('../roadster/RoadsterFlight.tsx').then(m => ({ default: m.RoadsterFlight })))
@@ -13,14 +16,19 @@ const GRACE_MS = 1200
 export const FLYOVER_FIRST_MS = 45_000
 export const FLYOVER_EVERY_MS = 4 * 60_000
 
-/** Whether the idle flyover is up: never under reduced motion, where a scene popping up unasked is what the person turned off. */
+/**
+ * Whether the idle flyover is up: never with Flyover animations off, nor under reduced motion, where
+ * a scene popping up unasked is what the person turned off.
+ */
 function useIdleFlyover(): { up: boolean; flown: number; land: () => void } {
   const reduced = useReducedMotion()
+  const prefs = useStore($prefs)
+  const off = reduced || !flyoversOn(prefs)
   const [up, setUp] = useState(false)
   const flown = useRef(0)
 
   useEffect(() => {
-    if (reduced || up) {
+    if (off || up) {
       return
     }
 
@@ -33,9 +41,9 @@ function useIdleFlyover(): { up: boolean; flown: number; land: () => void } {
     )
 
     return () => clearTimeout(timer)
-  }, [reduced, up])
+  }, [off, up])
 
-  return { up: up && !reduced, flown: flown.current, land: () => setUp(false) }
+  return { up: up && !off, flown: flown.current, land: () => setUp(false) }
 }
 
 function Clock() {

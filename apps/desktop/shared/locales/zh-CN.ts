@@ -301,6 +301,9 @@ export const zhCN: Translation = {
 
   'settings.general.subtitle': 'Herald OS 如何启动、在哪里工作。',
   'settings.appearance.subtitle': '主题、强调色、壁纸、字体和菜单栏。',
+  'settings.appearance.flyovers': '飞越动画',
+  'settings.appearance.flyoversHint': '助手的工作完成时，一辆白色敞篷跑车会飞越宠物小屋，也会不时飞过屏幕保护程序。在命令栏中输入“fly”时，它总会起飞。',
+  'settings.appearance.flyoversFailed': '无法更改飞越动画',
   'settings.pet.subtitle':
     '桌面上的 Hermes petdex 吉祥物：它会显示 Hermes 正在做什么，举着待批准的请求，接收提问和文件，又不碍事。选哪只宠物、大小和开关都是 Hermes 自己的设置，在 Hermes CLI、TUI 和 Hermes 桌面版中都一样。',
   'settings.room.subtitle':

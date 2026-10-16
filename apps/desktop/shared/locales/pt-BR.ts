@@ -310,6 +310,9 @@ export const ptBR: Translation = {
 
   'settings.general.subtitle': 'Como o Herald OS inicia e onde ele trabalha.',
   'settings.appearance.subtitle': 'Tema, cor de destaque, papel de parede, fontes e a barra de menus.',
+  'settings.appearance.flyovers': 'Animações de sobrevoo',
+  'settings.appearance.flyoversHint': 'Um roadster branco sobrevoa a Sala dos Mascotes quando o trabalho de um assistente termina e, de vez em quando, o protetor de tela. Digitar “fly” na barra de comandos o faz voar de qualquer jeito.',
+  'settings.appearance.flyoversFailed': 'Não foi possível alterar as animações de sobrevoo',
   'settings.pet.subtitle':
     'O mascote petdex do Hermes na área de trabalho: ele mostra o que o Hermes está fazendo, exibe pedidos de aprovação, recebe perguntas e arquivos e não atrapalha. A escolha do mascote, seu tamanho e sua ativação são configurações do próprio Hermes, compartilhadas pela CLI, pela TUI e pelo app de desktop do Hermes.',
   'settings.room.subtitle':
