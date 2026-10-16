@@ -255,7 +255,7 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
 
   return (
     <div ref={ref} className="relative">
-      <Dropdown label={<span className="max-w-[200px] truncate">{busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}</span>} onClick={() => !disabled && setOpen(o => !o)} className={cn(disabled && 'opacity-50')} />
+      <Dropdown label={<span className="max-w-[200px] truncate" title={busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}>{busy ? t('settings.agents.provider.switching') : (current?.name ?? t('settings.agents.provider.choose'))}</span>} onClick={() => !disabled && setOpen(o => !o)} className={cn(disabled && 'opacity-50')} />
       {open && (
         <div className="float animate-pop absolute top-[calc(100%+6px)] right-0 z-30 flex w-[340px] flex-col rounded-lg" role="dialog" aria-label={t('settings.agents.provider.chooseLabel')}>
           <label className="glass-input m-2 flex h-8 items-center gap-2 rounded-lg px-2.5">
