@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Update Herald OS: the shell (repo + rebuild, or a newer release tarball in /opt/herald-os), one-shot
 # migrations, system packages (dnf on Fedora, pacman and the AUR helper on Arch, Omarchy's own updater
-# on Omarchy, the whole image with bootc on the Herald OS image), Flatpaks and Hermes Agent. `--check`
+# on Omarchy, the whole image with bootc on the Herald OS image, or rpm-ostree once packages are
+# layered on it), Flatpaks and Hermes Agent. `--check`
 # only reports and records whether anything is pending (the menu bar shows a dot). Channels
 # (~/.config/herald-os/channel): stable (default) or edge. A checkout tracks the repo's main branch on
 # both; a release tarball follows releases, with pre-releases on edge.
@@ -9,6 +10,10 @@
 #   herald-os-update [--check] [--migrate] [--no-system] [--no-hermes]
 #
 # `--migrate` only runs pending one-shot migrations (linux/dev/build.sh calls it after every build).
+#
+# Every step is reported in a summary at the end. The exit status is 1 when the system step or one of
+# Herald OS's own steps (shell, release, migrations, rebuild) failed; a Flatpak or Hermes Agent that
+# did not update is reported, but leaves the exit status at 0.
 set -uo pipefail
 
 REPO="${HERALD_OS_REPO:-$HOME/Herald-OS}"
@@ -17,9 +22,9 @@ CONFIG="$HOME/.config/herald-os"
 CHANNEL="$(cat "$CONFIG/channel" 2>/dev/null || echo stable)"
 MIGRATIONS_DONE="/var/lib/herald-os/migrations"
 # What tells the Herald OS image from other bootc and ostree systems (is_herald_image).
-OSTREE_BOOTED=/run/ostree-booted
+OSTREE_BOOTED="${HERALD_OS_OSTREE_BOOTED:-/run/ostree-booted}"
 OS_RELEASE=(/etc/os-release /usr/lib/os-release)
-IMAGE_SHELL=/usr/share/herald-os/app/resources/app.asar
+IMAGE_SHELL="${HERALD_OS_IMAGE_SHELL:-/usr/share/herald-os/app/resources/app.asar}"
 CHECK=0
 MIGRATE=0
 SYSTEM=1
@@ -73,6 +78,46 @@ system_kind() {
 SYSTEM_KIND="$(system_kind)"
 AUR_HELPER="$(command -v yay || command -v paru || true)"
 
+# What the booted deployment adds to the image or takes from it: packages layered with rpm-ostree
+# install (from a repo or a local RPM), packages removed with rpm-ostree override remove, and ones
+# replaced with rpm-ostree override replace. bootc refuses to upgrade such a deployment ("Deployment
+# contains local rpm-ostree modifications"), so rpm-ostree upgrades it instead and keeps them. Prints
+# e.g. "layered: htop, vim; removed: firefox", or nothing (and fails) for the image as built.
+local_modifications() {
+  command -v rpm-ostree >/dev/null && command -v python3 >/dev/null || return 1
+  rpm-ostree status --json 2>/dev/null | python3 -c '
+import json, sys
+
+def name(item):
+    # A package is a name, an object, or (from GVariant tuples) [nevra, name, ...]; a replacement
+    # is a pair of packages, the new one first.
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return str(item.get("nevra") or item.get("name") or "?")
+    if isinstance(item, list) and item:
+        return name(item[0])
+    return "?"
+
+try:
+    status = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+booted = next((d for d in status.get("deployments") or [] if isinstance(d, dict) and d.get("booted")), {})
+found = []
+for key, label in (("requested-packages", "layered"), ("requested-local-packages", "local"),
+                   ("base-removals", "removed"), ("base-local-replacements", "replaced")):
+    names = [name(item) for item in booted.get(key) or []]
+    if names:
+        found.append(label + ": " + ", ".join(names))
+if not found:
+    sys.exit(1)
+print("; ".join(found))
+'
+}
+IMAGE_CHANGES=""
+[[ $SYSTEM_KIND == image ]] && IMAGE_CHANGES="$(local_modifications)"
+
 # Pending system updates (a count; the image counts as one).
 count_system_updates() {
   local out rc
@@ -94,7 +139,12 @@ count_system_updates() {
       echo $((repo + aur))
       ;;
     image)
-      command -v bootc >/dev/null && sudo -n bootc upgrade --check 2>/dev/null | grep -qi 'update available' && echo 1 || echo 0
+      if [[ -n "$IMAGE_CHANGES" ]]; then
+        # Exits 0 when there is an update and 77 when there is none.
+        sudo -n rpm-ostree upgrade --check >/dev/null 2>&1 && echo 1 || echo 0
+      else
+        command -v bootc >/dev/null && sudo -n bootc upgrade --check 2>/dev/null | grep -qi 'update available' && echo 1 || echo 0
+      fi
       ;;
     *) echo 0 ;;
   esac
@@ -123,7 +173,13 @@ update_system() {
       ;;
     image)
       # Stages the new image; it boots on the next restart and the old one stays in the boot menu.
-      sudo -n bootc upgrade
+      if [[ -n "$IMAGE_CHANGES" ]]; then
+        echo "This system has packages of its own on top of the image ($IMAGE_CHANGES)."
+        echo "bootc cannot upgrade it like that, so rpm-ostree upgrades the image and keeps them."
+        sudo -n rpm-ostree upgrade
+      else
+        sudo -n bootc upgrade
+      fi
       ;;
     ostree)
       echo "This is not the Herald OS image, so the system is left to its own updates (its software center, rpm-ostree upgrade or bootc upgrade)."
@@ -229,9 +285,47 @@ fi
 echo "==> Herald OS update ($CHANNEL)"
 notify "Updating Herald OS" "This can take a few minutes."
 
+# One line per step for the summary at the end. `failed` holds the steps that make the update fail,
+# `warnings` the ones that are only reported (Flatpaks, Hermes Agent).
+summary=()
+warnings=()
+step() { summary+=("$(printf '  %-10s %s' "$1" "$2")"); }
+
+# The line of a command's output that says what went wrong: its last error, or else its last line.
+error_of() {
+  local line
+  line="$(printf '%s\n' "$1" | grep -iE 'error' | tail -n 1)"
+  [[ -n "$line" ]] || line="$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 1)"
+  line="${line#*[Ee]rror: }"
+  echo "${line:-no output}"
+}
+
+# The person's Flatpaks. When the update as a whole fails, each installed ref is updated on its own,
+# so that one broken app neither holds back the rest nor goes unnamed. Each failure goes to
+# flatpak_problems as "ref: error".
+flatpak_problems=()
+update_flatpaks() {
+  local out all ref refs
+  all="$(flatpak update -y --noninteractive --user 2>&1)" && return 0
+  mapfile -t refs < <(flatpak list --user --columns=ref 2>/dev/null | grep -v '^[[:space:]]*$')
+  if [[ ${#refs[@]} -eq 0 ]]; then
+    flatpak_problems+=("$(error_of "$all")")
+    return 1
+  fi
+  for ref in "${refs[@]}"; do
+    out="$(flatpak update -y --noninteractive --user "$ref" 2>&1)" || flatpak_problems+=("$ref: $(error_of "$out")")
+  done
+  [[ ${#flatpak_problems[@]} -eq 0 ]]
+}
+
 if [[ -n "$repo_remote" && $pending_repo -gt 0 ]]; then
   echo "==> shell: pulling $repo_remote"
-  git -C "$REPO" pull --ff-only --quiet origin "$(branch_for_channel)" || failed+=(shell)
+  if git -C "$REPO" pull --ff-only --quiet origin "$(branch_for_channel)"; then
+    step shell "updated from $repo_remote"
+  else
+    failed+=(shell)
+    step shell "FAILED: git pull --ff-only from $repo_remote"
+  fi
 fi
 
 # Before the migrations, so that the new version's migrations run in the same update.
@@ -243,16 +337,45 @@ if [[ $pending_tarball -eq 1 ]]; then
     echo "Herald OS $tarball_version did not install; in a terminal, herald-os update can ask for your password."
     failed+=(herald-os)
   fi
+  if [[ " ${failed[*]} " == *" herald-os "* ]]; then
+    step herald-os "FAILED: $tarball_version did not install"
+  else
+    step herald-os "$tarball_version installed"
+  fi
 fi
 
+failed_before=${#failed[@]}
 run_migrations
+if [[ ${#failed[@]} -gt $failed_before ]]; then
+  step migrations "FAILED: ${failed[*]:$failed_before}"
+fi
 
 if [[ $SYSTEM -eq 1 ]]; then
   echo "==> system ($SYSTEM_KIND)"
-  update_system || failed+=(packages)
+  system_tool="$SYSTEM_KIND"
+  if [[ $SYSTEM_KIND == image ]]; then
+    system_tool="bootc upgrade"
+    [[ -n "$IMAGE_CHANGES" ]] && system_tool="rpm-ostree upgrade, keeping $IMAGE_CHANGES"
+  fi
+  update_system
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    step system "ok ($system_tool)"
+  else
+    failed+=(system)
+    step system "FAILED ($system_tool, exit $rc)"
+  fi
   if command -v flatpak >/dev/null; then
     echo "==> flatpaks"
-    flatpak update -y --noninteractive --user >/dev/null || failed+=(flatpaks)
+    if update_flatpaks; then
+      step flatpaks ok
+    else
+      warnings+=(flatpaks)
+      for problem in "${flatpak_problems[@]}"; do
+        echo "WARNING: flatpak: $problem" >&2
+      done
+      step flatpaks "did not all update: $(printf '%s; ' "${flatpak_problems[@]}" | sed 's/; $//')"
+    fi
   fi
 fi
 
@@ -262,29 +385,52 @@ if [[ $HERMES -eq 1 ]]; then
   mapfile -t hermes < <(herald-os hermes-command --managed 2>/dev/null)
   if [[ ${#hermes[@]} -gt 0 ]]; then
     echo "==> Hermes Agent"
-    "${hermes[@]}" update </dev/null >/dev/null 2>&1 || echo "WARNING: hermes update did not complete (run it in a terminal)"
+    if "${hermes[@]}" update </dev/null >/dev/null 2>&1; then
+      step hermes ok
+    else
+      echo "WARNING: hermes update did not complete (run it in a terminal)"
+      warnings+=(hermes)
+      step hermes "did not complete (run hermes update in a terminal)"
+    fi
   fi
 fi
 
 if [[ -x "$REPO/linux/dev/build.sh" && ( $pending_repo -gt 0 || -n "${HERALD_OS_FORCE_REBUILD:-}" ) ]]; then
   echo "==> rebuilding the shell"
-  bash "$REPO/linux/dev/build.sh" || failed+=(build)
+  if bash "$REPO/linux/dev/build.sh"; then
+    step build ok
+  else
+    failed+=(build)
+    step build "FAILED: linux/dev/build.sh"
+  fi
 fi
 
 printf '{"channel":"%s","checkedAt":"%s","pending":0,"shell":0,"packages":0,"flatpaks":0}\n' "$CHANNEL" "$(date -Is)" >"$STATE/update-available.json"
 report 0 "up to date"
 
+problems=("${failed[@]}" "${warnings[@]}")
+
 # Hooks in ~/.config/herald-os/hooks/after-update.d/ and "after Herald OS updates" automations.
 if command -v herald-os >/dev/null; then
-  herald-os event after-update "problems=${failed[*]:-none}" >/dev/null 2>&1 || true
+  herald-os event after-update "problems=${problems[*]:-none}" >/dev/null 2>&1 || true
+fi
+
+echo "==> summary"
+if [[ ${#summary[@]} -gt 0 ]]; then
+  printf '%s\n' "${summary[@]}"
+else
+  echo "  nothing to update"
 fi
 
 if [[ ${#failed[@]} -gt 0 ]]; then
-  notify "Update finished with problems" "${failed[*]}"
+  notify "Update finished with problems" "${problems[*]}"
   echo "failed: ${failed[*]}" >&2
   exit 1
 fi
-if [[ $pending_tarball -eq 1 ]]; then
+if [[ ${#warnings[@]} -gt 0 ]]; then
+  notify "Update finished with problems" "${problems[*]}"
+  echo "not updated: ${warnings[*]}" >&2
+elif [[ $pending_tarball -eq 1 ]]; then
   notify "Herald OS $tarball_version is installed" "Log out and back in (or restart herald-os-app) to use it."
 else
   notify "Herald OS is up to date" "Restart the shell to use the new build."
