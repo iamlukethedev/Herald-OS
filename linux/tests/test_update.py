@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,21 +12,47 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 UPDATE = ROOT / "linux" / "bin" / "herald-os-update"
 
-# The booted deployment as `rpm-ostree status --json` reports it, with whatever it adds to the image.
-# Removals and replacements come from GVariant tuples: [nevra, name, epoch, version, release, arch].
+# What a deployment adds to the image, as `rpm-ostree status --json` reports it. The requested-* keys
+# come from the origin as names; what rpm-ostree derived comes from GVariant tuples:
+# [nevra, name, epoch, version, release, arch], a replacement being a pair of them, the new one first.
 FIREFOX = ["firefox-131.0-1.fc44.x86_64", "firefox", "0", "131.0", "1.fc44", "x86_64"]
 MESA = ["mesa-dri-drivers-25.0-2.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "2.fc44", "x86_64"]
 MESA_OLD = ["mesa-dri-drivers-25.0-1.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "1.fc44", "x86_64"]
+KERNEL = ["kernel-6.17.1-300.fc44.x86_64", "kernel", "0", "6.17.1", "300.fc44", "x86_64"]
+KERNEL_OLD = ["kernel-6.16.9-300.fc44.x86_64", "kernel", "0", "6.16.9", "300.fc44", "x86_64"]
 CHANGES = {
     "requested-packages": (["htop", "vim-enhanced"], "layered: htop, vim-enhanced"),
     "requested-local-packages": (["mytool-1.0-1.x86_64"], "local: mytool-1.0-1.x86_64"),
+    "requested-local-fileoverride-packages": (["myfix-2.0-1.x86_64"], "local: myfix-2.0-1.x86_64"),
+    "requested-modules": (["nodejs:22/default"], "modules: nodejs:22/default"),
+    "requested-modules-enabled": (["nodejs:22"], "modules: nodejs:22"),
+    "requested-base-removals": (["firefox", "firefox-langpacks"], "removed: firefox, firefox-langpacks"),
+    "requested-base-local-replacements": (["mesa-dri-drivers-25.0-2.fc44.x86_64"], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "requested-base-remote-replacements": (
+        [["repo=updates-testing", ["kernel", "kernel-core"]]],
+        "replaced: kernel from repo=updates-testing, kernel-core from repo=updates-testing",
+    ),
+    "packages": (["htop"], "layered: htop"),
     "base-removals": ([FIREFOX], "removed: firefox-131.0-1.fc44.x86_64"),
     "base-local-replacements": ([[MESA, MESA_OLD]], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "base-remote-replacements": ({"repo=updates-testing": [[KERNEL, KERNEL_OLD]]}, "replaced: kernel-6.17.1-300.fc44.x86_64 from repo=updates-testing"),
+    "regenerate-initramfs": (True, "initramfs: regenerated"),
+    "initramfs-etc": (["/etc/crypttab"], "initramfs: /etc/crypttab"),
 }
+# Every key rpm-ostree reports, empty, as it reports them for the image as built.
+CLEAN = {key: {} if key == "base-remote-replacements" else False if key == "regenerate-initramfs" else [] for key in CHANGES}
+GOOD, BROKEN = "app/org.example.Good/x86_64/stable", "app/org.example.Broken/x86_64/stable"
+SYSTEM_APP = "app/org.example.System/x86_64/stable"
 
 STUBS = {
     "herald-os": 'echo "$@" >>"$HOME/herald-os.log"',
-    "sudo": '[ "$1" = -n ] && shift\nexec "$@"',
+    "sudo": """if [ -e "$HOME/no-sudo" ]; then
+  echo "sudo: a password is required" >&2
+  exit 1
+fi
+[ "$1" = -n ] && shift
+exec "$@\"""",
+    # Like bootc, refuses when the booted or the staged deployment has local changes.
     "bootc": """echo "bootc $*" >>"$HOME/calls.log"
 if [ -s "$HOME/layered" ]; then
   echo "error: Upgrading: Deployment contains local rpm-ostree modifications; cannot upgrade via bootc" >&2
@@ -35,23 +63,32 @@ exit 0""",
     "rpm-ostree": """[ "$1" = status ] && exec cat "$HOME/status.json"
 echo "rpm-ostree $*" >>"$HOME/calls.log"
 exit "$(cat "$HOME/rpm-ostree-exit" 2>/dev/null || echo 0)\"""",
-    # Updating everything fails when any ref in ~/broken-refs does; so does updating that ref alone.
+    # The user installation's refs are in ~/refs, the system one's in ~/system-refs. Updating a whole
+    # installation fails when one of its refs is in ~/broken-refs, and so does updating that ref alone.
     "flatpak": """echo "flatpak $*" >>"$HOME/calls.log"
+refs="$HOME/refs"
+case " $* " in *" --system "*) refs="$HOME/system-refs" ;; esac
 case "$1" in
-  list) cat "$HOME/refs" ;;
+  list) cat "$refs" 2>/dev/null ;;
   remote-ls) ;;
   update)
+    if [ -e "$HOME/remote-down" ]; then
+      echo "error: Unable to load summary from remote flathub: Could not resolve hostname" >&2
+      exit 1
+    fi
     for arg in "$@"; do last="$arg"; done
-    if [ -s "$HOME/broken-refs" ]; then
-      if [ "$last" = --user ]; then
+    if [ "$last" = --user ] || [ "$last" = --system ]; then
+      if [ -s "$HOME/broken-refs" ] && grep -qxFf "$HOME/broken-refs" "$refs" 2>/dev/null; then
         echo "Error: Failed to update some refs" >&2
         exit 1
       fi
-      if grep -qx "$last" "$HOME/broken-refs"; then
-        echo "Looking for updates..." >&2
-        echo "error: Failed to install $last: No space left on device" >&2
-        exit 1
-      fi
+      echo "Updated everything $last" >>"$HOME/updated.log"
+      exit 0
+    fi
+    if grep -qx "$last" "$HOME/broken-refs" 2>/dev/null; then
+      echo "Looking for updates..." >&2
+      echo "error: Failed to install $last: No space left on device" >&2
+      exit 1
     fi
     echo "Updated $last" >>"$HOME/updated.log"
     ;;
@@ -70,27 +107,33 @@ def machine(tmp_path):
         (stubs / name).chmod(0o755)
     (tmp_path / "ostree-booted").write_text("")
     (tmp_path / "app.asar").write_text("")
-    (home / "refs").write_text("app/org.example.Good/x86_64/stable\napp/org.example.Broken/x86_64/stable\n")
+    (home / "refs").write_text(f"{GOOD}\n{BROKEN}\n")
     env = {
         "HOME": str(home),
         "HERALD_OS_REPO": str(repo),
         "HERALD_OS_OSTREE_BOOTED": str(tmp_path / "ostree-booted"),
         "HERALD_OS_IMAGE_SHELL": str(tmp_path / "app.asar"),
+        "HERALD_OS_TESTING": "1",
         "PATH": os.pathsep.join([str(stubs), "/usr/bin", "/bin"]),
     }
-    deploy(home, {})
+    deploy(home)
     return home, env
 
 
-def deploy(home: Path, changes: dict) -> None:
-    booted = {"id": "fedora-herald", "booted": True, "requested-packages": [], "requested-local-packages": [], "base-removals": [], "base-local-replacements": [], **changes}
-    staged = {"id": "fedora-herald-staged", "booted": False, "requested-packages": ["only-in-the-staged-one"]}
-    (home / "status.json").write_text(json.dumps({"deployments": [staged, booted]}))
-    (home / "layered").write_text("1" if any(changes.values()) else "")
+def deploy(home: Path, booted: dict | None = None, staged: dict | None = None, rollback: dict | None = None, staged_osname: str = "fedora") -> None:
+    """The deployments: the booted one, and if given one staged for the next boot and a rollback one."""
+    deployments = [{"id": "fedora-booted", "osname": "fedora", "booted": True, "staged": False, **CLEAN, **(booted or {})}]
+    if staged is not None:
+        deployments.insert(0, {"id": "fedora-staged", "osname": staged_osname, "booted": False, "staged": True, **CLEAN, **staged})
+    if rollback is not None:
+        deployments.append({"id": "fedora-rollback", "osname": "fedora", "booted": False, "staged": False, **CLEAN, **rollback})
+    (home / "status.json").write_text(json.dumps({"deployments": deployments}))
+    pending = staged if staged is not None and staged_osname == "fedora" else {}
+    (home / "layered").write_text("1" if any((booted or {}).values()) or any(pending.values()) else "")
 
 
-def run(env, *args):
-    return subprocess.run(["bash", str(UPDATE), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+def run(env, *args, prefix=()):
+    return subprocess.run([*prefix, "bash", str(UPDATE), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
 
 
 def calls(home: Path) -> list[str]:
@@ -98,33 +141,86 @@ def calls(home: Path) -> list[str]:
     return log.read_text().splitlines() if log.exists() else []
 
 
+def ran(home: Path, command: str) -> bool:
+    return any(call.startswith(command) for call in calls(home))
+
+
+def summary(stdout: str) -> dict[str, str]:
+    """The summary at the end: each step and what became of it."""
+    lines = stdout.split("==> summary\n", 1)[1].splitlines()
+    return dict(re.match(r"  (\S+)\s+(.*)", line).groups() for line in lines if re.match(r"  \S", line))
+
+
 def test_the_image_as_built_upgrades_with_bootc(machine):
     home, env = machine
     done = run(env)
     assert done.returncode == 0, done.stderr
     assert "bootc upgrade" in calls(home)
-    assert not [call for call in calls(home) if call.startswith("rpm-ostree")]
-    assert "system     ok (bootc upgrade)" in done.stdout
+    assert not ran(home, "rpm-ostree")
+    assert summary(done.stdout)["system"] == "ok (bootc upgrade)"
 
 
 @pytest.mark.parametrize("key", CHANGES)
 def test_layered_overridden_or_local_packages_upgrade_with_rpm_ostree(machine, key):
     home, env = machine
     packages, described = CHANGES[key]
-    deploy(home, {key: packages})
+    deploy(home, booted={key: packages})
     done = run(env)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "rpm-ostree upgrade" in calls(home)
-    assert not [call for call in calls(home) if call.startswith("bootc")]
+    assert not ran(home, "bootc")
     assert f"packages of its own on top of the image ({described})" in done.stdout
-    assert f"system     ok (rpm-ostree upgrade, keeping {described})" in done.stdout
+    assert summary(done.stdout)["system"] == f"ok (rpm-ostree upgrade; {described})"
 
 
-def test_only_the_booted_deployment_counts(machine):
+def test_what_was_requested_is_named_rather_than_what_rpm_ostree_made_of_it(machine):
     home, env = machine
-    assert "only-in-the-staged-one" in (home / "status.json").read_text()
+    deploy(home, booted={"requested-base-removals": ["firefox"], "base-removals": [FIREFOX]})
+    assert "packages of its own on top of the image (removed: firefox)" in run(env).stdout
+
+
+def test_a_staged_deployment_with_layers_upgrades_with_rpm_ostree(machine):
+    """After rpm-ostree install without a restart: bootc would upgrade the clean booted one and drop htop."""
+    home, env = machine
+    deploy(home, booted={}, staged={"requested-packages": ["htop"]})
+    done = run(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "rpm-ostree upgrade" in calls(home)
+    assert not ran(home, "bootc")
+    assert summary(done.stdout)["system"] == "ok (rpm-ostree upgrade; layered: htop (staged for the next restart))"
+
+
+def test_the_staged_deployment_counts_rather_than_the_booted_one(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]}, staged={"requested-packages": ["htop", "vim-enhanced"]})
+    done = run(env)
+    assert "packages of its own on top of the image (layered: htop, vim-enhanced (staged for the next restart))" in done.stdout
+
+
+def test_a_clean_staged_deployment_over_a_layered_booted_one_still_needs_rpm_ostree(machine):
+    """bootc refuses when the booted deployment has changes too, even if the staged one drops them."""
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]}, staged={})
+    done = run(env)
+    assert "rpm-ostree upgrade" in calls(home)
+    assert not ran(home, "bootc")
+    assert "layered: htop (in the running system only; the next restart drops them)" in done.stdout
+
+
+def test_a_rollback_deployment_does_not_count(machine):
+    home, env = machine
+    deploy(home, rollback={"requested-packages": ["htop"]})
     assert run(env).returncode == 0
     assert "bootc upgrade" in calls(home)
+    assert not ran(home, "rpm-ostree")
+
+
+def test_a_deployment_staged_for_another_os_does_not_count(machine):
+    home, env = machine
+    deploy(home, staged={"requested-packages": ["htop"]}, staged_osname="other")
+    assert run(env).returncode == 0
+    assert "bootc upgrade" in calls(home)
+    assert not ran(home, "rpm-ostree")
 
 
 def test_unreadable_rpm_ostree_status_falls_back_to_bootc(machine):
@@ -136,42 +232,88 @@ def test_unreadable_rpm_ostree_status_falls_back_to_bootc(machine):
 
 def test_the_check_asks_rpm_ostree_when_packages_are_layered(machine):
     home, env = machine
-    deploy(home, {"requested-packages": ["htop"]})
+    deploy(home, booted={"requested-packages": ["htop"]})
     done = run(env, "--check")
     assert done.returncode == 0
     assert "rpm-ostree upgrade --check" in calls(home)
-    assert not [call for call in calls(home) if call.startswith("bootc")]
+    assert not ran(home, "bootc")
     assert done.stdout.strip() == "1 package"
 
 
 def test_a_failed_system_upgrade_fails_the_update(machine):
     home, env = machine
-    deploy(home, {"requested-packages": ["htop"]})
+    deploy(home, booted={"requested-packages": ["htop"]})
     (home / "rpm-ostree-exit").write_text("1")
     done = run(env)
     assert done.returncode == 1
-    assert "system     FAILED (rpm-ostree upgrade, keeping layered: htop, exit 1)" in done.stdout
+    assert summary(done.stdout)["system"] == "FAILED (rpm-ostree upgrade; layered: htop, exit 1)"
     assert "failed: system" in done.stderr
-    assert "flatpaks   ok" in done.stdout
+    assert summary(done.stdout)["flatpaks"] == "ok"
 
 
 def test_a_broken_flatpak_is_named_and_does_not_fail_the_update(machine):
     home, env = machine
-    (home / "broken-refs").write_text("app/org.example.Broken/x86_64/stable\n")
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
     done = run(env)
     assert done.returncode == 0, done.stderr
-    problem = "app/org.example.Broken/x86_64/stable: Failed to install app/org.example.Broken/x86_64/stable: No space left on device"
-    assert f"WARNING: flatpak: {problem}" in done.stderr
-    assert f"flatpaks   did not all update: {problem}" in done.stdout
-    assert "Updated app/org.example.Good/x86_64/stable" in (home / "updated.log").read_text()
-    assert "system     ok (bootc upgrade)" in done.stdout
+    problem = f"{BROKEN}: Failed to install {BROKEN}: No space left on device"
+    assert f"WARNING: flatpaks: {problem}" in done.stderr
+    assert summary(done.stdout)["flatpaks"] == f"did not all update: {problem}"
+    assert f"Updated {GOOD}" in (home / "updated.log").read_text()
+    assert summary(done.stdout)["system"] == "ok (bootc upgrade)"
     assert "after-update problems=flatpaks" in (home / "herald-os.log").read_text()
 
 
 def test_flatpaks_that_cannot_be_listed_report_the_whole_update_error(machine):
     home, env = machine
-    (home / "broken-refs").write_text("app/org.example.Broken/x86_64/stable\n")
+    (home / "remote-down").write_text("")
     (home / "refs").write_text("")
     done = run(env)
     assert done.returncode == 0
-    assert "flatpaks   did not all update: Failed to update some refs" in done.stdout
+    assert summary(done.stdout)["flatpaks"] == "did not all update: Unable to load summary from remote flathub: Could not resolve hostname"
+
+
+def test_system_flatpaks_update_as_root_and_are_reported_per_ref(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n{BROKEN}\n")
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
+    (home / "refs").write_text(f"{GOOD}\n")
+    done = run(env)
+    assert done.returncode == 0, done.stderr
+    assert "flatpak update -y --noninteractive --system" in calls(home)
+    assert f"flatpak update -y --noninteractive --system {SYSTEM_APP}" in calls(home)
+    steps = summary(done.stdout)
+    assert steps["flatpaks"] == "ok"
+    assert steps["system-flatpaks"] == f"did not all update: {BROKEN}: Failed to install {BROKEN}: No space left on device"
+    assert "after-update problems=system-flatpaks" in (home / "herald-os.log").read_text()
+
+
+def test_system_flatpaks_without_sudo_are_reported_as_not_updated(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert not [call for call in calls(home) if call.startswith("flatpak update") and "--system" in call]
+    assert summary(done.stdout)["system-flatpaks"] == "not updated: they need root (run sudo herald-os update)"
+    assert summary(done.stdout)["flatpaks"] == "ok"
+
+
+def test_without_system_flatpaks_there_is_no_system_flatpak_step(machine):
+    home, env = machine
+    done = run(env)
+    assert "system-flatpaks" not in summary(done.stdout)
+    assert not [call for call in calls(home) if call.startswith("flatpak update") and "--system" in call]
+
+
+def can_be_root() -> bool:
+    return shutil.which("unshare") is not None and subprocess.run(["unshare", "-r", "true"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+def test_as_root_the_test_paths_count_only_with_the_testing_flag(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]})
+    flagged = run(env, prefix=("unshare", "-r"))
+    assert "==> system (image)" in flagged.stdout
+    unflagged = run({key: value for key, value in env.items() if key != "HERALD_OS_TESTING"}, prefix=("unshare", "-r"))
+    assert "==> system (image)" not in unflagged.stdout

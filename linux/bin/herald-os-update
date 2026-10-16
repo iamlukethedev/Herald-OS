@@ -22,9 +22,15 @@ CONFIG="$HOME/.config/herald-os"
 CHANNEL="$(cat "$CONFIG/channel" 2>/dev/null || echo stable)"
 MIGRATIONS_DONE="/var/lib/herald-os/migrations"
 # What tells the Herald OS image from other bootc and ostree systems (is_herald_image).
-OSTREE_BOOTED="${HERALD_OS_OSTREE_BOOTED:-/run/ostree-booted}"
+OSTREE_BOOTED=/run/ostree-booted
 OS_RELEASE=(/etc/os-release /usr/lib/os-release)
-IMAGE_SHELL="${HERALD_OS_IMAGE_SHELL:-/usr/share/herald-os/app/resources/app.asar}"
+IMAGE_SHELL=/usr/share/herald-os/app/resources/app.asar
+# The tests point these elsewhere. As root (sudo herald-os update) only with HERALD_OS_TESTING=1, so
+# that an inherited environment cannot change how the system is updated.
+if [[ $EUID -ne 0 || "${HERALD_OS_TESTING:-}" == 1 ]]; then
+  OSTREE_BOOTED="${HERALD_OS_OSTREE_BOOTED:-$OSTREE_BOOTED}"
+  IMAGE_SHELL="${HERALD_OS_IMAGE_SHELL:-$IMAGE_SHELL}"
+fi
 CHECK=0
 MIGRATE=0
 SYSTEM=1
@@ -78,15 +84,29 @@ system_kind() {
 SYSTEM_KIND="$(system_kind)"
 AUR_HELPER="$(command -v yay || command -v paru || true)"
 
-# What the booted deployment adds to the image or takes from it: packages layered with rpm-ostree
-# install (from a repo or a local RPM), packages removed with rpm-ostree override remove, and ones
-# replaced with rpm-ostree override replace. bootc refuses to upgrade such a deployment ("Deployment
-# contains local rpm-ostree modifications"), so rpm-ostree upgrades it instead and keeps them. Prints
-# e.g. "layered: htop, vim; removed: firefox", or nothing (and fails) for the image as built.
+# What the system adds to the image or takes from it with rpm-ostree: packages layered (from a repo
+# or a local RPM), modules, packages removed or replaced with rpm-ostree override, and an initramfs
+# regenerated on the machine. bootc refuses to upgrade when the booted or the staged deployment has
+# any of them ("Deployment contains local rpm-ostree modifications"), so rpm-ostree upgrades instead.
+# rpm-ostree upgrades from the deployment staged for the next boot when there is one (after
+# `rpm-ostree install` without a restart, the booted one is still clean), so that one is described:
+# e.g. "layered: htop, vim; removed: firefox". Prints nothing (and fails) when bootc can upgrade.
 local_modifications() {
   command -v rpm-ostree >/dev/null && command -v python3 >/dev/null || return 1
   rpm-ostree status --json 2>/dev/null | python3 -c '
 import json, sys
+
+# Each label with the keys that fill it: first what was asked for (the requested-* keys, from the
+# deployment origin), then, only when those are empty, what rpm-ostree made of it in the deployment.
+KEYS = (
+    ("layered", ("requested-packages",), ("packages",)),
+    ("local", ("requested-local-packages", "requested-local-fileoverride-packages"), ()),
+    ("modules", ("requested-modules", "requested-modules-enabled"), ()),
+    ("removed", ("requested-base-removals",), ("base-removals",)),
+    ("replaced", ("requested-base-local-replacements", "requested-base-remote-replacements"),
+     ("base-local-replacements", "base-remote-replacements")),
+    ("initramfs", ("regenerate-initramfs", "initramfs-etc"), ()),
+)
 
 def name(item):
     # A package is a name, an object, or (from GVariant tuples) [nevra, name, ...]; a replacement
@@ -99,20 +119,48 @@ def name(item):
         return name(item[0])
     return "?"
 
+def names(key, value):
+    if key == "regenerate-initramfs":
+        return ["regenerated"] if value is True else []
+    if key == "requested-base-remote-replacements":
+        # [[source, [package, ...]], ...]
+        return [f"{package} from {pair[0]}" for pair in value or [] if isinstance(pair, list) and len(pair) == 2
+                for package in (pair[1] if isinstance(pair[1], list) else [pair[1]])]
+    if isinstance(value, dict):
+        # base-remote-replacements: {source: [replacement, ...]}
+        return [f"{name(item)} from {source}" for source, items in value.items()
+                for item in (items if isinstance(items, list) else [items])]
+    return [name(item) for item in value] if isinstance(value, list) else []
+
+def describe(deployment):
+    found = []
+    for label, requested, derived in KEYS:
+        listed = [n for key in requested for n in names(key, deployment.get(key))]
+        listed = listed or [n for key in derived for n in names(key, deployment.get(key))]
+        if listed:
+            found.append(label + ": " + ", ".join(dict.fromkeys(listed)))
+    return "; ".join(found)
+
 try:
     status = json.load(sys.stdin)
 except ValueError:
     sys.exit(1)
-booted = next((d for d in status.get("deployments") or [] if isinstance(d, dict) and d.get("booted")), {})
-found = []
-for key, label in (("requested-packages", "layered"), ("requested-local-packages", "local"),
-                   ("base-removals", "removed"), ("base-local-replacements", "replaced")):
-    names = [name(item) for item in booted.get(key) or []]
-    if names:
-        found.append(label + ": " + ", ".join(names))
+deployments = [d for d in status.get("deployments") or [] if isinstance(d, dict)]
+booted = next((d for d in deployments if d.get("booted")), None)
+if booted is None:
+    sys.exit(1)
+staged = next((d for d in deployments if d.get("staged") and not d.get("booted") and d.get("osname") == booted.get("osname")), None)
+if staged is None:
+    found = describe(booted)
+elif describe(staged):
+    found = describe(staged) + " (staged for the next restart)"
+elif describe(booted):
+    found = describe(booted) + " (in the running system only; the next restart drops them)"
+else:
+    found = ""
 if not found:
     sys.exit(1)
-print("; ".join(found))
+print(found)
 '
 }
 IMAGE_CHANGES=""
@@ -175,7 +223,7 @@ update_system() {
       # Stages the new image; it boots on the next restart and the old one stays in the boot menu.
       if [[ -n "$IMAGE_CHANGES" ]]; then
         echo "This system has packages of its own on top of the image ($IMAGE_CHANGES)."
-        echo "bootc cannot upgrade it like that, so rpm-ostree upgrades the image and keeps them."
+        echo "bootc refuses to upgrade it, so rpm-ostree upgrades the image instead and keeps what the next boot has."
         sudo -n rpm-ostree upgrade
       else
         sudo -n bootc upgrade
@@ -289,7 +337,7 @@ notify "Updating Herald OS" "This can take a few minutes."
 # `warnings` the ones that are only reported (Flatpaks, Hermes Agent).
 summary=()
 warnings=()
-step() { summary+=("$(printf '  %-10s %s' "$1" "$2")"); }
+step() { summary+=("$(printf '  %-16s %s' "$1" "$2")"); }
 
 # The line of a command's output that says what went wrong: its last error, or else its last line.
 error_of() {
@@ -300,22 +348,40 @@ error_of() {
   echo "${line:-no output}"
 }
 
-# The person's Flatpaks. When the update as a whole fails, each installed ref is updated on its own,
-# so that one broken app neither holds back the rest nor goes unnamed. Each failure goes to
-# flatpak_problems as "ref: error".
+# Flatpaks in one installation: `update_flatpaks --user`, or `update_flatpaks --system sudo -n` with
+# the command that runs flatpak as root. When the update as a whole fails, each installed ref is
+# updated on its own, so that one broken app neither holds back the rest nor goes unnamed. Each
+# failure goes to flatpak_problems as "ref: error".
 flatpak_problems=()
 update_flatpaks() {
-  local out all ref refs
-  all="$(flatpak update -y --noninteractive --user 2>&1)" && return 0
-  mapfile -t refs < <(flatpak list --user --columns=ref 2>/dev/null | grep -v '^[[:space:]]*$')
+  local scope="$1" out all ref refs
+  shift
+  flatpak_problems=()
+  all="$("$@" flatpak update -y --noninteractive "$scope" 2>&1)" && return 0
+  mapfile -t refs < <(flatpak list "$scope" --columns=ref 2>/dev/null | grep -v '^[[:space:]]*$')
   if [[ ${#refs[@]} -eq 0 ]]; then
     flatpak_problems+=("$(error_of "$all")")
     return 1
   fi
   for ref in "${refs[@]}"; do
-    out="$(flatpak update -y --noninteractive --user "$ref" 2>&1)" || flatpak_problems+=("$ref: $(error_of "$out")")
+    out="$("$@" flatpak update -y --noninteractive "$scope" "$ref" 2>&1)" || flatpak_problems+=("$ref: $(error_of "$out")")
   done
   [[ ${#flatpak_problems[@]} -eq 0 ]]
+}
+
+# Runs one Flatpak installation's update and reports it as the step $1 (and, if it fails, in warnings).
+flatpak_step() {
+  local label="$1" problem
+  shift
+  if update_flatpaks "$@"; then
+    step "$label" ok
+    return
+  fi
+  warnings+=("$label")
+  for problem in "${flatpak_problems[@]}"; do
+    echo "WARNING: $label: $problem" >&2
+  done
+  step "$label" "did not all update: $(printf '%s; ' "${flatpak_problems[@]}" | sed 's/; $//')"
 }
 
 if [[ -n "$repo_remote" && $pending_repo -gt 0 ]]; then
@@ -355,7 +421,7 @@ if [[ $SYSTEM -eq 1 ]]; then
   system_tool="$SYSTEM_KIND"
   if [[ $SYSTEM_KIND == image ]]; then
     system_tool="bootc upgrade"
-    [[ -n "$IMAGE_CHANGES" ]] && system_tool="rpm-ostree upgrade, keeping $IMAGE_CHANGES"
+    [[ -n "$IMAGE_CHANGES" ]] && system_tool="rpm-ostree upgrade; $IMAGE_CHANGES"
   fi
   update_system
   rc=$?
@@ -367,14 +433,17 @@ if [[ $SYSTEM -eq 1 ]]; then
   fi
   if command -v flatpak >/dev/null; then
     echo "==> flatpaks"
-    if update_flatpaks; then
-      step flatpaks ok
-    else
-      warnings+=(flatpaks)
-      for problem in "${flatpak_problems[@]}"; do
-        echo "WARNING: flatpak: $problem" >&2
-      done
-      step flatpaks "did not all update: $(printf '%s; ' "${flatpak_problems[@]}" | sed 's/; $//')"
+    flatpak_step flatpaks --user
+    # The system installation (where the image puts its apps) needs root. From the menu there is no
+    # one to ask for a password, so without sudo that needs none it is only reported.
+    if [[ -n "$(flatpak list --system --columns=ref 2>/dev/null)" ]]; then
+      echo "==> system flatpaks"
+      if sudo -n true 2>/dev/null; then
+        flatpak_step system-flatpaks --system sudo -n
+      else
+        warnings+=(system-flatpaks)
+        step system-flatpaks "not updated: they need root (run sudo herald-os update)"
+      fi
     fi
   fi
 fi
