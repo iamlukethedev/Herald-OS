@@ -228,8 +228,8 @@ interface Places {
 }
 
 /** macOS and Windows file systems ignore case, so `~/.SSH` is `~/.ssh` there. */
-const foldCase = process.platform === 'darwin' || process.platform === 'win32'
-const comparable = (file: string): string => (foldCase ? file.toLowerCase() : file)
+const foldCase = (): boolean => process.platform === 'darwin' || process.platform === 'win32'
+const comparable = (file: string): string => (foldCase() ? file.toLowerCase() : file)
 
 const within = (file: string, root: string): boolean => {
   const [a, b] = [comparable(file), comparable(root)]
@@ -270,7 +270,7 @@ const names = (dir: string): Promise<string[]> => fs.readdir(dir).catch((): stri
 async function hermesKeys(hermes: string): Promise<string[]> {
   const profiles = path.join(hermes, 'profiles')
   const dirs = [hermes, ...(await names(profiles)).map(name => path.join(profiles, name))]
-  const found = await Promise.all(dirs.map(async dir => (await names(dir)).filter(name => isEnvFile(name) || name === 'auth.json').map(name => path.join(dir, name))))
+  const found = await Promise.all(dirs.map(async dir => (await names(dir)).filter(isEnvFile).map(name => path.join(dir, name))))
 
   return [...dirs.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')]), ...found.flat()]
 }

@@ -39,7 +39,7 @@ vi.mock('electron', () => ({
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
-const { HOME_SECRETS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
+const { ENV_SEARCH_LIMIT, HOME_SECRETS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
 const { WebViews, registerWebIpc, servableFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
@@ -56,6 +56,9 @@ registerThemeIpc({ panels: false, broadcast: () => {}, backend: {} as never })
 registerAppsIpc()
 const openFile = vi.spyOn(WebViews.prototype, 'openFile').mockReturnValue('web-1')
 registerWebIpc(false)
+
+// In worker threads os.homedir() does not see a stubbed HOME, so it is read from the environment here.
+vi.spyOn(os, 'homedir').mockImplementation(() => process.env.HOME ?? '')
 
 /** Outside every temporary root, so a path outside the home folder is never let in as a temporary one. */
 const BASE = fs.realpathSync(fs.existsSync('/var/tmp') ? '/var/tmp' : os.homedir())
@@ -79,6 +82,7 @@ const PROTECTED = /is a protected location/
 const CONFINED = /only looks through folders inside your home folder/
 const EDITS = /only edits files inside your home folder/
 const HOLDS = /holds a protected location/
+const TOO_LARGE = /too large to check/
 const CHANGED = /changed while it was being opened/
 const PROJECT_OUTSIDE = /project folders must be inside your home folder/
 
@@ -708,6 +712,34 @@ describe('more credential stores', () => {
     expect((await readFile(`${home}/Library/Group Containers/group.com.apple.notes/notes.json`)).content).toBe('{}')
   })
 
+  it('refuses a .env at any depth in a Hermes home, and nothing that only looks like one', async () => {
+    write('.hermes/skills/deploy/config/.env', 'TOKEN=x')
+    write('.hermes/skills/deploy/.env.production', 'TOKEN=x')
+    write('.hermes/skills/deploy/env.md', 'about env')
+    write('Projects/site/config/.env.production', 'PROJECT=x')
+
+    await expect(readFile(`${hermes}/skills/deploy/config/.env`)).rejects.toThrow(PROTECTED)
+    await expect(readFile(`${hermes}/skills/deploy/.env.production`)).rejects.toThrow(PROTECTED)
+    await expect(readDir(`${hermes}/skills/deploy/config/.env`)).rejects.toThrow(PROTECTED)
+    expect((await readFile(`${hermes}/skills/deploy/env.md`)).content).toBe('about env')
+    expect((await readFile(`${home}/Projects/site/config/.env.production`)).content).toBe('PROJECT=x')
+  })
+
+  it("finds each profile's key files, so links to them are refused", async () => {
+    write('.hermes/profiles/work/.env.production', 'KEY=x')
+    write('.hermes/profiles/work/auth.json', '{}')
+    moveBehindLink('.hermes/profiles/work/auth.json', 'vault/work-auth')
+    write('.hermes/profiles/work/auth.json-old', '{}')
+    moveBehindLink('.hermes/profiles/work/.env.production', 'vault/work-production')
+    moveBehindLink('.hermes/profiles/work/.env.local', 'vault/work-local')
+    write('vault/unrelated.txt', 'fine')
+
+    await expect(readFile(`${home}/vault/work-auth`)).rejects.toThrow(PROTECTED)
+    await expect(readFile(`${home}/vault/work-production`)).rejects.toThrow(PROTECTED)
+    await expect(readFile(`${home}/vault/work-local`)).rejects.toThrow(PROTECTED)
+    expect((await readFile(`${home}/vault/unrelated.txt`)).content).toBe('fine')
+  })
+
   it('leaves key files and stores out of a Hermes home listing and of ~/.config, but not of the home folder', async () => {
     write('.config/nvim/init.lua', '')
     link('.hermes', 'hermes-link')
@@ -719,6 +751,173 @@ describe('more credential stores', () => {
     expect(await names(`${hermes}/profiles/work`)).toEqual([])
     expect(await names(`${home}/.config`)).toEqual(['nvim'])
     expect(await names(home)).toEqual(expect.arrayContaining(['.ssh', '.aws', '.config']))
+  })
+})
+
+describe('case folding on macOS', () => {
+  it('matches credential stores and .env files without regard to case on macOS', async () => {
+    await onPlatform('darwin', async () => {
+      await expect(readFile(`${home}/.SSH/id_rsa`)).rejects.toThrow(PROTECTED)
+      await expect(readFile(`${home}/library/keychains/login.keychain-db`)).rejects.toThrow(PROTECTED)
+      await expect(readFile(`${hermes}/.ENV`)).rejects.toThrow(PROTECTED)
+      await expect(readFile(`${hermes}/skills/x/.Env.Local`)).rejects.toThrow(PROTECTED)
+      await expect(readFile(`${hermes}/skills/x/.ENV`)).rejects.toThrow(PROTECTED)
+      await expect(readFile(`${hermes}/AUTH.json`)).rejects.toThrow(PROTECTED)
+    })
+  })
+
+  it('finds a .ENV in a Hermes folder on macOS before moving it', async () => {
+    write('.hermes/skills/deploy/.ENV', 'TOKEN=x')
+
+    await onPlatform('darwin', async () => {
+      await expect(invoke(IPC.fsTrash, [`${hermes}/skills/deploy`])).rejects.toThrow(HOLDS)
+    })
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
+  it.runIf(process.platform === 'linux')('treats other spellings as other files on Linux', async () => {
+    await expect(readFile(`${home}/.SSH/id_rsa`)).rejects.toThrow(/ENOENT/)
+    await expect(readFile(`${hermes}/.ENV`)).rejects.toThrow(/ENOENT/)
+    await expect(readFile(`${hermes}/skills/x/.Env.Local`)).rejects.toThrow(/ENOENT/)
+  })
+})
+
+describe('the narrower checks', () => {
+  it('lets a Hermes home outside the home folder be measured, but not be a project', async () => {
+    const moved = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-hermes-')))
+    vi.stubEnv('HERMES_HOME', moved)
+
+    try {
+      fs.mkdirSync(path.join(moved, 'skills', 'notes'), { recursive: true })
+      fs.writeFileSync(path.join(moved, 'skills', 'notes', 'SKILL.md'), '# Notes')
+
+      expect(await size(moved)).toMatchObject({ files: 1 })
+      await expect(invoke(IPC.fsListTree, path.join(moved, 'skills'), 100)).rejects.toThrow(PROJECT_OUTSIDE)
+      await expect(invoke(IPC.fsWatchTree, path.join(moved, 'skills'))).rejects.toThrow(PROJECT_OUTSIDE)
+    } finally {
+      fs.rmSync(moved, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a folder outside the home and temporary folders for deep walks', async () => {
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-outside-')))
+
+    try {
+      fs.writeFileSync(path.join(outside, 'a.txt'), 'a')
+
+      expect(await names(outside)).toEqual(['a.txt'])
+      await expect(invoke(IPC.fsDirSize, outside)).rejects.toThrow(CONFINED)
+      await expect(invoke(IPC.fsListTree, outside, 100)).rejects.toThrow(PROJECT_OUTSIDE)
+      await expect(invoke(IPC.fsWriteText, path.join(outside, 'b.txt'), 'b')).rejects.toThrow(EDITS)
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a credential store before touching the disk, so a symlink loop in one is refused, not reported', async () => {
+    link('.ssh/loop', '.ssh/loop')
+
+    await expect(readFile(`${home}/.ssh/loop`)).rejects.toThrow(PROTECTED)
+    await expect(readFile(`${home}/.ssh/loop/deeper`)).rejects.toThrow(PROTECTED)
+  })
+
+  it('counts a project under the resolved temporary folder as temporary', async () => {
+    const real = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-temp-')))
+    const linked = `${real}-link`
+    fs.symlinkSync(real, linked)
+    fs.mkdirSync(path.join(real, 'site'))
+    fs.writeFileSync(path.join(real, 'site', 'index.html'), '')
+    const tmpdir = vi.spyOn(os, 'tmpdir').mockReturnValue(linked)
+
+    try {
+      expect(await assertProjectFolder(path.join(real, 'site'))).toBe(path.join(real, 'site'))
+      await expect(assertProjectFolder(real)).rejects.toThrow(/system folder/)
+    } finally {
+      tmpdir.mockRestore()
+      fs.rmSync(linked)
+      fs.rmSync(real, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses / as a project even when it is the home folder', async () => {
+    vi.stubEnv('HOME', '/')
+
+    await expect(assertProjectFolder('/')).rejects.toThrow(/system folder/)
+  })
+
+  it('refuses a project that is inside the home folder only as written', async () => {
+    const moved = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-hermes-')))
+    vi.stubEnv('HERMES_HOME', moved)
+
+    try {
+      fs.mkdirSync(path.join(moved, 'skills'))
+      link(path.join(moved, 'skills'), 'skills-link')
+
+      await expect(invoke(IPC.fsListTree, `${home}/skills-link`, 100)).rejects.toThrow(PROJECT_OUTSIDE)
+    } finally {
+      fs.rmSync(moved, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a write through a path outside the home folder, even one that leads into it', async () => {
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-outside-')))
+
+    try {
+      fs.symlinkSync(`${home}/Projects`, path.join(outside, 'projects'))
+
+      await expect(invoke(IPC.fsWriteText, path.join(outside, 'projects', 'planted.txt'), 'x')).rejects.toThrow(EDITS)
+      expect(fs.existsSync(`${home}/Projects/planted.txt`)).toBe(false)
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to trash, rename or write the home folder itself', async () => {
+    await expect(invoke(IPC.fsTrash, [home])).rejects.toThrow(EDITS)
+    await expect(invoke(IPC.fsTrash, [`${home}/`])).rejects.toThrow(EDITS)
+    await expect(invoke(IPC.fsRename, home, `${home}-moved`)).rejects.toThrow(EDITS)
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
+  it.runIf(fs.existsSync('/usr/lib'))('refuses a write in a system folder even when the home folder is in one', async () => {
+    vi.stubEnv('HOME', '/usr')
+
+    await expect(assertWritable('/usr/lib/new-file')).rejects.toThrow(PROTECTED)
+  })
+
+  it('judges a tree by where its root resolves, so a link to a project holding the ssh target leaves it out', async () => {
+    write('Projects/app/src/main.ts', '')
+    moveBehindLink('.ssh', 'Projects/app/keys')
+    link('Projects/app', 'app-link')
+
+    expect(await listed(`${home}/app-link`)).toEqual([`${home}/app-link/src`, `${home}/app-link/src/main.ts`])
+    expect(await size(`${home}/app-link`)).toMatchObject({ files: 1 })
+  })
+
+  it('refuses to move a folder that only holds a credential store once its parent resolves', async () => {
+    moveBehindLink('.ssh', 'realdir/dotfiles/ssh')
+    link('realdir', 'linkdir')
+
+    await expect(invoke(IPC.fsTrash, [`${home}/linkdir/dotfiles`])).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsRename, `${home}/linkdir/dotfiles`, `${home}/moved`)).rejects.toThrow(HOLDS)
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
+  it(`looks through ${ENV_SEARCH_LIMIT} entries of a Hermes folder for a .env, and refuses a larger one as too large to check`, async () => {
+    const fill = (dir: string, count: number) => {
+      fs.mkdirSync(path.join(hermes, dir), { recursive: true })
+
+      for (let i = 0; i < count; i++) {
+        fs.writeFileSync(path.join(hermes, dir, `f${i}`), '')
+      }
+    }
+    fill('skills/fits', ENV_SEARCH_LIMIT)
+    fill('skills/big', ENV_SEARCH_LIMIT + 1)
+
+    await invoke(IPC.fsTrash, [`${hermes}/skills/fits`])
+    expect(trashItem).toHaveBeenCalledWith(`${hermes}/skills/fits`)
+    await expect(invoke(IPC.fsTrash, [`${hermes}/skills/big`])).rejects.toThrow(TOO_LARGE)
+    await expect(invoke(IPC.fsRename, `${hermes}/skills/big`, `${home}/big`)).rejects.toThrow(TOO_LARGE)
   })
 })
 
