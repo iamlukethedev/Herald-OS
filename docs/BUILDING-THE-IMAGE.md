@@ -33,8 +33,8 @@ for working on the shell, and the image for trying the system as it ships.
 
 ### What `packages.sh --image` does
 
-Each step prints a `--- <step>` line in the build log, and the script ends with
-`==> system half done (--image)`.
+Six of the eight steps print a `--- <step>` line in the build log; the image's name (4) and the
+signature policy (6) print none. The script ends with `==> system half done (--image)`.
 
 1. **SELinux permissive** (ADR-012).
 2. **Packages.** `dnf -y install --setopt=install_weak_deps=False` with everything in
@@ -63,6 +63,9 @@ Each step prints a `--- <step>` line in the build log, and the script ends with
 
 ## Building it locally
 
+A typical build, the shell tarball and then the image, takes about 23 minutes. On GitHub's runners,
+the image workflow's job for one architecture takes 10 to 12 minutes.
+
 ### Prerequisites
 
 - **Linux on the architecture you build for**: x86_64 for an `amd64` image, aarch64 for `arm64`.
@@ -74,6 +77,11 @@ Each step prints a `--- <step>` line in the build log, and the script ends with
   `build-essential` and `python3` on Ubuntu.
 - **A network connection.** The build downloads the pinned Hermes snapshot, the npm packages and
   Electron, the base image from quay.io, the Fedora packages and Flathub's remote file.
+- **Plain HTTP to `ciscobinary.openh264.org`.** Fedora's openh264 repository
+  (`fedora-cisco-openh264`, enabled in the base image) sends its packages from
+  `codecs.fedoraproject.org` there over `http://`, and the image installs `openh264` and
+  `mozilla-openh264` from it (Firefox, `libavcodec-free` and `libheif` need them). A proxy or
+  firewall that allows only HTTPS stops the package step.
 - **Disk space** for `node_modules`, the shell build and the image, which is about 5.7 GB on its
   own, plus the disk you make from it.
 - **btrfs in the host's kernel**, only for making a VM disk or an installer
