@@ -29,6 +29,7 @@ NetworkManager
 NetworkManager-wifi
 # Firmware. Fedora split linux-firmware into packages it only recommends, and this list installs
 # without weak dependencies, so each one is named: Wi-Fi, Bluetooth, GPUs, CPU microcode and audio.
+# fedora-bootc:44 ships most of them today; naming them keeps them if the base trims its set.
 linux-firmware
 # Intel CNVi Wi-Fi firmware (iwlwifi): without it, most modern laptops (e.g. Surface Go) have no
 # wireless at all. dvm is the older Intel cards (Centrino, 6000 series).
@@ -44,8 +45,8 @@ intel-gpu-firmware
 nvidia-gpu-firmware
 amd-ucode-firmware
 # Laptop sound: Intel's Sound Open Firmware DSPs (most Intel laptops since 2019 have no speakers or
-# built-in microphone without it), the profiles that tell PipeWire how to use them, and the
-# amplifier firmware some laptops' speakers need.
+# built-in microphone without it) and the profiles that tell PipeWire how to use them, which the
+# base lacks, and the amplifier firmware some laptops' speakers need.
 alsa-sof-firmware
 alsa-ucm
 intel-audio-firmware
