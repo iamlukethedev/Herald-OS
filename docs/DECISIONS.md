@@ -1580,16 +1580,25 @@ does not hold.
   NVIDIA's proprietary userspace, its 1 GiB, or a second signing key. x86_64 only.
 - **Universal Blue's prebuilt modules.** `ghcr.io/ublue-os/akmods-nvidia-open` publishes NVIDIA's
   open modules for each Fedora kernel, signed with their key, with negativo17's driver to match;
-  Bluefin, Aurora and Bazzite ship the same ones. Building and signing them here would mean a
-  kernel-module key of our own for people to enrol, and a build per kernel; theirs is already
-  enrolled on machines switched from those systems.
+  the images' labels name Bluefin and Aurora, which use them too. Building and signing them here
+  would mean a kernel-module key of our own for people to enroll, and a build per kernel; theirs
+  may already be enrolled on machines switched from those systems.
 - **Rejected: a Universal Blue base image.** Their NVIDIA images start from Silverblue's desktop
   base, not `fedora-bootc`, and would change everything under Herald, not only the driver.
-- **One kernel.** The workflow pins the base by digest and picks the akmods tag for its kernel, and
-  `nvidia.sh` refuses a mismatch. When Universal Blue has not caught up with a new kernel, the NVIDIA
-  build fails on its own and the default image is not held back.
-- **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image's first boot
-  says how to switch (`herald-os-gpu-check`). Switching is a `bootc switch`, `herald-os channel`
+- **Trusting Universal Blue, checked.** Enrolling their key trusts every module (and boot binary)
+  they sign with it, for good, and that was accepted. The build trusts no more than that: the akmods
+  images go in by digest once their cosign signatures check out against Universal Blue's key,
+  committed in the repository; `nvidia.sh` pins the certificate people enroll by its SHA-256 and the
+  repositories' signing keys, and checks negativo17's signatures on the driver RPMs.
+- **One kernel.** The workflow pins the base by digest and takes the akmods images for its kernel,
+  and `nvidia.sh` refuses a mismatch. When Universal Blue has not caught up with a new kernel, the
+  NVIDIA build fails on its own, with a warning in the run, and the default image is not held back.
+- **A Containerfile of its own.** `Containerfile.nvidia` starts from the default image, so the
+  default image's build has no akmods stages to pull, whatever the builder does with unused stages.
+- **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image says how to
+  switch, and the NVIDIA image, with Secure Boot on and the driver refused, how to enroll the key
+  (`herald-os-gpu-check`). `herald-os-gpu-check switch` checks `/boot` first, since the NVIDIA
+  image needs a 2 GiB one, and uses rpm-ostree where packages are layered. `herald-os channel`
   keeps to the image, and both repositories are in the signature policy.
 - **Turing and newer.** The open modules need a GSP, so GTX 900 and 1000 cards stay on nouveau;
   NVIDIA's 580 legacy driver (`akmods-nvidia-lts`) could be a third image if they turn out to matter.

@@ -149,8 +149,14 @@ further.
 
 The standard image drives NVIDIA cards with the open-source driver, which has no CUDA. Switch to the
 NVIDIA image ([NVIDIA graphics](install-pc.md#nvidia-graphics)). On the NVIDIA image, if `nvidia-smi`
-says it cannot talk to the driver, Secure Boot is probably refusing it until Universal Blue's key is
-enrolled; the same page says how.
+says `NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver` and
+`mokutil --sb-state` says `SecureBoot enabled`, the key is probably not enrolled:
+`mokutil --test-key /etc/pki/akmods/certs/akmods-ublue.der` says `is not enrolled` then, and
+[Secure Boot: one key, once](install-pc.md#secure-boot-one-key-once) says what to do.
+`journalctl -k -b | grep -i nvidia` shows why the kernel refused the driver.
+
+If `herald-os-gpu-check switch` says `/boot` has too little room, the NVIDIA image does not fit
+there: it needs a 2 GiB `/boot` ([Space in /boot](../LINUX.md#the-nvidia-image)).
 
 ### Apps look too large or too small
 

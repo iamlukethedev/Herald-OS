@@ -87,18 +87,38 @@ picks which system starts. Herald OS's updates leave the Windows partition alone
 The installer puts the standard image on every PC. It runs an NVIDIA card's screen with the
 open-source driver, which has no CUDA, so local models do not use the card. If the PC has one, a
 notification after the first sign-in says so. The NVIDIA image has NVIDIA's own driver, for the
-GeForce GTX 16 and RTX 20 series and newer. In a terminal:
+GeForce GTX 16 and RTX 20 series and newer, and needs a `/boot` partition of 2 GiB, which the
+installer makes unless you lay out the disk yourself. In a terminal:
 
 ```bash
-sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:stable
+herald-os-gpu-check switch stable
 systemctl reboot
 ```
 
-With Secure Boot on, the NVIDIA driver also needs Universal Blue's signing key once the NVIDIA image
-is running: `sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der`, choose a one-time password,
-restart, and in the blue screen that appears pick Enroll MOK, Continue, Yes and type that password.
-`nvidia-smi` then lists the card. [The NVIDIA image](../LINUX.md#the-nvidia-image) has the details,
-and how to go back.
+It checks that `/boot` has room first, and changes nothing if it does not.
+
+### Secure Boot: one key, once
+
+With Secure Boot on, the NVIDIA driver only loads once Universal Blue's signing key is enrolled in
+the computer. Until then, including the NVIDIA image's first start, the screen has the basic display
+(on a laptop, the integrated graphics as usual) and a notification says how to enroll the key.
+Enrolling it trusts everything Universal Blue signs with that key, not only this driver, and it
+stays enrolled if you switch back. [The NVIDIA image](../LINUX.md#the-nvidia-image) says how to
+check the key before you trust it, and how to remove it.
+
+1. With the NVIDIA image running, in a terminal:
+
+   ```bash
+   sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der
+   ```
+
+   It asks for a password twice (`input password:`). Choose a one-time password; it is only asked
+   once more, at the next start.
+2. Restart. Before Herald OS starts, a screen says `Press any key to perform MOK management`:
+   press a key before its countdown ends.
+3. Pick `Enroll MOK`, then `Continue`, `Yes`, type the password, and pick `Reboot`.
+
+Afterwards `nvidia-smi` lists the card, and `modinfo -F signer nvidia` says `ublue kernel`.
 
 ## The disk password and your keyboard
 
