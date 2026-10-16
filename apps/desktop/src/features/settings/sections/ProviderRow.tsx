@@ -284,7 +284,9 @@ function ProviderMenu({ choices, current, loading, error, disabled, busy, reques
                       }}
                       className={cn('flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors', choice.current ? 'bg-accent-soft text-fg' : 'text-fg-2 hover:bg-white/8 hover:text-fg')}
                     >
-                      <span className="min-w-0 flex-1 truncate">{choice.name}</span>
+                      <span className="min-w-0 flex-1 truncate" title={choice.name}>
+                        {choice.name}
+                      </span>
                       {!choice.ready && <span className="shrink-0 text-[11px] text-fg-4">{t(SETUP_HINT[choice.setup])}</span>}
                       {choice.current && <IconCheck size={14} className="shrink-0 text-accent-strong" />}
                     </button>
