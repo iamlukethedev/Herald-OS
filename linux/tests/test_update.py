@@ -46,11 +46,16 @@ SYSTEM_APP = "app/org.example.System/x86_64/stable"
 
 STUBS = {
     "herald-os": 'echo "$@" >>"$HOME/herald-os.log"',
-    "sudo": """if [ -e "$HOME/no-sudo" ]; then
-  echo "sudo: a password is required" >&2
-  exit 1
+    # With ~/no-sudo, sudo needs a password: `sudo -n` fails, and plain sudo (in a terminal) gets one.
+    "sudo": """if [ "$1" = -n ]; then
+  shift
+  if [ -e "$HOME/no-sudo" ]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+  fi
+else
+  echo "asked for a password: $*" >>"$HOME/sudo.log"
 fi
-[ "$1" = -n ] && shift
 exec "$@\"""",
     # Like bootc, refuses when the booted or the staged deployment has local changes.
     "bootc": """echo "bootc $*" >>"$HOME/calls.log"
@@ -288,14 +293,106 @@ def test_system_flatpaks_update_as_root_and_are_reported_per_ref(machine):
     assert "after-update problems=system-flatpaks" in (home / "herald-os.log").read_text()
 
 
-def test_system_flatpaks_without_sudo_are_reported_as_not_updated(machine):
+SKIPPED = "skipped (needs root: run sudo herald-os update)"
+
+
+def system_flatpak_updates(home: Path) -> list[str]:
+    return [call for call in calls(home) if call.startswith("flatpak update") and "--system" in call]
+
+
+def problems(home: Path) -> str:
+    return re.findall(r"after-update problems=(.*)", (home / "herald-os.log").read_text())[-1]
+
+
+def test_from_the_menu_without_root_system_flatpaks_are_skipped_not_a_problem(machine, tmp_path):
+    """On another ostree system the system step needs no root, so only the Flatpaks are left."""
+    home, env = machine
+    env["HERALD_OS_IMAGE_SHELL"] = str(tmp_path / "no-such-shell")
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not system_flatpak_updates(home)
+    assert summary(done.stdout)["system-flatpaks"] == SKIPPED
+    assert summary(done.stdout)["flatpaks"] == "ok"
+    assert summary(done.stdout)["system"] == "ok (ostree)"
+    assert problems(home) == "none"
+    assert "notify Herald OS updated its own parts" in (home / "herald-os.log").read_text()
+
+
+def test_from_the_menu_without_root_the_image_is_skipped_not_failed(machine):
     home, env = machine
     (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
     (home / "no-sudo").write_text("")
     done = run(env)
-    assert not [call for call in calls(home) if call.startswith("flatpak update") and "--system" in call]
-    assert summary(done.stdout)["system-flatpaks"] == "not updated: they need root (run sudo herald-os update)"
-    assert summary(done.stdout)["flatpaks"] == "ok"
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not ran(home, "bootc") and not ran(home, "rpm-ostree")
+    assert not system_flatpak_updates(home)
+    assert "==> system: skipped (bootc upgrade needs root: run sudo herald-os update)" in done.stdout
+    assert "==> system flatpaks: skipped (needs root: run sudo herald-os update)" in done.stdout
+    assert "skipped: system system-flatpaks (run sudo herald-os update to update them)" in done.stdout
+    steps = summary(done.stdout)
+    assert steps["system"] == "skipped (bootc upgrade needs root: run sudo herald-os update)"
+    assert steps["system-flatpaks"] == SKIPPED
+    assert steps["flatpaks"] == "ok"
+    assert problems(home) == "none"
+    assert "failed:" not in done.stderr
+    assert "notify Herald OS updated its own parts The system needs root: run sudo herald-os update in a terminal." in (home / "herald-os.log").read_text()
+
+
+def test_from_the_menu_without_root_layered_packages_say_which_tool_needs_it(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]})
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert done.returncode == 0
+    assert not ran(home, "rpm-ostree upgrade")
+    assert summary(done.stdout)["system"] == "skipped (rpm-ostree upgrade; layered: htop needs root: run sudo herald-os update)"
+
+
+def test_skipped_steps_do_not_hide_real_failures(machine):
+    """Without root the system is skipped, but a user Flatpak that fails is still a problem."""
+    home, env = machine
+    (home / "no-sudo").write_text("")
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
+    done = run(env)
+    assert done.returncode == 0
+    assert summary(done.stdout)["system"].startswith("skipped")
+    assert summary(done.stdout)["flatpaks"].startswith("did not all update")
+    assert problems(home) == "flatpaks"
+    assert "notify Update finished with problems flatpaks" in (home / "herald-os.log").read_text()
+
+
+def test_a_system_upgrade_that_runs_and_fails_still_fails_the_update(machine):
+    """With root available a failing bootc is a real failure, not a skip."""
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "layered").write_text("1")
+    done = run(env)
+    assert done.returncode == 1
+    assert summary(done.stdout)["system"] == "FAILED (bootc upgrade, exit 1)"
+    assert summary(done.stdout)["system-flatpaks"] == "ok"
+    assert problems(home) == "system"
+
+
+@pytest.mark.skipif(shutil.which("script") is None, reason="needs script (util-linux) for a terminal")
+def test_in_a_terminal_sudo_asks_for_the_password_and_everything_updates(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "no-sudo").write_text("")
+    command = f"bash {UPDATE} --no-hermes"
+    done = subprocess.run(["script", "-qec", command, "/dev/null"], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    output = done.stdout.replace("\r\n", "\n")
+    assert done.returncode == 0, output
+    assert "bootc upgrade" in calls(home)
+    assert system_flatpak_updates(home)
+    asked = (home / "sudo.log").read_text()
+    assert "asked for a password: bootc upgrade" in asked
+    assert "asked for a password: flatpak update -y --noninteractive --system" in asked
+    steps = summary(output)
+    assert steps["system"] == "ok (bootc upgrade)"
+    assert steps["system-flatpaks"] == "ok"
+    assert problems(home) == "none"
 
 
 def test_without_system_flatpaks_there_is_no_system_flatpak_step(machine):

@@ -198,14 +198,47 @@ count_system_updates() {
   esac
 }
 
+# How this run gets root: it is root already (sudo herald-os update), sudo needs no password, or
+# there is a terminal where sudo can ask for one. From the menu there is no terminal, and the image
+# ships no rule that lets sudo go without a password, so there is usually no way (none).
+admin_access() {
+  if [[ $EUID -eq 0 ]]; then
+    echo root
+  elif sudo -n true 2>/dev/null; then
+    echo nopasswd
+  elif [[ -t 0 ]]; then
+    echo terminal
+  else
+    echo none
+  fi
+}
+as_root() {
+  if [[ $ADMIN == terminal ]]; then
+    sudo "$@"
+  else
+    sudo -n "$@"
+  fi
+}
+NEEDS_ROOT="needs root: run sudo herald-os update"
+skipped=()
+
+# Whether update_system runs its updater as root (an AUR helper asks for root itself).
+system_needs_root() {
+  case "$SYSTEM_KIND" in
+    dnf | image) return 0 ;;
+    pacman) [[ -z "$AUR_HELPER" ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 update_system() {
   case "$SYSTEM_KIND" in
-    dnf) sudo -n dnf -y -q upgrade ;;
+    dnf) as_root dnf -y -q upgrade ;;
     pacman)
       if [[ -n "$AUR_HELPER" ]]; then
         "$AUR_HELPER" -Syu --noconfirm
       else
-        sudo -n pacman -Syu --noconfirm
+        as_root pacman -Syu --noconfirm
       fi
       ;;
     omarchy)
@@ -224,9 +257,9 @@ update_system() {
       if [[ -n "$IMAGE_CHANGES" ]]; then
         echo "This system has packages of its own on top of the image ($IMAGE_CHANGES)."
         echo "bootc refuses to upgrade it, so rpm-ostree upgrades the image instead and keeps what the next boot has."
-        sudo -n rpm-ostree upgrade
+        as_root rpm-ostree upgrade
       else
-        sudo -n bootc upgrade
+        as_root bootc upgrade
       fi
       ;;
     ostree)
@@ -423,26 +456,36 @@ if [[ $SYSTEM -eq 1 ]]; then
     system_tool="bootc upgrade"
     [[ -n "$IMAGE_CHANGES" ]] && system_tool="rpm-ostree upgrade; $IMAGE_CHANGES"
   fi
-  update_system
-  rc=$?
-  if [[ $rc -eq 0 ]]; then
-    step system "ok ($system_tool)"
+  ADMIN="$(admin_access)"
+  # Without a way to root (from the menu) the system step is skipped rather than failed, and stays
+  # out of problems= and the exit status: `sudo herald-os update` updates it.
+  if system_needs_root && [[ $ADMIN == none ]]; then
+    echo "==> system: skipped ($system_tool $NEEDS_ROOT)"
+    skipped+=(system)
+    step system "skipped ($system_tool $NEEDS_ROOT)"
   else
-    failed+=(system)
-    step system "FAILED ($system_tool, exit $rc)"
+    update_system
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      step system "ok ($system_tool)"
+    else
+      failed+=(system)
+      step system "FAILED ($system_tool, exit $rc)"
+    fi
   fi
   if command -v flatpak >/dev/null; then
     echo "==> flatpaks"
     flatpak_step flatpaks --user
-    # The system installation (where the image puts its apps) needs root. From the menu there is no
-    # one to ask for a password, so without sudo that needs none it is only reported.
+    # The system installation (where the image puts its apps) needs root, so without it the pass is
+    # skipped the same way.
     if [[ -n "$(flatpak list --system --columns=ref 2>/dev/null)" ]]; then
-      echo "==> system flatpaks"
-      if sudo -n true 2>/dev/null; then
-        flatpak_step system-flatpaks --system sudo -n
+      if [[ $ADMIN == none ]]; then
+        echo "==> system flatpaks: skipped ($NEEDS_ROOT)"
+        skipped+=(system-flatpaks)
+        step system-flatpaks "skipped ($NEEDS_ROOT)"
       else
-        warnings+=(system-flatpaks)
-        step system-flatpaks "not updated: they need root (run sudo herald-os update)"
+        echo "==> system flatpaks"
+        flatpak_step system-flatpaks --system as_root
       fi
     fi
   fi
@@ -496,9 +539,14 @@ if [[ ${#failed[@]} -gt 0 ]]; then
   echo "failed: ${failed[*]}" >&2
   exit 1
 fi
+if [[ ${#skipped[@]} -gt 0 ]]; then
+  echo "skipped: ${skipped[*]} (run sudo herald-os update to update them)"
+fi
 if [[ ${#warnings[@]} -gt 0 ]]; then
   notify "Update finished with problems" "${problems[*]}"
   echo "not updated: ${warnings[*]}" >&2
+elif [[ ${#skipped[@]} -gt 0 ]]; then
+  notify "Herald OS updated its own parts" "The system needs root: run sudo herald-os update in a terminal."
 elif [[ $pending_tarball -eq 1 ]]; then
   notify "Herald OS $tarball_version is installed" "Log out and back in (or restart herald-os-app) to use it."
 else
