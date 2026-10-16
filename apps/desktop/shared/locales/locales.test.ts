@@ -26,10 +26,6 @@ describe('the English catalog', () => {
 })
 
 describe('the pt-BR catalog', () => {
-  it('translates every English message', () => {
-    expect(Object.keys(en).filter(key => !(key in ptBR))).toEqual([])
-  })
-
   it('leaves the theme draft open for the person to finish', () => {
     expect(ptBR['overview.makeThemeDraft']).toMatch(/ $/)
   })
@@ -64,6 +60,10 @@ describe('the pt-BR catalog', () => {
 
 describe.each(Object.entries(TRANSLATIONS))('the %s catalog', (language, catalog) => {
   const entries = Object.entries(catalog) as [keyof typeof en, string | object][]
+
+  it('translates every English message', () => {
+    expect(Object.keys(en).filter(key => !(key in catalog))).toEqual([])
+  })
 
   it('translates only messages English has', () => {
     expect(entries.map(([key]) => key).filter(key => !(key in en))).toEqual([])

@@ -2,8 +2,9 @@
 
 Herald OS can show itself in English, in Brazilian Portuguese (Português (Brasil)) or in Simplified
 Chinese (简体中文). So far that covers the
-menus Herald builds, the menu bar, the Overview, the command bar, the notifications panel, and
-Settings' navigation, section titles and General section; the rest of the shell is English until its
+menus Herald builds, the menu bar, the main window's sidebar, the Overview, the command bar, the
+notifications panel, and Settings' navigation, section titles, General section and the Autonomy
+choices in Hermes & agents; the rest of the shell is English until its
 strings move into the catalogs. This page says how the strings work, how to translate them, and how
 to add a language.
 
