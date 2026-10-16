@@ -74,6 +74,10 @@ area for the tool it uses. When the helper finishes, it walks back with the resu
 seconds, says the first sentence of Hermes's summary of what it found. Then it leaves through the
 door.
 
+When a helper's work completes, a white roadster lifts off over the room on jets of vapor, flips
+over a truck and flies away: a few seconds, at most once a minute, and any key or click ends it.
+With Reduce Motion on it is a single still frame instead.
+
 Hermes often lets helpers work in the background: the conversation can be resting in the lounge
 while its helpers are still busy, and it starts working again when their results come in.
 

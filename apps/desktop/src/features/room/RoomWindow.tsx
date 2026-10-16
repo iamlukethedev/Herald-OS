@@ -1,12 +1,13 @@
 import type { ApprovalChoice } from '@herald-os/client'
 import { useStore } from '@nanostores/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { liveOutside } from '../../../shared/room.ts'
 import { $connection } from '../../store/gateway.ts'
 import { runCommand } from '../../store/os-commands.ts'
 import { isMainSurface, openSurface, relayToMain } from '../../store/shell.ts'
 import { useDocumentVisible, useReducedMotion } from '../pet/hooks.ts'
 import { $petInfo } from '../pet/info.ts'
+import { useRoomFlyover } from '../roadster/room-flyover.ts'
 import { useRoomAssignment } from './assignment.ts'
 import { roomBridge } from './bridge.ts'
 import { roomTotal } from './model/costs.ts'
@@ -18,6 +19,8 @@ import { RoomReplay } from './replay/RoomReplay.tsx'
 import { roomNotices, sameFacts } from './scene/labels.ts'
 import { RoomScene } from './scene/RoomScene.tsx'
 import { $room, answerRoomApproval, openRoomAgent, useRoomFeed } from './store.ts'
+
+const RoadsterFlight = lazy(() => import('../roadster/RoadsterFlight.tsx').then(m => ({ default: m.RoadsterFlight })))
 
 /** Facts that grow with time ('quiet for 4 minutes during a turn') are worked out again this often. */
 const FACTS_MS = 30_000
@@ -113,34 +116,42 @@ export function RoomWindow({ active = true }: { active?: boolean }) {
   const desks = useMemo(() => Object.values(state.desks ?? {}), [state.desks])
   const total = useMemo(() => (prefs.costTotal ? roomTotal(state) : null), [prefs.costTotal, state])
   const logged = useLogged(prefs.log)
+  const flyover = useRoomFlyover({ handoffs: state.handoffs, agents: state.agents, settled: state.updatedAt > 0, live: live && !replaying })
 
   if (replaying) {
     return <RoomReplay active={active} onExit={() => setReplaying(false)} />
   }
 
   return (
-    <RoomScene
-      agents={agents}
-      handoffs={state.handoffs}
-      assignment={assignment}
-      installed={info.installed}
-      steps={prefs.steps}
-      motion={reduced ? 'still' : prefs.motion}
-      active={live}
-      settled={state.updatedAt > 0}
-      facts={facts}
-      desks={desks}
-      deskNames={prefs.deskNames}
-      lane={prefs.elsewhere}
-      laneLive={liveOutside(prefs)}
-      summary={summary}
-      notices={notices}
-      meters={prefs.costs}
-      total={total}
-      onOpen={openRoomAgent}
-      onAnswer={answer}
-      onPetSettings={openPetSettings}
-      onTimeLapse={logged ? () => setReplaying(true) : undefined}
-    />
+    <div className="relative h-full w-full">
+      <RoomScene
+        agents={agents}
+        handoffs={state.handoffs}
+        assignment={assignment}
+        installed={info.installed}
+        steps={prefs.steps}
+        motion={reduced ? 'still' : prefs.motion}
+        active={live}
+        settled={state.updatedAt > 0}
+        facts={facts}
+        desks={desks}
+        deskNames={prefs.deskNames}
+        lane={prefs.elsewhere}
+        laneLive={liveOutside(prefs)}
+        summary={summary}
+        notices={notices}
+        meters={prefs.costs}
+        total={total}
+        onOpen={openRoomAgent}
+        onAnswer={answer}
+        onPetSettings={openPetSettings}
+        onTimeLapse={logged ? () => setReplaying(true) : undefined}
+      />
+      {flyover.flight !== 0 && (
+        <Suspense fallback={null}>
+          <RoadsterFlight key={flyover.flight} contained onDone={flyover.land} />
+        </Suspense>
+      )}
+    </div>
   )
 }
