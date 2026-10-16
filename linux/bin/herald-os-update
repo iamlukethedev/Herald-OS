@@ -198,9 +198,11 @@ count_system_updates() {
       ;;
     image)
       # The daily check runs as the user, where `sudo -n` usually needs a password, so rpm-ostree
-      # checks first without it (polkit lets an administrator's session do that). It exits 0 when
-      # there is an update and 77 when there is none; anything else tells nothing, and then the
-      # tool the update would use tries through sudo -n. When neither can tell: unknown.
+      # checks first without it. That works where a polkit rule lets the user check (Fedora's Atomic
+      # desktops allow wheel); under rpm-ostree's own policy, which the image keeps, it wants an
+      # administrator's password, and with no polkit agent in the session it is refused at once.
+      # It exits 0 when there is an update and 77 when there is none; anything else tells nothing,
+      # and then the tool the update would use tries through sudo -n. When neither can tell: unknown.
       rc=1
       command -v rpm-ostree >/dev/null && { rpm-ostree upgrade --check >/dev/null 2>&1; rc=$?; }
       if [[ $rc -ne 0 && $rc -ne 77 ]]; then

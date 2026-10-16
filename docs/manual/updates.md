@@ -11,10 +11,11 @@ herald-os update --check    # only say what is waiting
 
 One update covers the system, your Flatpak apps and Hermes Agent. A check runs every day by itself
 (ten minutes after you start the computer, then daily), and a dot in the menu bar says when updates
-are waiting; click it to update. On the Herald OS image the check asks rpm-ostree, which an
-administrator may do without a password. If the system cannot be checked that way, or with `sudo`
-that needs none, its updates are left out: there is no dot for them, and `herald-os update --check`
-says "system updates not checked".
+are waiting; click it to update. On the Herald OS image the check needs to ask rpm-ostree or bootc
+without a password, which takes a polkit rule or `sudo` that needs none; the image ships neither.
+When the system cannot be checked, its updates are left out: there is no dot for them, and
+`herald-os update --check` says "system updates not checked". `herald-os update` still updates it
+(with `sudo`, or in a terminal).
 
 **On the Herald OS image**, the system updates as a whole: the new version is downloaded next to the
 one you run and starts at the next restart. Nothing changes under your feet, and a failed download
