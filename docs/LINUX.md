@@ -230,7 +230,9 @@ The manual covers these for people using them: [Make it yours](manual/make-it-yo
   Provisioning installs it (`HERALD_OS_OMAKASE=0` to skip); `herald-os omakase install` re-syncs.
 - **Updates**: `herald-os update` pulls the repo on the chosen channel (`herald-os channel
   stable|edge`; both track `main` until releases exist), runs one-shot `linux/migrations/*.sh`
-  (tracked in `/var/lib/herald-os/migrations`), upgrades the system (dnf on Fedora, pacman and the
+  (each says `# Runs as: user`, `root` or `user, with sudo`; user ones run as the person, even under
+  sudo, and are tracked in their `~/.local/state/herald-os/migrations`, root ones in
+  `/var/lib/herald-os/migrations`), upgrades the system (dnf on Fedora, pacman and the
   AUR helper on Arch; on Omarchy it leaves the system to `omarchy-update`, which Omarchy requires;
   the Herald OS image updates as a whole with `bootc upgrade`, or `rpm-ostree upgrade` when the
   booted or staged deployment has rpm-ostree changes such as layered, removed or replaced packages)
