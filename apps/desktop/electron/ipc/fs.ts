@@ -154,7 +154,19 @@ export const HOME_SECRETS = [
   '.config/gh',
   '.local/share/keyrings',
   'Library/Keychains',
-  'Library/Cookies'
+  'Library/Cookies',
+  // Browser profiles: saved passwords, cookies and session tokens.
+  '.config/google-chrome',
+  '.config/chromium',
+  '.config/BraveSoftware',
+  '.config/microsoft-edge',
+  '.mozilla/firefox',
+  'Library/Application Support/Google/Chrome',
+  'Library/Application Support/Chromium',
+  'Library/Application Support/BraveSoftware',
+  'Library/Application Support/Microsoft Edge',
+  'Library/Application Support/Firefox',
+  'Library/Containers/com.apple.Safari/Data/Library/Cookies'
 ]
 
 const TEMP_ROOTS = ['/tmp', '/private/tmp']

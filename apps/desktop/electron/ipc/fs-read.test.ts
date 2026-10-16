@@ -427,6 +427,7 @@ describe('moving and trashing folders that hold credential stores', () => {
     fs.rmSync(path.join(home, '.config'), { recursive: true })
 
     await expect(invoke(IPC.fsRename, `${home}/stuff`, `${home}/.config`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsRename, `${home}/stuff`, `${home}/.mozilla`)).rejects.toThrow(HOLDS)
     await expect(invoke(IPC.fsRename, `${home}/stuff`, `${home}/.ssh-new`)).resolves.toBeUndefined()
     expect(exists('.config')).toBe(false)
   })
@@ -441,6 +442,39 @@ describe('moving and trashing folders that hold credential stores', () => {
     expect(exists('Projects/site2/.env')).toBe(true)
     expect(exists('.hermes/skills/notes-old/SKILL.md')).toBe(true)
     expect(trashItem.mock.calls.map(([file]) => file)).toEqual([`${home}/Downloads`, `${home}/Projects/site2`])
+  })
+})
+
+describe('browser profiles', () => {
+  const profiles = [
+    '.config/google-chrome/Default/Cookies',
+    '.config/chromium/Default/Login Data',
+    '.config/BraveSoftware/Brave-Browser/Default/Cookies',
+    '.config/microsoft-edge/Default/Cookies',
+    '.mozilla/firefox/abcd.default-release/logins.json',
+    'Library/Application Support/Google/Chrome/Default/Cookies',
+    'Library/Application Support/Chromium/Default/Login Data',
+    'Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies',
+    'Library/Application Support/Microsoft Edge/Default/Cookies',
+    'Library/Application Support/Firefox/Profiles/abcd.default/cookies.sqlite',
+    'Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies',
+    'Library/Cookies/Cookies.binarycookies'
+  ]
+
+  it.each(profiles)('refuses to read, list or write ~/%s', async file => {
+    write(file, 'session')
+
+    await expect(readFile(path.join(home, file))).rejects.toThrow(PROTECTED)
+    await expect(readDir(path.dirname(path.join(home, file)))).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsWriteText, path.join(home, file), 'x')).rejects.toThrow(PROTECTED)
+  })
+
+  it('still lists Application Support and reads other apps there', async () => {
+    write('Library/Application Support/Google/Chrome/Default/Cookies', 'session')
+    write('Library/Application Support/Notes/notes.json', '{}')
+
+    expect(await names(`${home}/Library/Application Support`)).toEqual(['Google', 'Notes'])
+    expect((await readFile(`${home}/Library/Application Support/Notes/notes.json`)).content).toBe('{}')
   })
 })
 

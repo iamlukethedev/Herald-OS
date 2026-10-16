@@ -39,11 +39,12 @@ These are the guarantees Herald OS aims for. Breaking one of them is a vulnerabi
   to any page but the shell's own, so a dropped file or a link cannot gain that API. Links open in
   your browser, and only http(s) links open at all. Only the shell may use the microphone. Nothing
   they read or write through that API reaches a credential store: `~/.ssh`, `~/.gnupg`, `~/.aws`,
-  keychains, and `.env` files and `auth.json` in the Hermes home, among others, judged as written
-  and after symlinks resolve, so a link to one, or the folder a linked `~/.ssh` points to, counts
-  as one. Single files and folder listings may come from anywhere else; deep walks (project
-  trees, watches, folder sizes) stay in the home folder, the Hermes home and the temporary
-  folders, skip credential stores, and never start at `/` or a whole temporary folder. Writes stay in the home and temporary folders, and a rename or a trash
+  keychains, browser profiles and cookies, and `.env` files and `auth.json` in the Hermes home,
+  among others, judged as written and after symlinks resolve, so a link to one, or the folder a
+  linked `~/.ssh` points to, counts as one. Single files and folder listings may come from
+  anywhere else; deep walks (project trees, watches, folder sizes) stay in the home folder, the
+  Hermes home and the temporary folders, skip credential stores, and never start at `/` or a
+  whole temporary folder. Writes stay in the home and temporary folders, and a rename or a trash
   never moves a folder that holds a credential store, nor puts one where a credential store
   belongs.
 - **Web content is contained.** Web windows, file viewers and the Studio preview have no preload,
