@@ -112,7 +112,8 @@ def name(item):
 
 def names(key, value):
     if key == "regenerate-initramfs":
-        return ["regenerated"] if value is True else []
+        # A boolean from rpm-ostree; anything true counts, as missing a change is what breaks.
+        return ["regenerated"] if value else []
     if key == "requested-base-remote-replacements":
         # [[source, [package, ...]], ...]
         return [f"{package} from {pair[0]}" for pair in value or [] if isinstance(pair, list) and len(pair) == 2
