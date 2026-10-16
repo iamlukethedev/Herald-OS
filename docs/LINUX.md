@@ -388,17 +388,33 @@ systemctl reboot
 
 `herald-os-gpu-check switch [--force] [stable|edge]` checks `/boot` first and changes nothing when
 it does not fit: it needs 400 MiB free for the NVIDIA deployment (`--force` does not skip that), and
-a `/boot` smaller than about 1 GiB is refused unless `--force`; between that and 2 GiB it warns and
-goes on. Then it runs `sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`. Where
+a `/boot` of 1 GiB or less (under 1,200 MiB as `df` shows it; a 1 GiB partition shows as about 960 to
+1,000 MiB) is refused unless `--force`; between that and 2 GiB it warns and goes on. Then it runs
+`sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`. Where
 rpm-ostree changed the system, in the running deployment or the one pending for the next start
 (packages layered from a repository or a local RPM, modules, packages removed or replaced, an
 initramfs of the machine's own), bootc refuses ("Deployment contains local rpm-ostree
 modifications"), so it runs
 `sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`
 instead, which keeps them, and names them. It tells those apart the same way `herald-os update`
-does. `herald-os channel` and `herald-os update` keep to the image
-you are on, and the previous one stays in the boot menu. To go back:
-`sudo bootc switch ghcr.io/iamlukethedev/herald-os:stable`.
+does. `herald-os channel` and `herald-os update` keep to the image you are on, and the previous one
+stays in the boot menu. To go back: `sudo bootc switch ghcr.io/iamlukethedev/herald-os:stable`.
+
+Once the image carries the project's signing key (`/etc/pki/containers/herald-os.pub`, from
+`linux/image/cosign.pub`), the rebase is checked against it:
+
+- **The policy must require the key.** `/etc/containers/policy.json` must have a `sigstoreSigned`
+  entry with that key for `ghcr.io/iamlukethedev/herald-os-nvidia`, as `packages.sh` writes it, or
+  the switch changes nothing.
+- **`ostree-unverified-registry:` still applies that entry.** "Unverified" skips only ostree's own
+  signatures, not `policy.json`: in the image, a pull through it with the wrong key in the entry is
+  refused ("None of the signatures were accepted").
+- **`ostree-image-signed:docker://` only with a stricter default.** It refuses any pull while the
+  policy's default is `insecureAcceptAnything` ("containers-policy.json specifies a default of
+  `insecureAcceptAnything`; refusing usage"), and that is Fedora's default and the image's, which
+  the rest of the system's container pulls rely on. So the switch uses
+  `ostree-image-signed:docker://` only where the default is stricter, and
+  `ostree-unverified-registry:` otherwise.
 
 **Secure Boot: enroll Universal Blue's key once.** The modules are signed with Universal Blue's
 "ublue kernel" key, not Fedora's. With Secure Boot on, Fedora's kernel only loads modules signed
@@ -492,8 +508,8 @@ the same ones share them. Measured on the images built from `fedora-bootc:44` wi
 
 Three NVIDIA deployments take about 1.03 GiB, so the NVIDIA image needs a 2 GiB `/boot`. Anaconda's
 automatic layout, which the ISO uses unless you change it, makes `/boot` 2 GiB; a smaller one (your
-own layout, or a system switched from another one) can fill up during an update, and under about
-1 GiB the NVIDIA deployment and the one to go back to leave no room for an update's.
+own layout, or a system switched from another one) can fill up during an update, and with 1 GiB or
+less the NVIDIA deployment and the one to go back to leave no room for an update's.
 `herald-os-gpu-check switch` checks before switching, and `df -h /boot` shows how much is left.
 
 **How it is built.** The image workflow builds it next to the default image, x86_64 only, into its

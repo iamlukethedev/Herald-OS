@@ -95,8 +95,8 @@ herald-os-gpu-check switch stable
 systemctl reboot
 ```
 
-It checks that `/boot` has room first, and changes nothing if it does not (on a `/boot` under
-about 1 GiB it stops unless you add `--force`).
+It checks that `/boot` has room first, and changes nothing if it does not (on a `/boot` of 1 GiB or
+less it stops unless you add `--force`).
 
 ### Secure Boot: one key, once
 

@@ -1607,8 +1607,12 @@ does not hold.
 - **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image says how to
   switch, and the NVIDIA image, with Secure Boot on and the driver refused, how to enroll the key
   (`herald-os-gpu-check`). `herald-os-gpu-check switch` checks `/boot` first, since the NVIDIA
-  image needs a 2 GiB one (under about 1 GiB it refuses unless `--force`), and uses rpm-ostree
-  wherever bootc would refuse, by the same check as `herald-os update` (#156). `herald-os channel`
+  image needs a 2 GiB one (with 1 GiB or less it refuses unless `--force`), and uses rpm-ostree
+  wherever bootc would refuse, by the same check as `herald-os update` (#156). Once the image
+  carries the project's signing key, the rebase goes ahead only where the policy requires that key
+  for the NVIDIA image; `ostree-unverified-registry:` applies the policy too, and
+  `ostree-image-signed:` is used only under a default stricter than Fedora's
+  `insecureAcceptAnything`, which it refuses. `herald-os channel`
   keeps to the image, and both repositories are in the signature policy.
 - **Turing and newer.** The open modules need a GSP, so GTX 900 and 1000 cards stay on nouveau;
   NVIDIA's 580 legacy driver (`akmods-nvidia-lts`) could be a third image if they turn out to matter.
