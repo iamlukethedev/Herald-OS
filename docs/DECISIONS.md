@@ -1575,8 +1575,8 @@ neither build them on the person's machine (akmods writes to `/usr`) nor sign th
 does not hold.
 
 - **A second image, not a choice inside one.** `ghcr.io/iamlukethedev/herald-os-nvidia` is the
-  default image plus `linux/image/nvidia.sh`, a stage of the same Containerfile
-  (`--target herald-os-nvidia`), so the two cannot drift. Everyone else keeps an image without
+  default image plus `linux/image/nvidia.sh`: `linux/image/Containerfile.nvidia` starts from the
+  default image the same run builds, so the two cannot drift. Everyone else keeps an image without
   NVIDIA's proprietary userspace, its 1 GiB, or a second signing key. x86_64 only.
 - **Universal Blue's prebuilt modules.** `ghcr.io/ublue-os/akmods-nvidia-open` publishes NVIDIA's
   open modules for each Fedora kernel, signed with their key, with negativo17's driver to match;
@@ -1589,7 +1589,16 @@ does not hold.
   they sign with it, for good, and that was accepted. The build trusts no more than that: the akmods
   images go in by digest once their cosign signatures check out against Universal Blue's key,
   committed in the repository; `nvidia.sh` pins the certificate people enroll by its SHA-256 and the
-  repositories' signing keys, and checks negativo17's signatures on the driver RPMs.
+  repositories' signing keys, and checks negativo17's signatures on the driver RPMs against a key
+  database that holds that key alone. `kmod-nvidia` carries no RPM signature; the cosign signature
+  on its image vouches for it.
+- **Digests resolved each run, not committed.** Each run resolves the akmods tags for the base's
+  kernel to digests, logs them, checks their cosign signatures and builds from those digests;
+  `Containerfile.nvidia` has no default for them, so no build takes a tag as it stands. The digests
+  are not in the repository, so a run takes what Universal Blue signed for that kernel without a
+  change here. The stricter alternative is to commit the digests and have a bump PR (by hand or
+  automated) move them with each kernel: every module build would then be reviewed before it ships,
+  at the cost of an NVIDIA image that waits for that PR after every Fedora kernel update.
 - **One kernel.** The workflow pins the base by digest and takes the akmods images for its kernel,
   and `nvidia.sh` refuses a mismatch. When Universal Blue has not caught up with a new kernel, the
   NVIDIA build fails on its own, with a warning in the run, and the default image is not held back.
@@ -1598,7 +1607,8 @@ does not hold.
 - **Found, not guessed.** No installer of its own: on an NVIDIA GPU, the default image says how to
   switch, and the NVIDIA image, with Secure Boot on and the driver refused, how to enroll the key
   (`herald-os-gpu-check`). `herald-os-gpu-check switch` checks `/boot` first, since the NVIDIA
-  image needs a 2 GiB one, and uses rpm-ostree where packages are layered. `herald-os channel`
+  image needs a 2 GiB one (under about 1 GiB it refuses unless `--force`), and uses rpm-ostree
+  wherever bootc would refuse, by the same check as `herald-os update` (#156). `herald-os channel`
   keeps to the image, and both repositories are in the signature policy.
 - **Turing and newer.** The open modules need a GSP, so GTX 900 and 1000 cards stay on nouveau;
   NVIDIA's 580 legacy driver (`akmods-nvidia-lts`) could be a third image if they turn out to matter.

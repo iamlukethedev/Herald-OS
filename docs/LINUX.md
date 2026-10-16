@@ -386,13 +386,17 @@ herald-os-gpu-check switch stable    # or edge
 systemctl reboot
 ```
 
-`herald-os-gpu-check switch` first checks that `/boot` has the 400 MiB the NVIDIA deployment needs
-(and changes nothing if not), warns when `/boot` is smaller than 2 GiB, then runs
-`sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`. On a system with packages
-layered, removed or replaced through rpm-ostree, which bootc refuses ("Deployment contains local
-rpm-ostree modifications"), it runs
+`herald-os-gpu-check switch [--force] [stable|edge]` checks `/boot` first and changes nothing when
+it does not fit: it needs 400 MiB free for the NVIDIA deployment (`--force` does not skip that), and
+a `/boot` smaller than about 1 GiB is refused unless `--force`; between that and 2 GiB it warns and
+goes on. Then it runs `sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`. Where
+rpm-ostree changed the system, in the running deployment or the one pending for the next start
+(packages layered from a repository or a local RPM, modules, packages removed or replaced, an
+initramfs of the machine's own), bootc refuses ("Deployment contains local rpm-ostree
+modifications"), so it runs
 `sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os-nvidia:<channel>`
-instead, which keeps those packages. `herald-os channel` and `herald-os update` keep to the image
+instead, which keeps them, and names them. It tells those apart the same way `herald-os update`
+does. `herald-os channel` and `herald-os update` keep to the image
 you are on, and the previous one stays in the boot menu. To go back:
 `sudo bootc switch ghcr.io/iamlukethedev/herald-os:stable`.
 
@@ -488,7 +492,8 @@ the same ones share them. Measured on the images built from `fedora-bootc:44` wi
 
 Three NVIDIA deployments take about 1.03 GiB, so the NVIDIA image needs a 2 GiB `/boot`. Anaconda's
 automatic layout, which the ISO uses unless you change it, makes `/boot` 2 GiB; a smaller one (your
-own layout, or a system switched from another one) can fill up during an update.
+own layout, or a system switched from another one) can fill up during an update, and under about
+1 GiB the NVIDIA deployment and the one to go back to leave no room for an update's.
 `herald-os-gpu-check switch` checks before switching, and `df -h /boot` shows how much is left.
 
 **How it is built.** The image workflow builds it next to the default image, x86_64 only, into its
@@ -501,9 +506,12 @@ leg pins `quay.io/fedora/fedora-bootc:44` by digest, takes `ghcr.io/ublue-os/akm
 those digests only once `cosign verify` checks their signatures against Universal Blue's key,
 committed as `linux/image/ublue-os-akmods-cosign.pub` (from their
 [repository](https://github.com/ublue-os/akmods/raw/main/cosign.pub)). `nvidia.sh` then stops the
-build when the kernels differ, when the certificate is not the pinned one, when an RPM from the
-akmods image is not signed with negativo17's key, or when negativo17's or NVIDIA's repository does
-not check signatures (`gpgcheck=1`, and `repo_gpgcheck=1` for NVIDIA's). It installs with the two
+build when the kernels differ, when the certificate is not the pinned one, when a driver RPM from
+the akmods image is not signed with negativo17's key (checked with `rpm --dbpath` on a key database
+that holds that key alone, since `rpm -K` accepts any key the system's database has), when
+`kmod-nvidia` fails its digests (it carries no RPM signature: the cosign signature on the
+akmods-nvidia image vouches for it), or when negativo17's or NVIDIA's repository does not check
+signatures (`gpgcheck=1`, and `repo_gpgcheck=1` for NVIDIA's). It installs with the two
 repositories' keys committed next to it (`negativo17.asc`, fingerprint
 `0C5D 0F47 0484 AE2F C40A 9B65 97F3 0089 93E8 909B`; `nvidia-container-toolkit.asc`,
 `C95B 321B 61E8 8C18 09C4 F759 DDCA E044 F796 ECB0`) instead of the keys' URLs, and leaves the
@@ -512,18 +520,22 @@ repositories disabled in the image.
 Universal Blue publishes modules for each new Fedora kernel some time after Fedora does. Until then
 the NVIDIA leg fails on its own (`continue-on-error`): the default image goes out as usual, the
 NVIDIA tags keep the last build, and the run shows a warning, "NVIDIA image not published", in its
-annotations and summary. Locally (the same two builds, with `skopeo` and `jq`):
+annotations and summary. The digests are resolved each run and not committed (ADR-029 has the
+stricter alternative). `Containerfile.nvidia` has no default for `AKMODS_REF` and
+`AKMODS_NVIDIA_REF`: unset, the build stops at its first `FROM`, which names the argument. Locally,
+the same steps as the workflow, with `skopeo`, `jq` and `cosign`:
 
 ```bash
 base=quay.io/fedora/fedora-bootc:44
 kernel="$(skopeo inspect "docker://$base" | jq -r '.Labels["ostree.linux"]')"
 digest="$(skopeo inspect "docker://$base" | jq -r .Digest)"
+akmods="ghcr.io/ublue-os/akmods@$(skopeo inspect "docker://ghcr.io/ublue-os/akmods:main-44-$kernel" | jq -r .Digest)"
+nvidia="ghcr.io/ublue-os/akmods-nvidia-open@$(skopeo inspect "docker://ghcr.io/ublue-os/akmods-nvidia-open:main-44-$kernel" | jq -r .Digest)"
+cosign verify --key linux/image/ublue-os-akmods-cosign.pub "$akmods" "$nvidia" >/dev/null
 podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz \
   --build-arg "FEDORA_BOOTC=quay.io/fedora/fedora-bootc@$digest" -t localhost/herald-os .
 podman build -f linux/image/Containerfile.nvidia --build-arg HERALD_OS=localhost/herald-os \
-  --build-arg "AKMODS_REF=ghcr.io/ublue-os/akmods:main-44-$kernel" \
-  --build-arg "AKMODS_NVIDIA_REF=ghcr.io/ublue-os/akmods-nvidia-open:main-44-$kernel" \
-  -t herald-os-nvidia .
+  --build-arg "AKMODS_REF=$akmods" --build-arg "AKMODS_NVIDIA_REF=$nvidia" -t herald-os-nvidia .
 ```
 
 ### Switching a bootc system to Herald OS
