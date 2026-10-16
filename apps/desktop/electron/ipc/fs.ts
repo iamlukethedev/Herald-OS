@@ -642,7 +642,12 @@ async function opensChecked(handle: fs.FileHandle, checked: CheckedPath, flags: 
   return now === checked.real && there !== null && there.dev === opened.dev && there.ino === opened.ino
 }
 
-/** Write a whole file at a checked path through its resolved form, creating its folder. Nothing is truncated before the open is verified. */
+/**
+ * Write a whole file at a checked path through its resolved form, creating its folder. Nothing is truncated or written
+ * before the open is verified. A new file is created by the open itself (O_CREAT), so when a folder on the way was
+ * swapped for a symlink, an empty file can be left where the swap led even though the write is refused; it is not
+ * removed, as deleting by path would race the same swap.
+ */
 export async function writeChecked(checked: CheckedPath, data: string | Uint8Array): Promise<void> {
   await fs.mkdir(path.dirname(checked.real), { recursive: true })
   const handle = await openChecked(checked, fsConstants.O_WRONLY | fsConstants.O_CREAT)
