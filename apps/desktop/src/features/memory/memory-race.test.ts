@@ -32,10 +32,17 @@ const hasHermes =
   fs.existsSync(path.join(HERMES_CHECKOUT, 'tools', 'memory_tool_store.py')) &&
   (() => {
     try {
-      execFileSync('python3', ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from tools.memory_tool_store import MemoryStore', HERMES_CHECKOUT], { stdio: 'ignore' })
+      execFileSync('python3', ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from tools.memory_tool_store import MemoryStore', HERMES_CHECKOUT], { stdio: 'pipe', timeout: 20_000 })
 
       return true
-    } catch {
+    } catch (error) {
+      const stderr = String((error as { stderr?: Buffer }).stderr ?? '')
+      const missing = /ModuleNotFoundError: No module named '([^']+)'/.exec(stderr)?.[1]
+
+      // Only a missing third-party dependency skips; anything else (a broken tools.* import) fails loudly.
+      if (!missing || missing.startsWith('tools')) throw new Error(`Hermes's MemoryStore failed to import:\n${stderr}`)
+      console.warn(`Skipping the Hermes MemoryStore race test: python3 has no '${missing}' module.`)
+
       return false
     }
   })()
