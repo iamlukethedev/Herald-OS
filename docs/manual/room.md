@@ -76,7 +76,7 @@ door.
 
 When a helper's work completes, a white roadster lifts off over the room on jets of vapor, flips
 over a truck and flies away: a few seconds, at most once a minute, and any key or click ends it
-(a click that ends it does nothing else).
+(a click in the room that ends it does nothing else).
 With Reduce Motion on it is a single still frame instead. Settings > Appearance > Flyover animations
 turns it off.
 

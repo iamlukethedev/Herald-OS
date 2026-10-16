@@ -11,8 +11,9 @@ export interface RoadsterFlightProps {
   /** Over its container (the Pet Room) rather than the whole window. */
   contained?: boolean
   /**
-   * The flight was not asked for (the Pet Room's): the press that ends it is taken, with the click
-   * that follows, so it does nothing in the app. Asked-for flights let the press through.
+   * The flight was not asked for (the Pet Room's): a press over its container that ends it is taken,
+   * with the click that follows, so it does nothing there. A press anywhere else, and every press
+   * under an asked-for flight, ends the flight and goes on to the app.
    */
   claimsClick?: boolean
 }
@@ -20,19 +21,39 @@ export interface RoadsterFlightProps {
 /** A taken press's click comes after the flight is gone; if none comes by then, nothing waits for it. */
 export const CLAIMED_CLICK_MS = 1000
 
-/** Take the one click that follows a taken press. */
-function claimFollowingClick(): void {
+/** Input that means the taken press will bring no click of its own, so the next click is someone else's. */
+const CLICK_NEVER_COMES = ['pointerdown', 'pointercancel', 'contextmenu'] as const
+
+/** Take the one click that follows a taken primary-button press, and nothing after it. */
+function claimFollowingClick(press: PointerEvent): void {
+  if (press.button !== 0) {
+    return
+  }
+
   const take = (event: MouseEvent) => {
     event.preventDefault()
     event.stopPropagation()
     release()
   }
+  const giveUp = (event: Event) => {
+    if (event !== press) {
+      release()
+    }
+  }
   const release = () => {
     clearTimeout(timer)
     window.removeEventListener('click', take, true)
+
+    for (const name of CLICK_NEVER_COMES) {
+      window.removeEventListener(name, giveUp, true)
+    }
   }
   const timer = setTimeout(release, CLAIMED_CLICK_MS)
   window.addEventListener('click', take, true)
+
+  for (const name of CLICK_NEVER_COMES) {
+    window.addEventListener(name, giveUp, true)
+  }
 }
 
 interface Puff {
@@ -135,11 +156,13 @@ export function RoadsterFlight({ onDone, contained = false, claimsClick = false 
 
       end()
     }
+    // The scene fills its container and takes no pointer itself, so the press lands in the container under it.
+    const over = (target: EventTarget | null): boolean => target instanceof Node && Boolean(sceneRef.current?.parentElement?.contains(target))
     const onPointer = (event: PointerEvent) => {
-      if (claimsClick) {
+      if (claimsClick && over(event.target)) {
         event.preventDefault()
         event.stopPropagation()
-        claimFollowingClick()
+        claimFollowingClick(event)
       }
 
       end()
