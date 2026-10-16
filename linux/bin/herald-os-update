@@ -197,12 +197,26 @@ count_system_updates() {
       echo $((repo + aur))
       ;;
     image)
-      if [[ -n "$IMAGE_CHANGES" ]]; then
-        # Exits 0 when there is an update and 77 when there is none.
-        sudo -n rpm-ostree upgrade --check >/dev/null 2>&1 && echo 1 || echo 0
-      else
-        command -v bootc >/dev/null && sudo -n bootc upgrade --check 2>/dev/null | grep -qi 'update available' && echo 1 || echo 0
+      # The daily check runs as the user, where `sudo -n` usually needs a password, so rpm-ostree
+      # checks first without it (polkit lets an administrator's session do that). It exits 0 when
+      # there is an update and 77 when there is none; anything else tells nothing, and then the
+      # tool the update would use tries through sudo -n. When neither can tell: unknown.
+      rc=1
+      command -v rpm-ostree >/dev/null && { rpm-ostree upgrade --check >/dev/null 2>&1; rc=$?; }
+      if [[ $rc -ne 0 && $rc -ne 77 ]]; then
+        if [[ -n "$IMAGE_CHANGES" ]]; then
+          sudo -n rpm-ostree upgrade --check >/dev/null 2>&1
+          rc=$?
+        elif command -v bootc >/dev/null && out="$(sudo -n bootc upgrade --check 2>/dev/null)"; then
+          # "Update available for: ..." or "No changes in: ...".
+          grep -qi 'update available' <<<"$out" && rc=0 || rc=77
+        fi
       fi
+      case $rc in
+        0) echo 1 ;;
+        77) echo 0 ;;
+        *) echo unknown ;;
+      esac
       ;;
     *) echo 0 ;;
   esac
@@ -340,13 +354,20 @@ if [[ -n "$TARBALL" ]]; then
   esac
 fi
 
+# An image whose updates could not be checked counts as none, so the menu bar shows no dot for it,
+# and the summary says it was not checked.
 pending_pkgs=0
-if [[ $SYSTEM -eq 1 ]]; then
+pkgs_unknown=false
+if [[ $CHECK -eq 1 && $SYSTEM -eq 1 ]]; then
   pending_pkgs="$(count_system_updates)"
+  if [[ $pending_pkgs == unknown ]]; then
+    pending_pkgs=0
+    pkgs_unknown=true
+  fi
 fi
 
 pending_flatpaks=0
-if [[ $SYSTEM -eq 1 ]] && command -v flatpak >/dev/null; then
+if [[ $CHECK -eq 1 && $SYSTEM -eq 1 ]] && command -v flatpak >/dev/null; then
   pending_flatpaks="$(flatpak remote-ls --user --updates --columns=application flathub 2>/dev/null | grep -c . || true)"
 fi
 
@@ -360,13 +381,14 @@ if [[ $CHECK -eq 1 ]]; then
   [[ $pending_tarball -gt 0 ]] && parts+=("Herald OS $tarball_version")
   [[ $pending_pkgs -gt 0 ]] && parts+=("$(plural "$pending_pkgs" package)")
   [[ $pending_flatpaks -gt 0 ]] && parts+=("$(plural "$pending_flatpaks" app)")
+  [[ $pkgs_unknown == true ]] && parts+=("system updates not checked")
   summary="up to date"
   if [[ ${#parts[@]} -gt 0 ]]; then
     summary="$(printf '%s, ' "${parts[@]}")"
     summary="${summary%, }"
   fi
-  printf '{"channel":"%s","checkedAt":"%s","pending":%d,"shell":%d,"packages":%d,"flatpaks":%d}\n' \
-    "$CHANNEL" "$(date -Is)" "$total" "$((pending_repo + pending_tarball))" "$pending_pkgs" "$pending_flatpaks" >"$STATE/update-available.json"
+  printf '{"channel":"%s","checkedAt":"%s","pending":%d,"shell":%d,"packages":%d,"packagesUnknown":%s,"flatpaks":%d}\n' \
+    "$CHANNEL" "$(date -Is)" "$total" "$((pending_repo + pending_tarball))" "$pending_pkgs" "$pkgs_unknown" "$pending_flatpaks" >"$STATE/update-available.json"
   echo "$summary"
   report "$total" "$summary"
   exit 0
@@ -544,13 +566,13 @@ else
   echo "  nothing to update"
 fi
 
+if [[ ${#skipped[@]} -gt 0 ]]; then
+  echo "skipped: ${skipped[*]} (run sudo herald-os update to update them)"
+fi
 if [[ ${#failed[@]} -gt 0 ]]; then
   notify "Update finished with problems" "${problems[*]}"
   echo "failed: ${failed[*]}" >&2
   exit 1
-fi
-if [[ ${#skipped[@]} -gt 0 ]]; then
-  echo "skipped: ${skipped[*]} (run sudo herald-os update to update them)"
 fi
 if [[ ${#warnings[@]} -gt 0 ]]; then
   notify "Update finished with problems" "${problems[*]}"

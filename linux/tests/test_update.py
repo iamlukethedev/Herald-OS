@@ -57,17 +57,29 @@ if [ "$1" = -n ]; then
 else
   echo "asked for a password: $*" >>"$HOME/sudo.log"
 fi
-exec "$@\"""",
+SUDO_USER=tester exec "$@\"""",
     # Like bootc, refuses when the booted or the staged deployment has local changes.
     "bootc": """echo "bootc $*" >>"$HOME/calls.log"
 if [ -s "$HOME/layered" ]; then
   echo "error: Upgrading: Deployment contains local rpm-ostree modifications; cannot upgrade via bootc" >&2
   exit 1
 fi
-[ "$2" = --check ] && echo "Update available"
+if [ "$2" = --check ]; then
+  if [ -e "$HOME/bootc-up-to-date" ]; then
+    echo "No changes in: ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable"
+  else
+    echo "Update available for: ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable"
+  fi
+fi
 exit 0""",
+    # `upgrade --check` exits with ~/check-exit for the user (polkit) and ~/check-exit-root through
+    # sudo: 0 for an update, 77 for none, anything else when it cannot tell.
     "rpm-ostree": """[ "$1" = status ] && exec cat "$HOME/status.json"
 echo "rpm-ostree $*" >>"$HOME/calls.log"
+if [ "$2" = --check ]; then
+  [ -n "$SUDO_USER" ] && exit "$(cat "$HOME/check-exit-root" 2>/dev/null || echo 0)"
+  exit "$(cat "$HOME/check-exit" 2>/dev/null || echo 0)"
+fi
 exit "$(cat "$HOME/rpm-ostree-exit" 2>/dev/null || echo 0)\"""",
     # The user installation's refs are in ~/refs, the system one's in ~/system-refs. Updating a whole
     # installation fails when one of its refs is in ~/broken-refs, and so does updating that ref alone.
@@ -298,6 +310,97 @@ def test_the_check_asks_rpm_ostree_when_packages_are_layered(machine):
     assert "rpm-ostree upgrade --check" in calls(home)
     assert not ran(home, "bootc")
     assert done.stdout.strip() == "1 package"
+
+
+def check(home: Path, env: dict) -> tuple[str, dict, str]:
+    """`--check`: what it prints, what it records, and the count it reports to the menu bar."""
+    done = run(env, "--check")
+    assert done.returncode == 0, done.stderr
+    state = json.loads((home / ".local" / "state" / "herald-os" / "update-available.json").read_text())
+    reported = re.findall(r"^update-available (.*)$", (home / "herald-os.log").read_text(), re.M)[-1]
+    return done.stdout.strip(), state, reported
+
+
+def sudo_calls(home: Path) -> list[str]:
+    return [call for call in calls(home) if call.startswith("sudo ")]
+
+
+@pytest.mark.parametrize("layered", [True, False], ids=["layered", "as-built"])
+def test_the_check_asks_rpm_ostree_without_sudo_first(machine, layered):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]} if layered else {})
+    out, state, reported = check(home, env)
+    assert out == "1 package" and state["packages"] == 1 and state["packagesUnknown"] is False
+    assert reported == "1 1 package"
+    assert "rpm-ostree upgrade --check" in calls(home)
+    assert not sudo_calls(home)
+
+
+def test_the_check_without_sudo_finds_the_image_up_to_date(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]})
+    (home / "check-exit").write_text("77")
+    out, state, reported = check(home, env)
+    assert out == "up to date" and state["pending"] == 0 and state["packagesUnknown"] is False
+    assert not sudo_calls(home)
+
+
+def test_the_check_falls_back_to_sudo_n_rpm_ostree_when_polkit_says_no(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]})
+    (home / "check-exit").write_text("1")
+    out, state, _ = check(home, env)
+    assert out == "1 package" and state["packagesUnknown"] is False
+    assert "sudo -n rpm-ostree upgrade --check" in sudo_calls(home)
+    assert not ran(home, "bootc")
+
+
+@pytest.mark.parametrize("up_to_date", [False, True], ids=["update", "no-update"])
+def test_the_check_on_the_image_as_built_falls_back_to_sudo_n_bootc(machine, up_to_date):
+    home, env = machine
+    (home / "check-exit").write_text("1")
+    if up_to_date:
+        (home / "bootc-up-to-date").write_text("")
+    out, state, _ = check(home, env)
+    assert out == ("up to date" if up_to_date else "1 package")
+    assert state["packagesUnknown"] is False
+    assert "sudo -n bootc upgrade --check" in sudo_calls(home)
+
+
+@pytest.mark.parametrize("layered", [True, False], ids=["layered", "as-built"])
+def test_a_check_that_cannot_tell_reports_unknown_and_shows_no_dot(machine, layered):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"]} if layered else {})
+    (home / "check-exit").write_text("1")
+    (home / "no-sudo").write_text("")
+    out, state, reported = check(home, env)
+    assert out == "system updates not checked"
+    assert state["pending"] == 0 and state["packages"] == 0 and state["packagesUnknown"] is True
+    assert reported == "0 system updates not checked"
+
+
+def test_an_unknown_system_check_does_not_hide_other_updates(machine):
+    home, env = machine
+    (home / "check-exit").write_text("1")
+    (home / "no-sudo").write_text("")
+    flatpak = Path(env["PATH"].split(os.pathsep)[0]) / "flatpak"
+    flatpak.write_text(flatpak.read_text().replace("  remote-ls) ;;", "  remote-ls) echo org.example.Good ;;"))
+    out, state, reported = check(home, env)
+    assert out == "1 app, system updates not checked"
+    assert state["pending"] == 1 and state["packagesUnknown"] is True
+    assert reported == "1 1 app, system updates not checked"
+
+
+def test_skipped_steps_are_listed_even_when_another_step_fails(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "no-sudo").write_text("")
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "broken.sh").write_text("exit 1\n")
+    done = run(env)
+    assert done.returncode == 1
+    assert "skipped: system system-flatpaks (run sudo herald-os update to update them)" in done.stdout
+    assert "failed: migration:broken.sh" in done.stderr
+    assert problems(home) == "migration:broken.sh"
 
 
 def test_a_failed_system_upgrade_fails_the_update(machine):
