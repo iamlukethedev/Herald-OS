@@ -66,8 +66,8 @@ image's layer, `nvidia.sh`, prints four `--- <step>` lines of its own and ends w
 
 ## Building it locally
 
-A typical build, the shell tarball and then the image, takes about 23 minutes. On GitHub's runners,
-the image workflow's job for one architecture takes 10 to 12 minutes.
+A cold image build ([step 2](#2-build-the-image), after the shell tarball) takes about 10–25
+minutes, depending on machine and network.
 
 ### Prerequisites
 
@@ -83,10 +83,24 @@ the image workflow's job for one architecture takes 10 to 12 minutes.
 - **Plain HTTP to `ciscobinary.openh264.org`.** Fedora's openh264 repository
   (`fedora-cisco-openh264`, enabled in the base image) sends its packages from
   `codecs.fedoraproject.org` there over `http://`, and the image installs `openh264` and
-  `mozilla-openh264` from it (Firefox, `libavcodec-free` and `libheif` need them). A proxy or
-  firewall that allows only HTTPS stops the package step.
+  `mozilla-openh264` from it. A proxy or firewall that allows only HTTPS stops the package step.
+  Where that cannot change, turn the repository off before `packages.sh` runs, with a line before
+  the first `COPY` in the Containerfile:
+
+  ```dockerfile
+  RUN sed -i "s/^enabled=1/enabled=0/" /etc/yum.repos.d/fedora-cisco-openh264.repo
+  ```
+
+  dnf then installs `noopenh264` from Fedora's own repository instead, and Firefox,
+  `libavcodec-free` and `libheif` still install; the image just has no OpenH264 codec. The base
+  image's dnf has no `config-manager` command, hence `sed`.
 - **Disk space** for `node_modules`, the shell build and the image, which is about 5.7 GB on its
   own, plus the disk you make from it.
+- **For the NVIDIA image**, also `skopeo`, `jq` and `cosign`, which the commands in
+  `linux/image/Containerfile.nvidia`'s header use to pin the base and Universal Blue's akmods
+  images by digest and check their signatures. Those commands run `podman build` without `sudo`, so
+  both images go to your own image store; put `sudo` in front of both `podman build` lines to build
+  them where bootc-image-builder and `bootc switch --transport containers-storage` look, in root's.
 - **btrfs in the host's kernel**, only for making a VM disk or an installer
   ([step 3](#3-make-a-disk-or-an-installer-optional)).
 

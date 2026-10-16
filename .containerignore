@@ -17,3 +17,11 @@ packaging/arch/*/herald-os
 **/*.qcow2
 **/*.raw
 **/*.iso
+# Secrets, should one sit in the checkout: none is copied into the image, and none should reach the
+# build either.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/cosign.key
