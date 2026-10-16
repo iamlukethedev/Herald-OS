@@ -10,6 +10,27 @@ const TRANSLATIONS: Record<Exclude<Language, 'en'>, Translation> = { 'pt-BR': pt
 // so a translation may drop {device}.
 const OPTIONAL_SLOTS = new Set(['device'])
 
+// Names that read the same in every language (docs/TRANSLATING.md).
+const PRODUCTS = ['Herald Canvas', 'Herald Office', 'Herald Sheets', 'Herald Slides', 'Herald Calc', 'Herald Docs', 'Herald OS', 'Hermes']
+
+// Words a language writes as English does: loanwords, and Studio, the name of an app. Anything
+// else left in a message equal to English means it was copied rather than translated.
+const SAME_AS_ENGLISH: Record<Exclude<Language, 'en'>, string[]> = {
+  'pt-BR': ['Bluetooth', 'Emoji', 'min', 'offline', 'OK', 'Plugins', 'Software', 'Studio', 'Terminal', 'Web', 'Widget', 'Wi-Fi'],
+  'zh-CN': ['Studio', 'Wi-Fi']
+}
+
+/** What is left of a text once product names, `{slots}`, allowed words and anything but letters are gone. */
+function wordsLeft(text: string, allowed: string[]): string {
+  let rest = text.replace(/\{\w+\}/g, ' ')
+
+  for (const word of [...PRODUCTS, ...allowed]) {
+    rest = rest.replace(new RegExp(`(?<![\\p{L}-])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}-])`, 'gu'), ' ')
+  }
+
+  return rest.replace(/[^\p{L}]+/gu, ' ').trim()
+}
+
 const forms = (message: string | object): string[] => (typeof message === 'string' ? [message] : Object.values(message))
 const slotsIn = (texts: string[]) => new Set(texts.flatMap(text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1])))
 
@@ -96,5 +117,37 @@ describe.each(Object.entries(TRANSLATIONS))('the %s catalog', (language, catalog
     for (const [key, message] of entries) {
       expect(forms(message).filter(text => !text.trim()), key).toEqual([])
     }
+  })
+
+  it('translates every message rather than copying the English', () => {
+    const allowed = SAME_AS_ENGLISH[language as Exclude<Language, 'en'>]
+    const copied = entries.filter(([key, message]) => {
+      const english = en[key]
+      const same = typeof message === 'string' ? message === english : Object.entries(message).some(([form, text]) => text === (english as Record<string, string>)[form])
+
+      return same && forms(message).some(text => wordsLeft(text, allowed) !== '')
+    })
+
+    expect(copied.map(([key]) => key)).toEqual([])
+  })
+
+  it('allows only words some message in it really keeps', () => {
+    for (const word of SAME_AS_ENGLISH[language as Exclude<Language, 'en'>]) {
+      const kept = entries.some(([key, message]) => forms(message).some(text => text.includes(word) && forms(en[key]).some(english => english === text)))
+
+      expect(kept, word).toBe(true)
+    }
+  })
+})
+
+describe('the copied-English check', () => {
+  it('lets product names, slots and allowed words through, and nothing else', () => {
+    expect(wordsLeft('Hermes', [])).toBe('')
+    expect(wordsLeft('Herald Canvas', [])).toBe('')
+    expect(wordsLeft('{action} ({shortcut})', [])).toBe('')
+    expect(wordsLeft('Wi-Fi {network}', ['Wi-Fi'])).toBe('')
+    expect(wordsLeft('Hermes offline', [])).toBe('offline')
+    expect(wordsLeft('Add space', ['Studio'])).toBe('Add space')
+    expect(wordsLeft('Open Terminal', ['Terminal'])).toBe('Open')
   })
 })

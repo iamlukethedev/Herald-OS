@@ -49,7 +49,10 @@ npx tsc -p tsconfig.json --noEmit
 ```
 
 The test fails when a key is not in English, a slot is missing or added, a plural category is not
-one your language has, or a message is empty; the type check catches a misspelled key. A message
+one your language has, a message is empty, or a message is the English copied unchanged; the type
+check catches a misspelled key. A message may read as in English only when what it keeps is product
+names, slots, or a word your language writes the English way (Wi-Fi, Software), which goes in the
+short list for your language in `shared/locales/locales.test.ts`. A message
 your file lacks shows in English, never as its key: compare the keys of `en.ts` with yours to find
 them. To see the result, run the shell (`npm run dev`), pick the language in Settings > General >
 Language, and look over the surfaces above. Screenshots of anything that reads wrong, is cut off or
