@@ -31,7 +31,7 @@ import { VoiceSection } from './sections/VoiceSection.tsx'
  * collapse through `:has()`, so the result reads as "matching rows grouped by section".
  */
 
-const SECTIONS: { id: SectionId; label: TextKey; icon: ComponentType<{ size?: number; stroke?: number }>; view: ComponentType }[] = [
+const SECTIONS: { id: SectionId; label: TextKey; icon: ComponentType<{ size?: number; stroke?: number; className?: string }>; view: ComponentType }[] = [
   { id: 'general', label: 'settings.section.general', icon: IconSettings, view: GeneralSection },
   { id: 'appearance', label: 'settings.section.appearance', icon: IconPalette, view: AppearanceSection },
   { id: 'pet', label: 'settings.section.pet', icon: IconPaw, view: PetSection },
@@ -99,8 +99,10 @@ export function SettingsPage() {
                 }}
                 className={cn('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-150', active ? 'bg-accent text-accent-fg shadow-[0_4px_16px_rgba(47,125,255,.35)]' : 'text-fg-2 hover:bg-white/6 hover:text-fg')}
               >
-                <Icon size={17} stroke={1.7} />
-                <span className="truncate">{t(item.label)}</span>
+                <Icon size={17} stroke={1.7} className="shrink-0" />
+                <span className="min-w-0 truncate" title={t(item.label)}>
+                  {t(item.label)}
+                </span>
               </button>
             )
           })}

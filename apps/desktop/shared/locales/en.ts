@@ -396,6 +396,21 @@ export const en = {
   'settings.general.neverSleep': 'Never: the computer only sleeps when you ask.',
   'settings.general.sleepMinutes': 'Minutes before sleeping',
 
+  'settings.agents.autonomy': 'Autonomy',
+  'settings.agents.autonomyHint': 'Ask first. Balanced. Independent. How much Hermes checks in before acting.',
+  'settings.agents.askFirst': 'Ask first',
+  'settings.agents.askFirstHint': 'Confirm each action',
+  'settings.agents.balanced': 'Balanced',
+  'settings.agents.balancedHint': 'Work freely. Ask before sharing.',
+  'settings.agents.independent': 'Independent',
+  'settings.agents.independentHint': 'Follow your saved rules',
+  'settings.agents.independentWarning': 'Hermes will run gated actions without asking.',
+  'settings.agents.confirm': 'Confirm',
+  'settings.agents.confirmIndependent': 'Confirm independent mode',
+  'settings.agents.autonomyUpdated': 'Autonomy updated',
+  'settings.agents.autonomyFailed': 'Could not change autonomy',
+  'settings.agents.autonomyUnreadable': 'Could not read the approval mode: {error}',
+
   // When the voice Hermes speaks with fails and the computer's own voice stands in, or nothing can.
   // {voice} is a voice.name message that begins the sentence; {system} is voice.name.mac or
   // voice.name.system; {device} is “Mac” or “computer”, and a language may say “this computer” without it.

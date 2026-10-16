@@ -270,8 +270,12 @@ export function RadioCard({ icon, label, description, selected, onSelect, disabl
         {icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-fg">{label}</span>
-        <span className="block truncate text-[12px] text-fg-3">{description}</span>
+        <span className="block truncate text-[13px] font-medium text-fg" title={label}>
+          {label}
+        </span>
+        <span className="block truncate text-[12px] text-fg-3" title={description}>
+          {description}
+        </span>
       </span>
       <span aria-hidden="true" className={cn('flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors', selected ? 'border-accent-strong' : 'border-line-strong')}>
         {selected && <span className="size-2 rounded-full bg-accent-strong shadow-[0_0_8px_currentColor]" />}

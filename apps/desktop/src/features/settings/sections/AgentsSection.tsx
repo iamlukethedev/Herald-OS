@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { IconBolt, IconCloud, IconCpu, IconFileText, IconHistory, IconLock, IconMessage, IconScale, IconSearch, IconUsers } from '@tabler/icons-react'
 import { useMemo, useState } from 'react'
+import type { TextKey } from '../../../../shared/i18n.ts'
 import type { AuditEntry } from '../../../../shared/ipc.ts'
 import { HermesAvatar } from '../../../components/app-icon.tsx'
 import { Dropdown, GlassButton, GlassCard, LinkAction, Pill, type PillTone, StatusDot, Toggle } from '../../../components/ui/glass.tsx'
@@ -82,10 +83,10 @@ export function AgentsSection() {
 
 type ApprovalMode = 'manual' | 'smart' | 'off'
 
-const AUTONOMY: { mode: ApprovalMode; label: string; description: string; icon: React.ReactNode }[] = [
-  { mode: 'manual', label: 'Ask first', description: 'Confirm each action', icon: <IconMessage /> },
-  { mode: 'smart', label: 'Balanced', description: 'Work freely. Ask before sharing.', icon: <IconScale /> },
-  { mode: 'off', label: 'Independent', description: 'Follow your saved rules', icon: <IconBolt /> }
+const AUTONOMY: { mode: ApprovalMode; label: TextKey; description: TextKey; icon: React.ReactNode }[] = [
+  { mode: 'manual', label: 'settings.agents.askFirst', description: 'settings.agents.askFirstHint', icon: <IconMessage /> },
+  { mode: 'smart', label: 'settings.agents.balanced', description: 'settings.agents.balancedHint', icon: <IconScale /> },
+  { mode: 'off', label: 'settings.agents.independent', description: 'settings.agents.independentHint', icon: <IconBolt /> }
 ]
 
 function normalizeMode(value: unknown): ApprovalMode | null {
@@ -95,6 +96,7 @@ function normalizeMode(value: unknown): ApprovalMode | null {
 }
 
 function AutonomyBlock({ ready }: { ready: boolean }) {
+  const t = useT()
   const setting = useBackendData(() => gatewayRequest('config.get', { key: 'approvals.mode' }), [], { enabled: ready })
   const [override, setOverride] = useState<{ base: unknown; mode: ApprovalMode } | null>(null)
   const [pendingOff, setPendingOff] = useState(false)
@@ -109,10 +111,11 @@ function AutonomyBlock({ ready }: { ready: boolean }) {
     try {
       await gatewayRequest('config.set', { key: 'approvals.mode', value: mode })
       markSaved()
-      notify({ title: 'Autonomy updated', body: AUTONOMY.find(item => item.mode === mode)?.label, level: 'success' })
+      const chosen = AUTONOMY.find(item => item.mode === mode)
+      notify({ title: t('settings.agents.autonomyUpdated'), body: chosen && t(chosen.label), level: 'success' })
     } catch (error) {
       setOverride(null)
-      notify({ title: 'Could not change autonomy', body: errorText(error), level: 'error' })
+      notify({ title: t('settings.agents.autonomyFailed'), body: errorText(error), level: 'error' })
     } finally {
       setBusy(false)
       setting.reload()
@@ -136,26 +139,26 @@ function AutonomyBlock({ ready }: { ready: boolean }) {
   }
 
   return (
-    <SettingsBlock title="Autonomy" label="Autonomy" description="Ask first. Balanced. Independent. How much Hermes checks in before acting." keywords="approvals mode manual smart off yolo confirm">
-      <div className="flex gap-3" aria-label="Autonomy">
+    <SettingsBlock title={t('settings.agents.autonomy')} label={t('settings.agents.autonomy')} description={t('settings.agents.autonomyHint')} keywords="autonomy approvals mode manual smart off yolo confirm">
+      <div className="flex min-w-0 gap-3" aria-label={t('settings.agents.autonomy')}>
         {AUTONOMY.map(item => (
-          <RadioCard key={item.mode} icon={item.icon} label={item.label} description={item.description} selected={pendingOff ? item.mode === 'off' : current === item.mode} onSelect={() => choose(item.mode)} disabled={!ready || busy} />
+          <RadioCard key={item.mode} icon={item.icon} label={t(item.label)} description={t(item.description)} selected={pendingOff ? item.mode === 'off' : current === item.mode} onSelect={() => choose(item.mode)} disabled={!ready || busy} />
         ))}
       </div>
       {pendingOff && (
         <GlassCard className="flex items-center gap-3 px-3.5 py-2.5">
-          <InlineNote tone="warn" className="flex-1">
-            Hermes will run gated actions without asking.
+          <InlineNote tone="warn" className="min-w-0 flex-1">
+            {t('settings.agents.independentWarning')}
           </InlineNote>
           <GlassButton size="sm" variant="ghost" onClick={() => setPendingOff(false)}>
-            Cancel
+            {t('settings.cancel')}
           </GlassButton>
-          <GlassButton size="sm" variant="primary" onClick={() => void apply('off')} aria-label="Confirm independent mode">
-            Confirm
+          <GlassButton size="sm" variant="primary" onClick={() => void apply('off')} aria-label={t('settings.agents.confirmIndependent')}>
+            {t('settings.agents.confirm')}
           </GlassButton>
         </GlassCard>
       )}
-      {setting.error && <InlineNote tone="danger">Could not read the approval mode: {setting.error}</InlineNote>}
+      {setting.error && <InlineNote tone="danger">{t('settings.agents.autonomyUnreadable', { error: setting.error })}</InlineNote>}
     </SettingsBlock>
   )
 }
