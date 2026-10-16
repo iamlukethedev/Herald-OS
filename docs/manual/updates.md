@@ -35,8 +35,9 @@ Each part updates on its own, and the update ends with a summary of every part: 
 for anything that failed, why. A Flatpak that does not update (no space, a broken remote) is named
 with its error, and the other apps still update.
 
-Your own Flatpaks update with your account. The system itself, and the Flatpaks installed for the
-whole system (where the image puts its apps), need root. `sudo herald-os update` updates them, and
+Your own Flatpaks update with your account. The system itself, the Flatpaks installed for the whole
+system (where the image puts its apps), and Herald OS's one-shot migrations (which record that they
+ran where only root can write) need root. `sudo herald-os update` updates them, and
 so does `herald-os update` in a terminal, where sudo asks for your password. From the menu there is
 no one to type a password, so they are skipped: the update says they need `sudo herald-os update`,
 and a skipped part is not a problem and does not make the update fail.

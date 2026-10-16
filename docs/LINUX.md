@@ -432,7 +432,9 @@ systemctl reboot
 
 If `bootc` is missing or refuses, `sudo rpm-ostree rebase
 ostree-unverified-registry:ghcr.io/iamlukethedev/herald-os:stable` switches through rpm-ostree instead
-(`unverified`: without a signature check, as above).
+(`unverified`: without a signature check, as above). It is the right reference even once the image is
+signed: it still applies a `sigstoreSigned` entry for the repository in `/etc/containers/policy.json`,
+whereas `ostree-image-signed:` refuses every pull while that file's default is `insecureAcceptAnything`.
 
 **When there is no login screen.** greetd waits for `herald-os-login.service`, so if that fails, the
 first console stays empty. Press Ctrl+Alt+F2 for a text console (Herald OS keeps `getty@tty2` on),
