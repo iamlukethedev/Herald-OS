@@ -961,93 +961,112 @@ describe('the narrower checks', () => {
 
 describe('reading a file that changes while it is read', () => {
   const realOpen = fsp.open
-  /** Open the file, and run `change` once its size has been taken from the open handle. */
+  /**
+   * Open the file, and run `change` once, just before the first read from the handle: after the open was verified
+   * and readFile took the size. Hooking the handle's stat instead would run it again wherever stat is called, and the
+   * macOS check calls it to verify the open.
+   */
   const changedAfterStat = (change: () => void) =>
     vi.spyOn(fsp, 'open').mockImplementationOnce(async (target, flags) => {
       const handle = await realOpen(target, flags)
-      const stat = handle.stat.bind(handle)
-      handle.stat = (async (options?: fs.StatOptions) => {
-        const result = await stat(options as never)
-        change()
+      const read = handle.read.bind(handle) as (...args: unknown[]) => ReturnType<typeof handle.read>
+      let changed = false
+      handle.read = ((...args: unknown[]) => {
+        if (!changed) {
+          changed = true
+          change()
+        }
 
-        return result
-      }) as typeof handle.stat
+        return read(...args)
+      }) as typeof handle.read
 
       return handle
     })
 
-  it('reads a memory file swapped for a shorter one before the open as it now is, without NUL padding', async () => {
-    write('.hermes/memories/MEMORY.md', 'v1530')
-    const file = `${hermes}/memories/MEMORY.md`
-    const open = vi.spyOn(fsp, 'open').mockImplementationOnce(async (target, flags) => {
-      fs.writeFileSync(`${file}.tmp`, 'v153')
-      fs.renameSync(`${file}.tmp`, file)
+  describe.each(['linux', 'darwin'] as const)('with the %s check', platform => {
+    const readFileOn = async (file: string): Promise<Awaited<ReturnType<typeof readFile>>> => {
+      let preview!: Awaited<ReturnType<typeof readFile>>
+      await onPlatform(platform, async () => {
+        preview = await readFile(file)
+      })
 
-      return realOpen(target, flags)
+      return preview
+    }
+
+    it('reads a memory file swapped for a shorter one before the open as it now is, without NUL padding', async () => {
+      write('.hermes/memories/MEMORY.md', 'v1530')
+      const file = `${hermes}/memories/MEMORY.md`
+      const open = vi.spyOn(fsp, 'open').mockImplementationOnce(async (target, flags) => {
+        fs.writeFileSync(`${file}.tmp`, 'v153')
+        fs.renameSync(`${file}.tmp`, file)
+
+        return realOpen(target, flags)
+      })
+
+      const preview = await readFileOn(file)
+      open.mockRestore()
+
+      expect(preview).toMatchObject({ kind: 'text', content: 'v153', size: 4 })
+      expect(preview.content).not.toContain('\0')
     })
 
-    const preview = await readFile(file)
-    open.mockRestore()
+    it('keeps only the bytes read when the file shrinks after its size was taken', async () => {
+      write('.hermes/memories/MEMORY.md', 'v1530')
+      const file = `${hermes}/memories/MEMORY.md`
+      const open = changedAfterStat(() => fs.truncateSync(file, 4))
 
-    expect(preview).toMatchObject({ kind: 'text', content: 'v153', size: 4 })
-    expect(preview.content).not.toContain('\0')
-  })
+      const preview = await readFileOn(file)
+      open.mockRestore()
 
-  it('keeps only the bytes read when the file shrinks after its size was taken', async () => {
-    write('.hermes/memories/MEMORY.md', 'v1530')
-    const file = `${hermes}/memories/MEMORY.md`
-    const open = changedAfterStat(() => fs.truncateSync(file, 4))
+      expect(preview).toMatchObject({ kind: 'text', content: 'v153', size: 4, truncated: false })
+      expect(preview.content).not.toContain('\0')
+    })
 
-    const preview = await readFile(file)
-    open.mockRestore()
+    it('reads to the end when the file grows after its size was taken, past the binary probe too', async () => {
+      const file = write('notes.md', 'a'.repeat(9000))
+      const open = changedAfterStat(() => fs.appendFileSync(file, 'b'.repeat(1000)))
 
-    expect(preview).toMatchObject({ kind: 'text', content: 'v153', size: 4, truncated: false })
-    expect(preview.content).not.toContain('\0')
-  })
+      const preview = await readFileOn(file)
+      open.mockRestore()
 
-  it('reads to the end when the file grows after its size was taken, past the binary probe too', async () => {
-    const file = write('notes.md', 'a'.repeat(9000))
-    const open = changedAfterStat(() => fs.appendFileSync(file, 'b'.repeat(1000)))
+      expect(preview.content).toBe('a'.repeat(9000) + 'b'.repeat(1000))
+      expect(preview.content).toBe(fs.readFileSync(file, 'utf8'))
+      expect(preview.size).toBe(10000)
+    })
 
-    const preview = await readFile(file)
-    open.mockRestore()
+    it('keeps only the bytes read when a long file shrinks after its size was taken', async () => {
+      const file = write('notes.md', 'a'.repeat(10000))
+      const open = changedAfterStat(() => fs.truncateSync(file, 9000))
 
-    expect(preview.content).toBe('a'.repeat(9000) + 'b'.repeat(1000))
-    expect(preview.size).toBe(10000)
-  })
+      const preview = await readFileOn(file)
+      open.mockRestore()
 
-  it('keeps only the bytes read when a long file shrinks after its size was taken', async () => {
-    const file = write('notes.md', 'a'.repeat(10000))
-    const open = changedAfterStat(() => fs.truncateSync(file, 9000))
+      expect(preview.content).toBe('a'.repeat(9000))
+      expect(preview.content).not.toContain('\0')
+    })
 
-    const preview = await readFile(file)
-    open.mockRestore()
+    it('sends an image as the bytes read when it shrinks after its size was taken', async () => {
+      const file = write('Pictures/shot.png', 'x'.repeat(100))
+      const open = changedAfterStat(() => fs.truncateSync(file, 40))
 
-    expect(preview.content).toBe('a'.repeat(9000))
-    expect(preview.content).not.toContain('\0')
-  })
+      const preview = await readFileOn(file)
+      open.mockRestore()
 
-  it('sends an image as the bytes read when it shrinks after its size was taken', async () => {
-    const file = write('Pictures/shot.png', 'x'.repeat(100))
-    const open = changedAfterStat(() => fs.truncateSync(file, 40))
+      expect(preview).toMatchObject({ kind: 'image', size: 40, content: `data:image/png;base64,${Buffer.from('x'.repeat(40)).toString('base64')}` })
+    })
 
-    const preview = await readFile(file)
-    open.mockRestore()
+    it('sends an image that grows past the limit after its size was taken as too large', async () => {
+      const limit = 24 * 1024 * 1024
+      const file = write('Pictures/huge.png', '')
+      fs.truncateSync(file, limit - 8)
+      const open = changedAfterStat(() => fs.appendFileSync(file, Buffer.alloc(16)))
 
-    expect(preview).toMatchObject({ kind: 'image', size: 40, content: `data:image/png;base64,${Buffer.from('x'.repeat(40)).toString('base64')}` })
-  })
+      const preview = await readFileOn(file)
+      open.mockRestore()
 
-  it('sends an image that grows past the limit after its size was taken as too large', async () => {
-    const limit = 24 * 1024 * 1024
-    const file = write('Pictures/huge.png', '')
-    fs.truncateSync(file, limit - 8)
-    const open = changedAfterStat(() => fs.appendFileSync(file, Buffer.alloc(16)))
-
-    const preview = await readFile(file)
-    open.mockRestore()
-
-    expect(preview).toMatchObject({ kind: 'too-large', size: limit + 8, mime: 'image/png' })
-    expect(preview.content).toBeUndefined()
+      expect(preview).toMatchObject({ kind: 'too-large', size: limit + 8, mime: 'image/png' })
+      expect(preview.content).toBeUndefined()
+    })
   })
 
   it('still marks a text file past the limit as truncated, and a binary file as binary', async () => {
