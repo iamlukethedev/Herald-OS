@@ -231,7 +231,8 @@ The manual covers these for people using them: [Make it yours](manual/make-it-yo
 - **Updates**: `herald-os update` pulls the repo on the chosen channel (`herald-os channel
   stable|edge`; both track `main` until releases exist), runs one-shot `linux/migrations/*.sh`
   (each says `# Runs as: user`, `root` or `user, with sudo`; user ones run as the person, even under
-  sudo, and are tracked in their `~/.local/state/herald-os/migrations`, root ones in
+  sudo (then from the installed migrations, which the person can read, not root's `~/Herald-OS`), and
+  are tracked in their `~/.local/state/herald-os/migrations`, root ones in
   `/var/lib/herald-os/migrations`), upgrades the system (dnf on Fedora, pacman and the
   AUR helper on Arch; on Omarchy it leaves the system to `omarchy-update`, which Omarchy requires;
   the Herald OS image updates as a whole with `bootc upgrade`, or `rpm-ostree upgrade` when the
