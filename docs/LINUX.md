@@ -259,7 +259,9 @@ VM's provisioner also runs, so the VM and the image cannot drift apart:
 
 `linux/image/Containerfile` starts from `quay.io/fedora/fedora-bootc:44`; `.github/workflows/image.yml`
 builds it for x86_64 and aarch64 on matching runners, pushes it to the repository's GHCR package
-(`ghcr.io/iamlukethedev/herald-os`) and, for a release, turns it into:
+(`ghcr.io/iamlukethedev/herald-os`) and, for a release, turns it into the files below.
+[Building and customizing the image](BUILDING-THE-IMAGE.md) has the same build on your own machine,
+switching to it, and changing its packages, Flatpaks and branding.
 
 - **an x86_64 installer ISO** (bootc-image-builder `anaconda-iso`, `linux/image/iso.toml`): the
   storage screen stays interactive, so it can install next to another system and encrypt the disk

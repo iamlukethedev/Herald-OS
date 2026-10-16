@@ -427,6 +427,10 @@ To work on Herald OS, or to run what is on `main`:
 - **Herald OS Linux in a virtual machine** gives you the whole operating system, built from your
   checkout. The first setup takes about half an hour, most of it downloads.
 - **Herald OS on macOS** runs from your checkout in a few minutes if you already have Node.js.
+- **Your own Herald OS image**, the bootable system the installer and the VM disks are made from,
+  builds from your checkout with Podman on Linux. [docs/BUILDING-THE-IMAGE.md](docs/BUILDING-THE-IMAGE.md)
+  covers the recipe, the build, switching a machine to your build, and adding packages, Flatpaks
+  and branding.
 
 ### Herald OS Linux in a virtual machine
 

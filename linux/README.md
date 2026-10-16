@@ -6,6 +6,8 @@ your Mac). Full guide: [docs/LINUX.md](../docs/LINUX.md).
 ```
 linux/
   provision.sh            first-boot provisioner (root, idempotent)
+  image/                  the bootc image: Containerfile, packages.sh, first boot, disk and ISO
+                          settings (docs/BUILDING-THE-IMAGE.md)
   bin/                    herald-os (the CLI every hotkey and menu calls), -theme, -omakase, -update,
                           -tarball (installs and updates the release tarball in /opt/herald-os)
   session/                greetd config, compositor + session launchers, wayland-sessions entry,
