@@ -169,11 +169,15 @@ export const HOME_SECRETS = [
 
 const TEMP_ROOTS = ['/tmp', '/private/tmp']
 
-/** The home folder, the Hermes homes and the temporary folders, each as written and with its symlinks resolved. */
+/**
+ * The home folder, the Hermes homes, the temporary folders and the credential stores, each as written and with its
+ * symlinks resolved, so `~/.ssh -> ~/dotfiles/ssh` makes `~/dotfiles/ssh` a credential store too.
+ */
 interface Places {
   homes: string[]
   hermes: string[]
   temps: string[]
+  secrets: string[]
 }
 
 /** macOS and Windows file systems ignore case, so `~/.SSH` is `~/.ssh` there. */
@@ -189,9 +193,7 @@ const within = (file: string, root: string): boolean => {
 /** `$HERMES_HOME` and the default `~/.hermes`: a profile that moved its home still leaves keys in the old one. */
 const hermesHomes = (): string[] => [hermesHome(), path.join(os.homedir(), '.hermes')]
 
-function lexicalPlaces(): Places {
-  return { homes: [os.homedir()], hermes: hermesHomes(), temps: [...TEMP_ROOTS, os.tmpdir()] }
-}
+const isEnvFile = (name: string): boolean => comparable(name) === '.env' || comparable(name).startsWith('.env.')
 
 /** The path with every symlink resolved; for a path that does not exist (yet), its nearest existing folder's. */
 async function realpathDeep(file: string): Promise<string> {
@@ -215,53 +217,88 @@ async function realpathDeep(file: string): Promise<string> {
   }
 }
 
-async function resolvedPlaces(): Promise<Places> {
-  const lexical = lexicalPlaces()
-  const withReal = async (dirs: string[]) => [...new Set([...dirs, ...(await Promise.all(dirs.map(dir => realpathDeep(dir).catch(() => dir))))])]
+const names = (dir: string): Promise<string[]> => fs.readdir(dir).catch((): string[] => [])
 
-  return { homes: await withReal(lexical.homes), hermes: await withReal(lexical.hermes), temps: await withReal(lexical.temps) }
+/** `auth.json`, `.env` and `.env.*` at the top of a Hermes home and of each of its profiles. */
+async function hermesKeys(hermes: string): Promise<string[]> {
+  const profiles = path.join(hermes, 'profiles')
+  const dirs = [hermes, ...(await names(profiles)).map(name => path.join(profiles, name))]
+  const found = await Promise.all(dirs.map(async dir => (await names(dir)).filter(name => isEnvFile(name) || name === 'auth.json').map(name => path.join(dir, name))))
+
+  return [...dirs.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')]), ...found.flat()]
 }
 
-const isEnvFile = (name: string): boolean => comparable(name) === '.env' || comparable(name).startsWith('.env.')
+/** The places as written, for a check that cannot wait on the disk. */
+function lexicalPlaces(): Places {
+  const homes = [os.homedir()]
+  const hermes = hermesHomes()
+  const secrets = [...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...hermes.flatMap(dir => [path.join(dir, '.env'), path.join(dir, 'auth.json')])]
 
-/** A credential store: a {@link HOME_SECRETS} entry, `auth.json` in a Hermes home, or any `.env` anywhere under one. */
+  return { homes, hermes, temps: [...TEMP_ROOTS, os.tmpdir()], secrets }
+}
+
+async function resolvedPlaces(): Promise<Places> {
+  const withReal = async (dirs: string[]) => [...new Set([...dirs, ...(await Promise.all(dirs.map(dir => realpathDeep(dir).catch(() => dir))))])]
+  const [homes, hermes, temps] = await Promise.all([withReal([os.homedir()]), withReal(hermesHomes()), withReal([...TEMP_ROOTS, os.tmpdir()])])
+  const keys = (await Promise.all(hermes.map(hermesKeys))).flat()
+  const secrets = await withReal([...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...keys])
+
+  return { homes, hermes, temps, secrets }
+}
+
+/** A credential store: a {@link HOME_SECRETS} entry or a Hermes key file, as written or where it resolves, or any `.env` under a Hermes home. */
 function isSecret(file: string, places: Places): boolean {
-  if (places.homes.some(home => HOME_SECRETS.some(secret => within(file, path.join(home, secret))))) {
-    return true
-  }
+  return places.secrets.some(secret => within(file, secret)) || places.hermes.some(hermes => within(file, hermes) && path.relative(comparable(hermes), comparable(file)).split(path.sep).some(isEnvFile))
+}
 
-  return places.hermes.some(hermes => within(file, path.join(hermes, 'auth.json')) || (within(file, hermes) && path.relative(comparable(hermes), comparable(file)).split(path.sep).some(isEnvFile)))
+/** Whether a path under `root` (as the caller wrote it) is a credential store, by its spelling or by where it resolves. */
+async function secretsUnder(root: string): Promise<(file: string) => boolean> {
+  const [places, real] = await Promise.all([resolvedPlaces(), realpathDeep(root)])
+
+  return file => isSecret(file, places) || isSecret(path.join(real, path.relative(root, file)), places)
 }
 
 const withoutTrailingSeparator = (file: string): string => (file.length > 1 ? file.replace(/[\\/]+$/, '') || path.sep : file)
 
-/** A path the shell may read, as the caller wrote it (normalized) and with its symlinks resolved. Read through `real`. */
-export interface ReadablePath {
+/** A checked path, as the caller wrote it (normalized) and with its symlinks resolved. Read and write through `real`. */
+export interface CheckedPath {
   path: string
   real: string
 }
 
-/**
- * Paths the shell may read, list, stat or watch: the home folder, the Hermes home and the temporary folders, judged
- * after symlinks resolve. Credential stores ({@link isSecret}) are refused wherever a path or its target lands.
- */
-export async function assertReadable(target: string, outside = 'Herald OS only reads files inside your home folder'): Promise<ReadablePath> {
-  const file = withoutTrailingSeparator(normalizeUserPath(target))
-  const places = await resolvedPlaces()
-
-  // Judged before touching the disk, so a protected path is refused the same whether it exists or not.
+/** Refuse a credential store, judged as written (before touching the disk) and again once symlinks resolve. */
+async function outsideSecrets(file: string, places: Places, resolve: (file: string) => Promise<string> = realpathDeep): Promise<string> {
   if (isSecret(file, places)) {
     throw new Error(`${file} is a protected location`)
   }
 
-  const real = await realpathDeep(file)
-
-  if (![...places.homes, ...places.hermes, ...places.temps].some(root => within(real, root))) {
-    throw new Error(outside)
-  }
+  const real = await resolve(file)
 
   if (isSecret(real, places)) {
     throw new Error(`${file} is a protected location`)
+  }
+
+  return real
+}
+
+/** Paths the shell may read, stat or list one level of: anywhere but a credential store ({@link isSecret}), wherever a path or its target lands. */
+export async function assertReadable(target: string): Promise<CheckedPath> {
+  const file = withoutTrailingSeparator(normalizeUserPath(target))
+
+  return { path: file, real: await outsideSecrets(file, await resolvedPlaces()) }
+}
+
+/**
+ * Paths the shell may walk or measure in depth: readable, and inside the home folder, the Hermes home or a
+ * temporary folder once symlinks resolve.
+ */
+export async function assertConfined(target: string, outside = 'Herald OS only looks through folders inside your home folder'): Promise<CheckedPath> {
+  const file = withoutTrailingSeparator(normalizeUserPath(target))
+  const places = await resolvedPlaces()
+  const real = await outsideSecrets(file, places)
+
+  if (![...places.homes, ...places.hermes, ...places.temps].some(root => within(real, root))) {
+    throw new Error(outside)
   }
 
   return { path: file, real }
@@ -270,12 +307,12 @@ export async function assertReadable(target: string, outside = 'Herald OS only r
 const PROJECT_OUTSIDE = 'project folders must be inside your home folder'
 
 /**
- * A folder that may be listed deeply or watched: readable, inside the home folder or a temporary folder once
+ * A folder that may be listed deeply or watched: confined, inside the home folder or a temporary folder once
  * symlinks resolve, and not a whole system folder such as `/`, `/tmp` or the Hermes home. As the caller wrote it,
  * without a trailing separator.
  */
 export async function assertProjectFolder(target: string): Promise<string> {
-  const { path: root, real } = await assertReadable(target, PROJECT_OUTSIDE)
+  const { path: root, real } = await assertConfined(target, PROJECT_OUTSIDE)
   const places = await resolvedPlaces()
 
   if (path.dirname(real) === real || [...places.temps, ...places.hermes].some(dir => comparable(dir) === comparable(real))) {
@@ -290,7 +327,8 @@ export async function assertProjectFolder(target: string): Promise<string> {
 }
 
 async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number; files: number; complete: boolean }> {
-  const root = (await assertReadable(target)).real
+  const root = (await assertConfined(target)).real
+  const secret = await secretsUnder(root)
   const deadline = Date.now() + budgetMs
   let bytes = 0
   let files = 0
@@ -314,6 +352,10 @@ async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number
 
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
+
+      if (secret(full)) {
+        continue
+      }
 
       if (entry.isDirectory()) {
         stack.push(full)
@@ -358,6 +400,7 @@ async function listTree(target: string, limit: number): Promise<{ entries: TreeE
   const root = await projectRoot(target)
   const entries: TreeEntry[] = []
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
+  const secret = await secretsUnder(root)
 
   while (queue.length) {
     const { dir, depth } = queue.shift()!
@@ -375,6 +418,10 @@ async function listTree(target: string, limit: number): Promise<{ entries: TreeE
       }
 
       const full = path.join(dir, dirent.name)
+
+      if (secret(full)) {
+        continue
+      }
 
       if (entries.length >= limit) {
         return { entries, truncated: true }
@@ -421,6 +468,7 @@ function stopTree(watch: TreeWatch): void {
 async function watchTree(owner: WebContents, target: string): Promise<string> {
   const root = await projectRoot(target)
   const watchId = `tree-${++treeWatchCounter}`
+  const secret = await secretsUnder(root)
   const watch: TreeWatch = { watcher: watchFs(root, { recursive: true }), pending: new Set(), timer: null }
   const flush = () => {
     watch.timer = null
@@ -435,7 +483,7 @@ async function watchTree(owner: WebContents, target: string): Promise<string> {
   watch.watcher.on('change', (_type, filename) => {
     const relative = typeof filename === 'string' ? filename : filename?.toString()
 
-    if (!relative || skipped(relative)) {
+    if (!relative || skipped(relative) || secret(path.join(root, relative))) {
       return
     }
 

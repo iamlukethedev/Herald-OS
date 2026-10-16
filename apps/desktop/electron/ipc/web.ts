@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type WebOpenOptions, type WebViewBounds, type WebViewEvent } from '../../shared/ipc.ts'
 import { isViewable } from '../../shared/viewer.ts'
 import { log } from '../log.ts'
+import { assertReadable } from './fs.ts'
 
 /*
  * Embedded web pages. Herald OS is a whole environment, so a web page (the provider sign-in portal,
@@ -105,7 +106,7 @@ export class WebViews {
 
   register(): void {
     ipcMain.handle(IPC.webOpen, (event, url: string, options: WebOpenOptions = {}) => this.open(event.sender, url, options))
-    ipcMain.handle(IPC.webOpenFile, (event, filePath: string, options: WebOpenOptions = {}) => this.openFile(event.sender, filePath, options))
+    ipcMain.handle(IPC.webOpenFile, async (event, filePath: string, options: WebOpenOptions = {}) => this.openFile(event.sender, (await assertReadable(String(filePath))).path, options))
     ipcMain.on(IPC.webSetBounds, (event, id: string, bounds: WebViewBounds, visible: boolean) => this.setBounds(event.sender, id, bounds, visible))
     ipcMain.handle(IPC.webClose, (event, id: string) => this.close(id, event.sender))
     ipcMain.handle(IPC.webOpenPreview, (event, target: string, options: WebOpenOptions = {}) => this.openPreview(event.sender, target, options))

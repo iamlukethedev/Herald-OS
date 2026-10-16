@@ -8,6 +8,7 @@ import { type CaptureTool, type CaptureToolResult, IPC, type RecordingState, typ
 import { describeQr } from '../../shared/qr.ts'
 import { privacyPaneUrl } from '../../shared/privacy-panes.ts'
 import { allowAttachments } from '../attachments.ts'
+import { assertReadable } from './fs.ts'
 import { menuLanguage } from '../i18n.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
@@ -368,7 +369,7 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bm
 const MAX_IMAGE_BYTES = 40 * 1024 * 1024
 
 /** Only images under the home folder or Herald OS's own capture folder are read or written here. */
-function userImagePath(target: string, mustExist: boolean): string {
+function userImagePath(target: string): string {
   const file = path.resolve(String(target).replace(/^file:\/\//, ''))
   const inside = [os.homedir(), capturesDir()].some(root => file === root || file.startsWith(`${root}${path.sep}`))
 
@@ -376,15 +377,19 @@ function userImagePath(target: string, mustExist: boolean): string {
     throw new Error('Only images in your home folder can be opened here')
   }
 
-  if (mustExist) {
-    const stat = fs.statSync(file)
+  return file
+}
 
-    if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
-      throw new Error(`${path.basename(file)} is too large to edit`)
-    }
+/** An image to read: a {@link userImagePath} that is not a credential store once its symlinks resolve. Read through the returned path. */
+async function readableImage(target: string): Promise<string> {
+  const { real } = await assertReadable(userImagePath(target))
+  const stat = fs.statSync(real)
+
+  if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) {
+    throw new Error(`${path.basename(real)} is too large to edit`)
   }
 
-  return file
+  return real
 }
 
 export function registerCaptureIpc(onRecording: (state: RecordingState) => void): void {
@@ -448,9 +453,9 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
       fs.rmSync(file, { force: true })
     }
   })
-  ipcMain.handle(IPC.captureReadImage, (_event, target: string) => nativeImage.createFromPath(userImagePath(target, true)).toDataURL())
+  ipcMain.handle(IPC.captureReadImage, async (_event, target: string) => nativeImage.createFromPath(await readableImage(target)).toDataURL())
   ipcMain.handle(IPC.captureSaveImage, (_event, target: string, dataUrl: string) => {
-    const file = userImagePath(target, false)
+    const file = userImagePath(target)
     const match = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl))
 
     if (!match) {
@@ -463,7 +468,7 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
     return file
   })
   ipcMain.handle(IPC.captureCopyImage, async (_event, source: string) => {
-    const image = String(source).startsWith('data:image/') ? nativeImage.createFromDataURL(String(source)) : nativeImage.createFromPath(userImagePath(source, true))
+    const image = String(source).startsWith('data:image/') ? nativeImage.createFromDataURL(String(source)) : nativeImage.createFromPath(await readableImage(source))
 
     if (image.isEmpty()) {
       throw new Error('There is no image to copy')
