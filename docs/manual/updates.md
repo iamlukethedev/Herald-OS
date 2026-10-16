@@ -31,18 +31,22 @@ Each part updates on its own, and the update ends with a summary of every part: 
 for anything that failed, why. A Flatpak that does not update (no space, a broken remote) is named
 with its error, and the other apps still update.
 
-Your own Flatpaks update with your account. The ones installed for the whole system (where the image
-puts its apps) need root: `sudo herald-os update` updates them too. From the menu, where there is no
-one to type a password, the summary says they were not updated.
+Your own Flatpaks update with your account. The system itself, and the Flatpaks installed for the
+whole system (where the image puts its apps), need root. `sudo herald-os update` updates them, and
+so does `herald-os update` in a terminal, where sudo asks for your password. From the menu there is
+no one to type a password, so they are skipped: the update says they need `sudo herald-os update`,
+and a skipped part is not a problem and does not make the update fail.
 
 `herald-os update` exits with 1 when the system or Herald OS itself (its shell, release, one-shot
 migrations or rebuild) did not update. Flatpaks and Hermes Agent that did not update are reported in
-the summary and the notification, but the exit status stays 0.
+the summary and the notification, but the exit status stays 0. Parts skipped for want of root leave
+it at 0 too.
 
 An "after Herald OS updates" automation or hook gets the parts that did not update in `problems=`
 (`none` when everything did): `system`, `shell`, `herald-os`, `migration:<name>`, `build`,
-`flatpaks`, `system-flatpaks` or `hermes`. A system that did not update used to be called `packages`
-there and is now `system`, so a hook that looks for `packages` needs to look for `system` instead.
+`flatpaks`, `system-flatpaks` or `hermes`. Parts skipped for want of root are not listed. A system
+that did not update used to be called `packages` there and is now `system`, so a hook that looks for
+`packages` needs to look for `system` instead.
 
 ### Going back
 

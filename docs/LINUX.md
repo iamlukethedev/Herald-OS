@@ -234,8 +234,10 @@ The manual covers these for people using them: [Make it yours](manual/make-it-yo
   AUR helper on Arch; on Omarchy it leaves the system to `omarchy-update`, which Omarchy requires;
   the Herald OS image updates as a whole with `bootc upgrade`, or `rpm-ostree upgrade` when the
   booted or staged deployment has rpm-ostree changes such as layered, removed or replaced packages)
-  and Flatpaks (the user's, and the system installation's when sudo needs no password), updates Hermes Agent,
-  rebuilds the shell and restarts it. A daily user timer runs `herald-os update
+  and Flatpaks (the user's and the system installation's), updates Hermes Agent, rebuilds the shell
+  and restarts it. The system and system Flatpak steps need root: as root, with sudo that needs no
+  password, or in a terminal where sudo asks for one. Without root (from the menu) they are skipped
+  with a line saying to run `sudo herald-os update`, and they stay out of `problems=` and the exit status. A daily user timer runs `herald-os update
   --check`, which lights the menu-bar indicator when anything is pending. A repo pushed from a Mac
   (no `.git`) skips the shell step; use `linux/dev/push.sh` there. A release tarball in
   `/opt/herald-os` updates from GitHub releases instead
