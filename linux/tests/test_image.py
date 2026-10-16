@@ -1,6 +1,7 @@
 """Telling the Herald OS image from other bootc and ostree systems (Silverblue, Bazzite, Bluefin)."""
 
 import importlib.machinery
+import json
 import importlib.util
 import re
 import shutil
@@ -111,7 +112,13 @@ def test_the_default_image_never_refers_to_the_akmods_images():
 
 
 def test_the_nvidia_image_starts_from_the_default_one_and_the_akmods_images_it_is_given():
-    assert froms(CONTAINERFILE_NVIDIA) == [("${AKMODS_REF}", "akmods"), ("${AKMODS_NVIDIA_REF}", "akmods-nvidia"), ("${HERALD_OS}", "")]
+    found = froms(CONTAINERFILE_NVIDIA)
+    assert [name for _, name in found] == ["akmods", "akmods-nvidia", ""] and found[2][0] == "${HERALD_OS}"
+    # No movable default: unset, the build stops at the first FROM, which names the argument.
+    for (base, _), arg in zip(found, ("AKMODS_REF", "AKMODS_NVIDIA_REF")):
+        assert base.startswith("${" + arg + ":?" + arg + "-is-unset:") and base.endswith("}") and " " not in base
+        assert f"ARG {arg}=\n" in CONTAINERFILE_NVIDIA.read_text()
+    assert "main-44" not in "".join(line for line in CONTAINERFILE_NVIDIA.read_text().splitlines(True) if line.startswith("ARG"))
     text = CONTAINERFILE_NVIDIA.read_text()
     for name in ("nvidia.sh", "kargs-nvidia.toml", "negativo17.asc", "nvidia-container-toolkit.asc"):
         assert f"linux/image/{name}" in text and (ROOT / "linux" / "image" / name).is_file()
@@ -232,7 +239,60 @@ def test_the_nvidia_layer_checks_the_key_people_enroll_and_what_it_installs():
     assert 'echo "$KEY_SHA256  $KEY" | sha256sum --quiet -c -' in script
     assert '--setopt="fedora-nvidia.gpgkey=file://$HERE/negativo17.asc"' in script
     assert '--setopt="nvidia-container-toolkit.gpgkey=file://$HERE/nvidia-container-toolkit.asc"' in script
-    assert "rpm -K \"$rpm\" | grep -q ' signatures OK$'" in script
+    assert 'rpm --dbpath "$keys" --import "$HERE/negativo17.asc"' in script and "verify_rpms\n" in script
+
+
+# verify_rpms against an rpm stand-in that keeps each --dbpath's keys, and says what rpm 6.0.2 says
+# (checked in the image: a key database holding only NVIDIA's key fails negativo17's RPMs).
+RPM_STUB = r"""#!/bin/sh
+db=""; [ "$1" = --dbpath ] && { db="$2"; shift 2; }
+case "$1" in
+  --import) cat "$2" >>"$db/keys" ;;
+  -q) cat "$db/keys" ;;
+  -K) f="$2"; kind="$(cat "$f")"
+      case "$kind" in
+        negativo17) grep -qx 0c5d0f470484ae2fc40a9b6597f3008993e8909b "$db/keys" && echo "$f: digests signatures OK" || { echo "$f: digests SIGNATURES NOT OK"; exit 1; } ;;
+        unsigned) echo "$f: digests OK" ;;
+        corrupt) echo "$f: DIGESTS NOT OK"; exit 1 ;;
+      esac ;;
+esac
+"""
+
+
+def verify(tmp_path: Path, keys: str, driver: str = "negativo17", kmod: str = "unsigned") -> subprocess.CompletedProcess:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "rpm").write_text(RPM_STUB)
+    (bin_dir / "rpm").chmod(0o755)
+    (tmp_path / "negativo17.asc").write_text(keys + "\n")
+    (tmp_path / "nvidia-driver.rpm").write_text(driver)
+    (tmp_path / "kmod-nvidia.rpm").write_text(kmod)
+    script = NVIDIA.read_text()
+    function = re.search(r"^verify_rpms\(\) \{\n.*?^\}\n", script, re.M | re.S).group(0)
+    pinned = re.search(r"^NEGATIVO17_KEY=\S+$", script, re.M).group(0)
+    body = f'HERE="{tmp_path}"\n{pinned}\nRPMS=("{tmp_path}/nvidia-driver.rpm")\nKMOD="{tmp_path}/kmod-nvidia.rpm"\n{function}verify_rpms'
+    return subprocess.run(["bash", "-c", body], env={"PATH": f"{bin_dir}:/usr/bin:/bin"}, capture_output=True, text=True, check=False)
+
+
+NEGATIVO17_FPR = "0c5d0f470484ae2fc40a9b6597f3008993e8909b"
+NVIDIA_FPR = "c95b321b61e88c1809c4f759ddcae044f796ecb0"
+
+
+def test_the_driver_rpms_pass_against_negativo17s_key_alone_and_the_unsigned_kmod_on_its_digests(tmp_path):
+    result = verify(tmp_path, NEGATIVO17_FPR)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("keys,driver,kmod,said", [
+    (NVIDIA_FPR, "negativo17", "unsigned", f"holds {NVIDIA_FPR}, not {NEGATIVO17_FPR} alone"),
+    (f"{NEGATIVO17_FPR}\n{NVIDIA_FPR}", "negativo17", "unsigned", "alone"),
+    (NEGATIVO17_FPR, "unsigned", "unsigned", "nvidia-driver.rpm is not signed with negativo17's key"),
+    (NEGATIVO17_FPR, "corrupt", "unsigned", "nvidia-driver.rpm is not signed with negativo17's key: DIGESTS NOT OK"),
+    (NEGATIVO17_FPR, "negativo17", "corrupt", "kmod-nvidia.rpm fails its digests: DIGESTS NOT OK"),
+], ids=["only another key", "another key too", "driver unsigned", "driver corrupt", "kmod corrupt"])
+def test_verify_rpms_stops_the_build(tmp_path, keys, driver, kmod, said):
+    result = verify(tmp_path, keys, driver, kmod)
+    assert result.returncode == 1 and said in result.stderr
 
 
 # The repository files as ublue-os-nvidia-addons ships them (0.15), trimmed to what the checks read.

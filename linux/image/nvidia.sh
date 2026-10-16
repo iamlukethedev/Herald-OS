@@ -60,6 +60,26 @@ if bad:
 PY
 }
 
+# dnf does not check the signatures of RPMs given as files. Each driver RPM must be signed with
+# negativo17's key, checked against an RPM database that holds that key alone, since rpm -K accepts
+# any key the system's database has. kmod-nvidia is Universal Blue's build and carries no RPM
+# signature: only its digests are checked here, and the cosign signature on the akmods-nvidia image,
+# checked by digest in the image workflow, is what vouches for it.
+verify_rpms() {
+  local keys rpm out
+  keys="$(mktemp -d)"
+  rpm --dbpath "$keys" --import "$HERE/negativo17.asc"
+  out="$(rpm --dbpath "$keys" -q gpg-pubkey --qf '%{VERSION}\n')"
+  [[ "$out" == "$NEGATIVO17_KEY" ]] || { echo "the driver RPMs' key database holds ${out//$'\n'/ }, not $NEGATIVO17_KEY alone" >&2; exit 1; }
+  for rpm in "${RPMS[@]}"; do
+    out="$(rpm --dbpath "$keys" -K "$rpm" || true)"
+    [[ "$out" == *": digests signatures OK" ]] || { echo "${rpm##*/} is not signed with negativo17's key: ${out##*: }" >&2; exit 1; }
+  done
+  out="$(rpm --dbpath "$keys" -K "$KMOD" || true)"
+  [[ "$out" == *": digests OK" || "$out" == *": digests signatures OK" ]] || { echo "${KMOD##*/} fails its digests: ${out##*: }" >&2; exit 1; }
+  rm -rf "$keys"
+}
+
 [[ "$(uname -m)" == x86_64 ]] || { echo "the NVIDIA image is x86_64 only" >&2; exit 1; }
 
 # KERNEL_VERSION, NVIDIA_AKMOD_VERSION and DIST_ARCH: what the modules were built for.
@@ -95,15 +115,12 @@ for rpm in "$AKMODS"/nvidia/*.x86_64.rpm "$AKMODS"/nvidia/*.noarch.rpm; do
   esac
   RPMS+=("$rpm")
 done
-# dnf does not check the signatures of RPMs given as files; these are negativo17's.
-rpm --import "$HERE/negativo17.asc"
-for rpm in "${RPMS[@]}"; do
-  rpm -K "$rpm" | grep -q ' signatures OK$' || { echo "${rpm##*/} is not signed with negativo17's key" >&2; exit 1; }
-done
+KMOD="$AKMODS/kmods/kmod-nvidia-$KERNEL_VERSION-$NVIDIA_AKMOD_VERSION.$DIST_ARCH.rpm"
+verify_rpms
 dnf -y install --setopt=install_weak_deps=False --enablerepo=fedora-nvidia --enablerepo=nvidia-container-toolkit \
   --setopt="fedora-nvidia.gpgkey=file://$HERE/negativo17.asc" \
   --setopt="nvidia-container-toolkit.gpgkey=file://$HERE/nvidia-container-toolkit.asc" \
-  "${RPMS[@]}" "$AKMODS/kmods/kmod-nvidia-$KERNEL_VERSION-$NVIDIA_AKMOD_VERSION.$DIST_ARCH.rpm" \
+  "${RPMS[@]}" "$KMOD" \
   nvidia-container-toolkit egl-wayland libva-nvidia-driver mokutil
 for key in "$NEGATIVO17_KEY" "$NVIDIA_KEY"; do
   rpm -q gpg-pubkey --qf '%{VERSION}\n' | grep -qx "$key" || { echo "the RPM database has no key $key" >&2; exit 1; }
