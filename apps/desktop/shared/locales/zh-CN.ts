@@ -405,7 +405,7 @@ export const zhCN: Translation = {
   'settings.agents.connecting': '正在连接',
   'settings.agents.connectionError': '连接错误',
   'settings.agents.disconnected': '已断开连接',
-  'settings.agents.account': '账号',
+  'settings.agents.account': '账户',
   'settings.agents.modelPerformance': '模型与性能',
   'settings.agents.privacyControl': '隐私与控制',
   'settings.agents.status.ready': '就绪',
