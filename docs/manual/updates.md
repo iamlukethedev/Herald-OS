@@ -17,11 +17,13 @@ are waiting; click it to update.
 one you run and starts at the next restart. Nothing changes under your feet, and a failed download
 leaves the system as it was.
 
-If you added packages to the image yourself (`rpm-ostree install`, a local RPM, or `rpm-ostree
-override remove` or `override replace`), `bootc upgrade` refuses to update it. `herald-os update`
-notices them and updates with `rpm-ostree upgrade` instead. It says so, names the packages, and keeps
-them in the new version. To go back to plain bootc updates, take them out with `rpm-ostree uninstall`
-or `rpm-ostree override reset`.
+If you changed the image yourself with rpm-ostree (`rpm-ostree install`, a local RPM, modules,
+`rpm-ostree override remove` or `override replace`, or `rpm-ostree initramfs --enable`), `bootc
+upgrade` refuses to update it. `herald-os update` notices and updates with `rpm-ostree upgrade`
+instead. It says so, names the changes, and keeps them in the new version. This includes changes you
+made since the last restart: a package installed but not yet booted into is kept too. To go back to
+plain bootc updates, undo them with `rpm-ostree uninstall`, `rpm-ostree override reset` or
+`rpm-ostree reset`.
 
 ### When something does not update
 
@@ -29,9 +31,18 @@ Each part updates on its own, and the update ends with a summary of every part: 
 for anything that failed, why. A Flatpak that does not update (no space, a broken remote) is named
 with its error, and the other apps still update.
 
+Your own Flatpaks update with your account. The ones installed for the whole system (where the image
+puts its apps) need root: `sudo herald-os update` updates them too. From the menu, where there is no
+one to type a password, the summary says they were not updated.
+
 `herald-os update` exits with 1 when the system or Herald OS itself (its shell, release, one-shot
 migrations or rebuild) did not update. Flatpaks and Hermes Agent that did not update are reported in
 the summary and the notification, but the exit status stays 0.
+
+An "after Herald OS updates" automation or hook gets the parts that did not update in `problems=`
+(`none` when everything did): `system`, `shell`, `herald-os`, `migration:<name>`, `build`,
+`flatpaks`, `system-flatpaks` or `hermes`. A system that did not update used to be called `packages`
+there and is now `system`, so a hook that looks for `packages` needs to look for `system` instead.
 
 ### Going back
 
