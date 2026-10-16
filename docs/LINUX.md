@@ -232,7 +232,8 @@ The manual covers these for people using them: [Make it yours](manual/make-it-yo
   stable|edge`; both track `main` until releases exist), runs one-shot `linux/migrations/*.sh`
   (tracked in `/var/lib/herald-os/migrations`), upgrades the system (dnf on Fedora, pacman and the
   AUR helper on Arch; on Omarchy it leaves the system to `omarchy-update`, which Omarchy requires;
-  the Herald OS image updates as a whole with `bootc upgrade`) and Flatpaks, updates Hermes Agent,
+  the Herald OS image updates as a whole with `bootc upgrade`, or `rpm-ostree upgrade` when the
+  booted deployment has layered, removed or replaced packages) and Flatpaks, updates Hermes Agent,
   rebuilds the shell and restarts it. A daily user timer runs `herald-os update
   --check`, which lights the menu-bar indicator when anything is pending. A repo pushed from a Mac
   (no `.git`) skips the shell step; use `linux/dev/push.sh` there. A release tarball in
@@ -306,7 +307,8 @@ there); the system itself changes only by a whole new image.
 
 **Updates you can undo.** `herald-os update` runs `bootc upgrade` (the image tag of the channel:
 `stable` follows releases, `edge` follows main (rebuilt when image files change);
-`herald-os channel edge` switches with `bootc switch`), then Flatpaks and `hermes update`. The new
+`herald-os channel edge` switches with `bootc switch`; with packages layered on the image it runs
+`rpm-ostree upgrade`, which keeps them), then Flatpaks and `hermes update`. The new
 image starts on the next restart and the previous one stays in the boot menu; `herald-os rollback`
 (or Update > Go back to the previous version) makes it the default again.
 

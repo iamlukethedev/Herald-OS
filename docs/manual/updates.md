@@ -17,6 +17,22 @@ are waiting; click it to update.
 one you run and starts at the next restart. Nothing changes under your feet, and a failed download
 leaves the system as it was.
 
+If you added packages to the image yourself (`rpm-ostree install`, a local RPM, or `rpm-ostree
+override remove` or `override replace`), `bootc upgrade` refuses to update it. `herald-os update`
+notices them and updates with `rpm-ostree upgrade` instead. It says so, names the packages, and keeps
+them in the new version. To go back to plain bootc updates, take them out with `rpm-ostree uninstall`
+or `rpm-ostree override reset`.
+
+### When something does not update
+
+Each part updates on its own, and the update ends with a summary of every part: what it used, and
+for anything that failed, why. A Flatpak that does not update (no space, a broken remote) is named
+with its error, and the other apps still update.
+
+`herald-os update` exits with 1 when the system or Herald OS itself (its shell, release, one-shot
+migrations or rebuild) did not update. Flatpaks and Hermes Agent that did not update are reported in
+the summary and the notification, but the exit status stays 0.
+
 ### Going back
 
 The previous version stays in the boot menu. To make it the default again, choose Update > Go back to
