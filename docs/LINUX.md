@@ -341,6 +341,18 @@ switched from another bootc system is different: it gets a login screen and a lo
 
 - **Firewall:** firewalld with a `herald-os` zone that refuses incoming connections except LocalSend
   (port 53317) and mDNS. SSH is off in release images; the development VM's zone allows it.
+- **SSH:** `herald-os setup ssh --key <public key>` (or `--github <user>`) refuses without a key in
+  `~/.ssh/authorized_keys` (unless `--passwords`), writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
+  (`PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+  `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
+  distributions' `50-` files), then checks `sshd -T` reports those values and takes the file back if
+  not. It enables `sshd`, adds the rich rule `rule service name="ssh" accept limit value="4/m"` to
+  firewalld's default zone (runtime and permanent) when firewalld runs, and runs `restorecon` on
+  `~/.ssh` and the drop-in. Files in the home folder are written as the account, also when the first
+  boot runs it as root. `--off` disables `sshd.service` and `sshd.socket`, removes the drop-in and the
+  rule (with `firewall-offline-cmd` when firewalld is stopped) and leaves `authorized_keys`;
+  `--status [--json]` reports it without root where it can. `linux/tests/test_ssh.py` covers it,
+  with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,

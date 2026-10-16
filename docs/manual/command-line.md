@@ -73,6 +73,7 @@ your scripts drive the system the same way. Any of them can be a key of your own
 | `herald-os suspend`, `herald-os power` | Sleep now, or open the power menu |
 | `herald-os setup` | Once per account on Arch or the tarball: Hermes Agent and Herald's tools (`herald-os setup --undo` takes them back) |
 | `herald-os setup fingerprint` | Fingerprint sign-in (`setup fido2` for a security key) |
+| `herald-os setup ssh --key '<public key>'` | Turn SSH on for keys only (`--github <user>` for your GitHub keys; `--off`, `--status`); see [Security](security.md#ssh) |
 | `herald-os reset` | Erase this computer's account and start setup again |
 | `herald-os omarchy install` | Run Herald OS inside Omarchy |
 | `herald-os wm <action>` | A window-manager action, such as `wm toggle-overview` |

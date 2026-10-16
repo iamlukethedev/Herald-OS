@@ -60,8 +60,10 @@ call the tools directly.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
+import pwd
 import re
 import shutil
 import signal
@@ -155,7 +157,7 @@ COMMANDS: dict[str, str] = {
     "omakase": "Install the curated software set (omakase install | omakase list)",
     "wm": "A window-manager action: wm <niri action> [args] (on Hyprland the same names, or a dispatcher)",
     "omarchy": "omarchy install | remove | status: run Herald OS inside Omarchy (theme hook, menu entry, keys)",
-    "setup": "setup [--yes]: once per user after installing (Hermes Agent and the bridge plugin) | setup --undo: take back its changes to Hermes | setup fingerprint | setup fido2",
+    "setup": "setup [--yes]: once per user after installing (Hermes Agent and the bridge plugin) | setup --undo: take back its changes to Hermes | setup fingerprint | setup fido2 | setup ssh [--key <public key>] [--github <user>] [--keys-file <file>] [--passwords] [--user <name>]: SSH for keys only, never root, rate-limited | setup ssh --off | setup ssh --status [--json]",
     "state": "Dump the shell's window-manager state",
     "debug": "Print diagnostics for bug reports",
     "commands": "List commands",
@@ -2963,6 +2965,8 @@ def setup(args: list[str]) -> int:
         return setup_sign_in("fingerprint")
     if args[:1] == ["fido2"]:
         return setup_sign_in("fido2")
+    if args[:1] == ["ssh"]:
+        return setup_ssh(args[1:])
     assume_yes = "--yes" in args or "-y" in args
     bridge = next((d for d in BRIDGE_DIRS if (d / "plugin.yaml").exists()), None)
     if not bridge:
@@ -3077,6 +3081,498 @@ def pam_enable(file: Path, line: str) -> bool:
         subprocess.run(["sudo", "cp", "-p", str(file), str(backup)], check=True)
     subprocess.run(["sudo", "tee", str(file)], input=updated, text=True, stdout=subprocess.DEVNULL, check=True)
     return True
+
+
+# ---------------------------------------------------------------------------------------------
+# SSH: off as the image ships it (sshd disabled, nothing in the firewall zone) until someone turns it
+# on, and then for keys only unless they ask for passwords as well.
+# sshd keeps the first value it reads for each setting and reads sshd_config.d in name order, so 10-
+# comes before the distributions' own files (Fedora's 50-redhat.conf, cloud-init's 50-cloud-init.conf).
+SSHD_DROP_IN = Path("/etc/ssh/sshd_config.d/10-herald-os.conf")
+SSH_HOST_KEYS = Path("/etc/ssh")
+SSH_UNITS = ("sshd.service", "sshd.socket")
+# At most four new connections a minute from anywhere, which slows password and key guessing.
+SSH_RICH_RULE = 'rule service name="ssh" accept limit value="4/m"'
+# What sshd accepts today; DSA keys are gone from OpenSSH 9.8.
+SSH_KEY_TYPES = (
+    "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com",
+)
+GITHUB_USER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+SSH_USAGE = (
+    "setup ssh [--key <public key>]... [--github <user>]... [--keys-file <file>] [--passwords] [--user <name>]"
+    " | setup ssh --off | setup ssh --status [--json] [--user <name>]"
+)
+
+
+def as_root(argv: list[str]) -> list[str]:
+    """`argv` as root: unchanged when this runs as root already, else through sudo, which asks for the
+    password in a terminal and otherwise fails at once rather than wait for an answer no one gives."""
+    if os.geteuid() == 0:
+        return argv
+    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]
+
+
+def root_run(argv: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(as_root(argv), capture_output=True, text=True, check=False)
+
+
+def root_step(argv: list[str], what: str) -> None:
+    result = root_run(argv)
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout or "").strip()
+        die(f"{what} failed: `{' '.join(argv)}` (exit {result.returncode}){': ' + output if output else ''}", 1)
+
+
+def ssh_key(text: str) -> str | None:
+    """One public key the way authorized_keys takes it (type, key, comment), or None for anything else:
+    several lines, options in front, a type sshd no longer takes, or key data of another type (pure; tested)."""
+    if "\n" in text.strip() or "\r" in text:
+        return None
+    fields = text.split()
+    if len(fields) < 2 or fields[0] not in SSH_KEY_TYPES:
+        return None
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+    except ValueError:
+        return None
+    size = int.from_bytes(blob[:4], "big")
+    if len(blob) <= 4 + size or blob[4:4 + size] != fields[0].encode():
+        return None
+    return " ".join(fields)
+
+
+def authorized(text: str) -> list[str]:
+    """The keys (type and key) an authorized_keys file lets in, with options in front of them or not;
+    comments and broken lines let no one in (pure; tested)."""
+    keys = []
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        for at, field in enumerate(fields[:-1]):
+            if field in SSH_KEY_TYPES and ssh_key(f"{field} {fields[at + 1]}"):
+                keys.append(f"{field} {fields[at + 1]}")
+                break
+    return keys
+
+
+def with_keys(text: str, keys: list[str]) -> tuple[str, list[str]]:
+    """authorized_keys with `keys` added at the end, and which of them it did not have yet. The lines
+    already there stay exactly as they were (pure; tested)."""
+    have, added = set(authorized(text)), []
+    for key in keys:
+        bare = " ".join(key.split()[:2])
+        if bare not in have:
+            have.add(bare)
+            added.append(key)
+    if not added:
+        return text, []
+    return (text if not text or text.endswith("\n") else text + "\n") + "".join(f"{key}\n" for key in added), added
+
+
+def sshd_drop_in(passwords: bool) -> str:
+    """The sshd settings `setup ssh` adds (pure; tested)."""
+    return (
+        "# Written by `herald-os setup ssh`; `herald-os setup ssh --off` removes it.\n"
+        "PermitRootLogin no\n"
+        f"PasswordAuthentication {'yes' if passwords else 'no'}\n"
+        "KbdInteractiveAuthentication no\n"
+        "PermitEmptyPasswords no\n"
+    )
+
+
+def sshd_overruled(effective: str, passwords: bool) -> list[str]:
+    """What `sshd -T` reports that the drop-in did not get its way on, because a file sshd reads before
+    it says otherwise; a setting it does not report counts as overruled (pure; tested)."""
+    values: dict[str, str] = {}
+    for line in effective.splitlines():
+        key, _, value = line.strip().partition(" ")
+        values.setdefault(key.lower(), value.strip().lower())
+    wanted = {"permitrootlogin": "no", "kbdinteractiveauthentication": "no", "permitemptypasswords": "no"}
+    if not passwords:
+        wanted["passwordauthentication"] = "no"
+    return [f"{key} is {values.get(key, 'not reported')}, not {value}" for key, value in wanted.items() if values.get(key) != value]
+
+
+def ssh_account(name: str | None, required: bool = True) -> pwd.struct_passwd | None:
+    """Whose keys: the account this runs as or, as root (the first boot, sudo), the one --user names or
+    the one sudo ran from. Never root, which sshd turns away anyway."""
+    if os.geteuid() != 0:
+        me = pwd.getpwuid(os.getuid())
+        if name and name != me.pw_name:
+            die(f"--user {name}: only root sets up SSH for another account, and this runs as {me.pw_name}", 2)
+        return me
+    name = name or os.environ.get("SUDO_USER")
+    if not name or name == "root":
+        if not required:
+            return None
+        die("as root, say whose account SSH is for: --user <name> (root itself never signs in over SSH)", 2)
+    try:
+        account = pwd.getpwnam(name)
+    except KeyError:
+        die(f"there is no account named {name}", 1)
+    if account.pw_uid == 0:
+        die(f"{name} is root, which never signs in over SSH", 2)
+    return account
+
+
+@contextlib.contextmanager
+def as_account(account: pwd.struct_passwd):
+    """Files in someone's home are read and written as them, so a link they put there cannot send
+    root's writes anywhere else."""
+    if os.geteuid() != 0:
+        yield
+        return
+    groups = os.getgroups()
+    os.setgroups([])
+    os.setegid(account.pw_gid)
+    os.seteuid(account.pw_uid)
+    try:
+        yield
+    finally:
+        os.seteuid(0)
+        os.setegid(0)
+        os.setgroups(groups)
+
+
+def ssh_dir(account: pwd.struct_passwd) -> Path:
+    return Path(account.pw_dir) / ".ssh"
+
+
+def read_authorized(account: pwd.struct_passwd) -> str:
+    folder = ssh_dir(account)
+    keys_file = folder / "authorized_keys"
+    with as_account(account):
+        for path in (folder, keys_file):
+            if path.is_symlink():
+                die(f"{path} is a link, which sshd does not trust either: make it a real {'folder' if path == folder else 'file'} and run this again. Nothing was changed.", 1)
+        try:
+            return keys_file.read_text() if keys_file.exists() else ""
+        except OSError as exc:
+            die(f"cannot read {keys_file}: {exc}. Nothing was changed.", 1)
+    return ""
+
+
+def write_authorized(account: pwd.struct_passwd, text: str | None) -> None:
+    """~/.ssh 0700 and authorized_keys 0600, both the account's own: sshd ignores keys anyone else can
+    change. The new text goes through a new file and a rename, so the file is never half written."""
+    folder = ssh_dir(account)
+    keys_file = folder / "authorized_keys"
+    with as_account(account):
+        if text is not None:
+            folder.mkdir(mode=0o700, exist_ok=True)
+            fd, name = tempfile.mkstemp(dir=folder, prefix=".authorized_keys.")
+            with os.fdopen(fd, "w") as out:
+                out.write(text)
+            os.chmod(name, 0o600)
+            os.replace(name, keys_file)
+        if folder.is_dir():
+            folder.chmod(0o700)
+        if keys_file.is_file():
+            keys_file.chmod(0o600)
+    if folder.is_dir() and shutil.which("restorecon"):
+        # SELinux: a file written elsewhere and moved in keeps the wrong label, and sshd cannot read it.
+        if root_run(["restorecon", "-R", str(folder)]).returncode != 0:
+            print(f"    warning: restorecon -R {folder} failed; with SELinux enforcing, sshd may not read the keys")
+
+
+def github_keys(user: str) -> list[str]:
+    if not GITHUB_USER.match(user):
+        die(f"--github {user}: not a GitHub user name. Nothing was changed.", 2)
+    url = f"https://github.com/{user}.keys"
+    result = sh(["curl", "-fsSL", "--max-time", "20", url], timeout=30)
+    if result.returncode != 0:
+        die(f"could not read {url} (curl exit {result.returncode}). Nothing was changed.", 1)
+    keys = [key for key in map(ssh_key, result.stdout.splitlines()) if key]
+    if not keys:
+        die(f"{user} has no SSH keys on GitHub ({url}). Nothing was changed.", 1)
+    return [key if len(key.split()) > 2 else f"{key} github:{user}" for key in keys]
+
+
+def given_keys(opts: dict) -> list[str]:
+    """Every key --key, --keys-file and --github give, checked before anything changes."""
+    keys = []
+    for text in opts["keys"]:
+        key = ssh_key(text)
+        if not key:
+            die(f"--key {text[:60]!r}: not an SSH public key (one line: type, key, comment, such as the contents of ~/.ssh/id_ed25519.pub). Nothing was changed.", 2)
+        keys.append(key)
+    for file in opts["files"]:
+        try:
+            lines = Path(file).read_text().splitlines()
+        except OSError as exc:
+            die(f"--keys-file {file}: {exc}. Nothing was changed.", 1)
+        for number, line in enumerate(lines, 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            key = ssh_key(line)
+            if not key:
+                die(f"{file} line {number}: not an SSH public key. Nothing was changed.", 2)
+            keys.append(key)
+    for user in opts["github"]:
+        keys.extend(github_keys(user))
+    return keys
+
+
+def sshd_command() -> str:
+    found = shutil.which("sshd") or shutil.which("sshd", path="/usr/sbin:/usr/bin")
+    if not found:
+        die("the OpenSSH server is not installed (sudo dnf install openssh-server, or pacman -S openssh). Nothing was changed.", 127)
+    return found
+
+
+def sshd_configure(account: pwd.struct_passwd, passwords: bool, sshd: str) -> None:
+    """The drop-in, and then sshd's own word that its settings are the ones in effect for this account;
+    otherwise the drop-in is taken back (or the earlier one put back) and SSH stays as it was."""
+    # Fedora makes the host keys when sshd first starts, and `sshd -t` needs them now.
+    if root_run(["systemctl", "start", "sshd-keygen.target"]).returncode != 0:
+        root_step(["ssh-keygen", "-A"], "Making the SSH host keys")
+    before = SSHD_DROP_IN.read_text() if SSHD_DROP_IN.is_file() else None
+    install_drop_in(sshd_drop_in(passwords))
+    test = root_run([sshd, "-t"])
+    effective = root_run([sshd, "-T", "-C", f"user={account.pw_name},host=localhost,addr=127.0.0.1"]) if test.returncode == 0 else test
+    problems = sshd_overruled(effective.stdout, passwords) if effective.returncode == 0 else [(effective.stderr or effective.stdout or "").strip() or f"sshd exit {effective.returncode}"]
+    if problems:
+        if before is None:
+            root_run(["rm", "-f", str(SSHD_DROP_IN)])
+        else:
+            install_drop_in(before)
+        die(
+            f"sshd does not take {SSHD_DROP_IN}'s settings ({'; '.join(problems)}), so SSH stays as it was. "
+            "Another file sets them first (/etc/ssh/sshd_config before its Include line, or an earlier file in "
+            "/etc/ssh/sshd_config.d): `sudo sshd -T | grep -i -e permitrootlogin -e authentication` shows what is in effect.",
+            1,
+        )
+
+
+def install_drop_in(text: str) -> None:
+    fd, name = tempfile.mkstemp(prefix="herald-os-sshd-", suffix=".conf")
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+        root_step(["install", "-D", "-m", "0644", name, str(SSHD_DROP_IN)], f"Writing {SSHD_DROP_IN}")
+    finally:
+        os.unlink(name)
+    if shutil.which("restorecon"):
+        root_run(["restorecon", str(SSHD_DROP_IN)])
+
+
+def unit_loaded(unit: str) -> bool:
+    result = subprocess.run(["systemctl", "show", "-p", "LoadState", "--value", unit], capture_output=True, text=True, check=False)
+    return result.returncode == 0 and result.stdout.strip() == "loaded"
+
+
+def unit_state(unit: str) -> tuple[str, str]:
+    """(is-enabled, is-active) as systemctl prints them; neither needs root."""
+    enabled = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, check=False).stdout.strip()
+    active = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, check=False).stdout.strip()
+    return enabled or "unknown", active or "unknown"
+
+
+def firewall_zone() -> tuple[str, str] | None:
+    """("firewall-cmd", zone) while firewalld runs, ("firewall-offline-cmd", zone) when it is installed
+    and stopped, else None. The default zone is the one Herald OS's connections use."""
+    if shutil.which("firewall-cmd") and subprocess.run(["systemctl", "is-active", "--quiet", "firewalld"], check=False).returncode == 0:
+        zone = root_run(["firewall-cmd", "--get-default-zone"])
+        return ("firewall-cmd", zone.stdout.strip()) if zone.returncode == 0 and zone.stdout.strip() else None
+    if shutil.which("firewall-offline-cmd"):
+        zone = root_run(["firewall-offline-cmd", "--get-default-zone"])
+        return ("firewall-offline-cmd", zone.stdout.strip()) if zone.returncode == 0 and zone.stdout.strip() else None
+    return None
+
+
+def firewall_open() -> str:
+    found = firewall_zone()
+    if not found or found[0] != "firewall-cmd":
+        return "no firewall is running, so nothing was opened (start firewalld and run this again to rate-limit SSH)"
+    _, zone = found
+    for permanent in ([], ["--permanent"]):
+        root_step(["firewall-cmd", *permanent, f"--zone={zone}", f"--add-rich-rule={SSH_RICH_RULE}"], "Opening SSH in the firewall")
+    if root_run(["firewall-cmd", f"--zone={zone}", "--query-service=ssh"]).returncode == 0:
+        return f"the firewall zone {zone} lets SSH in already, without a rate limit (sudo firewall-cmd --permanent --zone={zone} --remove-service=ssh to rate-limit it)"
+    return f"open in the firewall zone {zone}, for at most 4 new connections a minute"
+
+
+def firewall_close() -> str:
+    found = firewall_zone()
+    if not found:
+        return "no firewall to change"
+    tool, zone = found
+    for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):
+        root_step([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"], "Closing SSH in the firewall")
+    if root_run([tool, f"--zone={zone}", "--query-service=ssh"]).returncode == 0:
+        return f"the rate-limited rule is gone, but the firewall zone {zone} still lets SSH in by itself, which setup ssh did not add (sudo firewall-cmd --permanent --zone={zone} --remove-service=ssh closes it)"
+    return f"closed in the firewall zone {zone}"
+
+
+def host_fingerprints() -> list[str]:
+    lines = []
+    for public in sorted(SSH_HOST_KEYS.glob("ssh_host_*_key.pub")):
+        result = subprocess.run(["ssh-keygen", "-lf", str(public)], capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            lines.append(result.stdout.strip())
+    return lines
+
+
+def addresses() -> list[str]:
+    result = subprocess.run(["ip", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, check=False)
+    found = []
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        fields = line.split()
+        if len(fields) > 3 and fields[2] in ("inet", "inet6"):
+            found.append(fields[3].split("/", 1)[0])
+    return found
+
+
+def ssh_on(opts: dict) -> int:
+    account = ssh_account(opts["user"])
+    keys = given_keys(opts)
+    sshd = sshd_command()
+    current = read_authorized(account)
+    updated, added = with_keys(current, keys)
+    keys_file = ssh_dir(account) / "authorized_keys"
+    if not authorized(updated) and not opts["passwords"]:
+        die(
+            f"not turning SSH on: {account.pw_name} has no SSH key in {keys_file}, and password logins stay off. "
+            "Give one with --key '<public key>' or --github <user>, or sign in with the account's password "
+            "instead with --passwords. Nothing was changed.",
+            1,
+        )
+    write_authorized(account, updated if added else None)
+    sshd_configure(account, opts["passwords"], sshd)
+    root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
+    root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
+    firewall = firewall_open()
+    count = len(authorized(updated))
+    print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
+    print(f"    keys: {count} in {keys_file}" + (f" ({len(added)} added)" if added else ""))
+    print(f"    firewall: {firewall}")
+    fingerprints = host_fingerprints()
+    if fingerprints:
+        print("    this computer's host keys (check them the first time you connect):")
+        for line in fingerprints:
+            print(f"      {line}")
+    for address in addresses():
+        print(f"    ssh {account.pw_name}@{address}")
+    print("    To turn it off again: herald-os setup ssh --off")
+    return 0
+
+
+def ssh_off(opts: dict) -> int:
+    account = ssh_account(opts["user"], required=False)
+    for unit in SSH_UNITS:
+        if unit_loaded(unit):
+            root_step(["systemctl", "disable", "--now", unit], f"Stopping {unit}")
+    if SSHD_DROP_IN.exists():
+        root_step(["rm", "-f", str(SSHD_DROP_IN)], f"Removing {SSHD_DROP_IN}")
+    firewall = firewall_close()
+    print("SSH is off: sshd is stopped and disabled, and its Herald OS settings are gone.")
+    print(f"    firewall: {firewall}")
+    if account:
+        print(f"    {ssh_dir(account) / 'authorized_keys'} is left as it is; its keys let no one in while SSH is off.")
+    return 0
+
+
+def ssh_state(account: pwd.struct_passwd | None) -> dict:
+    """Whether SSH is on and how, read without root where that is possible; None where it cannot tell."""
+    enabled, active = unit_state("sshd.service")
+    socket_enabled, socket_active = unit_state("sshd.socket")
+    drop_in = SSHD_DROP_IN.read_text() if SSHD_DROP_IN.is_file() else None
+    passwords = None
+    if drop_in is not None:
+        passwords = any(line.split()[:2] == ["PasswordAuthentication", "yes"] for line in drop_in.splitlines())
+    firewall: dict | None = None
+    if shutil.which("firewall-cmd") and subprocess.run(["systemctl", "is-active", "--quiet", "firewalld"], check=False).returncode == 0:
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"], capture_output=True, text=True, check=False)
+        name = zone.stdout.strip() if zone.returncode == 0 else ""
+        firewall = {"zone": name or None, "rateLimited": None, "open": None}
+        if name:
+            for key, query in (("rateLimited", f"--query-rich-rule={SSH_RICH_RULE}"), ("open", "--query-service=ssh")):
+                code = subprocess.run(["firewall-cmd", f"--zone={name}", query], capture_output=True, text=True, check=False).returncode
+                firewall[key] = {0: True, 1: False}.get(code)
+    keys = None
+    if account:
+        try:
+            with as_account(account):
+                keys_file = ssh_dir(account) / "authorized_keys"
+                keys = len(authorized(keys_file.read_text())) if keys_file.is_file() and not keys_file.is_symlink() else 0
+        except OSError:
+            keys = None
+    return {
+        "on": enabled == "enabled" or active == "active" or socket_enabled == "enabled" or socket_active == "active",
+        "enabled": enabled == "enabled",
+        "running": active == "active",
+        "socket": socket_enabled == "enabled" or socket_active == "active",
+        "dropIn": drop_in is not None,
+        "passwords": passwords,
+        "firewall": firewall,
+        "user": account.pw_name if account else None,
+        "keys": keys,
+    }
+
+
+def ssh_status(opts: dict) -> int:
+    account = ssh_account(opts["user"], required=False)
+    state = ssh_state(account)
+    if opts["json"]:
+        print(json.dumps(state))
+        return 0
+    how = "running" if state["running"] else "enabled, not running" if state["enabled"] else "its socket listens" if state["socket"] else ""
+    print(f"SSH: {'on (' + how + ')' if state['on'] else 'off'}")
+    if state["dropIn"]:
+        print(f"    sign-in: {'keys or a password' if state['passwords'] else 'keys only'}, never root ({SSHD_DROP_IN})")
+    else:
+        print("    sign-in: sshd's own settings (herald-os setup ssh has not set it up)")
+    if state["user"]:
+        print(f"    keys: {'unknown' if state['keys'] is None else state['keys']} for {state['user']}")
+    firewall = state["firewall"]
+    if firewall is None:
+        print("    firewall: not running")
+    elif firewall["rateLimited"] is None and firewall["open"] is None:
+        print(f"    firewall: zone {firewall['zone'] or 'unknown'}; whether SSH gets in needs root (sudo herald-os setup ssh --status)")
+    else:
+        door = "rate-limited (4 new connections a minute)" if firewall["rateLimited"] else "open, without a rate limit" if firewall["open"] else "closed"
+        print(f"    firewall: SSH {door} in zone {firewall['zone']}")
+    return 0
+
+
+def ssh_args(args: list[str]) -> dict:
+    opts: dict = {"keys": [], "github": [], "files": [], "user": None, "passwords": False, "off": False, "status": False, "json": False}
+    values = {"--key": "keys", "--github": "github", "--keys-file": "files"}
+    flags = {"--passwords": "passwords", "--off": "off", "--status": "status", "--json": "json"}
+    at = 0
+    while at < len(args):
+        name, equals, value = args[at].partition("=")
+        if name in values or name == "--user":
+            if not equals:
+                at += 1
+                if at >= len(args):
+                    die(f"{name} needs a value\n  {SSH_USAGE}", 2)
+                value = args[at]
+            if name == "--user":
+                opts["user"] = value
+            else:
+                opts[values[name]].append(value)
+        elif args[at] in flags:
+            opts[flags[args[at]]] = True
+        else:
+            die(f"setup ssh: unknown argument {args[at]!r}\n  {SSH_USAGE}", 2)
+        at += 1
+    gives = opts["keys"] or opts["github"] or opts["files"] or opts["passwords"]
+    if (opts["off"] and (opts["status"] or gives)) or (opts["status"] and gives) or (opts["json"] and not opts["status"]):
+        die(f"setup ssh: those arguments do not go together\n  {SSH_USAGE}", 2)
+    return opts
+
+
+def setup_ssh(args: list[str]) -> int:
+    """Turn SSH on for keys only (or passwords, when asked), off again, or say how it is."""
+    opts = ssh_args(args)
+    if opts["status"]:
+        return ssh_status(opts)
+    if opts["off"]:
+        return ssh_off(opts)
+    return ssh_on(opts)
 
 
 OSTREE_BOOTED = Path("/run/ostree-booted")
