@@ -66,8 +66,9 @@ image's layer, `nvidia.sh`, prints four `--- <step>` lines of its own and ends w
 
 ## Building it locally
 
-A cold image build ([step 2](#2-build-the-image), after the shell tarball) takes about 10–25
-minutes, depending on machine and network.
+A cold image build ([step 2](#2-build-the-image), after the shell tarball) takes about 3–25
+minutes: about 830 MiB of Fedora packages to download and install, then writing the 5.7 GB
+image, so a slow disk or a busy machine is what makes it long.
 
 ### Prerequisites
 
