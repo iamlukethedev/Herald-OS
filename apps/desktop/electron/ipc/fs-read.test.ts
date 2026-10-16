@@ -1638,6 +1638,23 @@ describe.runIf(process.platform !== 'win32')('FIFOs and other special files', ()
     expect(fs.readFileSync(`${home}/notes.md`, 'utf8')).toBe('notes')
   })
 
+  it('refuses at once a FIFO with no reader swapped in after the look', async () => {
+    const file = write('late.txt', 'regular')
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementationOnce(async target => {
+      const result = await realLstat(target)
+      fs.rmSync(file)
+      execFileSync('mkfifo', [file])
+
+      return result
+    })
+
+    try {
+      await quickly(writeChecked({ path: file, real: file }, 'x'), /not a regular file/)
+    } finally {
+      lstat.mockRestore()
+    }
+  })
+
   it('refuses a write to a FIFO that has a reader, so nothing reaches it', async () => {
     const pipe = fifo('feed.txt')
     const reader = await fsp.open(pipe, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
