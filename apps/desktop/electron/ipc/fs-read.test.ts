@@ -50,7 +50,7 @@ vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
 const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, OPEN_IMMEDIATE_RETRIES, OPEN_RETRY_BUDGET_MS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openBackoff, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
-const { WebViews, confineFiles, registerWebIpc, servableFile } = await import('./web.ts')
+const { WebViews, confineFiles, registerWebIpc, servableFile, serveOpenFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { registerOfficeIpc } = await import('../office/ipc.ts')
@@ -1322,6 +1322,39 @@ describe('the Studio preview', () => {
     expect(await part.text()).toBe('2345')
     expect(await (await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=-3' })).text()).toBe('789')
     expect((await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=20-' })).status).toBe(416)
+
+    const ranged = async (range: string) => {
+      const response = await fetchFile(`${home}/Projects/site/clip.mp4`, { range })
+
+      return [response.status, response.headers.get('content-range'), response.headers.get('content-length'), await response.text()]
+    }
+
+    expect(await ranged('bytes=2-100')).toEqual([206, 'bytes 2-9/10', '8', '23456789'])
+    expect(await ranged('bytes=-100')).toEqual([206, 'bytes 0-9/10', '10', '0123456789'])
+    expect(await ranged('bytes=7-')).toEqual([206, 'bytes 7-9/10', '3', '789'])
+    expect(await ranged('  bytes=2-5  ')).toEqual([206, 'bytes 2-5/10', '4', '2345'])
+    expect(await ranged('xbytes=2-5')).toEqual([200, null, '10', '0123456789'])
+    expect(await ranged('bytes=2-5x')).toEqual([200, null, '10', '0123456789'])
+    expect(await ranged('bytes=2-5,7-8')).toEqual([200, null, '10', '0123456789'])
+    expect(await ranged('bytes=-')).toEqual([200, null, '10', '0123456789'])
+    expect((await fetchFile(`${home}/Projects/site/clip.mp4`)).headers.get('content-length')).toBe('10')
+
+    // Fetch headers come trimmed; a range handed over directly may not be.
+    const direct = await servableFile(pathToFileURL(`${home}/Projects/site/clip.mp4`).toString(), () => true)
+    expect(await serveOpenFile(direct!, '  bytes=2-5  ').text()).toBe('2345')
+
+    write('Projects/site/INDEX.HTML', '<p>upper</p>')
+    const upper = await fetchFile(`${home}/Projects/site/INDEX.HTML`)
+    expect(upper.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    await upper.arrayBuffer()
+
+    write('Projects/site/empty.css', '')
+    const empty = await fetchFile(`${home}/Projects/site/empty.css`)
+    expect([empty.status, empty.headers.get('content-length'), empty.headers.get('content-type'), await empty.text()]).toEqual([200, '0', 'text/css; charset=utf-8', ''])
+
+    fs.mkdirSync(`${home}/Projects/site/assets`)
+    const folder = await fetchFile(`${home}/Projects/site/assets`)
+    expect(folder.status).toBe(404)
 
     for (const refused of [`${home}/Projects/site/env.txt`, `${hermes}/.env`, `${home}/.ssh/id_rsa`, `${home}/notes.md`, `${home}/Projects/site/missing.html`]) {
       const response = await fetchFile(refused)
