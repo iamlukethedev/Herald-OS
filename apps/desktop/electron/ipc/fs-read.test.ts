@@ -1218,6 +1218,23 @@ describe('opening checked paths', () => {
     expect(waits.reduce((sum, wait) => sum + wait, 0)).toBeLessThan(OPEN_RETRY_BUDGET_MS)
   })
 
+  it('waits out each backoff before opening again', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    const open = vi.spyOn(fsp, 'open').mockImplementation((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
+    const random = vi.spyOn(Math, 'random').mockReturnValue(1)
+    const started = Date.now()
+
+    try {
+      await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+      // 5, 10, 20 and 40 ms with the jitter at its top.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(70)
+    } finally {
+      open.mockRestore()
+      random.mockRestore()
+    }
+  })
+
   it('closes every handle it does not return, and refuses a swap that persists within the retry budget', async () => {
     write('dir/a.txt', 'public')
     const checked = await assertReadable(`${home}/dir/a.txt`)
@@ -1476,6 +1493,31 @@ describe('the Studio preview', () => {
       const response = await fetchFile(refused)
       expect(response.status).toBe(404)
       expect(await response.text()).toBe('')
+    }
+  })
+
+  it('serves regular files only: not a folder swapped in after the check, nor a FIFO', async () => {
+    const page = `${home}/Projects/site/swapped.html`
+    write('Projects/site/swapped.html', '<p>page</p>')
+    const realOpen = fsp.open
+    const opened: fsp.FileHandle[] = []
+    const open = vi.spyOn(fsp, 'open').mockImplementationOnce(async (target, flags) => {
+      fs.rmSync(page)
+      fs.mkdirSync(page)
+      const handle = await realOpen(target, flags)
+      opened.push(handle)
+
+      return handle
+    })
+
+    expect(await servableFile(pathToFileURL(page).toString(), allowAll)).toBeNull()
+    expect(opened).toHaveLength(1)
+    expect(opened[0].fd).toBe(-1)
+    open.mockRestore()
+
+    if (process.platform !== 'win32') {
+      execFileSync('mkfifo', [`${home}/Projects/site/pipe.html`])
+      expect(await servableFile(pathToFileURL(`${home}/Projects/site/pipe.html`).toString(), allowAll)).toBeNull()
     }
   })
 
