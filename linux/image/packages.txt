@@ -27,9 +27,30 @@ alsa-utils
 kernel-modules
 NetworkManager
 NetworkManager-wifi
-# Intel CNVi Wi-Fi firmware (iwlwifi): not in linux-firmware proper since Fedora split it
-# out; without it, most modern laptops (e.g. Surface Go) have no wireless at all.
+# Firmware. Fedora split linux-firmware into packages it only recommends, and this list installs
+# without weak dependencies, so each one is named: Wi-Fi, Bluetooth, GPUs, CPU microcode and audio.
+# fedora-bootc:44 ships most of them today; naming them keeps them if the base trims its set.
+linux-firmware
+# Intel CNVi Wi-Fi firmware (iwlwifi): without it, most modern laptops (e.g. Surface Go) have no
+# wireless at all. dvm is the older Intel cards (Centrino, 6000 series).
 iwlwifi-mvm-firmware
+iwlwifi-dvm-firmware
+atheros-firmware
+brcmfmac-firmware
+mt7xxx-firmware
+realtek-firmware
+nxpwireless-firmware
+amd-gpu-firmware
+intel-gpu-firmware
+nvidia-gpu-firmware
+amd-ucode-firmware
+# Laptop sound: Intel's Sound Open Firmware DSPs (most Intel laptops since 2019 have no speakers or
+# built-in microphone without it) and the profiles that tell PipeWire how to use them, which the
+# base lacks, and the amplifier firmware some laptops' speakers need.
+alsa-sof-firmware
+alsa-ucm
+intel-audio-firmware
+cirrus-audio-firmware
 bluez
 upower
 # Electron runtime libraries and fonts.

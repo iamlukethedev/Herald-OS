@@ -122,8 +122,9 @@ further.
 2. Check that no airplane-mode key or switch is on: `rfkill list` shows what is blocked, and
    `rfkill unblock wifi` lifts a software block.
 3. `nmcli device status` should list the Wi-Fi device. If it is missing, the computer may need
-   firmware Herald OS does not have yet; `herald-os debug` and the output of `lspci -nn` (or `lsusb`
-   for a USB adapter) help a bug report.
+   firmware Herald OS does not have yet (`sudo dmesg | grep -i firmware` names the file it looked
+   for); `herald-os debug` and the output of `lspci -nn` (or `lsusb` for a USB adapter) help a bug
+   report.
 4. `sudo systemctl restart NetworkManager` restarts the network service.
 
 ### Bluetooth stopped working
@@ -141,6 +142,21 @@ further.
    `systemctl --user restart pipewire pipewire-pulse wireplumber`.
 3. A Bluetooth headset that plays but will not use its microphone (or the other way round) can be
    switched in the Sound panel by choosing it as the input or the output.
+4. If the Sound panel lists only "Dummy Output", the sound chip did not start:
+   `sudo dmesg | grep -i -e sof -e firmware` shows why, and helps a bug report with `herald-os debug`.
+
+### Local models do not use the NVIDIA card
+
+The standard image drives NVIDIA cards with the open-source driver, which has no CUDA. Switch to the
+NVIDIA image ([NVIDIA graphics](install-pc.md#nvidia-graphics)). On the NVIDIA image, if `nvidia-smi`
+says `NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver` and
+`mokutil --sb-state` says `SecureBoot enabled`, the key is probably not enrolled:
+`mokutil --test-key /etc/pki/akmods/certs/akmods-ublue.der` says `is not enrolled` then, and
+[Secure Boot: one key, once](install-pc.md#secure-boot-one-key-once) says what to do.
+`journalctl -k -b | grep -i nvidia` shows why the kernel refused the driver.
+
+If `herald-os-gpu-check switch` says `/boot` has too little room, the NVIDIA image does not fit
+there: it needs a 2 GiB `/boot` ([Space in /boot](../LINUX.md#the-nvidia-image)).
 
 ### Apps look too large or too small
 

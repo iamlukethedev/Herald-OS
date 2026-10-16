@@ -328,6 +328,13 @@ system_phase() {
     systemctl --no-block start graphical.target
   fi
 
+  step "Graphics"
+  # An NVIDIA GPU on the default image: how to switch to the NVIDIA image, for the journal. The
+  # session says it once to the person (herald-os-session).
+  if command -v herald-os-gpu-check >/dev/null; then
+    herald-os-gpu-check || true
+  fi
+
   step "Home folder"
   as_user mkdir -p "$HOME_DIR/.local/bin" "$HOME_DIR/.local/share" "$HOME_DIR/.local/state" "$HOME_DIR/.config/herald-os" "$HOME_DIR/.config/niri" "$HOME_DIR/.config/swaylock" "$HOME_DIR/.config/systemd/user"
   as_user env XDG_RUNTIME_DIR="/run/user/$(id -u "$HERMES_USER")" systemctl --user enable herald-os-update-check.timer 2>/dev/null || true

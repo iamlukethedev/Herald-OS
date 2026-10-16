@@ -1,8 +1,10 @@
 """Telling the Herald OS image from other bootc and ostree systems (Silverblue, Bazzite, Bluefin)."""
 
 import importlib.machinery
+import json
 import importlib.util
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -86,3 +88,634 @@ def test_on_silverblue_rollback_and_channel_never_run_bootc(tmp_path, monkeypatc
 def test_the_image_build_names_the_image_in_os_release():
     packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
     assert "echo 'IMAGE_ID=herald-os' >>/usr/lib/os-release" in packages
+
+
+# The NVIDIA image (ADR-029): Containerfile.nvidia on top of the default image, a leg of the workflow.
+
+FIRSTBOOT_SCRIPT = ROOT / "linux" / "image" / "firstboot.sh"
+CONTAINERFILE = ROOT / "linux" / "image" / "Containerfile"
+CONTAINERFILE_NVIDIA = ROOT / "linux" / "image" / "Containerfile.nvidia"
+NVIDIA = ROOT / "linux" / "image" / "nvidia.sh"
+UBLUE_COSIGN = ROOT / "linux" / "image" / "ublue-os-akmods-cosign.pub"
+
+
+def froms(path: Path) -> list[tuple[str, str]]:
+    """Each FROM: what it starts from, and the stage's name ('' without one)."""
+    return re.findall(r"^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", path.read_text(), re.M)
+
+
+def test_the_default_image_never_refers_to_the_akmods_images():
+    # One stage, so no builder's handling of unused stages can make the default build pull them.
+    assert froms(CONTAINERFILE) == [("${FEDORA_BOOTC}", "")]
+    assert "ARG FEDORA_BOOTC=quay.io/fedora/fedora-bootc:44" in CONTAINERFILE.read_text()
+    assert "akmods" not in CONTAINERFILE.read_text().split("ARG FEDORA_BOOTC", 1)[1]
+
+
+def test_the_nvidia_image_starts_from_the_default_one_and_the_akmods_images_it_is_given():
+    found = froms(CONTAINERFILE_NVIDIA)
+    assert [name for _, name in found] == ["akmods", "akmods-nvidia", ""] and found[2][0] == "${HERALD_OS}"
+    # No movable default: unset, the build stops at the first FROM, which names the argument.
+    for (base, _), arg in zip(found, ("AKMODS_REF", "AKMODS_NVIDIA_REF")):
+        assert base.startswith("${" + arg + ":?" + arg + "-is-unset:") and base.endswith("}") and " " not in base
+        assert f"ARG {arg}=\n" in CONTAINERFILE_NVIDIA.read_text()
+    assert "main-44" not in "".join(line for line in CONTAINERFILE_NVIDIA.read_text().splitlines(True) if line.startswith("ARG"))
+    text = CONTAINERFILE_NVIDIA.read_text()
+    for name in ("nvidia.sh", "kargs-nvidia.toml", "negativo17.asc", "nvidia-container-toolkit.asc"):
+        assert f"linux/image/{name}" in text and (ROOT / "linux" / "image" / name).is_file()
+
+
+def image_job() -> dict:
+    import yaml
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "image.yml").read_text())["jobs"]["image"]
+
+
+def step(name: str) -> dict:
+    return next(s for s in image_job()["steps"] if s.get("name") == name)
+
+
+def test_the_workflow_builds_the_nvidia_image_next_to_the_default_one():
+    job = image_job()
+    legs = {(leg["image"], leg["arch"]): leg for leg in job["strategy"]["matrix"]["include"]}
+    assert set(legs) == {("herald-os", "amd64"), ("herald-os", "arm64"), ("herald-os-nvidia", "amd64")}
+    # The default image keeps its per-architecture tags (the manifest job joins them) and its check names.
+    assert legs[("herald-os", "amd64")]["suffix"] == "-amd64" and legs[("herald-os", "arm64")]["suffix"] == "-arm64"
+    assert legs[("herald-os", "amd64")]["label"] == "amd64" and legs[("herald-os", "arm64")]["label"] == "arm64"
+    assert legs[("herald-os-nvidia", "amd64")]["suffix"] == ""
+    build = step("Build the image")["run"]
+    assert build.count("-f linux/image/Containerfile ") == 2 and "-f linux/image/Containerfile.nvidia" in build
+    assert '--build-arg "AKMODS_REF=$AKMODS_REF" --build-arg "AKMODS_NVIDIA_REF=$AKMODS_NVIDIA_REF"' in build
+    assert '--build-arg "FEDORA_BOOTC=$FEDORA_BOOTC"' in build
+    # A missing NVIDIA module build never holds back the default image, and does not go unseen.
+    assert job["continue-on-error"] == "${{ matrix.image == 'herald-os-nvidia' }}"
+    assert job["env"]["REPO"].endswith("/${{ matrix.image }}")
+    said = step("Say that the NVIDIA image did not go out")
+    assert said["if"] == "failure() && matrix.image == 'herald-os-nvidia'"
+    assert "::warning" in said["run"] and '>>"$GITHUB_STEP_SUMMARY"' in said["run"]
+
+
+def test_the_nvidia_leg_makes_room_first_and_says_how_much_there_is():
+    names = [s.get("name") or s.get("uses") for s in image_job()["steps"]]
+    assert names[:2] == ["actions/checkout@v7", "Make room for the NVIDIA image"]
+    room = step("Make room for the NVIDIA image")
+    assert room["if"] == "matrix.image == 'herald-os-nvidia'" and room["run"].rstrip().endswith("df -h .")
+
+
+def test_the_nvidia_leg_pins_every_image_by_digest_and_checks_universal_blues_signatures():
+    pin = step("Pin the base and the NVIDIA modules to one kernel")
+    run = pin["run"]
+    assert pin["if"] == "matrix.image == 'herald-os-nvidia'"
+    assert '.Labels["ostree.linux"]' in run and 'tag="ghcr.io/ublue-os/$repo:main-44-$kernel"' in run
+    assert 'echo "FEDORA_BOOTC=${base%:*}@$digest"' in run
+    assert 'ref="ghcr.io/ublue-os/$repo@$(jq -r .Digest <<<"$inspect")"' in run
+    assert 'cosign verify --key linux/image/ublue-os-akmods-cosign.pub "$ref"' in run
+    assert 'echo "$tag is $ref (signature verified)"' in run and "AKMODS_NVIDIA_REF" in run
+    # cosign is there for this leg even while the project does not sign its own images.
+    installer = next(s for s in image_job()["steps"] if s.get("uses", "").startswith("sigstore/cosign-installer"))
+    assert installer["if"] == "env.SIGNING == 'true' || matrix.image == 'herald-os-nvidia'"
+    assert image_job()["steps"].index(installer) < image_job()["steps"].index(pin)
+
+
+def test_universal_blues_cosign_key_is_the_one_they_publish():
+    # https://github.com/ublue-os/akmods/raw/main/cosign.pub, as fetched; a change here is a review item.
+    import hashlib
+    data = UBLUE_COSIGN.read_bytes()
+    assert data.startswith(b"-----BEGIN PUBLIC KEY-----")
+    assert hashlib.sha256(data).hexdigest() == "af78ecfda6eb21c35195af3739341715e9cfc3f2f5911dd9c10b0670547bf6e8"
+    # Not the project's own cosign.pub, which turns on the image's signature policy.
+    assert UBLUE_COSIGN.name != "cosign.pub"
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="needs gpg to read the committed keys")
+@pytest.mark.parametrize("name,variable", [("negativo17.asc", "NEGATIVO17_KEY"), ("nvidia-container-toolkit.asc", "NVIDIA_KEY")])
+def test_the_committed_repository_keys_are_the_ones_nvidia_sh_pins(tmp_path, name, variable):
+    shown = subprocess.run(["gpg", "--homedir", str(tmp_path), "--show-keys", "--with-colons", str(ROOT / "linux" / "image" / name)],
+                           capture_output=True, text=True, check=True).stdout
+    primary = next(line.split(":")[9] for line in shown.splitlines() if line.startswith("fpr:"))
+    pinned = re.search(rf"^{variable}=([0-9a-f]{{40}})$", NVIDIA.read_text(), re.M).group(1)
+    assert primary.lower() == pinned
+
+
+def test_the_signature_policy_covers_both_images():
+    packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
+    for repo in ("ghcr.io/iamlukethedev/herald-os", "ghcr.io/iamlukethedev/herald-os-nvidia"):
+        assert f'"{repo}"' in packages and f"  {repo}:\\n    use-sigstore-attachments: true" in packages
+
+
+def fake_build(tmp_path: Path, image_kernel: str, modules_kernel: str) -> subprocess.CompletedProcess:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {"uname": "echo x86_64", "rpm": f'echo "{image_kernel}"', "dnf": 'echo "dnf $*" >>"$CALLS"'}.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    kmods = tmp_path / "akmods-nvidia" / "kmods"
+    kmods.mkdir(parents=True)
+    (kmods / "nvidia-vars").write_text(f'DIST_ARCH="fc44.x86_64"\nKERNEL_VERSION={modules_kernel}\nNVIDIA_AKMOD_VERSION=615.78.08-1\n')
+    return subprocess.run(
+        ["bash", str(NVIDIA), str(tmp_path / "akmods"), str(tmp_path / "akmods-nvidia")],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(tmp_path / "calls")}, capture_output=True, text=True, check=False,
+    )
+
+
+def test_nvidia_modules_for_another_kernel_stop_the_build_before_it_installs_anything(tmp_path):
+    result = fake_build(tmp_path, "7.2.11-200.fc44.x86_64", "7.2.10-200.fc44.x86_64")
+    assert result.returncode == 1
+    assert "built for kernel 7.2.10-200.fc44.x86_64, and this image has 7.2.11-200.fc44.x86_64" in result.stderr
+    assert "main-44-7.2.11-200.fc44.x86_64" in result.stderr
+    assert not (tmp_path / "calls").exists()
+
+
+def test_the_nvidia_layer_leaves_xorg_out_and_puts_the_driver_in_the_initramfs():
+    script = NVIDIA.read_text()
+    assert "xorg-x11-nvidia-*" in script and "--setopt=install_weak_deps=False" in script
+    assert "s@omit_drivers@force_drivers@" in script and 'dracut -f --no-hostonly' in script
+    assert "--excludepath=/etc/yum.repos.d" in script
+    kargs = (ROOT / "linux" / "image" / "kargs-nvidia.toml").read_text()
+    assert '"rd.driver.blacklist=nouveau"' in kargs and 'match-architectures = ["x86_64"]' in kargs
+
+
+def test_the_nvidia_layer_checks_the_key_people_enroll_and_what_it_installs():
+    script = NVIDIA.read_text()
+    assert "KEY_SHA256=4e5c68474cb133fd8984d9599762cece9100c3e6cd8a9709aeaabd85dd9e70d1" in script
+    assert 'echo "$KEY_SHA256  $KEY" | sha256sum --quiet -c -' in script
+    assert '--setopt="fedora-nvidia.gpgkey=file://$HERE/negativo17.asc"' in script
+    assert '--setopt="nvidia-container-toolkit.gpgkey=file://$HERE/nvidia-container-toolkit.asc"' in script
+    assert 'rpm --dbpath "$keys" --import "$HERE/negativo17.asc"' in script and "verify_rpms\n" in script
+
+
+# verify_rpms against an rpm stand-in that keeps each --dbpath's keys, and says what rpm 6.0.2 says
+# (checked in the image: a key database holding only NVIDIA's key fails negativo17's RPMs).
+RPM_STUB = r"""#!/bin/sh
+db=""; [ "$1" = --dbpath ] && { db="$2"; shift 2; }
+case "$1" in
+  --import) cat "$2" >>"$db/keys" ;;
+  -q) cat "$db/keys" ;;
+  -K) f="$2"; kind="$(cat "$f")"
+      case "$kind" in
+        negativo17) grep -qx 0c5d0f470484ae2fc40a9b6597f3008993e8909b "$db/keys" && echo "$f: digests signatures OK" || { echo "$f: digests SIGNATURES NOT OK"; exit 1; } ;;
+        unsigned) echo "$f: digests OK" ;;
+        corrupt) echo "$f: DIGESTS NOT OK"; exit 1 ;;
+      esac ;;
+esac
+"""
+
+
+def verify(tmp_path: Path, keys: str, driver: str = "negativo17", kmod: str = "unsigned") -> subprocess.CompletedProcess:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "rpm").write_text(RPM_STUB)
+    (bin_dir / "rpm").chmod(0o755)
+    (tmp_path / "negativo17.asc").write_text(keys + "\n")
+    (tmp_path / "nvidia-driver.rpm").write_text(driver)
+    (tmp_path / "kmod-nvidia.rpm").write_text(kmod)
+    script = NVIDIA.read_text()
+    function = re.search(r"^verify_rpms\(\) \{\n.*?^\}\n", script, re.M | re.S).group(0)
+    pinned = re.search(r"^NEGATIVO17_KEY=\S+$", script, re.M).group(0)
+    body = f'HERE="{tmp_path}"\n{pinned}\nRPMS=("{tmp_path}/nvidia-driver.rpm")\nKMOD="{tmp_path}/kmod-nvidia.rpm"\n{function}verify_rpms'
+    (tmp_path / "tmp").mkdir()
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path / "tmp")}
+    return subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True, check=False)
+
+
+NEGATIVO17_FPR = "0c5d0f470484ae2fc40a9b6597f3008993e8909b"
+NVIDIA_FPR = "c95b321b61e88c1809c4f759ddcae044f796ecb0"
+
+
+def test_the_driver_rpms_pass_against_negativo17s_key_alone_and_the_unsigned_kmod_on_its_digests(tmp_path):
+    result = verify(tmp_path, NEGATIVO17_FPR)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("keys,driver,kmod,said", [
+    (NVIDIA_FPR, "negativo17", "unsigned", f"holds {NVIDIA_FPR}, not {NEGATIVO17_FPR} alone"),
+    (f"{NEGATIVO17_FPR}\n{NVIDIA_FPR}", "negativo17", "unsigned", "alone"),
+    (NEGATIVO17_FPR, "unsigned", "unsigned", "nvidia-driver.rpm is not signed with negativo17's key"),
+    (NEGATIVO17_FPR, "corrupt", "unsigned", "nvidia-driver.rpm is not signed with negativo17's key: DIGESTS NOT OK"),
+    (NEGATIVO17_FPR, "negativo17", "corrupt", "kmod-nvidia.rpm fails its digests: DIGESTS NOT OK"),
+], ids=["only another key", "another key too", "driver unsigned", "driver corrupt", "kmod corrupt"])
+def test_verify_rpms_stops_the_build(tmp_path, keys, driver, kmod, said):
+    result = verify(tmp_path, keys, driver, kmod)
+    assert result.returncode == 1 and said in result.stderr
+
+
+# The repository files as ublue-os-nvidia-addons ships them (0.15), trimmed to what the checks read.
+ADDON_REPOS = {
+    "negativo17-fedora-nvidia.repo": "[fedora-nvidia]\nenabled=0\ngpgcheck=1\nrepo_gpgcheck=0\n"
+                                     "[fedora-nvidia-source]\nenabled=0\ngpgcheck=1\n[fedora-nvidia-debug]\nenabled=0\ngpgcheck=1\n",
+    "negativo17-fedora-nvidia-lts.repo": "[fedora-nvidia-lts]\nenabled=0\ngpgcheck=1\n",
+    "nvidia-container-toolkit.repo": "[nvidia-container-toolkit]\nrepo_gpgcheck=1\ngpgcheck=1\nenabled=0\n"
+                                     "[nvidia-container-toolkit-experimental]\nrepo_gpgcheck=1\ngpgcheck=1\nenabled=0\n",
+}
+
+
+def repo_check(tmp_path: Path, check: str, change=None) -> subprocess.CompletedProcess:
+    repos = tmp_path / "yum.repos.d"
+    repos.mkdir(parents=True)
+    for name, text in ADDON_REPOS.items():
+        (repos / name).write_text(text)
+    if change:
+        change(repos)
+    script = NVIDIA.read_text()
+    function = re.search(rf"^{check}\(\) \{{\n.*?^\}}\n", script, re.M | re.S).group(0)
+    return subprocess.run(["bash", "-c", f'REPOS="{repos}"\n{function}{check}'], capture_output=True, text=True, check=False)
+
+
+def test_the_addon_repositories_as_shipped_are_signed_and_stay_disabled(tmp_path):
+    assert repo_check(tmp_path / "a", "repos_signed").returncode == 0
+    assert repo_check(tmp_path / "b", "repos_disabled").returncode == 0
+
+
+@pytest.mark.parametrize("check,change,said", [
+    ("repos_signed", lambda d: (d / "negativo17-fedora-nvidia.repo").write_text("[fedora-nvidia]\ngpgcheck=0\n"), "[fedora-nvidia] has no gpgcheck=1"),
+    ("repos_signed", lambda d: (d / "nvidia-container-toolkit.repo").write_text("[nvidia-container-toolkit]\ngpgcheck=1\nrepo_gpgcheck=0\n"), "no repo_gpgcheck=1"),
+    ("repos_signed", lambda d: (d / "nvidia-container-toolkit.repo").unlink(), "nvidia-container-toolkit.repo is missing"),
+    ("repos_disabled", lambda d: (d / "negativo17-fedora-nvidia.repo").write_text("[fedora-nvidia]\nenabled=1\n"), "negativo17-fedora-nvidia.repo [fedora-nvidia]"),
+    ("repos_disabled", lambda d: (d / "nvidia-container-toolkit.repo").write_text("[nvidia-container-toolkit]\ngpgcheck=1\n"), "[nvidia-container-toolkit]"),
+    ("repos_disabled", lambda d: (d / "_copr_ublue-os-akmods.repo").write_text("[copr]\nenabled=1\n"), "_copr_ublue-os-akmods.repo"),
+], ids=["negativo17 unsigned", "toolkit metadata unsigned", "toolkit missing", "negativo17 enabled", "enabled by default", "copr"])
+def test_the_repository_checks_stop_the_build(tmp_path, check, change, said):
+    result = repo_check(tmp_path, check, change)
+    assert result.returncode != 0 and said in result.stderr
+
+
+# herald-os-gpu-check: an NVIDIA GPU on the default image is told how to switch to the NVIDIA image,
+# and on the NVIDIA image with Secure Boot on, how to enroll the key its driver is signed with.
+
+GPU_CHECK = ROOT / "linux" / "bin" / "herald-os-gpu-check"
+NVIDIA_VGA = ("0x10de", "0x030000")
+NVIDIA_3D = ("0x10de", "0x030200")
+NVIDIA_AUDIO = ("0x10de", "0x040300")
+INTEL_VGA = ("0x8086", "0x030000")
+SECURE_BOOT_VAR = "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+ENROLL = "sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der"
+
+
+class Gpu:
+    """A machine's PCI devices, Secure Boot state, loaded modules and image, and the session's state."""
+
+    def __init__(self, tmp_path: Path, devices, release=HERALD, driver=False, loaded=False, secure_boot=None,
+                 arch="x86_64", channel="edge"):
+        self.root = tmp_path
+        sysfs = tmp_path / "sys"
+        for i, (vendor, cls) in enumerate(devices):
+            dev = sysfs / "bus" / "pci" / "devices" / f"0000:0{i}:00.0"
+            dev.mkdir(parents=True)
+            (dev / "vendor").write_text(vendor + "\n")
+            (dev / "class").write_text(cls + "\n")
+        if loaded:
+            (sysfs / "module" / "nvidia").mkdir(parents=True)
+        if secure_boot is not None:
+            efivars = sysfs / "firmware" / "efi" / "efivars"
+            efivars.mkdir(parents=True)
+            (efivars / SECURE_BOOT_VAR).write_bytes(b"\x06\x00\x00\x00" + bytes([1 if secure_boot else 0]))
+        modules = tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia"
+        modules.mkdir(parents=True)
+        if driver:
+            (modules / "nvidia.ko.xz").write_text("")
+        (tmp_path / "os-release").write_text(release)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "herald-os").write_text(f'#!/bin/sh\n[ "$1" = channel ] && {{ echo {channel}; exit 0; }}\necho "$@" >>"{tmp_path / "notified"}"\n')
+        (bin_dir / "herald-os").chmod(0o755)
+        self.state = tmp_path / "state"
+        self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HERALD_OS_SYSFS": str(sysfs), "HERALD_OS_MODULES": str(tmp_path / "modules"),
+                    "HERALD_OS_OS_RELEASE": str(tmp_path / "os-release"), "HERALD_OS_ARCH": arch, "HERALD_OS_STATE": str(self.state)}
+
+    def run(self, notify=True) -> str:
+        argv = ["bash", str(GPU_CHECK)] + (["--notify"] if notify else [])
+        result = subprocess.run(argv, env=self.env, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def notified(self) -> list[str]:
+        path = self.root / "notified"
+        return path.read_text().splitlines() if path.exists() else []
+
+
+@pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
+def test_an_nvidia_gpu_on_the_default_image_is_told_how_to_switch(tmp_path, devices):
+    gpu = Gpu(tmp_path, devices)
+    out = gpu.run()
+    assert "herald-os-gpu-check switch edge" in out and "restart, then, with Secure Boot on, enroll" in out
+    [shown] = gpu.notified()
+    assert shown.startswith("notify NVIDIA graphics found ") and "herald-os-gpu-check switch edge" in shown
+
+
+@pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
+def test_the_nvidia_image_with_secure_boot_and_no_driver_loaded_is_told_how_to_enroll_the_key(tmp_path, devices):
+    gpu = Gpu(tmp_path, devices, driver=True, secure_boot=True)
+    out = gpu.run()
+    assert ENROLL in out and "Enroll MOK, Continue, Yes" in out and "switch" not in out
+    [shown] = gpu.notified()
+    assert shown.startswith("notify The NVIDIA driver did not load ") and ENROLL in shown
+
+
+@pytest.mark.parametrize("case", ["no nvidia", "nvidia audio only", "nvidia image without secure boot",
+                                  "nvidia image, efi says secure boot is off", "nvidia image, driver loaded",
+                                  "not the image", "arm"])
+def test_nothing_is_said_where_there_is_nothing_to_do(tmp_path, case):
+    args = {
+        "no nvidia": dict(devices=[INTEL_VGA]),
+        "nvidia audio only": dict(devices=[INTEL_VGA, NVIDIA_AUDIO]),
+        "nvidia image without secure boot": dict(devices=[NVIDIA_VGA], driver=True),
+        "nvidia image, efi says secure boot is off": dict(devices=[NVIDIA_VGA], driver=True, secure_boot=False),
+        "nvidia image, driver loaded": dict(devices=[NVIDIA_VGA], driver=True, loaded=True, secure_boot=True),
+        "not the image": dict(devices=[NVIDIA_VGA], release=FEDORA, driver=True, secure_boot=True),
+        "arm": dict(devices=[NVIDIA_VGA], arch="aarch64"),
+    }[case]
+    gpu = Gpu(tmp_path, **args)
+    assert gpu.run() == "" and gpu.notified() == []
+
+
+def test_each_notice_is_shown_once_and_a_switch_does_not_hide_the_next(tmp_path):
+    gpu = Gpu(tmp_path, [NVIDIA_VGA])
+    gpu.run()
+    gpu.run()
+    assert len(gpu.notified()) == 1
+    # After the switch to the NVIDIA image, the Secure Boot notice is a new one.
+    (tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia" / "nvidia.ko.xz").write_text("")
+    efivars = tmp_path / "sys" / "firmware" / "efi" / "efivars"
+    efivars.mkdir(parents=True)
+    (efivars / SECURE_BOOT_VAR).write_bytes(b"\x06\x00\x00\x00\x01")
+    gpu.run()
+    gpu.run()
+    first, second = gpu.notified()
+    assert first.startswith("notify NVIDIA graphics found ") and second.startswith("notify The NVIDIA driver did not load ")
+    assert sorted(p.name for p in gpu.state.iterdir()) == ["gpu-notice-secure-boot", "gpu-notice-switch"]
+
+
+def test_a_switch_notice_shown_by_the_earlier_session_is_not_shown_again(tmp_path):
+    gpu = Gpu(tmp_path, [NVIDIA_VGA])
+    gpu.state.mkdir()
+    (gpu.state / "gpu-check-done").write_text("")
+    assert "herald-os-gpu-check switch" in gpu.run() and gpu.notified() == []
+
+
+def test_without_a_channel_the_advice_is_stable(tmp_path):
+    gpu = Gpu(tmp_path, [NVIDIA_VGA], channel="")
+    assert "herald-os-gpu-check switch stable" in gpu.run(notify=False) and gpu.notified() == []
+
+
+def test_the_first_boot_and_every_session_run_the_gpu_check():
+    assert "herald-os-gpu-check || true" in FIRSTBOOT_SCRIPT.read_text()
+    session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
+    assert 'herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1\n' in session
+    assert "gpu-check-done" not in session
+
+
+def test_the_session_and_the_gpu_check_keep_state_in_one_folder():
+    session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
+    assert 'LOG_DIR="$HOME/.local/state/herald-os"' in session
+    assert 'STATE="${HERALD_OS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/herald-os}"' in GPU_CHECK.read_text()
+
+
+MIB = 1024 * 1024
+UPDATE = ROOT / "linux" / "bin" / "herald-os-update"
+
+# rpm-ostree status's keys for what the system changed, as herald-os-update's tests (#156) have them:
+# each with a value and how the switch names it.
+FIREFOX = ["firefox-131.0-1.fc44.x86_64", "firefox", "0", "131.0", "1.fc44", "x86_64"]
+MESA = ["mesa-dri-drivers-25.0-2.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "2.fc44", "x86_64"]
+MESA_OLD = ["mesa-dri-drivers-25.0-1.fc44.x86_64", "mesa-dri-drivers", "0", "25.0", "1.fc44", "x86_64"]
+KERNEL = ["kernel-6.17.1-300.fc44.x86_64", "kernel", "0", "6.17.1", "300.fc44", "x86_64"]
+KERNEL_OLD = ["kernel-6.16.9-300.fc44.x86_64", "kernel", "0", "6.16.9", "300.fc44", "x86_64"]
+CHANGES = {
+    "requested-packages": (["htop", "vim-enhanced"], "layered: htop, vim-enhanced"),
+    "requested-local-packages": (["mytool-1.0-1.x86_64"], "local: mytool-1.0-1.x86_64"),
+    "requested-local-fileoverride-packages": (["myfix-2.0-1.x86_64"], "local: myfix-2.0-1.x86_64"),
+    "requested-modules": (["nodejs:22/default"], "modules: nodejs:22/default"),
+    "requested-modules-enabled": (["nodejs:22"], "modules: nodejs:22"),
+    "requested-base-removals": (["firefox", "firefox-langpacks"], "removed: firefox, firefox-langpacks"),
+    "requested-base-local-replacements": (["mesa-dri-drivers-25.0-2.fc44.x86_64"], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "requested-base-remote-replacements": (
+        [["repo=updates-testing", ["kernel", "kernel-core"]]],
+        "replaced: kernel from repo=updates-testing, kernel-core from repo=updates-testing",
+    ),
+    "packages": (["htop"], "layered: htop"),
+    "base-removals": ([FIREFOX], "removed: firefox-131.0-1.fc44.x86_64"),
+    "base-local-replacements": ([[MESA, MESA_OLD]], "replaced: mesa-dri-drivers-25.0-2.fc44.x86_64"),
+    "base-remote-replacements": ({"repo=updates-testing": [[KERNEL, KERNEL_OLD]]}, "replaced: kernel-6.17.1-300.fc44.x86_64 from repo=updates-testing"),
+    "regenerate-initramfs": (True, "initramfs: regenerated"),
+    "initramfs-etc": (["/etc/crypttab"], "initramfs: /etc/crypttab"),
+}
+# Every key, empty, as rpm-ostree reports them for the image as built.
+CLEAN = {key: {} if key == "base-remote-replacements" else False if key == "regenerate-initramfs" else [] for key in CHANGES}
+NVIDIA_REF = "ghcr.io/iamlukethedev/herald-os-nvidia"
+
+
+def deployments(booted: dict | None = None, staged: dict | None = None, rollback: dict | None = None,
+                staged_osname: str = "fedora", staged_field: bool = True) -> dict:
+    """The booted deployment, and if given one pending for the next boot and a rollback one."""
+    found = [{"id": "fedora-booted", "osname": "fedora", "booted": True, "staged": False, **CLEAN, **(booted or {})}]
+    if staged is not None:
+        pending = {"id": "fedora-staged", "osname": staged_osname, "booted": False, **CLEAN, **staged}
+        if staged_field:
+            pending["staged"] = True
+        found.insert(0, pending)
+    if rollback is not None:
+        found.append({"id": "fedora-rollback", "osname": "fedora", "booted": False, "staged": False, **CLEAN, **rollback})
+    return {"deployments": found}
+
+
+def switching(tmp_path: Path, boot_size: int = 2000 * MIB, boot_free: int = 1500 * MIB, status="clean",
+              args=("switch",), release=HERALD, arch="x86_64", key: bool = False, policy=None):
+    """herald-os-gpu-check switch with df, sudo and rpm-ostree stand-ins; what sudo was asked to run."""
+    gpu = Gpu(tmp_path, [NVIDIA_VGA], release=release, arch=arch)
+    bin_dir = tmp_path / "bin"
+    stubs = {
+        "df": f'echo "     1B-blocks        Avail"; echo " {boot_size} {boot_free}"',
+        "sudo": f'echo "$*" >>"{tmp_path / "sudo"}"',
+    }
+    if status == "fails":
+        stubs["rpm-ostree"] = 'echo "error: Could not connect" >&2; exit 1'
+    elif status == "not json":
+        stubs["rpm-ostree"] = "echo not json"
+    elif status is not None:
+        (tmp_path / "status.json").write_text(json.dumps(deployments() if status == "clean" else status))
+        stubs["rpm-ostree"] = f'[ "$1 $2" = "status --json" ] && cat "{tmp_path / "status.json"}"'
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    env = {**gpu.env, "HERALD_OS_SIGNING_KEY": str(tmp_path / "herald-os.pub"), "HERALD_OS_POLICY": str(tmp_path / "policy.json")}
+    if key:
+        (tmp_path / "herald-os.pub").write_text("-----BEGIN PUBLIC KEY-----\n")
+    if policy is not None:
+        (tmp_path / "policy.json").write_text(policy if isinstance(policy, str) else json.dumps(policy))
+    result = subprocess.run(["bash", str(GPU_CHECK), *args], env=env, capture_output=True, text=True, check=False)
+    ran = (tmp_path / "sudo").read_text().splitlines() if (tmp_path / "sudo").exists() else []
+    return result, ran
+
+
+def bootc(channel="edge") -> list[str]:
+    return [f"bootc switch {NVIDIA_REF}:{channel}"]
+
+
+def rebase(channel="edge") -> list[str]:
+    return [f"rpm-ostree rebase ostree-unverified-registry:{NVIDIA_REF}:{channel}"]
+
+
+def test_switch_follows_the_channel_with_bootc(tmp_path):
+    result, ran = switching(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert ran == bootc()
+    assert "enroll Universal Blue's key after that" in result.stdout and "WARNING" not in result.stderr
+
+
+@pytest.mark.parametrize("key", CHANGES)
+def test_every_rpm_ostree_change_switches_through_rpm_ostree_and_is_named(tmp_path, key):
+    value, described = CHANGES[key]
+    result, ran = switching(tmp_path, status=deployments(booted={key: value}), args=("switch", "stable"))
+    assert result.returncode == 0, result.stderr
+    assert ran == rebase("stable")
+    assert f"rpm-ostree changes ({described})" in result.stdout
+
+
+def test_what_was_requested_is_named_rather_than_what_rpm_ostree_made_of_it(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={"requested-base-removals": ["firefox"], "base-removals": [FIREFOX]}))
+    assert ran == rebase() and "rpm-ostree changes (removed: firefox)" in result.stdout
+
+
+def test_a_staged_deployment_with_layers_switches_through_rpm_ostree(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={}, staged={"requested-packages": ["htop"]}))
+    assert ran == rebase() and "layered: htop (staged for the next restart)" in result.stdout
+
+
+def test_a_pending_deployment_without_a_staged_field_counts(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(staged={"requested-packages": ["htop"]}, staged_field=False))
+    assert ran == rebase() and "layered: htop (pending for the next restart)" in result.stdout
+
+
+def test_a_clean_staged_deployment_over_a_layered_booted_one_still_needs_rpm_ostree(tmp_path):
+    result, ran = switching(tmp_path, status=deployments(booted={"requested-packages": ["htop"]}, staged={}))
+    assert ran == rebase() and "in the running system only" in result.stdout
+
+
+@pytest.mark.parametrize("status", [
+    deployments(rollback={"requested-packages": ["htop"]}),
+    deployments(staged={"requested-packages": ["htop"]}, staged_osname="other"),
+    deployments(booted={"regenerate-initramfs": False, "initramfs-etc": []}),
+], ids=["rollback", "another os", "initramfs as built"])
+def test_what_bootc_does_not_mind_switches_with_bootc(tmp_path, status):
+    result, ran = switching(tmp_path, status=status)
+    assert result.returncode == 0 and ran == bootc()
+
+
+@pytest.mark.parametrize("status", ["fails", "not json", None], ids=["fails", "not json", "no rpm-ostree"])
+def test_switch_tries_bootc_when_the_rpm_ostree_status_cannot_be_read(tmp_path, status):
+    result, ran = switching(tmp_path, status=status)
+    assert result.returncode == 0 and ran == bootc()
+    assert "Traceback" not in result.stderr
+
+
+def test_switch_without_room_in_boot_changes_nothing(tmp_path):
+    result, ran = switching(tmp_path, boot_free=300 * MIB)
+    assert result.returncode == 1 and ran == []
+    assert "has 300 MiB free" in result.stderr and "about 352 MiB" in result.stderr
+
+
+@pytest.mark.parametrize("size", [1200, 1536, 1800 - 1], ids=["1.2 GiB", "1.5 GiB", "just under 2 GiB"])
+def test_switch_with_a_boot_between_1_and_2_gib_warns_and_goes_on(tmp_path, size):
+    result, ran = switching(tmp_path, boot_size=size * MIB, boot_free=600 * MIB)
+    assert result.returncode == 0 and ran == bootc()
+    assert f"WARNING: /boot is {size} MiB" in result.stderr
+
+
+# A 1 GiB /boot as df shows it (974 MiB on ext4), and either side of it.
+@pytest.mark.parametrize("size", [512, 974, 1024, 1200 - 1], ids=["512 MiB", "a 1 GiB partition", "1024 MiB", "just under 1.2 GiB"])
+def test_switch_with_a_boot_of_1_gib_or_less_is_refused_unless_forced(tmp_path, size):
+    result, ran = switching(tmp_path / "refused", boot_size=size * MIB, boot_free=450 * MIB)
+    assert result.returncode == 1 and ran == []
+    assert f"/boot is {size} MiB" in result.stderr and "--force switches anyway" in result.stderr
+    result, ran = switching(tmp_path / "forced", boot_size=size * MIB, boot_free=450 * MIB, args=("switch", "--force", "stable"))
+    assert result.returncode == 0 and ran == bootc("stable") and "WARNING" in result.stderr
+
+
+def test_force_does_not_skip_the_free_space_check(tmp_path):
+    result, ran = switching(tmp_path, boot_size=512 * MIB, boot_free=100 * MIB, args=("switch", "--force"))
+    assert result.returncode == 1 and ran == [] and "has 100 MiB free" in result.stderr
+
+
+@pytest.mark.parametrize("kind", ["not the image", "arm", "bad channel", "unknown option"])
+def test_switch_refuses_where_there_is_no_nvidia_image(tmp_path, kind):
+    args = {"not the image": dict(release=FEDORA), "arm": dict(arch="aarch64"), "bad channel": dict(args=("switch", "beta")),
+            "unknown option": dict(args=("switch", "--yes"))}[kind]
+    result, ran = switching(tmp_path, **args)
+    assert result.returncode == 2 and ran == []
+
+
+def shell_function(path: Path, name: str) -> str | None:
+    found = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", path.read_text(), re.M | re.S)
+    return found.group(0) if found else None
+
+
+@pytest.mark.skipif(shell_function(UPDATE, "local_modifications") is None,
+                    reason="herald-os-update has no local_modifications until #156 is merged")
+def test_the_switch_and_the_update_agree_on_rpm_ostree_changes():
+    assert shell_function(GPU_CHECK, "local_modifications") == shell_function(UPDATE, "local_modifications")
+
+
+SIGNED_POLICY = {"default": [{"type": "insecureAcceptAnything"}], "transports": {"docker": {
+    f"ghcr.io/iamlukethedev/{repo}": [{"type": "sigstoreSigned", "keyPath": "KEY", "signedIdentity": {"type": "matchRepository"}}]
+    for repo in ("herald-os", "herald-os-nvidia")}}}
+
+
+def policy_with(tmp_path: Path, default=None, repos=("herald-os", "herald-os-nvidia"), key_path=None) -> dict:
+    policy = json.loads(json.dumps(SIGNED_POLICY).replace('"KEY"', json.dumps(key_path or str(tmp_path / "herald-os.pub"))))
+    if default is not None:
+        policy["default"] = default
+    policy["transports"]["docker"] = {r: v for r, v in policy["transports"]["docker"].items() if r.rsplit("/", 1)[1] in repos}
+    return policy
+
+
+LAYERED = deployments(booted={"requested-packages": ["htop"]})
+
+
+def test_without_the_projects_key_rpm_ostree_rebases_unverified(tmp_path):
+    result, ran = switching(tmp_path, status=LAYERED)
+    assert result.returncode == 0 and ran == rebase()
+
+
+def test_with_the_key_and_fedoras_default_policy_rebases_unverified_which_still_applies_the_policy(tmp_path):
+    # ostree-image-signed refuses any pull while the default is insecureAcceptAnything (checked in the
+    # image: "containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage"),
+    # and ostree-unverified-registry still enforces the repository's sigstoreSigned entry (checked in the
+    # image: a wrong key gets "None of the signatures were accepted").
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy_with(tmp_path))
+    assert result.returncode == 0 and ran == rebase()
+
+
+@pytest.mark.parametrize("default", [[{"type": "reject"}], []], ids=["reject", "none"])
+def test_with_the_key_and_a_stricter_default_rebases_signed(tmp_path, default):
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy_with(tmp_path, default=default))
+    assert result.returncode == 0
+    assert ran == [f"rpm-ostree rebase ostree-image-signed:docker://{NVIDIA_REF}:edge"]
+
+
+@pytest.mark.parametrize("case", ["no entry for the nvidia image", "another key", "no policy", "unreadable policy"])
+def test_with_the_key_but_no_requirement_for_it_nothing_is_switched(tmp_path, case):
+    policy = {
+        "no entry for the nvidia image": policy_with(tmp_path, repos=("herald-os",)),
+        "another key": policy_with(tmp_path, key_path="/etc/pki/containers/other.pub"),
+        "no policy": None,
+        "unreadable policy": "{not json",
+    }[case]
+    result, ran = switching(tmp_path, status=LAYERED, key=True, policy=policy)
+    assert result.returncode == 1 and ran == []
+    assert "nothing was changed" in result.stderr
+
+
+def test_the_switch_reads_the_key_and_policy_packages_sh_writes():
+    packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
+    script = GPU_CHECK.read_text()
+    assert "/etc/pki/containers/herald-os.pub" in packages and 'SIGNING_KEY="${HERALD_OS_SIGNING_KEY:-/etc/pki/containers/herald-os.pub}"' in script
+    assert 'path = "/etc/containers/policy.json"' in packages and 'POLICY="${HERALD_OS_POLICY:-/etc/containers/policy.json}"' in script
+
+
+@pytest.mark.parametrize("keys,driver,kmod", [
+    (NEGATIVO17_FPR, "negativo17", "unsigned"),
+    (NVIDIA_FPR, "negativo17", "unsigned"),
+    (NEGATIVO17_FPR, "unsigned", "unsigned"),
+    (NEGATIVO17_FPR, "negativo17", "corrupt"),
+], ids=["passes", "wrong key", "driver unsigned", "kmod corrupt"])
+def test_verify_rpms_leaves_no_key_database_behind(tmp_path, keys, driver, kmod):
+    result = verify(tmp_path, keys, driver, kmod)
+    assert list((tmp_path / "tmp").iterdir()) == [], result.stderr

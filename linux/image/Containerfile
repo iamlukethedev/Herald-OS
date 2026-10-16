@@ -4,7 +4,11 @@
 # the shell tarball for the same architecture next to it:
 #
 #   podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz -t herald-os .
-FROM quay.io/fedora/fedora-bootc:44
+#
+# The NVIDIA image is this one with NVIDIA's driver on top: linux/image/Containerfile.nvidia, which
+# also says how its build pins FEDORA_BOOTC.
+ARG FEDORA_BOOTC=quay.io/fedora/fedora-bootc:44
+FROM ${FEDORA_BOOTC}
 
 ARG SHELL_TARBALL=herald-os-linux.tar.gz
 COPY linux /tmp/herald-os/linux
