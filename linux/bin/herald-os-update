@@ -291,7 +291,12 @@ have_root() {
     none) return 1 ;;
   esac
   [[ -n "${SUDO_KEPT:-}" ]] && return 0
-  sudo -v || return 1
+  # A password that does not work (three tries) means no root for the rest of the update, rather
+  # than asking again at every step.
+  if ! sudo -v; then
+    ADMIN=none
+    return 1
+  fi
   SUDO_KEPT=1
   (
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
@@ -405,23 +410,47 @@ user_marker() {
   # shellcheck disable=SC2016 # $HOME is the person's, expanded in their shell.
   as_user sh -c 'd="$HOME/.local/state/herald-os/migrations"; if [ "$1" = check ]; then test -f "$d/$2"; else mkdir -p "$d" && touch "$d/$2"; fi' sh "$1" "$2"
 }
-# Runs a user migration as the person. Under sudo, their checkout and user units are theirs: no
-# REPO from root (the migration finds ~/Herald-OS itself), and their runtime folder for systemctl --user.
+# Whether user migrations have somewhere to run: under sudo, an account sudo can run as, and in
+# any case a home folder the person can write (where they are recorded). Checked once; when not,
+# PERSON_PROBLEM says why, once, rather than every migration failing on its own.
+person_ready() {
+  if [[ -z "${PERSON_CHECKED:-}" ]]; then
+    PERSON_CHECKED=1
+    PERSON_PROBLEM=""
+    # shellcheck disable=SC2016 # $HOME is the person's, expanded in their shell.
+    if [[ $MIGRATION_USER == sudo ]] && ! as_user true 2>/dev/null; then
+      PERSON_PROBLEM="SUDO_USER=$SUDO_USER is not an account sudo can run as"
+      echo "WARNING: $PERSON_PROBLEM, so user migrations did not run" >&2
+    elif ! as_user sh -c '[ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -w "$HOME" ]' 2>/dev/null; then
+      PERSON_PROBLEM="${SUDO_USER:-${USER:-this account}} has no home folder to run them in"
+    fi
+  fi
+  [[ -z "$PERSON_PROBLEM" ]]
+}
+# Runs a user migration as the person, with no input and without the migration list on fd 3. Under
+# sudo, their checkout and user units are theirs: no REPO from root (the migration finds
+# ~/Herald-OS itself), and their runtime folder for systemctl --user.
 run_as_user() {
   local uid=""
   if [[ $MIGRATION_USER == self ]]; then
-    REPO="$REPO" bash "$1"
+    REPO="$REPO" bash "$1" </dev/null 3<&-
   else
     uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
-    as_user env ${uid:+XDG_RUNTIME_DIR="/run/user/$uid"} bash "$1"
+    as_user env ${uid:+XDG_RUNTIME_DIR="/run/user/$uid"} bash "$1" </dev/null 3<&-
   fi
 }
-# Whether the person's own sudo -n works, for a "user, with sudo" migration.
+# Whether the person's own sudo -n works, for a "user, with sudo" migration. Under sudo it often
+# does (sudo remembers the password they just typed); when not, in a terminal sudo asks them once.
 user_has_sudo() {
   if [[ $MIGRATION_USER == self ]]; then
     have_root
+  elif as_user sudo -n true 2>/dev/null; then
+    return 0
+  elif [[ -t 0 ]]; then
+    echo "A migration takes system steps as $SUDO_USER through sudo; sudo asks for $SUDO_USER's password once."
+    as_user sudo -v
   else
-    as_user sudo -n true 2>/dev/null
+    return 1
   fi
 }
 
@@ -433,30 +462,46 @@ migrations_dir() {
   local dir
   for dir in ${1:+"$REPO/linux/migrations"} "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../migrations" /usr/share/herald-os/migrations; do
     if [[ -d "$dir" ]]; then
-      echo "$dir"
+      (cd "$dir" && pwd -P)
       return 0
     fi
   done
   return 1
 }
 
-# Every migration to consider, as "name<TAB>path" in name order: all of the usual folder's, except
-# that under sudo the person's come from the installed folder.
+# Every migration to consider, as "name<TAB>path<TAB>kind", one per name. They are all the usual
+# folder's, except that under sudo the person's come from the installed folder (`mine`). A name in
+# both is the usual folder's to classify, as root reads both: its root migrations run from there,
+# its user ones from the installed copy, and a copy that says otherwise is warned about.
 migration_list() {
-  local dir="$1" mine="$2" migration kind
+  local dir="$1" mine="$2" migration name kind other
   for migration in "$dir"/*.sh; do
     [[ -f "$migration" ]] || continue
+    name="$(basename "$migration")"
     kind="$(migration_kind "$migration")"
+    other=""
+    if [[ -n "$mine" && -f "$mine/$name" && ! "$mine/$name" -ef "$migration" ]]; then
+      other="$(migration_kind "$mine/$name")"
+    fi
+    if [[ -n "$other" && $other != "$kind" ]]; then
+      echo "WARNING: migration $name is $kind in $dir but $other in $mine; it runs as $kind" >&2
+    fi
     if [[ -z "$mine" || $kind == root ]]; then
-      printf '%s\t%s\n' "$(basename "$migration")" "$migration"
+      printf '%s\t%s\t%s\n' "$name" "$migration" "$kind"
+    elif [[ -f "$mine/$name" ]]; then
+      printf '%s\t%s\t%s\n' "$name" "$mine/$name" "$kind"
+    else
+      echo "WARNING: migration $name is only in $dir, which $SUDO_USER cannot read, so it did not run" >&2
     fi
   done
   [[ -n "$mine" ]] || return 0
   for migration in "$mine"/*.sh; do
     [[ -f "$migration" ]] || continue
+    name="$(basename "$migration")"
+    [[ -f "$dir/$name" ]] && continue
     kind="$(migration_kind "$migration")"
     if [[ $kind != root ]]; then
-      printf '%s\t%s\n' "$(basename "$migration")" "$migration"
+      printf '%s\t%s\t%s\n' "$name" "$migration" "$kind"
     fi
   done
 }
@@ -468,11 +513,10 @@ run_migrations() {
   if [[ $MIGRATION_USER == sudo ]]; then
     mine="$(migrations_dir)" || mine=""
   fi
-  local migration name kind waiting=() no_user=()
+  local migration name kind waiting=() waiting_person=() no_user=()
   # The list comes in on fd 3: stdin stays the terminal, for sudo and admin_access.
-  while IFS=$'\t' read -r name migration <&3; do
+  while IFS=$'\t' read -r name migration kind <&3; do
     [[ -n "$name" ]] || continue
-    kind="$(migration_kind "$migration")"
     if [[ $kind == root ]]; then
       [[ -f "$MIGRATIONS_DONE/$name" ]] && continue
       # Without root, sudo would print "a password is required" at each step, and nothing would
@@ -482,24 +526,29 @@ run_migrations() {
         continue
       fi
       echo "==> migration $name (as root)"
-      if as_root env REPO="$REPO" bash "$migration"; then
+      if as_root env REPO="$REPO" bash "$migration" </dev/null 3<&-; then
         as_root mkdir -p "$MIGRATIONS_DONE" && as_root touch "$MIGRATIONS_DONE/$name"
       else
         failed+=("migration:$name")
       fi
       continue
     fi
-    if [[ $MIGRATION_USER == none ]]; then
+    if [[ $MIGRATION_USER == none ]] || ! person_ready; then
       no_user+=("$name")
       continue
     fi
     user_marker check "$name" && continue
     if [[ $kind == user-sudo ]] && ! user_has_sudo; then
-      waiting+=("$name")
+      # As the person, root fixes it; under sudo, only their own sudo does.
+      if [[ $MIGRATION_USER == sudo ]]; then
+        waiting_person+=("$name")
+      else
+        waiting+=("$name")
+      fi
       continue
     fi
-    if [[ $MIGRATION_USER == sudo ]] && ! as_user test -r "$migration"; then
-      echo "WARNING: $SUDO_USER cannot read $migration, so migration $name did not run" >&2
+    if ! as_user test -r "$migration"; then
+      echo "WARNING: ${SUDO_USER:-${USER:-this account}} cannot read $migration, so migration $name did not run" >&2
       continue
     fi
     echo "==> migration $name"
@@ -516,9 +565,18 @@ run_migrations() {
     skipped+=(migrations)
     step migrations "skipped ${waiting[*]} ($NEEDS_ROOT)"
   fi
+  if [[ ${#waiting_person[@]} -gt 0 ]]; then
+    echo "==> migrations: skipped (they need $SUDO_USER's own sudo: run herald-os update, without sudo, in a terminal)"
+    step migrations "skipped ${waiting_person[*]} (run herald-os update, without sudo, in a terminal)"
+  fi
   if [[ ${#no_user[@]} -gt 0 ]]; then
-    echo "==> user migrations: skipped (they run as a person, not as root: run herald-os update from your account)"
-    step user-migrations "skipped ${no_user[*]} (run herald-os update from your account)"
+    if [[ -n "${PERSON_PROBLEM:-}" ]]; then
+      echo "==> user migrations: skipped ($PERSON_PROBLEM)"
+      step user-migrations "skipped ${no_user[*]} ($PERSON_PROBLEM)"
+    else
+      echo "==> user migrations: skipped (they run as a person, not as root: run herald-os update from your account)"
+      step user-migrations "skipped ${no_user[*]} (run herald-os update from your account)"
+    fi
   fi
 }
 
@@ -729,7 +787,7 @@ if [[ $HERMES -eq 1 ]]; then
   # came from another installer is that installer's to update.
   hermes=()
   while IFS= read -r line || [[ -n "$line" ]]; do
-    hermes+=("$line")
+    [[ -n "$line" ]] && hermes+=("$line")
   done < <(herald-os hermes-command --managed 2>/dev/null)
   if [[ ${#hermes[@]} -gt 0 ]]; then
     echo "==> Hermes Agent"

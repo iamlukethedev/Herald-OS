@@ -48,10 +48,16 @@ GOOD, BROKEN = "app/org.example.Good/x86_64/stable", "app/org.example.Broken/x86
 SYSTEM_APP = "app/org.example.System/x86_64/stable"
 
 STUBS = {
-    "herald-os": 'echo "$@" >>"$TEST_HOME/herald-os.log"',
+    # `hermes-command --managed` prints ~/hermes-command as it is (blank lines, no last newline and all).
+    "herald-os": """echo "$@" >>"$TEST_HOME/herald-os.log"
+if [ "$1" = hermes-command ] && [ -e "$TEST_HOME/hermes-command" ]; then
+  cat "$TEST_HOME/hermes-command"
+fi""",
     # With ~/no-sudo the account needs a password: `sudo -n` fails until plain sudo (in a terminal)
-    # has asked once, which sudo then remembers. Root is never asked. `-u NAME -H` runs as the
-    # person NAME, whose home is ~/people/NAME.
+    # has asked once, which sudo then remembers; with ~/wrong-password the asking fails. Root is never
+    # asked. `-u NAME -H` runs as the person NAME (an account if listed in ~/accounts or with a home
+    # in ~/people/NAME), whose own sudo needs a password with ~/person-needs-password. As a person,
+    # `test -r` fails for the paths listed in ~/unreadable.
     "sudo": """echo "sudo $*" >>"$TEST_HOME/calls.log"
 n=; v=; who=
 while :; do
@@ -63,18 +69,36 @@ while :; do
     *) break ;;
   esac
 done
-if [ "$(id -u)" != 0 ] && [ -e "$TEST_HOME/no-sudo" ] && [ ! -e "$TEST_HOME/sudo-remembered" ]; then
+if [ -n "$who" ] && ! grep -qx "$who" "$TEST_HOME/accounts" 2>/dev/null && [ ! -d "$TEST_HOME/people/$who" ]; then
+  echo "sudo: unknown user $who" >&2
+  exit 1
+fi
+needs=; remembered=
+if [ -n "${STUB_PERSON:-}" ]; then
+  needs="$TEST_HOME/person-needs-password"; remembered="$TEST_HOME/person-remembered"
+elif [ "$(id -u)" != 0 ]; then
+  needs="$TEST_HOME/no-sudo"; remembered="$TEST_HOME/sudo-remembered"
+fi
+if [ -n "$needs" ] && [ -e "$needs" ] && [ ! -e "$remembered" ]; then
   if [ -n "$n" ]; then
     echo "sudo: a password is required" >&2
     exit 1
   fi
   echo "asked for a password: $*" >>"$TEST_HOME/sudo.log"
-  touch "$TEST_HOME/sudo-remembered"
+  if [ -e "$TEST_HOME/wrong-password" ]; then
+    echo "sudo: 1 incorrect password attempt" >&2
+    exit 1
+  fi
+  touch "$remembered"
 fi
 [ -n "$v" ] && exit 0
 if [ -n "$who" ]; then
   HOME="$TEST_HOME/people/$who"
-  export HOME
+  STUB_PERSON="$who"
+  export HOME STUB_PERSON
+  if [ "$1" = test ] && [ "$2" = -r ] && grep -qxF "$3" "$TEST_HOME/unreadable" 2>/dev/null; then
+    exit 1
+  fi
 fi
 SUDO_USER=tester exec "$@\"""",
     # Like bootc, refuses when the booted or the staged deployment has local changes.
@@ -182,8 +206,8 @@ def deploy(home: Path, booted: dict | None = None, staged: dict | None = None, r
     (home / "layered").write_text("1" if any((booted or {}).values()) or any(pending.values()) else "")
 
 
-def run(env, *args, prefix=(), script=UPDATE):
-    return subprocess.run([*prefix, BASH, str(script), "--no-hermes", *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+def run(env, *args, prefix=(), script=UPDATE, hermes=False):
+    return subprocess.run([*prefix, BASH, str(script), *([] if hermes else ["--no-hermes"]), *args], env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
 
 
 def calls(home: Path) -> list[str]:
@@ -1099,3 +1123,288 @@ def test_the_sudo_keeper_ends_with_the_update(machine):
             break
         time.sleep(0.1)
     assert leftovers(home) == []
+
+
+# Round 8: the unreadable, sorted, deduplicated and person-less paths of migrations, and the
+# smaller branches QA's mutants reached.
+
+ROOT_NS = pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+
+
+def as_root_under_sudo(env: dict, who: str = "alice", **kwargs) -> subprocess.CompletedProcess:
+    return run({**env, "SUDO_USER": who}, prefix=("unshare", "-r"), **kwargs)
+
+
+def person(home: Path, who: str = "alice") -> Path:
+    folder = home / "people" / who
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def started(stdout: str) -> list[str]:
+    """The migrations in the order they started."""
+    return re.findall(r"^==> migration (\S+)", stdout, re.M)
+
+
+@ROOT_NS
+def test_under_sudo_an_unreadable_user_migration_is_warned_about_once_and_skipped(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    migration(env, "b-user", "user", folder)
+    migration(env, "c-user", "user", folder)
+    (home / "unreadable").write_text(f"{folder / 'b-user.sh'}\n")
+    done = as_root_under_sudo(env, script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stderr.count(f"WARNING: alice cannot read {folder / 'b-user.sh'}, so migration b-user.sh did not run") == 1
+    assert runs(alice, "b-user") == 0 and runs(alice, "c-user") == 1
+    assert not user_marker(alice, "b-user").exists()
+    assert started(done.stdout) == ["c-user.sh"]
+    assert problems(home) == "none"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_as_the_person_an_unreadable_migration_is_warned_about_and_skipped(machine):
+    home, env = machine
+    migration(env, "b-user", "user")
+    migration(env, "c-user", "user")
+    path = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "b-user.sh"
+    path.chmod(0)
+    done = run(env)
+    path.chmod(0o644)
+    assert done.returncode == 0, done.stderr
+    assert f"cannot read {path}, so migration b-user.sh did not run" in done.stderr
+    assert runs(home, "b-user") == 0 and runs(home, "c-user") == 1
+
+
+@ROOT_NS
+def test_migrations_from_both_folders_run_in_name_order(machine, tmp_path):
+    home, env = machine
+    person(home)
+    script, folder = installed(tmp_path)
+    migration(env, "b-root", "root")
+    migration(env, "a-user", "user", folder)
+    migration(env, "c-user", "user", folder)
+    done = as_root_under_sudo(env, script=script)
+    assert started(done.stdout) == ["a-user.sh", "b-root.sh", "c-user.sh"]
+
+
+@ROOT_NS
+def test_under_sudo_a_root_migration_only_in_the_installed_folder_does_not_run(machine, tmp_path):
+    """The installed folder gives the person's migrations; root's come from the usual one."""
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    migration(env, "a-root", "root")
+    migration(env, "z-root", "root", folder)
+    done = as_root_under_sudo(env, script=script)
+    assert started(done.stdout) == ["a-root.sh"]
+    assert runs(home, "z-root") == 0 and runs(alice, "z-root") == 0
+
+
+@ROOT_NS
+def test_a_migration_in_both_folders_runs_once_as_the_usual_folder_says(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    checkout = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    migration(env, "x", "root", checkout, mark="x-checkout")
+    migration(env, "x", "user", folder, mark="x-installed")
+    migration(env, "y", "user", checkout, mark="y-checkout")
+    migration(env, "y", "root", folder, mark="y-installed")
+    done = as_root_under_sudo(env, script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert started(done.stdout) == ["x.sh", "y.sh"]
+    assert runs(home, "x-checkout") == 1 and runs(alice, "x-installed") == 0
+    assert runs(alice, "y-installed") == 1 and runs(home, "y-installed") == 0 and runs(alice, "y-checkout") == 0
+    assert f"WARNING: migration x.sh is root in {checkout} but user in {folder}; it runs as root" in done.stderr
+    assert f"WARNING: migration y.sh is user in {checkout} but root in {folder}; it runs as user" in done.stderr
+
+
+@ROOT_NS
+def test_under_sudo_a_user_migration_only_in_roots_checkout_is_warned_about(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, _ = installed(tmp_path)
+    checkout = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    migration(env, "only-here", "user", checkout)
+    done = as_root_under_sudo(env, script=script)
+    assert f"WARNING: migration only-here.sh is only in {checkout}, which alice cannot read, so it did not run" in done.stderr
+    assert runs(alice, "only-here") == 0 and runs(home, "only-here") == 0
+
+
+@ROOT_NS
+def test_a_sudo_user_that_is_not_an_account_gives_one_warning(machine, tmp_path):
+    home, env = machine
+    script, folder = installed(tmp_path)
+    migration(env, "a-root", "root")
+    migration(env, "b-user", "user", folder)
+    migration(env, "c-user", "user", folder)
+    done = as_root_under_sudo(env, "mallory", script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stderr.count("WARNING: SUDO_USER=mallory is not an account sudo can run as, so user migrations did not run") == 1
+    assert "cannot read" not in done.stderr and "unknown user" not in done.stderr
+    assert runs(home, "a-root") == 1
+    assert summary(done.stdout)["user-migrations"] == "skipped b-user.sh c-user.sh (SUDO_USER=mallory is not an account sudo can run as)"
+
+
+@ROOT_NS
+def test_a_person_without_a_home_folder_gets_one_notice(machine, tmp_path):
+    home, env = machine
+    (home / "accounts").write_text("bob\n")
+    script, folder = installed(tmp_path)
+    migration(env, "a-root", "root")
+    migration(env, "b-user", "user", folder)
+    done = as_root_under_sudo(env, "bob", script=script)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.count("==> user migrations: skipped (bob has no home folder to run them in)") == 1
+    assert runs(home, "a-root") == 1 and runs(home, "b-user") == 0
+    assert not (home / "people" / "bob").exists()
+
+
+@ROOT_NS
+def test_under_sudo_a_mixed_migration_without_the_persons_sudo_does_not_send_them_back_to_sudo(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    migration(env, "c-mixed", "user, with sudo", folder)
+    (home / "person-needs-password").write_text("")
+    done = as_root_under_sudo(env, script=script)
+    assert done.returncode == 0
+    assert runs(alice, "c-mixed") == 0
+    assert "sudo -n -u alice -H sudo -n true" in calls(home)
+    assert "==> migrations: skipped (they need alice's own sudo: run herald-os update, without sudo, in a terminal)" in done.stdout
+    assert "run sudo herald-os update" not in summary(done.stdout)["migrations"]
+
+
+@ROOT_NS
+@TERMINAL
+def test_under_sudo_in_a_terminal_a_mixed_migration_asks_for_the_persons_password_once(machine, tmp_path):
+    home, env = machine
+    alice = person(home)
+    script, folder = installed(tmp_path)
+    migration(env, "c-mixed", "user, with sudo", folder)
+    migration(env, "d-mixed", "user, with sudo", folder)
+    (home / "person-needs-password").write_text("")
+    command = f"unshare -r {BASH} {script} --no-hermes"
+    subprocess.run(["script", "-qec", command, "/dev/null"], env={**env, "SUDO_USER": "alice"}, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert runs(alice, "c-mixed") == 1 and runs(alice, "d-mixed") == 1
+    assert len((home / "sudo.log").read_text().splitlines()) == 1
+
+
+@TERMINAL
+def test_a_wrong_password_means_no_root_for_the_rest_of_the_update(machine):
+    home, env = machine
+    migration(env, "a-root", "root")
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "no-sudo").write_text("")
+    (home / "wrong-password").write_text("")
+    output = in_a_terminal(env)
+    assert len((home / "sudo.log").read_text().splitlines()) == 1
+    assert runs(home, "a-root") == 0
+    steps = summary(output)
+    assert steps["migrations"] == "skipped a-root.sh (needs root: run sudo herald-os update)"
+    assert steps["system"].startswith("skipped")
+    assert steps["system-flatpaks"].startswith("skipped")
+
+
+def test_with_sudo_that_needs_no_password_nothing_asks(machine):
+    home, env = machine
+    migration(env, "a-root", "root")
+    run(env)
+    assert runs(home, "a-root") == 1
+    assert "sudo -v" not in calls(home)
+
+
+def repo_seen(env: dict, name: str, kind: str, folder: Path | None = None) -> None:
+    folder = folder or Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    (folder / f"{name}.sh").write_text(f'# Runs as: {kind}\necho "REPO=${{REPO:-}}" >"$TEST_HOME/repo-{name}"\n')
+
+
+def test_a_persons_own_migrations_get_their_checkout_as_repo(machine):
+    home, env = machine
+    repo_seen(env, "b-user", "user")
+    repo_seen(env, "a-root", "root")
+    run(env)
+    assert (home / "repo-b-user").read_text().strip() == f"REPO={env['HERALD_OS_REPO']}"
+    assert (home / "repo-a-root").read_text().strip() == f"REPO={env['HERALD_OS_REPO']}"
+
+
+@ROOT_NS
+def test_under_sudo_user_migrations_get_no_repo_from_root(machine, tmp_path):
+    home, env = machine
+    person(home)
+    script, folder = installed(tmp_path)
+    repo_seen(env, "b-user", "user", folder)
+    as_root_under_sudo(env, script=script)
+    assert (home / "repo-b-user").read_text().strip() == "REPO="
+
+
+def test_a_failing_root_migration_fails_the_update_and_is_not_recorded(machine, tmp_path):
+    home, env = machine
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "a-root.sh").write_text("# Runs as: root\nexit 3\n")
+    done = run(env)
+    assert done.returncode == 1
+    assert problems(home) == "migration:a-root.sh"
+    assert not (tmp_path / "migrations-done" / "a-root.sh").exists()
+
+
+def test_waiting_migrations_are_in_the_final_skipped_line(machine):
+    home, env = machine
+    migration(env, "a-root", "root")
+    (home / "no-sudo").write_text("")
+    done = run(env)
+    assert re.search(r"^skipped: migrations( |$)", done.stdout, re.M)
+
+
+@TERMINAL
+def test_migrations_get_no_terminal_and_no_list_on_fd_3(machine):
+    home, env = machine
+    body = '''if [ -t 0 ]; then echo terminal; else echo no-terminal; fi >>"$TEST_HOME/seen-{0}"
+if [ -e /dev/fd/3 ]; then echo fd3-open; else echo fd3-closed; fi >>"$TEST_HOME/seen-{0}"
+'''
+    folder = Path(env["HERALD_OS_REPO"]) / "linux" / "migrations"
+    (folder / "a-root.sh").write_text("# Runs as: root\n" + body.format("a-root"))
+    (folder / "b-user.sh").write_text("# Runs as: user\n" + body.format("b-user"))
+    in_a_terminal(env)
+    for name in ("a-root", "b-user"):
+        assert (home / f"seen-{name}").read_text().split() == ["no-terminal", "fd3-closed"], name
+
+
+def test_without_date_iseconds_the_check_time_falls_back(machine, tmp_path):
+    home, env = machine
+    (tmp_path / "stubs" / "date").write_text('#!/bin/sh\n[ "$1" = -Iseconds ] && exit 1\nexec /bin/date "$@"\n')
+    (tmp_path / "stubs" / "date").chmod(0o755)
+    _, state, _ = check(home, env)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}", state["checkedAt"]), state["checkedAt"]
+
+
+def test_flatpak_refs_with_a_blank_line_and_no_last_newline_are_all_updated(machine):
+    home, env = machine
+    (home / "refs").write_text(f"{GOOD}\n\n{BROKEN}")
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
+    done = run(env)
+    assert f"Updated {GOOD}" in (home / "updated.log").read_text()
+    assert summary(done.stdout)["flatpaks"] == f"did not all update: {BROKEN}: Failed to install {BROKEN}: No space left on device"
+    assert "flatpak update -y --noninteractive --user " not in calls(home)
+
+
+def test_a_hermes_command_with_a_blank_line_and_no_last_newline_runs_whole(machine, tmp_path):
+    home, env = machine
+    hermes = tmp_path / "stubs" / "hermes"
+    hermes.write_text('#!/bin/sh\necho "hermes $*" >>"$TEST_HOME/calls.log"\n')
+    hermes.chmod(0o755)
+    (home / "hermes-command").write_text(f"{hermes}\n\n--profile=default")
+    done = run(env, hermes=True)
+    assert "hermes --profile=default update" in calls(home)
+    assert summary(done.stdout)["hermes"] == "ok"
+
+
+@pytest.mark.parametrize("installs", [True, False], ids=["installed", "failed"])
+def test_a_newer_release_is_reported_with_nothing_failed_before_it(machine, tmp_path, installs):
+    home, env = machine
+    tarball = tmp_path / "stubs" / "herald-os-tarball"
+    tarball.write_text(f'#!/bin/sh\n[ "$1" = check ] && echo 0.2.0 && exit 0\nexit {0 if installs else 1}\n')
+    tarball.chmod(0o755)
+    done = run(env)
+    assert summary(done.stdout)["herald-os"] == ("0.2.0 installed" if installs else "FAILED: 0.2.0 did not install")
