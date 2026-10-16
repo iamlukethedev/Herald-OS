@@ -47,7 +47,8 @@ SYSTEM_APP = "app/org.example.System/x86_64/stable"
 STUBS = {
     "herald-os": 'echo "$@" >>"$HOME/herald-os.log"',
     # With ~/no-sudo, sudo needs a password: `sudo -n` fails, and plain sudo (in a terminal) gets one.
-    "sudo": """if [ "$1" = -n ]; then
+    "sudo": """echo "sudo $*" >>"$HOME/calls.log"
+if [ "$1" = -n ]; then
   shift
   if [ -e "$HOME/no-sudo" ]; then
     echo "sudo: a password is required" >&2
@@ -105,7 +106,9 @@ esac""",
 def machine(tmp_path):
     """The Herald OS image with every command herald-os-update runs stood in for."""
     stubs, home, repo = tmp_path / "stubs", tmp_path / "home", tmp_path / "checkout"
-    for folder in (stubs, home, repo / "linux" / "migrations"):
+    # ~/Herald-OS is the checkout when HERALD_OS_REPO does not count (as root without the testing
+    # flag); without it the updater would fall back to this repository's own migrations.
+    for folder in (stubs, home, repo / "linux" / "migrations", home / "Herald-OS" / "linux" / "migrations"):
         folder.mkdir(parents=True)
     for name, body in STUBS.items():
         (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
@@ -212,6 +215,58 @@ def test_a_clean_staged_deployment_over_a_layered_booted_one_still_needs_rpm_ost
     assert "layered: htop (in the running system only; the next restart drops them)" in done.stdout
 
 
+def test_a_pending_deployment_without_a_staged_field_counts(machine):
+    """rpm-ostree status calls the first deployment of the booted OS pending when it is not the booted
+    one, and rpm-ostree upgrade builds on it, whether or not it says staged."""
+    home, env = machine
+    pending = {"id": "fedora-pending", "osname": "fedora", "booted": False, **CLEAN, "requested-packages": ["htop"]}
+    booted = {"id": "fedora-booted", "osname": "fedora", "booted": True, **CLEAN}
+    (home / "status.json").write_text(json.dumps({"deployments": [pending, booted]}))
+    (home / "layered").write_text("1")
+    done = run(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "rpm-ostree upgrade" in calls(home)
+    assert not ran(home, "bootc")
+    assert summary(done.stdout)["system"] == "ok (rpm-ostree upgrade; layered: htop (pending for the next restart))"
+
+
+def test_a_pending_deployment_of_another_os_first_in_the_list_does_not_count(machine):
+    home, env = machine
+    other = {"id": "other-pending", "osname": "other", "booted": False, **CLEAN, "requested-packages": ["htop"]}
+    booted = {"id": "fedora-booted", "osname": "fedora", "booted": True, **CLEAN}
+    (home / "status.json").write_text(json.dumps({"deployments": [other, booted]}))
+    assert run(env).returncode == 0
+    assert "bootc upgrade" in calls(home)
+    assert not ran(home, "rpm-ostree")
+
+
+def test_two_kinds_of_change_are_joined_with_a_semicolon(machine):
+    home, env = machine
+    deploy(home, booted={"requested-packages": ["htop"], "requested-base-removals": ["firefox"]})
+    assert "packages of its own on top of the image (layered: htop; removed: firefox)" in run(env).stdout
+
+
+@pytest.mark.parametrize("changes", [
+    {"initramfs-etc": ["/etc/crypttab"]},
+    {"initramfs-etc": ["/etc/crypttab", "/etc/vconsole.conf"]},
+    {"regenerate-initramfs": True},
+    {"regenerate-initramfs": True, "initramfs-etc": ["/etc/crypttab"]},
+], ids=["one-etc-file", "two-etc-files", "regenerate", "both"])
+def test_an_initramfs_of_the_machine_s_own_counts(machine, changes):
+    home, env = machine
+    deploy(home, booted=changes)
+    done = run(env)
+    assert "rpm-ostree upgrade" in calls(home) and not ran(home, "bootc")
+    assert "initramfs: " in summary(done.stdout)["system"]
+
+
+def test_an_initramfs_as_built_does_not_count(machine):
+    home, env = machine
+    deploy(home, booted={"regenerate-initramfs": False, "initramfs-etc": []})
+    assert run(env).returncode == 0
+    assert "bootc upgrade" in calls(home) and not ran(home, "rpm-ostree")
+
+
 def test_a_rollback_deployment_does_not_count(machine):
     home, env = machine
     deploy(home, rollback={"requested-packages": ["htop"]})
@@ -290,7 +345,59 @@ def test_system_flatpaks_update_as_root_and_are_reported_per_ref(machine):
     steps = summary(done.stdout)
     assert steps["flatpaks"] == "ok"
     assert steps["system-flatpaks"] == f"did not all update: {BROKEN}: Failed to install {BROKEN}: No space left on device"
+    assert f"WARNING: system-flatpaks: {BROKEN}: Failed to install {BROKEN}: No space left on device" in done.stderr
+    assert f"Updated {SYSTEM_APP}" in (home / "updated.log").read_text()
     assert "after-update problems=system-flatpaks" in (home / "herald-os.log").read_text()
+
+
+def test_the_system_flatpak_pass_runs_through_sudo_n_and_the_user_pass_does_not(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    run(env)
+    sudo = [call for call in calls(home) if call.startswith("sudo ")]
+    assert "sudo -n true" in sudo
+    assert "sudo -n flatpak update -y --noninteractive --system" in sudo
+    assert "sudo -n bootc upgrade" in sudo
+    assert not [call for call in sudo if "--user" in call]
+    assert "flatpak update -y --noninteractive --user" in calls(home)
+
+
+def test_each_flatpak_pass_reports_only_its_own_problems(machine):
+    home, env = machine
+    system_broken = "app/org.example.SystemBroken/x86_64/stable"
+    (home / "refs").write_text(f"{GOOD}\n{BROKEN}\n")
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n{system_broken}\n")
+    (home / "broken-refs").write_text(f"{BROKEN}\n{system_broken}\n")
+    steps = summary(run(env).stdout)
+    assert steps["flatpaks"] == f"did not all update: {BROKEN}: Failed to install {BROKEN}: No space left on device"
+    assert steps["system-flatpaks"] == f"did not all update: {system_broken}: Failed to install {system_broken}: No space left on device"
+
+
+def test_a_failed_user_pass_leaves_the_system_pass_ok(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
+    steps = summary(run(env).stdout)
+    assert steps["flatpaks"].startswith("did not all update")
+    assert steps["system-flatpaks"] == "ok"
+    assert problems(home) == "flatpaks"
+
+
+def test_the_last_error_line_is_the_one_reported(machine, tmp_path):
+    home, env = machine
+    (home / "broken-refs").write_text(f"{BROKEN}\n")
+    stub = tmp_path / "stubs" / "flatpak"
+    stub.write_text(stub.read_text().replace('echo "error: Failed to install $last', 'echo "error: an earlier error" >&2\n      echo "error: Failed to install $last'))
+    done = run(env)
+    assert "an earlier error" not in done.stdout
+    assert summary(done.stdout)["flatpaks"] == f"did not all update: {BROKEN}: Failed to install {BROKEN}: No space left on device"
+
+
+def test_the_check_neither_updates_nor_lists_flatpaks(machine):
+    home, env = machine
+    (home / "system-refs").write_text(f"{SYSTEM_APP}\n")
+    run(env, "--check")
+    assert not [call for call in calls(home) if call.startswith(("flatpak update", "flatpak list", "sudo -n flatpak"))]
 
 
 SKIPPED = "skipped (needs root: run sudo herald-os update)"
@@ -389,6 +496,7 @@ def test_in_a_terminal_sudo_asks_for_the_password_and_everything_updates(machine
     asked = (home / "sudo.log").read_text()
     assert "asked for a password: bootc upgrade" in asked
     assert "asked for a password: flatpak update -y --noninteractive --system" in asked
+    assert "sudo flatpak update -y --noninteractive --system" in calls(home)
     steps = summary(output)
     assert steps["system"] == "ok (bootc upgrade)"
     assert steps["system-flatpaks"] == "ok"
@@ -414,3 +522,61 @@ def test_as_root_the_test_paths_count_only_with_the_testing_flag(machine):
     assert "==> system (image)" in flagged.stdout
     unflagged = run({key: value for key, value in env.items() if key != "HERALD_OS_TESTING"}, prefix=("unshare", "-r"))
     assert "==> system (image)" not in unflagged.stdout
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+@pytest.mark.parametrize("flag", ["0", "yes", "true", " 1", "1 ", "01"])
+def test_as_root_only_testing_flag_1_counts(machine, flag):
+    home, env = machine
+    done = run({**env, "HERALD_OS_TESTING": flag}, prefix=("unshare", "-r"))
+    assert "==> system (image)" not in done.stdout
+    assert not ran(home, "bootc") and not ran(home, "rpm-ostree")
+
+
+def with_migration(env: dict) -> Path:
+    """A migration in the HERALD_OS_REPO checkout that leaves a mark when it runs."""
+    (Path(env["HERALD_OS_REPO"]) / "linux" / "migrations" / "mark.sh").write_text('touch "$HOME/migration-ran"\n')
+    return Path(env["HOME"]) / "migration-ran"
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+def test_as_root_a_checkout_from_the_environment_runs_no_migrations(machine):
+    home, env = machine
+    mark = with_migration(env)
+    run({key: value for key, value in env.items() if key != "HERALD_OS_TESTING"}, prefix=("unshare", "-r"))
+    assert not mark.exists()
+    run(env, prefix=("unshare", "-r"))
+    assert mark.exists()
+
+
+def test_as_the_user_the_checkout_from_the_environment_counts(machine):
+    home, env = machine
+    mark = with_migration(env)
+    run({key: value for key, value in env.items() if key != "HERALD_OS_TESTING"})
+    assert mark.exists()
+
+
+def with_build(home: Path) -> Path:
+    """A build script in ~/Herald-OS (the checkout as root) that leaves a mark when it runs."""
+    build = home / "Herald-OS" / "linux" / "dev" / "build.sh"
+    build.parent.mkdir(parents=True)
+    build.write_text('touch "$HOME/build-ran"\n')
+    build.chmod(0o755)
+    return home / "build-ran"
+
+
+@pytest.mark.skipif(not can_be_root(), reason="needs unprivileged user namespaces (unshare -r)")
+def test_as_root_a_forced_rebuild_from_the_environment_does_not_count(machine):
+    home, env = machine
+    mark = with_build(home)
+    unflagged = {key: value for key, value in env.items() if key not in ("HERALD_OS_TESTING", "HERALD_OS_REPO")}
+    run({**unflagged, "HERALD_OS_FORCE_REBUILD": "1"}, prefix=("unshare", "-r"))
+    assert not mark.exists()
+
+
+def test_as_the_user_a_forced_rebuild_counts(machine):
+    home, env = machine
+    mark = with_build(home)
+    unflagged = {key: value for key, value in env.items() if key not in ("HERALD_OS_TESTING", "HERALD_OS_REPO")}
+    run({**unflagged, "HERALD_OS_FORCE_REBUILD": "1"})
+    assert mark.exists()

@@ -16,7 +16,8 @@
 # did not update is reported, but leaves the exit status at 0.
 set -uo pipefail
 
-REPO="${HERALD_OS_REPO:-$HOME/Herald-OS}"
+REPO="$HOME/Herald-OS"
+FORCE_REBUILD=""
 STATE="$HOME/.local/state/herald-os"
 CONFIG="$HOME/.config/herald-os"
 CHANNEL="$(cat "$CONFIG/channel" 2>/dev/null || echo stable)"
@@ -25,9 +26,12 @@ MIGRATIONS_DONE="/var/lib/herald-os/migrations"
 OSTREE_BOOTED=/run/ostree-booted
 OS_RELEASE=(/etc/os-release /usr/lib/os-release)
 IMAGE_SHELL=/usr/share/herald-os/app/resources/app.asar
-# The tests point these elsewhere. As root (sudo herald-os update) only with HERALD_OS_TESTING=1, so
-# that an inherited environment cannot change how the system is updated.
+# A checkout elsewhere, a forced rebuild, and (for the tests) other image markers. As root (sudo
+# herald-os update) only with HERALD_OS_TESTING=1: the checkout's migrations and build run as root,
+# so an inherited environment must not choose them, nor how the system is updated.
 if [[ $EUID -ne 0 || "${HERALD_OS_TESTING:-}" == 1 ]]; then
+  REPO="${HERALD_OS_REPO:-$REPO}"
+  FORCE_REBUILD="${HERALD_OS_FORCE_REBUILD:-}"
   OSTREE_BOOTED="${HERALD_OS_OSTREE_BOOTED:-$OSTREE_BOOTED}"
   IMAGE_SHELL="${HERALD_OS_IMAGE_SHELL:-$IMAGE_SHELL}"
 fi
@@ -88,8 +92,9 @@ AUR_HELPER="$(command -v yay || command -v paru || true)"
 # or a local RPM), modules, packages removed or replaced with rpm-ostree override, and an initramfs
 # regenerated on the machine. bootc refuses to upgrade when the booted or the staged deployment has
 # any of them ("Deployment contains local rpm-ostree modifications"), so rpm-ostree upgrades instead.
-# rpm-ostree upgrades from the deployment staged for the next boot when there is one (after
-# `rpm-ostree install` without a restart, the booted one is still clean), so that one is described:
+# rpm-ostree upgrades from the deployment pending for the next boot (staged, or simply first) when
+# there is one (after `rpm-ostree install` without a restart, the booted one is still clean), so
+# that one is described:
 # e.g. "layered: htop, vim; removed: firefox". Prints nothing (and fails) when bootc can upgrade.
 local_modifications() {
   command -v rpm-ostree >/dev/null && command -v python3 >/dev/null || return 1
@@ -149,11 +154,16 @@ deployments = [d for d in status.get("deployments") or [] if isinstance(d, dict)
 booted = next((d for d in deployments if d.get("booted")), None)
 if booted is None:
     sys.exit(1)
-staged = next((d for d in deployments if d.get("staged") and not d.get("booted") and d.get("osname") == booted.get("osname")), None)
-if staged is None:
+# rpm-ostree upgrade builds on the first deployment of the OS (the staged one when there is one),
+# and rpm-ostree status calls that one pending when it is not the booted one, staged or not.
+same_os = [d for d in deployments if d.get("osname") == booted.get("osname")]
+pending = next((d for d in same_os if d.get("staged") and not d.get("booted")), None)
+if pending is None and same_os and not same_os[0].get("booted"):
+    pending = same_os[0]
+if pending is None:
     found = describe(booted)
-elif describe(staged):
-    found = describe(staged) + " (staged for the next restart)"
+elif describe(pending):
+    found = describe(pending) + (" (staged for the next restart)" if pending.get("staged") else " (pending for the next restart)")
 elif describe(booted):
     found = describe(booted) + " (in the running system only; the next restart drops them)"
 else:
@@ -507,7 +517,7 @@ if [[ $HERMES -eq 1 ]]; then
   fi
 fi
 
-if [[ -x "$REPO/linux/dev/build.sh" && ( $pending_repo -gt 0 || -n "${HERALD_OS_FORCE_REBUILD:-}" ) ]]; then
+if [[ -x "$REPO/linux/dev/build.sh" && ( $pending_repo -gt 0 || -n "$FORCE_REBUILD" ) ]]; then
   echo "==> rebuilding the shell"
   if bash "$REPO/linux/dev/build.sh"; then
     step build ok
