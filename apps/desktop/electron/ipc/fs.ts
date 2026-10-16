@@ -267,6 +267,26 @@ export async function assertReadable(target: string): Promise<ReadablePath> {
   return { path: file, real }
 }
 
+/**
+ * A folder that may be listed deeply or watched: readable, inside the home folder or a temporary folder once
+ * symlinks resolve, and not a whole system folder such as `/`, `/tmp` or the Hermes home. As the caller wrote it,
+ * without a trailing separator.
+ */
+export async function assertProjectFolder(target: string): Promise<string> {
+  const { path: root, real } = await assertReadable(target)
+  const places = await resolvedPlaces()
+
+  if (path.dirname(real) === real || [...places.temps, ...places.hermes].some(dir => comparable(dir) === comparable(real))) {
+    throw new Error(`${root} is a system folder, not a project folder`)
+  }
+
+  if (![...places.homes, ...places.temps].some(dir => within(real, dir))) {
+    throw new Error('project folders must be inside your home folder')
+  }
+
+  return root
+}
+
 async function dirSize(target: string, budgetMs = 4000): Promise<{ bytes: number; files: number; complete: boolean }> {
   const root = (await assertReadable(target)).real
   const deadline = Date.now() + budgetMs
@@ -319,7 +339,7 @@ const skipped = (relative: string): boolean => relative.split(path.sep).some(par
 
 /** Project folders must be real directories inside the home folder. */
 async function projectRoot(target: string): Promise<string> {
-  const root = normalizeUserPath(target)
+  const root = await assertProjectFolder(target)
 
   if (!root.startsWith(os.homedir() + path.sep) && !root.startsWith('/tmp/') && !root.startsWith('/private/tmp/')) {
     throw new Error('project folders must be inside your home folder')

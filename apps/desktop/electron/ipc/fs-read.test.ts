@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp' }
 }))
 
-const { HOME_SECRETS, assertReadable, assertWritable, readDir, readFile, registerFsIpc } = await import('./fs.ts')
+const { HOME_SECRETS, assertProjectFolder, assertReadable, assertWritable, readDir, readFile, registerFsIpc } = await import('./fs.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { IPC } = await import('../../shared/ipc.ts')
 
@@ -239,5 +239,65 @@ describe('read-type IPC', () => {
     fs.symlinkSync(`${home}/.aws/credentials`, `${home}/photo.png`)
 
     await expect(invoke(IPC.canvasReadImage, `${home}/photo.png`)).rejects.toThrow(PROTECTED)
+  })
+})
+
+describe('project folders for the Studio tree and its watcher', () => {
+  const listed = async (root: string): Promise<string[]> => ((await invoke(IPC.fsListTree, root, 100)) as { entries: Array<{ path: string }> }).entries.map(entry => entry.path).sort()
+
+  it('lists and watches a project inside the home folder, with or without a trailing separator', async () => {
+    const files = [`${home}/Projects/site/.env`, `${home}/Projects/site/index.html`]
+
+    expect(await listed(`${home}/Projects/site`)).toEqual(files)
+    expect(await listed(`${home}/Projects/site/`)).toEqual(files)
+    expect(await listed(`${home}/Projects/site//`)).toEqual(files)
+    expect(await invoke(IPC.fsWatchTree, `${home}/Projects/site/`)).toMatch(/^tree-\d+$/)
+  })
+
+  it('refuses a symlink in the home folder that leads to /etc', async () => {
+    fs.symlinkSync('/etc', `${home}/etc`)
+    fs.symlinkSync('/', `${home}/root`)
+
+    await expect(invoke(IPC.fsListTree, `${home}/etc`, 100)).rejects.toThrow(OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/etc/`, 100)).rejects.toThrow(OUTSIDE)
+    await expect(invoke(IPC.fsWatchTree, `${home}/etc`)).rejects.toThrow(OUTSIDE)
+    await expect(invoke(IPC.fsListTree, `${home}/root`, 100)).rejects.toThrow(OUTSIDE)
+  })
+
+  it('refuses a symlink in the home folder that leads to a credential store', async () => {
+    fs.symlinkSync(`${home}/.ssh`, `${home}/Projects/keys`)
+
+    await expect(invoke(IPC.fsListTree, `${home}/Projects/keys`, 100)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsListTree, `${home}/.aws`, 100)).rejects.toThrow(PROTECTED)
+  })
+
+  it('refuses the temporary folders and the root themselves, however they are written', async () => {
+    for (const root of ['/tmp', '/tmp/', '/tmp//', '/private/tmp/', `${os.tmpdir()}/`, '/tmp/../tmp', '/', '//']) {
+      await expect(invoke(IPC.fsListTree, root, 100)).rejects.toThrow(/system folder|only reads files inside/)
+      await expect(invoke(IPC.fsWatchTree, root)).rejects.toThrow(/system folder|only reads files inside/)
+    }
+  })
+
+  it('refuses the Hermes home as a project, and a symlink to /tmp', async () => {
+    fs.symlinkSync('/tmp', `${home}/scratch`)
+
+    await expect(assertProjectFolder(hermes)).rejects.toThrow(/system folder/)
+    await expect(assertProjectFolder(`${hermes}/`)).rejects.toThrow(/system folder/)
+    await expect(invoke(IPC.fsListTree, `${home}/scratch/`, 100)).rejects.toThrow(/system folder/)
+  })
+
+  it('still accepts a project folder inside a temporary folder', async () => {
+    const dir = fs.mkdtempSync('/tmp/herald-project-')
+
+    try {
+      fs.writeFileSync(path.join(dir, 'index.html'), '')
+      expect(await listed(`${dir}/`)).toEqual([path.join(dir, 'index.html')])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses .. that climbs out of the home folder', async () => {
+    await expect(invoke(IPC.fsListTree, `${home}/Projects/../../../../../../etc`, 100)).rejects.toThrow(OUTSIDE)
   })
 })

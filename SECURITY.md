@@ -41,7 +41,8 @@ These are the guarantees Herald OS aims for. Breaking one of them is a vulnerabi
   they read through that API (listings, previews, thumbnails, `exists`, watches) stays in the home
   folder, the Hermes home and the temporary folders, judged after symlinks resolve, and never
   reaches a credential store: `~/.ssh`, `~/.gnupg`, `~/.aws`, keychains, and `.env` files and
-  `auth.json` in the Hermes home, among others.
+  `auth.json` in the Hermes home, among others. A project tree is never `/` or a whole temporary
+  folder.
 - **Web content is contained.** Web windows, file viewers and the Studio preview have no preload,
   run in their own storage partitions, are denied every permission, cannot download files and
   cannot open pop-ups. The Studio preview loads web pages and files inside the project folder,
