@@ -309,8 +309,48 @@ export async function assertProjectFolder(target: string): Promise<string> {
 }
 
 export interface WritableOptions {
-  /** The entry itself (a rename or a trash moves a symlink, not what it points to): only its folder is resolved. */
+  /**
+   * The entry itself (a rename or a trash moves a symlink, not what it points to): only its folder is resolved, and an
+   * entry that holds a credential store, or would once a rename lands, is refused.
+   */
   entry?: boolean
+}
+
+/** The most entries looked through for `.env` files before a folder in a Hermes home is taken to hold one. */
+const ENV_SEARCH_LIMIT = 5000
+
+/** Whether `dir` holds a `.env` or `.env.*` file anywhere below it; a search that runs out counts as yes. */
+async function holdsEnvFile(dir: string): Promise<boolean> {
+  const stack = [dir]
+  let seen = 0
+
+  while (stack.length) {
+    const current = stack.pop()!
+    const dirents = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
+
+    for (const dirent of dirents) {
+      if (++seen > ENV_SEARCH_LIMIT || isEnvFile(dirent.name)) {
+        return true
+      }
+
+      if (dirent.isDirectory()) {
+        stack.push(path.join(current, dirent.name))
+      }
+    }
+  }
+
+  return false
+}
+
+/** Whether moving or trashing `file` (resolved: `real`) would carry a credential store with it, or put one in place. */
+async function holdsSecret(file: string, real: string, places: Places): Promise<boolean> {
+  if (places.secrets.some(secret => within(secret, file) || within(secret, real))) {
+    return true
+  }
+
+  const inHermes = places.hermes.some(hermes => within(file, hermes) || within(real, hermes))
+
+  return inHermes && (await fs.lstat(real).then(stat => stat.isDirectory(), () => false)) && holdsEnvFile(real)
 }
 
 /**
@@ -336,6 +376,10 @@ export async function checkWritable(target: string, options: WritableOptions = {
 
   if ([file, real].some(candidate => SYSTEM_ROOTS.some(root => within(candidate, root)))) {
     throw new Error(`${file} is a protected location`)
+  }
+
+  if (options.entry && (await holdsSecret(file, real, places))) {
+    throw new Error(`${file} holds a protected location`)
   }
 
   return { path: file, real }

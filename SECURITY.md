@@ -43,8 +43,9 @@ These are the guarantees Herald OS aims for. Breaking one of them is a vulnerabi
   and after symlinks resolve, so a link to one, or the folder a linked `~/.ssh` points to, counts
   as one. Single files and folder listings may come from anywhere else; deep walks (project
   trees, watches, folder sizes) stay in the home folder, the Hermes home and the temporary
-  folders, skip credential stores, and never start at `/` or a whole temporary folder. Writes
-  stay in the home and temporary folders.
+  folders, skip credential stores, and never start at `/` or a whole temporary folder. Writes stay in the home and temporary folders, and a rename or a trash
+  never moves a folder that holds a credential store, nor puts one where a credential store
+  belongs.
 - **Web content is contained.** Web windows, file viewers and the Studio preview have no preload,
   run in their own storage partitions, are denied every permission, cannot download files and
   cannot open pop-ups. The Studio preview loads web pages and files inside the project folder,

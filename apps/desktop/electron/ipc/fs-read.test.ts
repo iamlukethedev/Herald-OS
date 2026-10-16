@@ -38,6 +38,7 @@ const invoke = (channel: string, ...args: unknown[]): Promise<unknown> => Promis
 const PROTECTED = /is a protected location/
 const CONFINED = /only looks through folders inside your home folder/
 const EDITS = /only edits files inside your home folder/
+const HOLDS = /holds a protected location/
 const PROJECT_OUTSIDE = /project folders must be inside your home folder/
 
 let home: string
@@ -382,6 +383,64 @@ describe('writes through links', () => {
     expect(content('Projects/new/deep/file.txt')).toBe('new')
     expect(fs.readFileSync(`${home}/Pictures/out.png`)).toEqual(Buffer.from([1, 2]))
     expect(fs.readFileSync(`${home}/Pictures/shot.png`)).toEqual(Buffer.from([0]))
+  })
+})
+
+describe('moving and trashing folders that hold credential stores', () => {
+  const exists = (file: string): boolean => fs.existsSync(path.join(home, file))
+
+  it('refuses to rename or trash ~/.config, which holds the gh token', async () => {
+    await expect(invoke(IPC.fsRename, `${home}/.config`, `${home}/cfg2`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsTrash, [`${home}/.config`])).rejects.toThrow(HOLDS)
+    expect(exists('.config/gh/hosts.yml')).toBe(true)
+    expect(exists('cfg2')).toBe(false)
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
+  it('refuses to rename or trash a dotfiles folder holding where ~/.ssh leads', async () => {
+    moveBehindLink('.ssh', 'dotfiles/ssh')
+
+    await expect(invoke(IPC.fsRename, `${home}/dotfiles`, `${home}/moved`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsTrash, [`${home}/dotfiles`])).rejects.toThrow(HOLDS)
+    expect(exists('moved')).toBe(false)
+    await expect(readFile(`${home}/moved/ssh/id_rsa`)).rejects.toThrow(/ENOENT/)
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
+  it('refuses to rename or trash ~/Library, which holds the keychains and cookies', async () => {
+    await expect(invoke(IPC.fsRename, `${home}/Library`, `${home}/Library-old`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsTrash, [`${home}/Library`])).rejects.toThrow(HOLDS)
+  })
+
+  it('refuses to rename or trash a Hermes home or a folder in it that holds a .env', async () => {
+    write('.hermes/skills/deploy/.env', 'TOKEN=x')
+
+    await expect(invoke(IPC.fsRename, hermes, `${home}/hermes-old`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsRename, `${hermes}/profiles/work`, `${home}/work`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsRename, `${hermes}/skills`, `${home}/skills`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsTrash, [`${hermes}/skills/deploy`])).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsTrash, [hermes])).rejects.toThrow(HOLDS)
+  })
+
+  it('refuses a rename that would put a folder where a credential store belongs', async () => {
+    write('stuff/gh/hosts.yml', 'oauth_token: planted')
+    fs.rmSync(path.join(home, '.config'), { recursive: true })
+
+    await expect(invoke(IPC.fsRename, `${home}/stuff`, `${home}/.config`)).rejects.toThrow(HOLDS)
+    await expect(invoke(IPC.fsRename, `${home}/stuff`, `${home}/.ssh-new`)).resolves.toBeUndefined()
+    expect(exists('.config')).toBe(false)
+  })
+
+  it('still renames and trashes ordinary folders, a project with its own .env included', async () => {
+    write('.hermes/skills/notes/notes.md', '')
+
+    await invoke(IPC.fsRename, `${home}/Projects/site`, `${home}/Projects/site2`)
+    await invoke(IPC.fsRename, `${hermes}/skills/notes`, `${hermes}/skills/notes-old`)
+    await invoke(IPC.fsTrash, [`${home}/Downloads`, `${home}/Projects/site2`])
+
+    expect(exists('Projects/site2/.env')).toBe(true)
+    expect(exists('.hermes/skills/notes-old/SKILL.md')).toBe(true)
+    expect(trashItem.mock.calls.map(([file]) => file)).toEqual([`${home}/Downloads`, `${home}/Projects/site2`])
   })
 })
 
