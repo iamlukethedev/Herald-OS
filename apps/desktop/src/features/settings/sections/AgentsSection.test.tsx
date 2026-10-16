@@ -209,6 +209,19 @@ describe('Hermes & agents', () => {
     expect(statusLine(host)).toBe(t(key))
   })
 
+  // The gateway client here has no socket, so every request it is asked for rejects with its own English.
+  it.each(['pt-BR', 'zh-CN'] as const)("says the gateway is not connected in %s, not in the client's English", async language => {
+    $connection.set('open')
+    $connectionEpoch.set(1)
+    const host = await show(language)
+    const notConnected = t('settings.agents.gatewayNotConnected')
+
+    expect(notConnected).not.toBe(en['settings.agents.gatewayNotConnected'])
+    expect(host.textContent).toContain(t('settings.agents.autonomyUnreadable', { error: notConnected }))
+    expect(host.textContent).toContain(t('settings.agents.provider.unreadable', { error: notConnected }))
+    expect(host.innerHTML).not.toContain('gateway not connected')
+  })
+
   it('opens the activity history in the language chosen', async () => {
     const host = await show('zh-CN')
     await openHistory(host)
