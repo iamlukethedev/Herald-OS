@@ -49,3 +49,6 @@ linux/vm/build/
 *.raw
 *.iso
 *.dmg
+
+# bootc-image-builder's output folder (docs/BUILDING-THE-IMAGE.md).
+/output/
