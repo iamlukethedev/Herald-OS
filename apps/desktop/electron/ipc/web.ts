@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type WebOpenOptions, type WebViewBounds, type WebViewEvent } from '../../shared/ipc.ts'
 import { isViewable } from '../../shared/viewer.ts'
 import { log } from '../log.ts'
-import { assertReadable } from './fs.ts'
+import { assertPreviewFolder, assertReadable } from './fs.ts'
 
 /*
  * Embedded web pages. Herald OS is a whole environment, so a web page (the provider sign-in portal,
@@ -106,7 +106,7 @@ export class WebViews {
 
   register(): void {
     ipcMain.handle(IPC.webOpen, (event, url: string, options: WebOpenOptions = {}) => this.open(event.sender, url, options))
-    ipcMain.handle(IPC.webOpenFile, async (event, filePath: string, options: WebOpenOptions = {}) => this.openFile(event.sender, (await assertReadable(String(filePath))).path, options))
+    ipcMain.handle(IPC.webOpenFile, async (event, filePath: string, options: WebOpenOptions = {}) => this.openFile(event.sender, (await assertReadable(String(filePath))).real, options))
     ipcMain.on(IPC.webSetBounds, (event, id: string, bounds: WebViewBounds, visible: boolean) => this.setBounds(event.sender, id, bounds, visible))
     ipcMain.handle(IPC.webClose, (event, id: string) => this.close(id, event.sender))
     ipcMain.handle(IPC.webOpenPreview, (event, target: string, options: WebOpenOptions = {}) => this.openPreview(event.sender, target, options))
@@ -125,12 +125,10 @@ export class WebViews {
    * A Studio preview: a web page (usually the dev server on localhost) or a local file inside the
    * project folder (`options.root`), for static sites. Links between the project's own pages work.
    */
-  openPreview(owner: WebContents, target: string, options: WebOpenOptions): string {
-    const root = typeof options.root === 'string' && options.root ? resolveHomePath(options.root) : null
-
-    if (root && !root.startsWith(os.homedir() + path.sep)) {
-      throw new Error('a preview folder must be inside your home folder')
-    }
+  async openPreview(owner: WebContents, target: string, options: WebOpenOptions): Promise<string> {
+    // Strictly inside the home folder, holding no credential store; every file it serves is checked again on request.
+    const folder = typeof options.root === 'string' && options.root ? await assertPreviewFolder(resolveHomePath(options.root)) : null
+    const root = folder?.path ?? null
 
     lockDownPartition(WEB_PARTITION)
     lockDownPartition(PREVIEW_PARTITION)
@@ -143,8 +141,8 @@ export class WebViews {
     this.entries.set(id, entry)
     this.previewRoots.set(id, root)
 
-    if (root) {
-      this.previewFolders.set(id, realPath(root))
+    if (folder) {
+      this.previewFolders.set(id, folder.real)
     }
     const contents = entry.kind === 'view' ? entry.view.webContents : entry.win.webContents
     this.guardPreview(id, contents)
@@ -473,10 +471,22 @@ export function lockDownPartition(partition: string): void {
 
 const confinedPartitions = new Set<string>()
 
+/** The resolved file a confined file:// request is served from, or null: never a credential store, and only what `allows` accepts. */
+export async function servableFile(url: string, allows: (file: string) => boolean): Promise<string | null> {
+  try {
+    const { real } = await assertReadable(fileURLToPath(url))
+
+    return allows(real) ? real : null
+  } catch {
+    // Malformed URLs and credential stores are refused like the rest.
+    return null
+  }
+}
+
 /**
  * Electron lets a file:// page read every other file:// URL, so a previewed site or an SVG in the
  * viewer could read ~/.hermes/.env. Here a partition serves only the files `allows` accepts, judged
- * after symlinks resolve; anything else looks missing.
+ * after symlinks resolve, and never a credential store; anything else looks missing.
  */
 function confineFiles(partition: string, allows: (file: string) => boolean): void {
   if (confinedPartitions.has(partition)) {
@@ -485,12 +495,14 @@ function confineFiles(partition: string, allows: (file: string) => boolean): voi
 
   confinedPartitions.add(partition)
   session.fromPartition(partition).protocol.handle('file', async request => {
+    const file = await servableFile(request.url, allows)
+
     try {
-      if (allows(await fs.promises.realpath(fileURLToPath(request.url)))) {
-        return await net.fetch(request, { bypassCustomProtocolHandlers: true })
+      if (file) {
+        return await net.fetch(pathToFileURL(file).toString(), { headers: request.headers, bypassCustomProtocolHandlers: true })
       }
     } catch {
-      // Missing files and malformed URLs are refused like the rest.
+      // Missing files are refused like the rest.
     }
 
     return new Response(null, { status: 404 })

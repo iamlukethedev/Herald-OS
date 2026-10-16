@@ -42,9 +42,16 @@ export function normalizeUserPath(input: string): string {
   return path.normalize(expanded)
 }
 
+/**
+ * One level of a folder. In a Hermes home and in `~/.config`, the credential stores among the entries are left out.
+ * The listing reads the resolved folder; a folder on the way swapped for a symlink between the check and the read is
+ * not caught here, but every file in it is checked again when it is opened.
+ */
 export async function readDir(target: string): Promise<DirEntry[]> {
-  const { path: dir, real } = await assertReadable(target)
-  const dirents = await fs.readdir(real, { withFileTypes: true })
+  const { path: dir, real, places } = await checkReadable(target)
+  const configs = places.homes.map(home => path.join(home, '.config'))
+  const hides = [dir, real].some(folder => [...places.hermes, ...configs].some(root => within(folder, root)))
+  const dirents = (await fs.readdir(real, { withFileTypes: true })).filter(dirent => !hides || ![path.join(dir, dirent.name), path.join(real, dirent.name)].some(file => isSecret(file, places)))
   const entries = await Promise.all(
     dirents.map(async dirent => {
       const full = path.join(dir, dirent.name)
@@ -88,7 +95,8 @@ export async function readDir(target: string): Promise<DirEntry[]> {
 }
 
 export async function readFile(target: string): Promise<FilePreview> {
-  const { path: file, real } = await assertReadable(target)
+  const checked = await assertReadable(target)
+  const { path: file, real } = checked
   const stat = await fs.stat(real)
 
   if (stat.isDirectory()) {
@@ -103,7 +111,7 @@ export async function readFile(target: string): Promise<FilePreview> {
       return { path: file, kind: 'too-large', size: stat.size, mime: imageMime }
     }
 
-    const image = await openChecked(real, fsConstants.O_RDONLY)
+    const image = await openChecked(checked, fsConstants.O_RDONLY)
     let data: Buffer
 
     try {
@@ -116,7 +124,7 @@ export async function readFile(target: string): Promise<FilePreview> {
   }
 
   const looksText = TEXT_EXTENSIONS.has(ext) || ext === '' || /^\.[a-z0-9]{1,6}rc$/.test(ext)
-  const handle = await openChecked(real, fsConstants.O_RDONLY)
+  const handle = await openChecked(checked, fsConstants.O_RDONLY)
 
   try {
     const probe = Buffer.alloc(Math.min(8192, stat.size))
@@ -301,6 +309,17 @@ function isSecret(file: string, places: Places): boolean {
   )
 }
 
+/** The credential store `file` lies in, as its own entry in its parent folder: the outermost folder (or file) that is one. */
+function storeEntry(file: string, places: Places): string {
+  let entry = file
+
+  for (let parent = path.dirname(entry); parent !== entry && isSecret(parent, places); parent = path.dirname(parent)) {
+    entry = parent
+  }
+
+  return entry
+}
+
 /** Whether a path under `root` (as the caller wrote it) is a credential store, by its spelling or by where it resolves. */
 async function secretsUnder(root: string): Promise<(file: string) => boolean> {
   const [places, real] = await Promise.all([resolvedPlaces(), realpathDeep(root)])
@@ -331,11 +350,31 @@ async function outsideSecrets(file: string, places: Places, resolve: (file: stri
   return real
 }
 
-/** Paths the shell may read, stat or list one level of: anywhere but a credential store ({@link isSecret}), wherever a path or its target lands. */
-export async function assertReadable(target: string): Promise<CheckedPath> {
+async function checkReadable(target: string): Promise<CheckedPath & { places: Places }> {
   const file = withoutTrailingSeparator(normalizeUserPath(target))
+  const places = await resolvedPlaces()
 
-  return { path: file, real: await outsideSecrets(file, await resolvedPlaces()) }
+  return { path: file, real: await outsideSecrets(file, places), places }
+}
+
+/** Paths the shell may read, stat, open or list one level of: anywhere but a credential store ({@link isSecret}), wherever a path or its target lands. */
+export async function assertReadable(target: string): Promise<CheckedPath> {
+  const { path: file, real } = await checkReadable(target)
+
+  return { path: file, real }
+}
+
+/**
+ * What to show in the file manager for `target`: the path itself, or for a path in a credential store, the store's own
+ * entry in its parent folder. The file manager then never opens a store, and nothing comes back to the window.
+ */
+export async function revealablePath(target: string): Promise<string> {
+  const file = withoutTrailingSeparator(normalizeUserPath(target))
+  const places = await resolvedPlaces()
+  const real = await realpathDeep(file)
+  const secret = [file, real].find(candidate => isSecret(candidate, places))
+
+  return secret ? storeEntry(secret, places) : file
 }
 
 /**
@@ -343,9 +382,7 @@ export async function assertReadable(target: string): Promise<CheckedPath> {
  * temporary folder once symlinks resolve.
  */
 export async function assertConfined(target: string, outside = 'Herald OS only looks through folders inside your home folder'): Promise<CheckedPath> {
-  const file = withoutTrailingSeparator(normalizeUserPath(target))
-  const places = await resolvedPlaces()
-  const real = await outsideSecrets(file, places)
+  const { path: file, real, places } = await checkReadable(target)
 
   if (![...places.homes, ...places.hermes, ...places.temps].some(root => within(real, root))) {
     throw new Error(outside)
@@ -376,19 +413,11 @@ export async function assertProjectFolder(target: string): Promise<string> {
   return root
 }
 
-export interface WritableOptions {
-  /**
-   * The entry itself (a rename or a trash moves a symlink, not what it points to): only its folder is resolved, and an
-   * entry that holds a credential store, or would once a rename lands, is refused.
-   */
-  entry?: boolean
-}
+/** The most entries looked through for `.env` files before a folder in a Hermes home is refused as too large to check. */
+export const ENV_SEARCH_LIMIT = 5000
 
-/** The most entries looked through for `.env` files before a folder in a Hermes home is taken to hold one. */
-const ENV_SEARCH_LIMIT = 5000
-
-/** Whether `dir` holds a `.env` or `.env.*` file anywhere below it; a search that runs out counts as yes. */
-async function holdsEnvFile(dir: string): Promise<boolean> {
+/** Whether `dir` holds a `.env` or `.env.*` file anywhere below it; `unknown` when the search runs out first. */
+async function holdsEnvFile(dir: string): Promise<boolean | 'unknown'> {
   const stack = [dir]
   let seen = 0
 
@@ -397,8 +426,12 @@ async function holdsEnvFile(dir: string): Promise<boolean> {
     const dirents = await fs.readdir(current, { withFileTypes: true }).catch(() => [])
 
     for (const dirent of dirents) {
-      if (++seen > ENV_SEARCH_LIMIT || isEnvFile(dirent.name)) {
+      if (isEnvFile(dirent.name)) {
         return true
+      }
+
+      if (++seen > ENV_SEARCH_LIMIT) {
+        return 'unknown'
       }
 
       if (dirent.isDirectory()) {
@@ -410,15 +443,49 @@ async function holdsEnvFile(dir: string): Promise<boolean> {
   return false
 }
 
-/** Whether moving or trashing `file` (resolved: `real`) would carry a credential store with it, or put one in place. */
-async function holdsSecret(file: string, real: string, places: Places): Promise<boolean> {
+/** Refuse a folder that holds a credential store (`file`, resolved: `real`), or would once moved into place. */
+async function refuseHoldingSecret(file: string, real: string, places: Places): Promise<void> {
   if (places.secrets.some(secret => within(secret, file) || within(secret, real))) {
-    return true
+    throw new Error(`${file} holds a protected location`)
   }
 
-  const inHermes = places.hermes.some(hermes => within(file, hermes) || within(real, hermes))
+  if (!places.hermes.some(hermes => within(file, hermes) || within(real, hermes)) || !(await fs.lstat(real).then(stat => stat.isDirectory(), () => false))) {
+    return
+  }
 
-  return inHermes && (await fs.lstat(real).then(stat => stat.isDirectory(), () => false)) && holdsEnvFile(real)
+  const env = await holdsEnvFile(real)
+
+  if (env === 'unknown') {
+    throw new Error(`${file} is too large to check for protected files`)
+  }
+
+  if (env) {
+    throw new Error(`${file} holds a protected location`)
+  }
+}
+
+/** A Studio preview's folder: a project folder strictly inside the home folder, as written and resolved, that holds no credential store. */
+export async function assertPreviewFolder(target: string): Promise<CheckedPath> {
+  const root = await assertProjectFolder(target)
+  const places = await resolvedPlaces()
+  const real = await realpathDeep(root)
+  const insideHome = (candidate: string) => places.homes.some(home => within(candidate, home) && comparable(candidate) !== comparable(home))
+
+  if (!insideHome(root) || !insideHome(real)) {
+    throw new Error('a preview folder must be inside your home folder')
+  }
+
+  await refuseHoldingSecret(root, real, places)
+
+  return { path: root, real }
+}
+
+export interface WritableOptions {
+  /**
+   * The entry itself (a rename or a trash moves a symlink, not what it points to): only its folder is resolved, and an
+   * entry that holds a credential store, or would once a rename lands, is refused.
+   */
+  entry?: boolean
 }
 
 /**
@@ -446,8 +513,8 @@ export async function checkWritable(target: string, options: WritableOptions = {
     throw new Error(`${file} is a protected location`)
   }
 
-  if (options.entry && (await holdsSecret(file, real, places))) {
-    throw new Error(`${file} holds a protected location`)
+  if (options.entry) {
+    await refuseHoldingSecret(file, real, places)
   }
 
   return { path: file, real }
@@ -458,17 +525,48 @@ export async function assertWritable(target: string, options: WritableOptions = 
   return (await checkWritable(target, options)).path
 }
 
-/** Open a checked, resolved path without following a symlink put in its place after the check. */
-export function openChecked(real: string, flags: number): Promise<fs.FileHandle> {
-  return fs.open(real, flags | (fsConstants.O_NOFOLLOW ?? 0))
-}
-
-/** Write a whole file at a checked, resolved path, creating its folder. */
-export async function writeChecked(real: string, data: string | Uint8Array): Promise<void> {
-  await fs.mkdir(path.dirname(real), { recursive: true })
-  const handle = await openChecked(real, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC)
+/**
+ * Open a checked path through its resolved form, without following a symlink put in its place after the check, and
+ * make sure the file opened is the one checked. A folder on the way swapped for a symlink between the check and the
+ * open is caught here: on Linux by the path the kernel reports for the open file; elsewhere by resolving the path
+ * again and comparing the file there with the one open, which leaves only a swap undone and redone in between.
+ */
+export async function openChecked(checked: CheckedPath, flags: number): Promise<fs.FileHandle> {
+  const handle = await fs.open(checked.real, flags | (fsConstants.O_NOFOLLOW ?? 0))
 
   try {
+    if (!(await opensChecked(handle, checked))) {
+      throw new Error(`${checked.path} changed while it was being opened`)
+    }
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+
+  return handle
+}
+
+async function opensChecked(handle: fs.FileHandle, checked: CheckedPath): Promise<boolean> {
+  if (process.platform === 'linux') {
+    const opened = await fs.realpath(`/proc/self/fd/${handle.fd}`).catch(() => null)
+
+    if (opened !== null) {
+      return opened === checked.real
+    }
+  }
+
+  const [opened, now, there] = await Promise.all([handle.stat(), realpathDeep(checked.path).catch(() => null), fs.stat(checked.real).catch(() => null)])
+
+  return now === checked.real && there !== null && there.dev === opened.dev && there.ino === opened.ino
+}
+
+/** Write a whole file at a checked path through its resolved form, creating its folder. Nothing is truncated before the open is verified. */
+export async function writeChecked(checked: CheckedPath, data: string | Uint8Array): Promise<void> {
+  await fs.mkdir(path.dirname(checked.real), { recursive: true })
+  const handle = await openChecked(checked, fsConstants.O_WRONLY | fsConstants.O_CREAT)
+
+  try {
+    await handle.truncate(0)
     await handle.writeFile(data)
   } finally {
     await handle.close()
@@ -668,13 +766,14 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null
   })
   ipcMain.handle(IPC.fsWriteText, async (_event, target: string, content: string, options?: WriteTextOptions) => {
-    const { path: file, real } = await checkWritable(target)
+    const checked = await checkWritable(target)
+    const file = checked.path
 
     if (options?.atomic) {
       return writeTextAtomic(file, String(content), options.expect === undefined ? {} : { expect: options.expect === null ? null : String(options.expect) })
     }
 
-    await writeChecked(real, String(content))
+    await writeChecked(checked, String(content))
 
     return true
   })
@@ -744,7 +843,7 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
     try {
       await printer.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(String(html))}`)
       const pdf = await printer.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 } })
-      await writeChecked((await checkWritable(picked.filePath)).real, pdf)
+      await writeChecked(await checkWritable(picked.filePath), pdf)
 
       return picked.filePath
     } finally {
@@ -774,13 +873,14 @@ export function registerFsIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.fsDirSize, (_event, target: string) => dirSize(target))
   ipcMain.handle(IPC.fsReadDir, (_event, target: string) => readDir(target))
   ipcMain.handle(IPC.fsReadFile, (_event, target: string) => readFile(target))
-  ipcMain.handle(IPC.fsReveal, (_event, target: string) => hostPlatform().revealPath(normalizeUserPath(target)))
+  // A path in a credential store shows the store's entry in its parent folder instead (see revealablePath).
+  ipcMain.handle(IPC.fsReveal, async (_event, target: string) => hostPlatform().revealPath(await revealablePath(target)))
   ipcMain.handle(IPC.fsOpenPath, async (_event, target: string) => {
-    const error = await shell.openPath(normalizeUserPath(target))
+    const error = await shell.openPath((await assertReadable(target)).real)
 
     if (error) {
       throw new Error(error)
     }
   })
-  ipcMain.handle(IPC.fsOpenIn, (_event, editor: EditorTarget, target: string) => hostPlatform().openIn(editor, normalizeUserPath(target)))
+  ipcMain.handle(IPC.fsOpenIn, async (_event, editor: EditorTarget, target: string) => hostPlatform().openIn(editor, (await assertReadable(target)).real))
 }

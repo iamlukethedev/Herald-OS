@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc.ts'
 import { hostPlatform } from '../platform/index.ts'
-import { normalizeUserPath } from './fs.ts'
+import { assertReadable } from './fs.ts'
 
 const iconCache = new Map<string, string>()
 const inflight = new Map<string, Promise<string>>()
@@ -64,6 +64,6 @@ function iconFor(appPath: string): Promise<string> {
 
 export function registerAppsIpc(): void {
   ipcMain.handle(IPC.appsList, () => hostPlatform().listInstalledApps())
-  ipcMain.handle(IPC.appsLaunch, (_event, appPath: string) => hostPlatform().launchApp(normalizeUserPath(appPath)))
-  ipcMain.handle(IPC.appsIcon, (_event, appPath: string) => iconFor(normalizeUserPath(appPath)))
+  ipcMain.handle(IPC.appsLaunch, async (_event, appPath: string) => hostPlatform().launchApp((await assertReadable(appPath)).real))
+  ipcMain.handle(IPC.appsIcon, async (_event, appPath: string) => iconFor((await assertReadable(appPath)).real))
 }

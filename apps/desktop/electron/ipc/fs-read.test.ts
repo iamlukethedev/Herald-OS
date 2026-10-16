@@ -1,11 +1,21 @@
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>())
 const trashItem = vi.hoisted(() => vi.fn(async (_file: string) => undefined))
+const openPath = vi.hoisted(() => vi.fn(async (_file: string) => ''))
+const platform = vi.hoisted(() => ({
+  launchApp: vi.fn(async (_file: string) => undefined),
+  appIcon: vi.fn(async (_file: string) => Buffer.from('icon')),
+  revealPath: vi.fn(async (_file: string) => undefined),
+  openIn: vi.fn(async (_editor: string, _file: string) => undefined),
+  thumbnail: vi.fn(async () => null)
+}))
 
 vi.mock('electron', () => ({
   BrowserWindow: class {},
@@ -20,14 +30,18 @@ vi.mock('electron', () => ({
       return image
     }
   },
-  shell: { trashItem },
+  session: { fromPartition: () => ({ setPermissionRequestHandler: () => {}, setPermissionCheckHandler: () => {}, setDevicePermissionHandler: () => {}, on: () => {}, protocol: { handle: () => {} } }) },
+  shell: { trashItem, openPath },
   systemPreferences: {},
   webContents: { getAllWebContents: () => [] },
   app: { getPath: () => '/tmp', on: () => {} }
 }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
+vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
-const { HOME_SECRETS, assertProjectFolder, assertReadable, assertWritable, readDir, readFile, registerFsIpc } = await import('./fs.ts')
+const { HOME_SECRETS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
+const { WebViews, registerWebIpc, servableFile } = await import('./web.ts')
+const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { registerOfficeIpc } = await import('../office/ipc.ts')
 const { registerCaptureIpc } = await import('./capture.ts')
@@ -39,6 +53,24 @@ registerCanvasIpc(() => null)
 registerOfficeIpc(() => null)
 registerCaptureIpc(() => {})
 registerThemeIpc({ panels: false, broadcast: () => {}, backend: {} as never })
+registerAppsIpc()
+const openFile = vi.spyOn(WebViews.prototype, 'openFile').mockReturnValue('web-1')
+registerWebIpc(false)
+
+/** Outside every temporary root, so a path outside the home folder is never let in as a temporary one. */
+const BASE = fs.realpathSync(fs.existsSync('/var/tmp') ? '/var/tmp' : os.homedir())
+
+/** Run `test` as if on `name` (process.platform), for the macOS and Windows rules. */
+async function onPlatform(name: NodeJS.Platform, test: () => Promise<void>): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...original, value: name })
+
+  try {
+    await test()
+  } finally {
+    Object.defineProperty(process, 'platform', original)
+  }
+}
 
 const owner = () => Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() })
 let sender = owner()
@@ -47,6 +79,7 @@ const PROTECTED = /is a protected location/
 const CONFINED = /only looks through folders inside your home folder/
 const EDITS = /only edits files inside your home folder/
 const HOLDS = /holds a protected location/
+const CHANGED = /changed while it was being opened/
 const PROJECT_OUTSIDE = /project folders must be inside your home folder/
 
 let home: string
@@ -74,11 +107,14 @@ const listed = async (root: string): Promise<string[]> => ((await invoke(IPC.fsL
 const size = async (dir: string) => (await invoke(IPC.fsDirSize, dir)) as { bytes: number; files: number; complete: boolean }
 
 beforeEach(() => {
-  home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herald-read-')))
+  home = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-read-')))
   hermes = path.join(home, '.hermes')
   vi.stubEnv('HOME', home)
   vi.stubEnv('HERMES_HOME', '')
   trashItem.mockClear()
+  openPath.mockClear()
+  openFile.mockClear()
+  Object.values(platform).forEach(mock => mock.mockClear())
 
   write('.ssh/id_rsa', 'PRIVATE KEY')
   write('.gnupg/private-keys-v1.d/key.key', 'GPG')
@@ -123,8 +159,12 @@ describe('reading the places the shell reads', () => {
     expect((await readFile(`${hermes}/config.yaml`)).content).toBe('model: x')
     expect((await readFile(`${hermes}/skills/notes/SKILL.md`)).content).toBe('# Notes')
     expect((await readFile(`${hermes}/herald-os/office/slide-themes.json`)).content).toBe('[]')
-    // The Hermes home lists its files by name, `.env` included; reading one is what is refused.
-    expect(await names(hermes)).toEqual(expect.arrayContaining(['.env', 'auth.json', 'memories']))
+  })
+
+  it('keeps the test home outside every temporary folder', () => {
+    const temps = [os.tmpdir(), '/tmp', '/private/tmp'].filter(dir => fs.existsSync(dir))
+
+    expect(temps.some(dir => home.startsWith(fs.realpathSync(dir) + path.sep))).toBe(false)
   })
 
   it("reads a Studio project's files, its own .env included", async () => {
@@ -161,7 +201,7 @@ describe('reading the places the shell reads', () => {
   })
 
   it('reads a Hermes home that HERMES_HOME moved, and still refuses its keys', async () => {
-    const moved = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'herald-hermes-')))
+    const moved = fs.realpathSync(fs.mkdtempSync(path.join(BASE, 'herald-hermes-')))
     vi.stubEnv('HERMES_HOME', moved)
 
     try {
@@ -666,5 +706,176 @@ describe('more credential stores', () => {
     await expect(readFile(`${home}/vault/op/data.sqlite`)).rejects.toThrow(PROTECTED)
     await expect(readFile(`${home}/Library/Group Containers/2BUA8C4S2C.com.1PASSWORD/data.sqlite`)).rejects.toThrow(PROTECTED)
     expect((await readFile(`${home}/Library/Group Containers/group.com.apple.notes/notes.json`)).content).toBe('{}')
+  })
+
+  it('leaves key files and stores out of a Hermes home listing and of ~/.config, but not of the home folder', async () => {
+    write('.config/nvim/init.lua', '')
+    link('.hermes', 'hermes-link')
+
+    expect(await names(hermes)).toEqual(expect.arrayContaining(['config.yaml', 'memories', 'profiles']))
+    expect(await names(hermes)).not.toContain('.env')
+    expect(await names(hermes)).not.toContain('auth.json')
+    expect(await names(`${home}/hermes-link`)).not.toContain('.env')
+    expect(await names(`${hermes}/profiles/work`)).toEqual([])
+    expect(await names(`${home}/.config`)).toEqual(['nvim'])
+    expect(await names(home)).toEqual(expect.arrayContaining(['.ssh', '.aws', '.config']))
+  })
+})
+
+describe('opening checked paths', () => {
+  it('does not follow a symlink in the last place of a checked path', async () => {
+    link('notes.md', 'notes-link.md')
+    const swapped = { path: `${home}/notes-link.md`, real: `${home}/notes-link.md` }
+
+    await expect(openChecked(swapped, fs.constants.O_RDONLY)).rejects.toThrow(/ELOOP|EMLINK/)
+    await expect(writeChecked(swapped, 'x')).rejects.toThrow(/ELOOP|EMLINK/)
+    expect(fs.readFileSync(`${home}/notes.md`, 'utf8')).toBe('notes')
+  })
+
+  const swapParent = () => {
+    write('.ssh/a.txt', 'PRIVATE')
+    fs.renameSync(`${home}/dir`, `${home}/dir-old`)
+    link('.ssh', 'dir')
+  }
+
+  it('refuses a file whose folder was swapped for a link to a credential store after the check', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    swapParent()
+
+    await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+    await onPlatform('darwin', async () => {
+      await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+    })
+  })
+
+  it('refuses such a write before anything is truncated', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await checkWritable(`${home}/dir/a.txt`)
+    swapParent()
+
+    await expect(writeChecked(checked, 'overwritten')).rejects.toThrow(CHANGED)
+    await onPlatform('darwin', async () => {
+      await expect(writeChecked(checked, 'overwritten')).rejects.toThrow(CHANGED)
+    })
+    expect(fs.readFileSync(`${home}/.ssh/a.txt`, 'utf8')).toBe('PRIVATE')
+  })
+
+  it('refuses a file opened while its folder was swapped and swapped back', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await assertReadable(`${home}/dir/a.txt`)
+    const realOpen = fsp.open
+    const swapped = () => vi.spyOn(fsp, 'open').mockImplementationOnce((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
+
+    swapped()
+    await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+    await onPlatform('darwin', async () => {
+      swapped()
+      await expect(openChecked(checked, fs.constants.O_RDONLY)).rejects.toThrow(CHANGED)
+    })
+  })
+
+  it('opens and writes a checked path that did not change, on Linux and macOS alike', async () => {
+    write('dir/a.txt', 'public')
+    const checked = await checkWritable(`${home}/dir/a.txt`)
+
+    await writeChecked(checked, 'longer content')
+    await writeChecked(checked, 'short')
+    expect(fs.readFileSync(`${home}/dir/a.txt`, 'utf8')).toBe('short')
+    await onPlatform('darwin', async () => {
+      await (await openChecked(checked, fs.constants.O_RDONLY)).close()
+      await writeChecked(await checkWritable(`${home}/dir/new.txt`), 'new')
+    })
+    expect(fs.readFileSync(`${home}/dir/new.txt`, 'utf8')).toBe('new')
+  })
+})
+
+describe('opening, revealing and launching', () => {
+  it('opens the resolved file in a viewer, and never a credential store', async () => {
+    write('Documents/report.pdf', '%PDF')
+    link('Documents/report.pdf', 'report-link.pdf')
+
+    await invoke(IPC.webOpenFile, `${home}/report-link.pdf`)
+    expect(openFile).toHaveBeenCalledWith(sender, `${home}/Documents/report.pdf`, {})
+    await expect(invoke(IPC.webOpenFile, `${hermes}/.env`)).rejects.toThrow(PROTECTED)
+    expect(openFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens files and folders in other apps, but not credential stores', async () => {
+    link('.ssh', 'keys')
+
+    await invoke(IPC.fsOpenPath, `${home}/notes.md`)
+    expect(openPath).toHaveBeenCalledWith(`${home}/notes.md`)
+    await expect(invoke(IPC.fsOpenPath, `${home}/.ssh/id_rsa`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsOpenPath, `${home}/keys/id_rsa`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsOpenIn, 'editor', `${hermes}/.env`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.fsOpenIn, 'terminal', `${home}/.ssh`)).rejects.toThrow(PROTECTED)
+    await invoke(IPC.fsOpenIn, 'editor', `${home}/Projects/site`)
+    expect(openPath).toHaveBeenCalledTimes(1)
+    expect(platform.openIn).toHaveBeenCalledWith('editor', `${home}/Projects/site`)
+    expect(platform.openIn).toHaveBeenCalledTimes(1)
+  })
+
+  it("reveals a credential store's own entry in its parent instead of opening the store", async () => {
+    moveBehindLink('.config', 'dotfiles/config')
+    link('.ssh', 'keys')
+
+    await invoke(IPC.fsReveal, `${home}/.ssh/id_rsa`)
+    await invoke(IPC.fsReveal, `${home}/keys/id_rsa`)
+    await invoke(IPC.fsReveal, `${home}/.config/gh/hosts.yml`)
+    await invoke(IPC.fsReveal, `${home}/dotfiles/config/gh/hosts.yml`)
+    await invoke(IPC.fsReveal, `${hermes}/profiles/work/.env`)
+    await invoke(IPC.fsReveal, `${home}/notes.md`)
+
+    expect(platform.revealPath.mock.calls.map(([file]) => file)).toEqual([`${home}/.ssh`, `${home}/.ssh`, `${home}/.config/gh`, `${home}/dotfiles/config/gh`, `${hermes}/profiles/work/.env`, `${home}/notes.md`])
+  })
+
+  it('launches apps and reads their icons through the resolved path, never from a credential store', async () => {
+    write('Applications/Notes.app/Contents/Info.plist', '')
+    link('Applications/Notes.app', 'Notes-link.app')
+
+    await invoke(IPC.appsLaunch, `${home}/Notes-link.app`)
+    expect(platform.launchApp).toHaveBeenCalledWith(`${home}/Applications/Notes.app`)
+    expect(await invoke(IPC.appsIcon, `${home}/Notes-link.app`)).toBe(`data:image/png;base64,${Buffer.from('icon').toString('base64')}`)
+    await expect(invoke(IPC.appsLaunch, `${home}/.ssh/id_rsa`)).rejects.toThrow(PROTECTED)
+    await expect(invoke(IPC.appsIcon, `${home}/.aws/credentials`)).rejects.toThrow(PROTECTED)
+    expect(platform.launchApp).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the Studio preview', () => {
+  const allowAll = () => true
+
+  it('serves only resolved files that are not credential stores', async () => {
+    link(`${hermes}/.env`, 'Projects/site/env.txt')
+    link('Projects/site/index.html', 'Projects/site/home.html')
+
+    expect(await servableFile(pathToFileURL(`${home}/Projects/site/index.html`).toString(), allowAll)).toBe(`${home}/Projects/site/index.html`)
+    expect(await servableFile(pathToFileURL(`${home}/Projects/site/home.html`).toString(), allowAll)).toBe(`${home}/Projects/site/index.html`)
+    expect(await servableFile(pathToFileURL(`${hermes}/.env`).toString(), allowAll)).toBeNull()
+    expect(await servableFile(pathToFileURL(`${home}/.ssh/id_rsa`).toString(), allowAll)).toBeNull()
+    expect(await servableFile(pathToFileURL(`${home}/Projects/site/env.txt`).toString(), allowAll)).toBeNull()
+    expect(await servableFile(pathToFileURL(`${home}/notes.md`).toString(), file => file.startsWith(`${home}/Projects/`))).toBeNull()
+    expect(await servableFile('file://other-host/etc/passwd', allowAll)).toBeNull()
+  })
+
+  it('accepts a project folder inside the home folder as the preview folder', async () => {
+    expect(await assertPreviewFolder(`${home}/Projects/site/`)).toEqual({ path: `${home}/Projects/site`, real: `${home}/Projects/site` })
+  })
+
+  it('refuses the home folder or wider, a credential store, and a folder holding one as the preview folder', async () => {
+    moveBehindLink('.ssh', 'dotfiles/ssh')
+    link('', 'home-link')
+    const preview = (root: string) => invoke(IPC.webOpenPreview, 'index.html', { root })
+
+    await expect(preview('~')).rejects.toThrow(/inside your home folder/)
+    await expect(preview(`${home}/`)).rejects.toThrow(/inside your home folder/)
+    await expect(preview(`${home}/home-link`)).rejects.toThrow(/inside your home folder/)
+    await expect(preview('/')).rejects.toThrow(/system folder|inside your home folder/)
+    await expect(preview(path.dirname(home))).rejects.toThrow(/inside your home folder/)
+    await expect(preview(`${home}/.aws`)).rejects.toThrow(PROTECTED)
+    await expect(preview(`${home}/dotfiles`)).rejects.toThrow(HOLDS)
+    await expect(preview(`${home}/.config`)).rejects.toThrow(HOLDS)
+    await expect(preview(hermes)).rejects.toThrow(/system folder/)
   })
 })

@@ -455,16 +455,16 @@ export function registerCaptureIpc(onRecording: (state: RecordingState) => void)
   })
   ipcMain.handle(IPC.captureReadImage, async (_event, target: string) => nativeImage.createFromPath(await readableImage(target)).toDataURL())
   ipcMain.handle(IPC.captureSaveImage, async (_event, target: string, dataUrl: string) => {
-    const { path: file, real } = await checkWritable(userImagePath(target))
+    const checked = await checkWritable(userImagePath(target))
     const match = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl))
 
     if (!match) {
       throw new Error('The image must be a PNG')
     }
 
-    await writeChecked(real, Buffer.from(match[1], 'base64'))
+    await writeChecked(checked, Buffer.from(match[1], 'base64'))
 
-    return file
+    return checked.path
   })
   ipcMain.handle(IPC.captureCopyImage, async (_event, source: string) => {
     const image = String(source).startsWith('data:image/') ? nativeImage.createFromDataURL(String(source)) : nativeImage.createFromPath(await readableImage(source))

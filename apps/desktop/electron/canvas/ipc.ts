@@ -309,11 +309,11 @@ export function registerCanvasIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.canvasStreamAbort, (_event, id: string) => abortStream(String(id)))
 
   ipcMain.handle(IPC.canvasWriteFile, async (_event, target: string, data: Uint8Array | CanvasRawImage, ppi?: number) => {
-    const { path: file, real } = await checkWritable(String(target))
+    const checked = await checkWritable(String(target))
     const bytes = data instanceof Uint8Array ? data : encodePng(data as CanvasRawImage & { channels: 1 | 4 }, ppi)
-    await writeChecked(real, bytes)
+    await writeChecked(checked, bytes)
 
-    return file
+    return checked.path
   })
 
   ipcMain.handle(IPC.canvasWatch, async (event, target: string, loaded?: string) => {
