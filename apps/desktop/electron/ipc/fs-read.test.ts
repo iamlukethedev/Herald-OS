@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>())
+const fileHandlers = vi.hoisted(() => new Map<string, (request: Request) => Promise<Response>>())
 const trashItem = vi.hoisted(() => vi.fn(async (_file: string) => undefined))
 const openPath = vi.hoisted(() => vi.fn(async (_file: string) => ''))
 const platform = vi.hoisted(() => ({
@@ -30,7 +31,15 @@ vi.mock('electron', () => ({
       return image
     }
   },
-  session: { fromPartition: () => ({ setPermissionRequestHandler: () => {}, setPermissionCheckHandler: () => {}, setDevicePermissionHandler: () => {}, on: () => {}, protocol: { handle: () => {} } }) },
+  session: {
+    fromPartition: (partition: string) => ({
+      setPermissionRequestHandler: () => {},
+      setPermissionCheckHandler: () => {},
+      setDevicePermissionHandler: () => {},
+      on: () => {},
+      protocol: { handle: (scheme: string, handler: (request: Request) => Promise<Response>) => fileHandlers.set(`${partition}:${scheme}`, handler) }
+    })
+  },
   shell: { trashItem, openPath },
   systemPreferences: {},
   webContents: { getAllWebContents: () => [] },
@@ -40,7 +49,7 @@ vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../platform/index.ts', () => ({ hostPlatform: () => platform }))
 
 const { ENV_SEARCH_LIMIT, HOME_SECRETS, OPEN_ATTEMPTS, assertPreviewFolder, assertProjectFolder, assertReadable, assertWritable, checkWritable, openChecked, readDir, readFile, registerFsIpc, writeChecked } = await import('./fs.ts')
-const { WebViews, registerWebIpc, servableFile } = await import('./web.ts')
+const { WebViews, confineFiles, registerWebIpc, servableFile } = await import('./web.ts')
 const { registerAppsIpc } = await import('./apps.ts')
 const { registerCanvasIpc } = await import('../canvas/ipc.ts')
 const { registerOfficeIpc } = await import('../office/ipc.ts')
@@ -1157,13 +1166,59 @@ describe('the Studio preview', () => {
     link(`${hermes}/.env`, 'Projects/site/env.txt')
     link('Projects/site/index.html', 'Projects/site/home.html')
 
-    expect(await servableFile(pathToFileURL(`${home}/Projects/site/index.html`).toString(), allowAll)).toBe(`${home}/Projects/site/index.html`)
-    expect(await servableFile(pathToFileURL(`${home}/Projects/site/home.html`).toString(), allowAll)).toBe(`${home}/Projects/site/index.html`)
+    const served = async (file: string) => {
+      const open = await servableFile(pathToFileURL(file).toString(), allowAll)
+      await open?.handle.close()
+
+      return open && { real: open.real, size: open.size }
+    }
+
+    expect(await served(`${home}/Projects/site/index.html`)).toEqual({ real: `${home}/Projects/site/index.html`, size: 11 })
+    expect(await served(`${home}/Projects/site/home.html`)).toEqual({ real: `${home}/Projects/site/index.html`, size: 11 })
+    expect(await served(`${home}/Projects/site`)).toBeNull()
+    expect(await served(`${home}/Projects/site/missing.html`)).toBeNull()
     expect(await servableFile(pathToFileURL(`${hermes}/.env`).toString(), allowAll)).toBeNull()
     expect(await servableFile(pathToFileURL(`${home}/.ssh/id_rsa`).toString(), allowAll)).toBeNull()
     expect(await servableFile(pathToFileURL(`${home}/Projects/site/env.txt`).toString(), allowAll)).toBeNull()
     expect(await servableFile(pathToFileURL(`${home}/notes.md`).toString(), file => file.startsWith(`${home}/Projects/`))).toBeNull()
     expect(await servableFile('file://other-host/etc/passwd', allowAll)).toBeNull()
+  })
+
+  it('serves through the registered file:// handler only what servableFile allows, from the checked file', async () => {
+    write('Projects/site/clip.mp4', '0123456789')
+    link(`${hermes}/.env`, 'Projects/site/env.txt')
+    confineFiles('test-partition', file => file.startsWith(`${home}/Projects/`))
+    const handler = fileHandlers.get('test-partition:file')!
+    const fetchFile = (file: string, headers: Record<string, string> = {}) => handler(new Request(pathToFileURL(file), { headers }))
+
+    const page = await fetchFile(`${home}/Projects/site/index.html`)
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-type')).toBe('text/html')
+    expect(await page.text()).toBe('<h1>hi</h1>')
+
+    const part = await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=2-5' })
+    expect(part.status).toBe(206)
+    expect(part.headers.get('content-range')).toBe('bytes 2-5/10')
+    expect(await part.text()).toBe('2345')
+    expect(await (await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=-3' })).text()).toBe('789')
+    expect((await fetchFile(`${home}/Projects/site/clip.mp4`, { range: 'bytes=20-' })).status).toBe(416)
+
+    for (const refused of [`${home}/Projects/site/env.txt`, `${hermes}/.env`, `${home}/.ssh/id_rsa`, `${home}/notes.md`, `${home}/Projects/site/missing.html`]) {
+      const response = await fetchFile(refused)
+      expect(response.status).toBe(404)
+      expect(await response.text()).toBe('')
+    }
+  })
+
+  it('refuses to serve a file whose open lands somewhere other than the checked file', async () => {
+    const realOpen = fsp.open
+    const open = vi.spyOn(fsp, 'open').mockImplementation((_file, flags) => realOpen(`${home}/.ssh/id_rsa`, flags))
+
+    try {
+      expect(await servableFile(pathToFileURL(`${home}/Projects/site/index.html`).toString(), allowAll)).toBeNull()
+    } finally {
+      open.mockRestore()
+    }
   })
 
   it('accepts a project folder inside the home folder as the preview folder', async () => {

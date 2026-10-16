@@ -1,12 +1,14 @@
-import { BrowserWindow, ipcMain, net, session, type WebContents, WebContentsView } from 'electron'
+import { BrowserWindow, ipcMain, session, type WebContents, WebContentsView } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { FileHandle } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type WebOpenOptions, type WebViewBounds, type WebViewEvent } from '../../shared/ipc.ts'
 import { isViewable } from '../../shared/viewer.ts'
 import { log } from '../log.ts'
-import { assertPreviewFolder, assertReadable } from './fs.ts'
+import { assertPreviewFolder, assertReadable, openChecked } from './fs.ts'
 
 /*
  * Embedded web pages. Herald OS is a whole environment, so a web page (the provider sign-in portal,
@@ -469,26 +471,128 @@ export function lockDownPartition(partition: string): void {
   guest.on('will-download', event => event.preventDefault())
 }
 
-const confinedPartitions = new Set<string>()
+/** A file a confined file:// request is served from: checked, resolved, and open through the verified handle. */
+export interface Servable {
+  real: string
+  handle: FileHandle
+  size: number
+}
 
-/** The resolved file a confined file:// request is served from, or null: never a credential store, and only what `allows` accepts. */
-export async function servableFile(url: string, allows: (file: string) => boolean): Promise<string | null> {
+/**
+ * The file a confined file:// request is served from, or null: never a credential store, only what `allows` accepts,
+ * and opened through openChecked, so what is served is the file that was checked.
+ */
+export async function servableFile(url: string, allows: (file: string) => boolean): Promise<Servable | null> {
+  let checked
+
   try {
-    const { real } = await assertReadable(fileURLToPath(url))
-
-    return allows(real) ? real : null
+    checked = await assertReadable(fileURLToPath(url))
   } catch {
     // Malformed URLs and credential stores are refused like the rest.
     return null
   }
+
+  if (!allows(checked.real)) {
+    return null
+  }
+
+  const handle = await openChecked(checked, fs.constants.O_RDONLY).catch(() => null)
+  const stat = await handle?.stat().catch(() => null)
+
+  if (!handle || !stat?.isFile()) {
+    await handle?.close()
+
+    return null
+  }
+
+  return { real: checked.real, handle, size: stat.size }
 }
+
+/** Content types for what previews and viewers load; anything else is sent as bytes. */
+const WEB_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.cjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.xml': 'application/xml',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.wasm': 'application/wasm',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac'
+}
+
+/** The open file as a response: its type from its extension, and one byte range when asked for one (media seeking). */
+export function serveOpenFile({ real, handle, size }: Servable, range: string | null): Response {
+  const type = WEB_TYPES[path.extname(real).toLowerCase()] ?? 'application/octet-stream'
+  const asked = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  let start = 0
+  let end = size - 1
+
+  if (asked && (asked[1] || asked[2])) {
+    start = asked[1] ? Number(asked[1]) : Math.max(0, size - Number(asked[2]))
+    end = asked[1] && asked[2] ? Math.min(Number(asked[2]), size - 1) : size - 1
+
+    if (start > end) {
+      void handle.close()
+
+      return new Response(null, { status: 416, headers: { 'content-range': `bytes */${size}` } })
+    }
+  }
+
+  const partial = Boolean(asked && (asked[1] || asked[2]))
+  const headers: Record<string, string> = { 'content-type': type, 'content-length': String(Math.max(0, end - start + 1)), 'accept-ranges': 'bytes' }
+
+  if (partial) {
+    headers['content-range'] = `bytes ${start}-${end}/${size}`
+  }
+
+  if (size === 0) {
+    void handle.close()
+
+    return new Response(null, { status: 200, headers })
+  }
+
+  return new Response(Readable.toWeb(handle.createReadStream({ start, end })) as ReadableStream<Uint8Array>, { status: partial ? 206 : 200, headers })
+}
+
+const confinedPartitions = new Set<string>()
 
 /**
  * Electron lets a file:// page read every other file:// URL, so a previewed site or an SVG in the
  * viewer could read ~/.hermes/.env. Here a partition serves only the files `allows` accepts, judged
- * after symlinks resolve, and never a credential store; anything else looks missing.
+ * after symlinks resolve, never a credential store, and from the handle that was checked; anything
+ * else looks missing.
  */
-function confineFiles(partition: string, allows: (file: string) => boolean): void {
+export function confineFiles(partition: string, allows: (file: string) => boolean): void {
   if (confinedPartitions.has(partition)) {
     return
   }
@@ -497,15 +601,7 @@ function confineFiles(partition: string, allows: (file: string) => boolean): voi
   session.fromPartition(partition).protocol.handle('file', async request => {
     const file = await servableFile(request.url, allows)
 
-    try {
-      if (file) {
-        return await net.fetch(pathToFileURL(file).toString(), { headers: request.headers, bypassCustomProtocolHandlers: true })
-      }
-    } catch {
-      // Missing files are refused like the rest.
-    }
-
-    return new Response(null, { status: 404 })
+    return file ? serveOpenFile(file, request.headers.get('range')) : new Response(null, { status: 404 })
   })
 }
 
