@@ -58,12 +58,13 @@ if [[ "$HERALD_OS_SHELL_MODE" == "panels" ]]; then
   fi
 fi
 
-# An NVIDIA GPU on the default image: say once, after the shell is up, how to switch to the NVIDIA
-# image (linux/bin/herald-os-gpu-check).
-if command -v herald-os-gpu-check >/dev/null && [[ ! -f "$LOG_DIR/gpu-check-done" ]]; then
+# An NVIDIA GPU: after the shell is up, how to switch to the NVIDIA image (the default image), or how
+# to enroll the driver's Secure Boot key (the NVIDIA image). Every login, since the second comes
+# after a switch; each is shown once (linux/bin/herald-os-gpu-check).
+if command -v herald-os-gpu-check >/dev/null; then
   (
     sleep 60
-    herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1 && touch "$LOG_DIR/gpu-check-done"
+    herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1
   ) &
 fi
 

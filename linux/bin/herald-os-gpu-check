@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
-# Whether this computer has an NVIDIA GPU that the Herald OS image it runs has no driver for. The
-# default image drives it with nouveau, which runs the screen but has no CUDA, so local models get no
-# GPU; the NVIDIA image (ghcr.io/iamlukethedev/herald-os-nvidia, ADR-029) has NVIDIA's driver. When
-# that is so, says how to switch; otherwise, and anywhere but on the image, says nothing.
+# The NVIDIA GPU, and what the Herald OS image does with it (ADR-029). Two notices, each said once:
 #
-#   herald-os-gpu-check            print the advice (the first boot writes it to the journal)
-#   herald-os-gpu-check --notify   also show it as a notification (herald-os-session, once a user)
+# - switch: the default image drives an NVIDIA GPU with nouveau, which runs the screen but has no
+#   CUDA, so local models get no GPU. The NVIDIA image (ghcr.io/iamlukethedev/herald-os-nvidia) has
+#   NVIDIA's driver: says how to switch.
+# - secure-boot: on the NVIDIA image with Secure Boot on, the kernel only loads the driver once
+#   Universal Blue's signing key is enrolled. When the driver is not loaded, says how to enroll it.
+#
+# Anywhere but on the Herald OS image, or with nothing to say, says nothing.
+#
+#   herald-os-gpu-check            print the notice (the first boot writes it to the journal)
+#   herald-os-gpu-check --notify   also show it as a notification, once each (herald-os-session)
 set -euo pipefail
 
 SYSFS="${HERALD_OS_SYSFS:-/sys}"
 MODULES="${HERALD_OS_MODULES:-/usr/lib/modules}"
 OS_RELEASE="${HERALD_OS_OS_RELEASE:-/usr/lib/os-release}"
 ARCH="${HERALD_OS_ARCH:-$(uname -m)}"
+STATE="${HERALD_OS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/herald-os}"
 NVIDIA_IMAGE=ghcr.io/iamlukethedev/herald-os-nvidia
+KEY=/etc/pki/akmods/certs/akmods-ublue.der
+# The UEFI global variable: four bytes of attributes, then 1 while Secure Boot is on.
+SECURE_BOOT="$SYSFS/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 
 herald_image() { grep -Eqx 'IMAGE_ID="?herald-os"?' "$OS_RELEASE" 2>/dev/null; }
 
@@ -28,16 +37,33 @@ nvidia_gpu() {
 }
 
 nvidia_driver() { compgen -G "$MODULES/*/extra/nvidia/nvidia.ko*" >/dev/null; }
+nvidia_loaded() { [[ -d "$SYSFS/module/nvidia" ]]; }
+secure_boot() { [[ "$(od -An -t u1 -j 4 -N 1 "$SECURE_BOOT" 2>/dev/null | tr -d ' ')" == 1 ]]; }
 
-if [[ "$ARCH" != x86_64 ]] || ! herald_image || ! nvidia_gpu || nvidia_driver; then
+# Prints the notice; with --notify, also shows it, unless this one was shown before.
+notice() {
+  local kind="$1" title="$2" body="$3"
+  echo "$title: $body"
+  [[ "$NOTIFY" == 1 ]] || return 0
+  [[ ! -f "$STATE/gpu-notice-$kind" ]] || return 0
+  # Shown by the session before there were two notices.
+  [[ "$kind" != switch || ! -f "$STATE/gpu-check-done" ]] || return 0
+  herald-os notify "$title" "$body" || return 0
+  mkdir -p "$STATE"
+  : >"$STATE/gpu-notice-$kind"
+}
+
+NOTIFY=0
+[[ "${1:-}" != --notify ]] || NOTIFY=1
+
+if [[ "$ARCH" != x86_64 ]] || ! herald_image || ! nvidia_gpu; then
   exit 0
 fi
 
-channel="$(herald-os channel 2>/dev/null || true)"
-[[ "$channel" == stable || "$channel" == edge ]] || channel=stable
-title="NVIDIA graphics found"
-body="This computer has an NVIDIA GPU, which this Herald OS image drives without CUDA, so local models do not use it. The NVIDIA image has NVIDIA's driver: run \`sudo bootc switch $NVIDIA_IMAGE:$channel\` in a terminal and restart. With Secure Boot on, enroll its key first (docs/LINUX.md, \"The NVIDIA image\")."
-echo "$title: $body"
-if [[ "${1:-}" == --notify ]]; then
-  herald-os notify "$title" "$body" || true
+if ! nvidia_driver; then
+  channel="$(herald-os channel 2>/dev/null || true)"
+  [[ "$channel" == stable || "$channel" == edge ]] || channel=stable
+  notice switch "NVIDIA graphics found" "This computer has an NVIDIA GPU, which this Herald OS image drives without CUDA, so local models do not use it. The NVIDIA image has NVIDIA's driver: run \`sudo bootc switch $NVIDIA_IMAGE:$channel\` in a terminal and restart. With Secure Boot on, it then asks to enroll a key once (docs/LINUX.md, \"The NVIDIA image\")."
+elif ! nvidia_loaded && secure_boot; then
+  notice secure-boot "The NVIDIA driver did not load" "Secure Boot is on, and it loads the driver only once Universal Blue's key is enrolled; until then the NVIDIA GPU is not used. Run \`sudo mokutil --import $KEY\` in a terminal, choose a one-time password, restart, and in MOK Manager pick Enroll MOK, Continue, Yes, type that password, then Reboot (docs/LINUX.md, \"The NVIDIA image\")."
 fi

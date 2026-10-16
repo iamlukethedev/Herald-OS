@@ -185,65 +185,131 @@ def test_the_nvidia_layer_leaves_xorg_out_and_puts_the_driver_in_the_initramfs()
     assert '"rd.driver.blacklist=nouveau"' in kargs and 'match-architectures = ["x86_64"]' in kargs
 
 
-# herald-os-gpu-check: an NVIDIA GPU on the default image is told how to switch to the NVIDIA image.
+# herald-os-gpu-check: an NVIDIA GPU on the default image is told how to switch to the NVIDIA image,
+# and on the NVIDIA image with Secure Boot on, how to enroll the key its driver is signed with.
 
 GPU_CHECK = ROOT / "linux" / "bin" / "herald-os-gpu-check"
 NVIDIA_VGA = ("0x10de", "0x030000")
 NVIDIA_3D = ("0x10de", "0x030200")
 NVIDIA_AUDIO = ("0x10de", "0x040300")
 INTEL_VGA = ("0x8086", "0x030000")
+SECURE_BOOT_VAR = "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+ENROLL = "sudo mokutil --import /etc/pki/akmods/certs/akmods-ublue.der"
 
 
-def gpu_check(tmp_path: Path, devices, release=HERALD, driver=False, arch="x86_64", channel="edge", notify=False):
-    sysfs = tmp_path / "sys"
-    for i, (vendor, cls) in enumerate(devices):
-        dev = sysfs / "bus" / "pci" / "devices" / f"0000:0{i}:00.0"
-        dev.mkdir(parents=True)
-        (dev / "vendor").write_text(vendor + "\n")
-        (dev / "class").write_text(cls + "\n")
-    modules = tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia"
-    modules.mkdir(parents=True)
-    if driver:
-        (modules / "nvidia.ko.xz").write_text("")
-    (tmp_path / "os-release").write_text(release)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "herald-os").write_text(f'#!/bin/sh\n[ "$1" = channel ] && {{ echo {channel}; exit 0; }}\necho "$@" >>"{tmp_path / "notified"}"\n')
-    (bin_dir / "herald-os").chmod(0o755)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HERALD_OS_SYSFS": str(sysfs), "HERALD_OS_MODULES": str(tmp_path / "modules"),
-           "HERALD_OS_OS_RELEASE": str(tmp_path / "os-release"), "HERALD_OS_ARCH": arch}
-    argv = ["bash", str(GPU_CHECK)] + (["--notify"] if notify else [])
-    result = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    notified = tmp_path / "notified"
-    return result.stdout, notified.read_text() if notified.exists() else ""
+class Gpu:
+    """A machine's PCI devices, Secure Boot state, loaded modules and image, and the session's state."""
+
+    def __init__(self, tmp_path: Path, devices, release=HERALD, driver=False, loaded=False, secure_boot=None,
+                 arch="x86_64", channel="edge"):
+        self.root = tmp_path
+        sysfs = tmp_path / "sys"
+        for i, (vendor, cls) in enumerate(devices):
+            dev = sysfs / "bus" / "pci" / "devices" / f"0000:0{i}:00.0"
+            dev.mkdir(parents=True)
+            (dev / "vendor").write_text(vendor + "\n")
+            (dev / "class").write_text(cls + "\n")
+        if loaded:
+            (sysfs / "module" / "nvidia").mkdir(parents=True)
+        if secure_boot is not None:
+            efivars = sysfs / "firmware" / "efi" / "efivars"
+            efivars.mkdir(parents=True)
+            (efivars / SECURE_BOOT_VAR).write_bytes(b"\x06\x00\x00\x00" + bytes([1 if secure_boot else 0]))
+        modules = tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia"
+        modules.mkdir(parents=True)
+        if driver:
+            (modules / "nvidia.ko.xz").write_text("")
+        (tmp_path / "os-release").write_text(release)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "herald-os").write_text(f'#!/bin/sh\n[ "$1" = channel ] && {{ echo {channel}; exit 0; }}\necho "$@" >>"{tmp_path / "notified"}"\n')
+        (bin_dir / "herald-os").chmod(0o755)
+        self.state = tmp_path / "state"
+        self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HERALD_OS_SYSFS": str(sysfs), "HERALD_OS_MODULES": str(tmp_path / "modules"),
+                    "HERALD_OS_OS_RELEASE": str(tmp_path / "os-release"), "HERALD_OS_ARCH": arch, "HERALD_OS_STATE": str(self.state)}
+
+    def run(self, notify=True) -> str:
+        argv = ["bash", str(GPU_CHECK)] + (["--notify"] if notify else [])
+        result = subprocess.run(argv, env=self.env, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def notified(self) -> list[str]:
+        path = self.root / "notified"
+        return path.read_text().splitlines() if path.exists() else []
 
 
 @pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
 def test_an_nvidia_gpu_on_the_default_image_is_told_how_to_switch(tmp_path, devices):
-    out, notified = gpu_check(tmp_path, devices, notify=True)
-    assert "sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge" in out
-    assert notified.startswith("notify NVIDIA graphics found ") and "herald-os-nvidia:edge" in notified
+    gpu = Gpu(tmp_path, devices)
+    assert "sudo bootc switch ghcr.io/iamlukethedev/herald-os-nvidia:edge" in gpu.run()
+    [shown] = gpu.notified()
+    assert shown.startswith("notify NVIDIA graphics found ") and "herald-os-nvidia:edge" in shown
 
 
-@pytest.mark.parametrize("case", ["no nvidia", "nvidia audio only", "nvidia image", "not the image", "arm"])
-def test_nothing_is_said_where_there_is_nothing_to_switch_to(tmp_path, case):
+@pytest.mark.parametrize("devices", [[NVIDIA_VGA], [INTEL_VGA, NVIDIA_3D]], ids=["desktop", "hybrid laptop"])
+def test_the_nvidia_image_with_secure_boot_and_no_driver_loaded_is_told_how_to_enroll_the_key(tmp_path, devices):
+    gpu = Gpu(tmp_path, devices, driver=True, secure_boot=True)
+    out = gpu.run()
+    assert ENROLL in out and "Enroll MOK, Continue, Yes" in out and "bootc switch" not in out
+    [shown] = gpu.notified()
+    assert shown.startswith("notify The NVIDIA driver did not load ") and ENROLL in shown
+
+
+@pytest.mark.parametrize("case", ["no nvidia", "nvidia audio only", "nvidia image without secure boot",
+                                  "nvidia image, efi says secure boot is off", "nvidia image, driver loaded",
+                                  "not the image", "arm"])
+def test_nothing_is_said_where_there_is_nothing_to_do(tmp_path, case):
     args = {
         "no nvidia": dict(devices=[INTEL_VGA]),
         "nvidia audio only": dict(devices=[INTEL_VGA, NVIDIA_AUDIO]),
-        "nvidia image": dict(devices=[NVIDIA_VGA], driver=True),
-        "not the image": dict(devices=[NVIDIA_VGA], release=FEDORA),
+        "nvidia image without secure boot": dict(devices=[NVIDIA_VGA], driver=True),
+        "nvidia image, efi says secure boot is off": dict(devices=[NVIDIA_VGA], driver=True, secure_boot=False),
+        "nvidia image, driver loaded": dict(devices=[NVIDIA_VGA], driver=True, loaded=True, secure_boot=True),
+        "not the image": dict(devices=[NVIDIA_VGA], release=FEDORA, driver=True, secure_boot=True),
         "arm": dict(devices=[NVIDIA_VGA], arch="aarch64"),
     }[case]
-    assert gpu_check(tmp_path, notify=True, **args) == ("", "")
+    gpu = Gpu(tmp_path, **args)
+    assert gpu.run() == "" and gpu.notified() == []
+
+
+def test_each_notice_is_shown_once_and_a_switch_does_not_hide_the_next(tmp_path):
+    gpu = Gpu(tmp_path, [NVIDIA_VGA])
+    gpu.run()
+    gpu.run()
+    assert len(gpu.notified()) == 1
+    # After the switch to the NVIDIA image, the Secure Boot notice is a new one.
+    (tmp_path / "modules" / "7.2.10-200.fc44.x86_64" / "extra" / "nvidia" / "nvidia.ko.xz").write_text("")
+    efivars = tmp_path / "sys" / "firmware" / "efi" / "efivars"
+    efivars.mkdir(parents=True)
+    (efivars / SECURE_BOOT_VAR).write_bytes(b"\x06\x00\x00\x00\x01")
+    gpu.run()
+    gpu.run()
+    first, second = gpu.notified()
+    assert first.startswith("notify NVIDIA graphics found ") and second.startswith("notify The NVIDIA driver did not load ")
+    assert sorted(p.name for p in gpu.state.iterdir()) == ["gpu-notice-secure-boot", "gpu-notice-switch"]
+
+
+def test_a_switch_notice_shown_by_the_earlier_session_is_not_shown_again(tmp_path):
+    gpu = Gpu(tmp_path, [NVIDIA_VGA])
+    gpu.state.mkdir()
+    (gpu.state / "gpu-check-done").write_text("")
+    assert "bootc switch" in gpu.run() and gpu.notified() == []
 
 
 def test_without_a_channel_the_advice_is_stable(tmp_path):
-    out, notified = gpu_check(tmp_path, [NVIDIA_VGA], channel="")
-    assert "herald-os-nvidia:stable" in out and notified == ""
+    gpu = Gpu(tmp_path, [NVIDIA_VGA], channel="")
+    assert "herald-os-nvidia:stable" in gpu.run(notify=False) and gpu.notified() == []
 
 
-def test_the_first_boot_and_the_session_run_the_gpu_check():
+def test_the_first_boot_and_every_session_run_the_gpu_check():
     assert "herald-os-gpu-check || true" in FIRSTBOOT_SCRIPT.read_text()
     session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
-    assert 'herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1 && touch "$LOG_DIR/gpu-check-done"' in session
+    assert 'herald-os-gpu-check --notify >>"$LOG_DIR/gpu-check.log" 2>&1\n' in session
+    assert "gpu-check-done" not in session
+
+
+def test_the_session_and_the_gpu_check_keep_state_in_one_folder():
+    session = (ROOT / "linux" / "session" / "herald-os-session").read_text()
+    assert 'LOG_DIR="$HOME/.local/state/herald-os"' in session
+    assert 'STATE="${HERALD_OS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/herald-os}"' in GPU_CHECK.read_text()
