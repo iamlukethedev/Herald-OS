@@ -694,6 +694,20 @@ export const WRITE_FLAGS = fsConstants.O_WRONLY | fsConstants.O_CREAT | (fsConst
 export async function writeChecked(checked: CheckedPath, data: string | Uint8Array): Promise<void> {
   await fs.mkdir(path.dirname(checked.real), { recursive: true })
   const notRegular = () => new Error(`${checked.path} is not a regular file`)
+  // A FIFO, socket, device or symlink already there is refused without being opened; the check on the open handle
+  // below stays the one that counts, for whatever is there by the time of the open.
+  const existing = await fs.lstat(checked.real).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') {
+      return null
+    }
+
+    throw error
+  })
+
+  if (existing && !existing.isFile()) {
+    throw notRegular()
+  }
+
   let handle: fs.FileHandle
 
   try {

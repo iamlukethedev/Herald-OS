@@ -1092,7 +1092,8 @@ describe('opening checked paths', () => {
     const swapped = { path: `${home}/notes-link.md`, real: `${home}/notes-link.md` }
 
     await expect(openChecked(swapped, fs.constants.O_RDONLY)).rejects.toThrow(/ELOOP|EMLINK/)
-    await expect(writeChecked(swapped, 'x')).rejects.toThrow(/ELOOP|EMLINK/)
+    // writeChecked refuses the symlink before opening it (see the special files below).
+    await expect(writeChecked(swapped, 'x')).rejects.toThrow(/not a regular file/)
     expect(fs.readFileSync(`${home}/notes.md`, 'utf8')).toBe('notes')
   })
 
@@ -1574,6 +1575,8 @@ describe('the Studio preview', () => {
 })
 
 describe.runIf(process.platform !== 'win32')('FIFOs and other special files', () => {
+  const realLstat = fsp.lstat
+  const realOpen = fsp.open
   const fifo = (name: string): string => {
     const file = path.join(home, name)
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -1596,6 +1599,43 @@ describe.runIf(process.platform !== 'win32')('FIFOs and other special files', ()
     await quickly(invoke(IPC.canvasWriteFile, fifo('Pictures/out.png'), new Uint8Array([1])), /not a regular file/)
     await quickly(invoke(IPC.captureSaveImage, fifo('Pictures/shot.png'), 'data:image/png;base64,AA=='), /not a regular file/)
     expect(fs.statSync(pipe).isFIFO()).toBe(true)
+  })
+
+  it('refuses a write to a FIFO or a symlink without opening it, and still checks what it opens', async () => {
+    const pipe = fifo('queue.txt')
+    link('notes.md', 'notes-link.md')
+    const opens = vi.spyOn(fsp, 'open')
+
+    try {
+      await quickly(writeChecked({ path: pipe, real: pipe }, 'x'), /not a regular file/)
+      await quickly(writeChecked({ path: `${home}/notes-link.md`, real: `${home}/notes-link.md` }, 'x'), /not a regular file/)
+      expect(opens).not.toHaveBeenCalled()
+
+      // Swapped for a FIFO with a reader between the look and the open, the open succeeds and its handle refuses it.
+      const file = write('swap.txt', 'regular')
+      let reader: fsp.FileHandle | undefined
+      const lstat = vi.spyOn(fsp, 'lstat').mockImplementationOnce(async target => {
+        const result = await realLstat(target)
+        fs.rmSync(file)
+        execFileSync('mkfifo', [file])
+        reader = await realOpen(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+
+        return result
+      })
+
+      try {
+        await quickly(writeChecked({ path: file, real: file }, 'leaked'), /not a regular file/)
+        expect(opens).toHaveBeenCalledTimes(1)
+        const { bytesRead } = await reader!.read(Buffer.alloc(16), 0, 16, null).catch(() => ({ bytesRead: 0 }))
+        expect(bytesRead).toBe(0)
+      } finally {
+        lstat.mockRestore()
+        await reader?.close()
+      }
+    } finally {
+      opens.mockRestore()
+    }
+    expect(fs.readFileSync(`${home}/notes.md`, 'utf8')).toBe('notes')
   })
 
   it('refuses a write to a FIFO that has a reader, so nothing reaches it', async () => {
