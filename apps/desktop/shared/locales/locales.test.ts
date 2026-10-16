@@ -79,6 +79,15 @@ describe('the pt-BR catalog', () => {
   })
 })
 
+describe('the zh-CN catalog', () => {
+  it('says 账户 for an account everywhere, never 账号 or 帐号', () => {
+    const others = Object.entries(zhCN).filter(([, message]) => forms(message).some(text => /账号|帐号/.test(text)))
+
+    expect(others.map(([key]) => key)).toEqual([])
+    expect(zhCN['settings.agents.account']).toBe('账户')
+  })
+})
+
 describe.each(Object.entries(TRANSLATIONS))('the %s catalog', (language, catalog) => {
   const entries = Object.entries(catalog) as [keyof typeof en, string | object][]
 
