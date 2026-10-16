@@ -1,0 +1,19 @@
+# gitleaks (scripts/check-secrets.sh): its default rules, and the findings checked by hand and known
+# not to be credentials, each scoped to the file and the exact value. Commit-specific findings stay in
+# .gitleaksignore.
+[extend]
+useDefault = true
+
+# Public fingerprints the NVIDIA image pins (docs/LINUX.md, "The NVIDIA image"): the SHA-256 of
+# Universal Blue's Secure Boot certificate, and the GPG key fingerprints of negativo17 and NVIDIA.
+[[allowlists]]
+description = "Public key fingerprints pinned by linux/image/nvidia.sh"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^linux/image/nvidia\.sh$''', '''^linux/tests/test_image\.py$''']
+regexTarget = "secret"
+regexes = [
+  '''^4e5c68474cb133fd8984d9599762cece9100c3e6cd8a9709aeaabd85dd9e70d1$''',
+  '''^0c5d0f470484ae2fc40a9b6597f3008993e8909b$''',
+  '''^c95b321b61e88c1809c4f759ddcae044f796ecb0$''',
+]
