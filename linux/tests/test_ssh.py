@@ -13,6 +13,8 @@ import ipaddress
 import json
 import os
 import pwd
+import re
+import shlex
 import shutil
 import stat
 import struct
@@ -30,6 +32,8 @@ cli = importlib.util.module_from_spec(_SPEC)
 _LOADER.exec_module(cli)
 
 REAL_RUN = subprocess.run
+# How the stand-in sshd reads a setting, written independently of the CLI's parser.
+SETTING = re.compile(r"(\S+?)(\s*=\s*|\s+)(.*)$")
 REQUIRED_PATHS = cli.SSH_LIMIT_REQUIRED
 SSH_KEYGEN = shutil.which("ssh-keygen")
 pytestmark = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
@@ -335,10 +339,15 @@ class System:
             line = raw.split("#", 1)[0].strip()
             if not line:
                 continue
-            if line.lower().startswith("include "):
-                for found in sorted(glob.glob(line.split(None, 1)[1])):
-                    yield from self.config_lines(Path(found), depth + 1)
-                    yield None
+            parsed = SETTING.match(line)
+            if parsed and parsed.group(1).lower() == "include":
+                # sshd's own reading: "=" or spaces, quotes, several patterns, relative to /etc/ssh;
+                # an unclosed quote makes it refuse the file (ValueError).
+                for pattern in shlex.split(parsed.group(3)):
+                    full = pattern if pattern.startswith("/") else str(self.etc / pattern)
+                    for found in sorted(glob.glob(full)):
+                        yield from self.config_lines(Path(found), depth + 1)
+                        yield None
             else:
                 yield line
 
@@ -351,7 +360,8 @@ class System:
             if line is None:
                 applies = None
                 continue
-            key, value = line.split(None, 1)
+            parsed = SETTING.match(line)
+            key, value = (parsed.group(1), parsed.group(3)) if parsed else (line, "")
             if key.lower() == "match":
                 applies = match_applies(value, probe)
             elif applies is None:
@@ -1322,6 +1332,52 @@ def off_reloads_systemd(machine: System, tmp_path: Path, capsys) -> bool:
     return ["systemctl", "daemon-reload"] in changes and changes.index(["systemctl", "daemon-reload"]) < changes.index(["systemctl", "disable", "--now", "herald-os-ssh-limit.service"])
 
 
+WEAK = "Match User alice\n  PasswordAuthentication yes\n"
+
+
+def include_line_escapes(machine: System, line: str, files: dict[str, str]) -> str:
+    """Files under etc, and a line in sshd_config.d that includes them; what turning on says."""
+    for name, text in files.items():
+        (machine.etc / name).parent.mkdir(parents=True, exist_ok=True)
+        (machine.etc / name).write_text(text)
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text(line.replace("@", str(machine.etc)) + "\n")
+    return str(outcome(machine, "--key", public_key()))
+
+
+def equals_includes_are_followed(machine: System, tmp_path: Path, capsys) -> bool:
+    return include_line_escapes(machine, "Include=@/weak.conf", {"weak.conf": WEAK}) == "exit 1" and not machine.on()
+
+
+def every_pattern_is_followed(machine: System, tmp_path: Path, capsys) -> bool:
+    return include_line_escapes(machine, "Include @/ok.conf @/weak.conf", {"ok.conf": "X11Forwarding no\n", "weak.conf": WEAK}) == "exit 1"
+
+
+def relative_includes_are_under_etc_ssh(machine: System, tmp_path: Path, capsys) -> bool:
+    return include_line_escapes(machine, "Include site.d/*.conf", {"site.d/weak.conf": WEAK}) == "exit 1"
+
+
+def quoted_includes_name_something(machine: System, tmp_path: Path, capsys) -> bool:
+    return include_line_escapes(machine, 'Include="@/missing.conf"', {}) == "exit 1" and not machine.on()
+
+
+def unclosed_quotes_in_an_include_are_said(machine: System, tmp_path: Path, capsys) -> bool:
+    capsys.readouterr()
+    include_line_escapes(machine, 'Include "@/weak.conf', {"weak.conf": WEAK})
+    return "never closed" in capsys.readouterr().err and not machine.on()
+
+
+def unclosed_quotes_anywhere_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    return include_line_escapes(machine, 'Banner "/etc/issue', {}) == "exit 1" and not machine.on()
+
+
+def quotes_group_words(machine: System, tmp_path: Path, capsys) -> bool:
+    return machine.module.sshd_words('"/etc/ssh/x y.conf" \'/z\'') == ["/etc/ssh/x y.conf", "/z"]
+
+
+def comments_start_only_a_word(machine: System, tmp_path: Path, capsys) -> bool:
+    return machine.module.sshd_words("/etc/ssh/a#b.conf # note") == ["/etc/ssh/a#b.conf"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1372,12 +1428,20 @@ MUTANTS = {
     "the requirement not ordered after the limit": (the_requirement_orders_and_requires, '        f"After={SSH_LIMIT_UNIT.name}\\n"\n', ""),
     "off does not reload systemd": (off_reloads_systemd, "    if required:\n        root_run([\"systemctl\", \"daemon-reload\"])\n", ""),
     "off keeps the requirement": (off_removes_the_requirement, "    for path in required:\n        root_step([\"rm\", \"-f\", str(path)], f\"Removing {path}\")\n", ""),
-    "an Include under Match let through": (include_under_match_is_refused, '            elif match is not None and keyword.lower() == "include":', "            elif False:"),
+    "an Include under Match let through": (include_under_match_is_refused, '            elif match is not None and keyword == "include":', "            elif False:"),
     "an unreadable file skipped": (unreadable_files_are_refused, '        return [], [f"cannot read {path}: {(result.stderr or \'\').strip() or \'exit \' + str(result.returncode)}"]', "        return [], []"),
     "an unreadable sshd_config skipped": (unreadable_main_config_is_refused, "    files, problems = sshd_files()\n", "    files, problems = sshd_files()\n    problems = []\n"),
-    "an unlistable Include skipped": (unlistable_includes_are_refused, "            if problem:\n                problems.append(problem)\n", ""),
+    "an unlistable Include skipped": (unlistable_includes_are_refused, "            if problem:\n                problems.append(problem)\n            elif", "            if False:\n                pass\n            elif"),
     "Includes listed as the caller": (includes_are_listed_as_root, '    result = root_run(["env", "LC_ALL=C", "sh", "-c", SSHD_GLOB, "sh", full])', '    result = subprocess.run(["env", "LC_ALL=C", "sh", "-c", SSHD_GLOB, "sh", full], capture_output=True, text=True)'),
     "deep Includes cut short": (deep_includes_are_refused, '            problems.append(f"{path}: Includes nest deeper than 16 files")\n            break\n', "            break\n"),
+    "Include= not read as an Include": (equals_includes_are_followed, 'SSHD_KEYWORD = re.compile(r"(\\S+?)(\\s*=\\s*|\\s+)(.*)$")', 'SSHD_KEYWORD = re.compile(r"(\\S+?)(\\s+)(.*)$")'),
+    "only an Include's first pattern": (every_pattern_is_followed, "        for pattern in args:\n", "        for pattern in args[:1]:\n"),
+    "relative Includes from the current folder": (relative_includes_are_under_etc_ssh, '    full = pattern if pattern.startswith("/") else str(SSHD_CONFIG.parent / pattern)', "    full = pattern"),
+    "a quoted Include may name nothing": (quoted_includes_name_something, "            elif not names and strict:", "            elif False:"),
+    "an unclosed quote in an Include not said": (unclosed_quotes_in_an_include_are_said, '            problems.append(f"{path} line {number}: an Include with a quote that is never closed, which cannot be followed")', "            pass"),
+    "an unclosed quote elsewhere let through": (unclosed_quotes_anywhere_are_refused, '                    found.append(f"{name} line {number}: {keyword} has a quote that is never closed, so it cannot be read the way sshd reads it")', "                    pass"),
+    "quotes not grouping": (quotes_group_words, """        elif char in "'\\"" and quote in ("", char):""", "        elif False:"),
+    "# inside a word a comment": (comments_start_only_a_word, '        elif not quote and char == "#" and not started:', '        elif not quote and char == "#":'),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -1745,3 +1809,103 @@ def test_the_include_listing_script_expands_globs_and_nothing_else(tmp_path):
         assert REAL_RUN(["sh", "-c", cli.SSHD_GLOB, "sh", pattern], capture_output=True, text=True, cwd=tmp_path).stdout == ""
     assert not list(tmp_path.glob("PWNED"))
     assert not (tmp_path / "PWNED2").exists() and not (tmp_path / "PWNED3").exists()
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 4: Include lines are read as sshd reads them.
+def test_words_are_split_the_way_sshd_splits_them():
+    words = cli.sshd_words
+    assert words("/a.conf /b.conf") == ["/a.conf", "/b.conf"]
+    assert words('"/x y.conf" /b') == ["/x y.conf", "/b"]
+    assert words("'/x y.conf'") == ["/x y.conf"]
+    assert words('"it\'s"') == ["it's"] and words("'say \"hi\"'") == ['say "hi"']
+    assert words("/a\\ b.conf") == ["/a b.conf"] and words('"a\\"b"') == ['a"b'] and words("a\\nb") == ["a\\nb"]
+    assert words("/a#b.conf # a note") == ["/a#b.conf"] and words("#all of it") == [] and words('"#kept"') == ["#kept"]
+    assert words("  \t ") == [] and words('""') == [""]
+    assert words('"/unclosed') is None and words("'/unclosed") is None and words('"a" "b') is None
+
+
+def test_settings_are_read_with_any_case_and_either_separator():
+    text = (
+        "# a comment\n"
+        "Include /etc/ssh/a.conf\n"
+        "Include=/etc/ssh/b.conf\n"
+        "include = /etc/ssh/c.conf\n"
+        "  INCLUDE   \"/etc/ssh/d e.conf\"   /etc/ssh/f.conf  # two of them\n"
+        "Include sshd_config.d/*.conf\n"
+        "Include \"/never/closed\n"
+        "Match=User alice\n"
+        "Port\n"
+    )
+    assert cli.sshd_settings(text) == [
+        (2, "include", ["/etc/ssh/a.conf"], False),
+        (3, "include", ["/etc/ssh/b.conf"], True),
+        (4, "include", ["/etc/ssh/c.conf"], True),
+        (5, "include", ["/etc/ssh/d e.conf", "/etc/ssh/f.conf"], True),
+        (6, "include", ["sshd_config.d/*.conf"], False),
+        (7, "include", None, True),
+        (8, "match", ["User", "alice"], True),
+        (9, "port", [], False),
+    ]
+
+
+def test_match_and_include_are_found_in_every_form():
+    files = [("/etc/ssh/x.conf", "match=User alice\n  passwordauthentication = yes\nMATCH Address 10.0.0.0/8\n  include=\"/etc/ssh/y.conf\"\n")]
+    assert cli.match_weakening(files, passwords=False) == [
+        "/etc/ssh/x.conf line 2: PasswordAuthentication yes under Match User alice",
+        "/etc/ssh/x.conf line 4: Include /etc/ssh/y.conf under Match Address 10.0.0.0/8, which setup ssh does not check (move the Include above the first Match)",
+    ]
+    # A line whose quote is never closed cannot be vouched for; an Include's is sshd_files's to say.
+    assert cli.match_weakening([("x", 'Banner "/etc/issue\nInclude "/a\n')], passwords=False) == [
+        "x line 1: banner has a quote that is never closed, so it cannot be read the way sshd reads it",
+    ]
+
+
+@pytest.mark.parametrize("line, files, words", [
+    ("Include=@/weak.conf", {"weak.conf": WEAK}, "weak.conf line 2"),
+    ("include = @/weak.conf", {"weak.conf": WEAK}, "weak.conf line 2"),
+    ("INCLUDE\t@/weak.conf", {"weak.conf": WEAK}, "weak.conf line 2"),
+    ('Include "@/weak one.conf"', {"weak one.conf": WEAK}, "weak one.conf line 2"),
+    ("Include '@/weak one.conf'", {"weak one.conf": WEAK}, "weak one.conf line 2"),
+    ('Include @/ok.conf "@/weak two.conf"', {"ok.conf": "X11Forwarding no\n", "weak two.conf": WEAK}, "weak two.conf line 2"),
+    ("Include site.d/*.conf", {"site.d/weak.conf": WEAK}, "site.d/weak.conf line 2"),
+    ("Include=site.d/weak.conf # the site's own", {"site.d/weak.conf": WEAK}, "site.d/weak.conf line 2"),
+])
+def test_a_match_block_in_a_file_included_any_way_sshd_accepts_is_found(machine, capsys, line, files, words):
+    assert include_line_escapes(machine, line, files) == "exit 1"
+    err = capsys.readouterr().err
+    assert words in err and "PasswordAuthentication yes under Match User alice" in err
+    assert_backed_out(machine)
+
+
+@pytest.mark.parametrize("line", ['Include="@/missing.conf"', "Include=@/missing.conf", 'Include "@/missing.conf"', "include = @/missing-*.conf"])
+def test_an_include_written_with_equals_or_quotes_that_matches_nothing_stops_it(machine, capsys, line):
+    assert include_line_escapes(machine, line, {}) == "exit 1"
+    assert "matches no file" in capsys.readouterr().err
+    assert_backed_out(machine)
+
+
+def test_a_plain_include_that_matches_nothing_is_fine_as_it_is_for_sshd(machine):
+    assert include_line_escapes(machine, "Include @/none-*.conf", {}) == "0"
+    assert machine.on()
+
+
+@pytest.mark.parametrize("line, words", [
+    ('Include "@/weak.conf', "an Include with a quote that is never closed"),
+    ("Include '@/weak.conf", "an Include with a quote that is never closed"),
+    ('Banner "/etc/issue', "banner has a quote that is never closed"),
+    ("Include", "an Include that names no file"),
+])
+def test_a_line_that_cannot_be_read_the_way_sshd_reads_it_stops_it(machine, capsys, line, words):
+    assert include_line_escapes(machine, line, {"weak.conf": WEAK}) == "exit 1"
+    assert words in capsys.readouterr().err
+    assert_backed_out(machine)
+
+
+def test_quoted_include_names_reach_the_root_side_listing_whole(machine):
+    include_line_escapes(machine, 'Include "@/two words.conf" @/plain.conf', {"two words.conf": "X11Forwarding no\n", "plain.conf": "X11Forwarding no\n"})
+    listed = [argv[-1] for root, argv in machine.calls if argv[:4] == ["env", "LC_ALL=C", "sh", "-c"]]
+    assert f"{machine.etc}/two words.conf" in listed and f"{machine.etc}/plain.conf" in listed
+    read = [argv[2] for _, argv in machine.calls if argv[:2] == ["cat", "--"]]
+    assert f"{machine.etc}/two words.conf" in read

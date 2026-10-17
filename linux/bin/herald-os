@@ -3267,6 +3267,14 @@ def sshd_overruled(effective: str, passwords: bool) -> list[str]:
     return [f"{key} is {values.get(key, 'not reported')}, not {value}" for key, value in wanted.items() if values.get(key) != value]
 
 
+# The settings the scan reports, spelled as sshd_config(5) spells them.
+SSHD_NAMES = {
+    "passwordauthentication": "PasswordAuthentication", "kbdinteractiveauthentication": "KbdInteractiveAuthentication",
+    "challengeresponseauthentication": "ChallengeResponseAuthentication", "permitrootlogin": "PermitRootLogin",
+    "permitemptypasswords": "PermitEmptyPasswords", "authenticationmethods": "AuthenticationMethods",
+}
+
+
 def sshd_weaker(key: str, value: str, passwords: bool) -> bool:
     """Whether a setting lets in more than the drop-in does (pure; tested)."""
     value = value.strip().strip('"').lower()
@@ -3280,6 +3288,60 @@ def sshd_weaker(key: str, value: str, passwords: bool) -> bool:
     return False
 
 
+# A setting line as sshd reads it: the keyword (any case), then whitespace or an "=" (with or without
+# spaces around it), then its arguments.
+SSHD_KEYWORD = re.compile(r"(\S+?)(\s*=\s*|\s+)(.*)$")
+
+
+def sshd_words(text: str) -> list[str] | None:
+    """Arguments split the way sshd splits them (argv_split in OpenSSH's misc.c): whitespace outside
+    quotes ends a word, single or double quotes group one, a backslash escapes a quote, a backslash or
+    an unquoted space, and a # that starts a word starts a comment. None when a quote is never closed
+    (pure; tested)."""
+    words: list[str] = []
+    word: list[str] = []
+    quote, started, at = "", False, 0
+    while at < len(text):
+        char = text[at]
+        if not quote and char in " \t":
+            if started:
+                words.append("".join(word))
+                word, started = [], False
+        elif not quote and char == "#" and not started:
+            break
+        elif char == "\\" and at + 1 < len(text) and (text[at + 1] in "'\"\\" or (not quote and text[at + 1] == " ")):
+            at += 1
+            word.append(text[at])
+            started = True
+        elif char in "'\"" and quote in ("", char):
+            quote = "" if quote else char
+            started = True
+        else:
+            word.append(char)
+            started = True
+        at += 1
+    if quote:
+        return None
+    if started:
+        words.append("".join(word))
+    return words
+
+
+def sshd_settings(text: str) -> list[tuple[int, str, list[str] | None, bool]]:
+    """Each setting in an sshd file: its line number, its keyword (lower case), its arguments (None
+    when they cannot be split, as with a quote never closed), and whether they were written with "="
+    or quotes, the forms an Include must not use to name nothing (pure; tested)."""
+    settings = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parsed = SSHD_KEYWORD.match(line)
+        keyword, separator, value = parsed.groups() if parsed else (line, "", "")
+        settings.append((number, keyword.lower(), sshd_words(value), "=" in separator or "'" in value or '"' in value))
+    return settings
+
+
 def match_weakening(files: list[tuple[str, str]], passwords: bool) -> list[str]:
     """Settings under a Match block, in any of sshd's files, that let in more than the drop-in: such a
     block wins over it for the connections it matches. A Match lasts until the next one or the end of
@@ -3288,19 +3350,20 @@ def match_weakening(files: list[tuple[str, str]], passwords: bool) -> list[str]:
     found = []
     for name, text in files:
         match = None
-        for number, raw in enumerate(text.splitlines(), 1):
-            line = raw.split("#", 1)[0].strip()
-            parsed = re.match(r"(\S+?)(?:\s*=\s*|\s+)(.*)$", line)
-            if not parsed:
+        for number, keyword, args, _ in sshd_settings(text):
+            if args is None:
+                # An unparsable Include is sshd_files's to report; any other line, this one's.
+                if keyword != "include":
+                    found.append(f"{name} line {number}: {keyword} has a quote that is never closed, so it cannot be read the way sshd reads it")
                 continue
-            keyword, value = parsed.groups()
-            if keyword.lower() == "match":
+            value = " ".join(args)
+            if keyword == "match":
                 match = value
-            elif match is not None and keyword.lower() == "include":
+            elif match is not None and keyword == "include":
                 found.append(f"{name} line {number}: Include {value} under Match {match}, which setup ssh does not check "
                              "(move the Include above the first Match)")
-            elif match is not None and sshd_weaker(keyword.lower(), value, passwords):
-                found.append(f"{name} line {number}: {keyword} {value} under Match {match}")
+            elif match is not None and sshd_weaker(keyword, value, passwords):
+                found.append(f"{name} line {number}: {SSHD_NAMES.get(keyword, keyword)} {value} under Match {match}")
     return found
 
 
@@ -3327,18 +3390,27 @@ def sshd_files(path: Path | None = None, depth: int = 0) -> tuple[list[tuple[str
     if result.returncode != 0:
         return [], [f"cannot read {path}: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}"]
     files, problems = [(str(path), result.stdout)], []
-    for line in result.stdout.splitlines():
-        fields = line.split("#", 1)[0].split()
-        if not (fields[:1] and fields[0].lower() == "include"):
+    for number, keyword, args, strict in sshd_settings(result.stdout):
+        if keyword != "include":
+            continue
+        if args is None:
+            problems.append(f"{path} line {number}: an Include with a quote that is never closed, which cannot be followed")
+            continue
+        if not args:
+            problems.append(f"{path} line {number}: an Include that names no file")
             continue
         if depth >= 16:
             # sshd's own limit (READCONF_MAX_DEPTH); deeper, sshd refuses the config anyway.
             problems.append(f"{path}: Includes nest deeper than 16 files")
             break
-        for pattern in fields[1:]:
+        for pattern in args:
             names, problem = sshd_include(pattern)
             if problem:
                 problems.append(problem)
+            elif not names and strict:
+                # sshd lets an Include match nothing; written with "=" or quotes, which a person types
+                # to name one file, it more likely means this check is reading the line wrongly.
+                problems.append(f"{path} line {number}: Include {pattern} matches no file")
             for name in names:
                 more, trouble = sshd_files(Path(name), depth + 1)
                 files += more

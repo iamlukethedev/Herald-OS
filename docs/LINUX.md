@@ -370,7 +370,12 @@ switched from another bootc system is different: it gets a login screen and a lo
   `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
   distributions' `50-` files), reads `sshd_config` and its includes for a `Match` block that sets any
   of those or `AuthenticationMethods` to something weaker, and refuses an `Include` under a `Match`
-  (its file would be conditional, which the scan does not follow). Reading fails closed: every file is
+  (its file would be conditional, which the scan does not follow). Lines are read as sshd reads
+  them: the keyword in any case, then spaces or an `=` (`Include=/x`, `include = /x`), then arguments
+  split like OpenSSH's `argv_split` (quotes, backslash escapes, `#` starting a comment only at the
+  start of a word), several patterns to an Include, relative ones under `/etc/ssh`. A line with an
+  unclosed quote, an Include that names no file, or one written with `=` or quotes that matches
+  nothing stops it. Reading fails closed: every file is
   read as root (`cat --`), Include globs are expanded as root by `sh -c` with the pattern as an
   argument (globbing only, `IFS` empty) and the names returned NUL-separated, and any file or listing
   that cannot be read, or Includes nested past sshd's 16, stop it; and checks `sshd -T`, and
