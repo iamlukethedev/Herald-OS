@@ -901,3 +901,17 @@ def test_dropping_sshd_from_the_reserved_names_is_caught(tmp_path):
     assert ACCOUNT_PRE.count("nfsnobody sshd dbus") == 1
     found, out, console = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace("nfsnobody sshd dbus", "nfsnobody dbus"), ACCOUNT="sshd"), no_accounts=True)
     assert found.returncode == 0 and not account_refused(found, out, console)
+
+
+
+def test_sshd_is_a_reserved_name():
+    assert "sshd" in RESERVED
+    assert re.search(r"(?<![\w-])sshd(?![\w-])", re.search(r'^reserved="([^"]*)"', ACCOUNT_PRE, re.M).group(1))
+
+
+def test_the_kickstart_s_github_fetch_has_exactly_these_limits():
+    fetch = re.search(r"curl ([^\n]*?)\\\n\s*([^\n]*?) \"https://github.com/\$1.keys\"", ACCOUNT_PRE)
+    assert fetch, "the account %pre no longer fetches GitHub's keys with curl"
+    words = (fetch.group(1) + " " + fetch.group(2)).split()
+    assert words == ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3", "--max-filesize", "1M",
+                     "--retry", "3", "--connect-timeout", "10", "--max-time", "30"]

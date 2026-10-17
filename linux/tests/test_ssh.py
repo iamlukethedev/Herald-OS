@@ -2640,3 +2640,10 @@ def test_keys_that_were_never_written_are_not_reported_as_left_behind(machine, c
     assert "setup ssh stopped: Permission denied" in err and "SSH is as it was before this run" in err
     assert "could not take the added keys back out" not in err and "taken out" not in err
     assert (machine.keys_file.read_text() if existing else machine.keys_file.exists()) == (public_key(seed=9) + "\n" if existing else False)
+
+
+
+def test_the_github_fetch_gives_up_after_exactly_20_seconds():
+    curl = cli.GITHUB_CURL
+    assert curl.count("--max-time") == 1 and curl[curl.index("--max-time") + 1] == "20"
+    assert curl.count("--connect-timeout") == 1 and curl[curl.index("--connect-timeout") + 1] == "10"
