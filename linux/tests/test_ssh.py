@@ -202,6 +202,10 @@ class System:
         monkeypatch.setattr(module.subprocess, "call", lambda argv, **kwargs: self.run(argv).returncode)
         # sudo lets this account in (False: it wants a password nobody can type).
         self.sudo_lets_in = True
+        # sudo still remembers the password (False: its cache ran out after `sudo -v`).
+        self.sudo_cached = True
+        # How each root command was run: ("-n", argv) or ("asks", argv).
+        self.sudo_modes: list[tuple[str, list[str]]] = []
         monkeypatch.delenv("XDG_SESSION_ID", raising=False)
 
     def main_config(self, *before: str) -> None:
@@ -212,11 +216,20 @@ class System:
     def run(self, argv, capture_output=False, text=False, check=False, timeout=None, input=None, **_):
         argv = list(argv)
         root = argv[:1] == ["sudo"]
+        asks = False
         if root:
             argv = argv[1:]
-            if argv[:1] == ["-n"]:
+            asks = argv[:1] != ["-n"]
+            if not asks:
                 argv = argv[1:]
+            self.sudo_modes.append(("asks" if asks else "-n", argv))
         self.calls.append((root, argv))
+        if root and argv != ["-v"] and not self.sudo_cached:
+            if asks:
+                # A sudo that asks, from a group in the background of the terminal: stopped (SIGTTIN)
+                # until something kills it.
+                return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
+            return subprocess.CompletedProcess(argv, 1, "", "sudo: a password is required\n")
         self.timeouts.append((argv, timeout))
         if any(argv[:len(prefix)] == prefix for prefix in self.hang):
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
@@ -1818,6 +1831,16 @@ def the_budget_is_a_hard_cap(machine: System, tmp_path: Path, capsys) -> bool:
         module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST = saved
 
 
+def sudo_never_asks_again(machine: System, tmp_path: Path, capsys) -> bool:
+    original = machine.module.sys.stdin.isatty
+    machine.module.sys.stdin.isatty = lambda: True
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        machine.module.sys.stdin.isatty = original
+    return bool(machine.sudo_modes) and all(mode == "-n" for mode, argv in machine.sudo_modes if argv != ["-v"])
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1855,7 +1878,8 @@ MUTANTS = {
     "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n    firewall = firewall_close()", "    firewall = firewall_close()"),
     "off ends no session": (off_ends_sessions_when_told, '        if root_run(["loginctl", "terminate-session", session]).returncode != 0:', "        if False:"),
     "off never asks": (off_asks_in_a_terminal, "    if sessions and not end and sys.stdin.isatty():", "    if False:"),
-    "root without sudo": (root_only_through_sudo, '    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]', "    return argv"),
+    "root without sudo": (root_only_through_sudo, '    return ["sudo", "-n", *argv]', "    return argv"),
+    "sudo may ask again in the background": (sudo_never_asks_again, '    return ["sudo", "-n", *argv]', '    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]'),
     "status follows a linked drop-in": (status_sees_a_linked_drop_in, "    drop_in_state = file_state(SSHD_DROP_IN)\n", '    drop_in_state = "present" if SSHD_DROP_IN.is_file() else "absent"\n'),
     "reads follow links": (reads_do_not_follow_links, "os.O_RDONLY | os.O_NOFOLLOW", "os.O_RDONLY"),
     "on writes through a linked drop-in": (on_refuses_a_linked_drop_in, '        if file_state(path) == "tampered":', "        if False:"),
@@ -3171,3 +3195,16 @@ def test_the_rollback_budget_is_a_hard_cap_even_when_every_command_hangs(machine
     # sshd's four steps were still tried, past the budget.
     tried = [argv for _, argv in machine.calls if argv[:1] == ["systemctl"] and argv[1] in ("stop", "disable") and argv[2] in ("sshd.service", "sshd.socket")]
     assert len(tried) == 4
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 9: after the first `sudo -v`, sudo never asks again; a rollback with trouble says so.
+def test_after_the_first_sudo_v_every_root_command_uses_sudo_n_even_in_a_terminal(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    machine.setup("--key", public_key())
+    machine.setup("--off")
+    modes = [mode for mode, argv in machine.sudo_modes if argv != ["-v"]]
+    assert modes and set(modes) == {"-n"}
+    # The one that may ask is the first: `sudo -v`, in the terminal's foreground.
+    assert machine.calls[[argv for _, argv in machine.calls].index(["-v"])][1] == ["-v"]

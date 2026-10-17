@@ -3139,11 +3139,14 @@ SSH_USAGE = (
 
 
 def as_root(argv: list[str]) -> list[str]:
-    """`argv` as root: unchanged when this runs as root already, else through sudo, which asks for the
-    password in a terminal and otherwise fails at once rather than wait for an answer no one gives."""
+    """`argv` as root: unchanged when this runs as root already, else through `sudo -n`. ssh_sudo() has
+    asked for the password up front (interactively: `sudo -n -v` would refuse people whose rules use
+    verifypw=all), so a later sudo never needs to ask. Each command runs in a process group of its
+    own, in the background of the terminal, where a sudo that did ask would stop on SIGTTIN until its
+    timeout; with -n, sudo whose cached password has run out fails at once instead."""
     if os.geteuid() == 0:
         return argv
-    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]
+    return ["sudo", "-n", *argv]
 
 
 # Every command `setup ssh` runs gets this long, so a hung nft, systemctl, firewall-cmd or sshd
@@ -3177,7 +3180,9 @@ def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = N
 
 def ssh_kill(process: subprocess.Popen) -> None:
     """End a command's whole group: SIGTERM first, which sudo passes on to the command it runs (in a
-    session of its own when sudo uses a pty), then SIGKILL after a short grace."""
+    session of its own when sudo uses a pty), then SIGKILL after a short grace. The SIGKILL reaches
+    the group, which is sudo, but not a root command in a session of its own under it: the SIGTERM
+    sudo passes on is what ends that command."""
     for signum, grace in ((signal.SIGTERM, SSH_KILL_GRACE), (signal.SIGKILL, None)):
         try:
             os.killpg(process.pid, signum)
