@@ -222,6 +222,21 @@ describe('Hermes & agents', () => {
     expect(host.innerHTML).not.toContain('gateway not connected')
   })
 
+  it.each(['pt-BR', 'zh-CN'] as const)("says the model list cannot load because the gateway is not connected in %s, not in the client's English", async language => {
+    $connection.set('open')
+    $connectionEpoch.set(1)
+    const host = await show(language)
+    const dropdown = [...host.querySelectorAll('button')].find(button => button.textContent?.startsWith(`${t('app.hermes')} · `))
+
+    await act(async () => dropdown?.click())
+    await settle()
+
+    const models = host.querySelector(`[role="dialog"][aria-label="${t('settings.agents.chooseModel')}"]`)
+    expect(models).not.toBeNull()
+    expect([...(models?.querySelectorAll('.text-danger') ?? [])].map(error => error.textContent)).toEqual([t('settings.agents.gatewayNotConnected')])
+    expect(models?.innerHTML).not.toContain('gateway not connected')
+  })
+
   it('opens the activity history in the language chosen', async () => {
     const host = await show('zh-CN')
     await openHistory(host)
