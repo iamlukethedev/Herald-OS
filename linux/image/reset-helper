@@ -31,6 +31,13 @@ case "${1:-}" in
     # Flatpaks installed for everyone and saved Wi-Fi networks go too: the machine starts fresh.
     flatpak uninstall --system --all -y --noninteractive >/dev/null 2>&1 || true
     rm -f /etc/NetworkManager/system-connections/*.nmconnection
+    # SSH goes back to off, as the image ships it, and an unattended install's choices go too: the next
+    # first boot would turn SSH on for its keys again and name the new account as it did. Nothing else
+    # reads them (firstboot.sh does, every phase, but this runs before it, so every phase from here on
+    # names the session user hermes). herald-os-reset.service runs before sshd, and any SSH session
+    # still open (sshd.socket, or one that got in another way) is ended here.
+    rm -f /etc/herald-os/ssh-keys /etc/herald-os/install.conf
+    herald-os setup ssh --off --end-sessions >/dev/null || echo "WARNING: SSH could not be turned off; run herald-os setup ssh --off --end-sessions" >&2
     rm -f "$STATE/firstboot-done" "$STATE/firstboot-apps-done" "$STATE/hermes-pending" "$PENDING"
     ;;
   *) echo "usage: $0 schedule <user> | apply" >&2; exit 2 ;;

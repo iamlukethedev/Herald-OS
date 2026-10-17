@@ -1,7 +1,8 @@
 [Unit]
 Description=Herald OS: apply a reset that `herald-os reset` scheduled (erase the account, run setup again)
 ConditionPathExists=/var/lib/herald-os/reset-pending
-Before=herald-os-firstboot.service greetd.service
+# Before sshd too: no one signs in over SSH to the account while it is erased.
+Before=herald-os-firstboot.service greetd.service sshd.service sshd.socket
 
 [Service]
 Type=oneshot

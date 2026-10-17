@@ -3,6 +3,10 @@ name: Installer test
 # Installs a release's x86_64 ISO into a virtual machine (KVM) the way a person would, minus the
 # questions: the ISO's own kickstart (the Herald OS image inside it) plus an unattended disk layout.
 # Then it boots the installed system and screenshots it as it comes up, for a look at what it shows.
+# With an account name given, it also tests an unattended account and SSH: the account %pre of
+# linux/image/unattended.ks (ACCOUNT and a throwaway key in SSH_KEYS) goes into the kickstart, and once
+# the system is up, the key must sign in as that account and nothing else may (root, passwords). Left
+# empty, as it is by default, the run is the same as without the option.
 
 on:
   workflow_dispatch:
@@ -10,6 +14,10 @@ on:
       tag:
         description: The release to install
         default: v0.1.0-alpha.5
+      account:
+        description: "Also test an unattended account and SSH key login: the account's name (empty: not tested). Needs a release whose image has herald-os setup ssh."
+        required: false
+        default: ""
 
 permissions:
   # Write, only so a draft release (visible with push access) can be tested before it is published.
@@ -41,6 +49,8 @@ jobs:
           echo "LABEL=$(blkid -o value -s LABEL herald.iso)" >>"$GITHUB_ENV"
           7z l herald.iso | grep -Ei '\.ks|vmlinuz|initrd|grub.cfg' || true
       - name: The ISO's kickstart, unattended
+        env:
+          ACCOUNT: ${{ inputs.account }}
         run: |
           7z e -oiso herald.iso images/pxeboot/vmlinuz images/pxeboot/initrd.img EFI/BOOT/grub.cfg >/dev/null
           grep -E 'linux|inst\.' iso/grub.cfg | head -n 6 || true
@@ -60,6 +70,11 @@ jobs:
             echo 'rootpw --lock'
             echo 'poweroff'
           } >>ks.cfg
+          if [[ -n "$ACCOUNT" ]]; then
+            # The account and a key made for this run only; the private half never leaves the runner.
+            ssh-keygen -q -t ed25519 -N '' -C installer-test -f test-key
+            bash linux/vm/account-kickstart.sh "$ACCOUNT" test-key.pub >>ks.cfg
+          fi
           echo "----- ks.cfg"; cat ks.cfg
       - name: Install
         run: |
@@ -76,10 +91,12 @@ jobs:
           tail -n 40 install.log
           grep -q -i 'reboot: Power down\|Power down' install.log || { echo "::error::the install did not finish"; exit 1; }
       - name: Boot what was installed
+        env:
+          ACCOUNT: ${{ inputs.account }}
         run: |
           (qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 6144 -machine q35 \
             -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd -drive if=pflash,format=raw,file=vars.fd \
-            -drive file=disk.qcow2,if=virtio -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+            -drive file=disk.qcow2,if=virtio -netdev "user,id=net0${ACCOUNT:+,hostfwd=tcp:127.0.0.1:2222-:22}" -device virtio-net-pci,netdev=net0 \
             -display none -vga virtio -serial file:boot.log -monitor unix:monitor.sock,server,nowait &)
           for minute in 2 4 6 8 10 14 18; do
             sleep $(( minute == 2 ? 120 : (minute <= 10 ? 120 : 240) ))
@@ -88,8 +105,32 @@ jobs:
             pnmtopng "shots/boot-$(printf %02d "$minute")min.ppm" >"shots/boot-$(printf %02d "$minute")min.png" && rm "shots/boot-$(printf %02d "$minute")min.ppm"
             echo "--- $minute min"; tail -n 5 boot.log
           done
+          failed=""
+          if [[ -n "$ACCOUNT" ]]; then
+            # The key signs in as the account; root and passwords do not. A try every 30 s stays under
+            # the per-address limit (4 new connections a minute), which counts the runner as one address.
+            ssh_to() { ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=known_hosts "$@"; }
+            signed_in=""
+            for _ in $(seq 1 20); do
+              if ssh_to -i test-key "$ACCOUNT@127.0.0.1" 'id -un; systemctl is-active sshd herald-os-ssh-limit; cat /etc/herald-os/install.conf' >ssh.log 2>&1; then
+                signed_in=1
+                break
+              fi
+              sleep 30
+            done
+            grep -qx "$ACCOUNT" ssh.log || { echo "::error::the key did not sign in as $ACCOUNT"; failed=1; }
+            sleep 30
+            if ssh_to -i test-key "root@127.0.0.1" true >>ssh.log 2>&1; then echo "::error::root signed in over SSH"; failed=1; fi
+            sleep 30
+            if ssh_to -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$ACCOUNT@127.0.0.1" true >>ssh.log 2>&1; then
+              echo "::error::signed in without the key"; failed=1
+            fi
+            grep -q 'Permission denied (publickey)' ssh.log || { echo "::error::sshd offered more than keys"; failed=1; }
+            echo "----- ssh.log (signed in: ${signed_in:-no})"; cat ssh.log
+          fi
           echo "quit" | socat - UNIX-CONNECT:monitor.sock >/dev/null || true
           grep -E 'herald-os|Herald OS|Reached target|Failed' boot.log | tail -n 60 || true
+          [[ -z "$failed" ]]
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -99,3 +140,4 @@ jobs:
             install.log
             boot.log
             ks.cfg
+            ssh.log

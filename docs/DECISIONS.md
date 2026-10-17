@@ -1621,3 +1621,34 @@ does not hold.
   names them. `fedora-bootc:44` ships most today; what it lacked was Sound Open Firmware, ALSA's UCM
   profiles (Intel laptops' speakers and microphones) and the older Intel Wi-Fi firmware, about
   13 MiB in all. The default image stays lean: the NVIDIA driver's 1.6 GB is only in its own image.
+
+## ADR-030: SSH is rate-limited per address by an nftables table of Herald's own, beside firewalld
+
+**Status: Accepted.** From #56.
+
+`herald-os setup ssh` opens SSH in firewalld's zone and limits how fast anyone can try it. The
+limit has to count each source address on its own: one bucket for everyone lets a single guesser,
+or a scanner, use it up and lock the owner out.
+
+- **Not firewalld's own limit.** A rich rule's `limit value="4/m"` is one bucket for every source.
+  firewalld has no per-source meter, and its direct interface, which could pass `hashlimit` rules,
+  is deprecated and needs the iptables tools, which an nftables-only image does not carry.
+- **An nftables table of Herald's own.** `table inet herald_os_ssh` hooks input at priority
+  `filter - 10`, before firewalld's table, and drops new connections to sshd's ports past 4 a minute
+  (burst 4) from one IPv4 address or one IPv6 /64, using dynamic sets whose entries expire after 5
+  minutes. It counts packets that open a connection (conntrack state new), so a client's resent SYNs
+  count too: one whose first SYN was dropped, or that times out and retries, uses up more of its
+  allowance, and an address over the limit keeps being dropped while it retries, until the rate
+  allows again. Clients behind one NAT address share an allowance. A drop in any table is final, so
+  a connection it lets through still needs the zone's `rule service name="ssh" accept`. firewalld
+  manages only its own table and leaves this one alone on reload. The table is not tied to a zone:
+  on interfaces whose zone does not allow SSH, firewalld refuses those connections anyway.
+- **Loaded at boot by a unit `setup ssh` writes.** `/etc/herald-os/ssh-limit.nft` replaces the table
+  each time it loads, and `/etc/systemd/system/herald-os-ssh-limit.service` loads it before
+  `network-pre.target` and sshd. `sshd.service` and `sshd.socket` each get a drop-in with
+  `Requires=` and `After=` on it, so a limit that fails leaves sshd stopped instead of running
+  without it, and stopping the limit stops sshd too. `setup ssh --off` removes the drop-ins, stops
+  the unit (which deletes the table) and removes its files. Nothing is in the image itself, so a
+  machine that never turns SSH on has neither the table nor the unit.
+- **firewalld required by default.** Without firewalld running, `setup ssh` refuses unless
+  `--no-firewall`, which warns, and still loads the limit when `nft` is there.

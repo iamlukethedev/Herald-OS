@@ -292,7 +292,22 @@ switching to it, and changing its packages, Flatpaks and branding.
   several internal disks and no `DISK=`, or a `DISK=` that fails those checks, it stops before
   erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
   `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.
-  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output.
+  `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output. A second `%pre`
+  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (RSA needs 2048 bits; GitHub's keys
+  are read there, while the installer is online, with the same curl limits as the CLI) and writes
+  `/tmp/herald-os-account.ks`, a `%post` that leaves `/etc/herald-os/install.conf` (`user=<name>`)
+  and `/etc/herald-os/ssh-keys` in the installed system. `firstboot.sh` names the session user from
+  the first (env `HERMES_USER` still wins; a name that is not an account name or belongs to a system
+  account is ignored) and, when there are keys, runs
+  `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys --offline-firewall` before
+  installing Hermes. `herald-os-firstboot.service` wants firewalld and starts after it; should
+  firewalld still not be up, `--offline-firewall` saves the rule with `firewall-offline-cmd`, and
+  sshd starts only once the rate limit has loaded. Without nft, or with no firewalld at all, SSH
+  stays off and the journal says why. The account `%pre` runs before the disk's and also refuses
+  reserved and system names (Fedora's system accounts and groups, `systemd-*`, and anything `getent`
+  resolves to an id below 1000), and it logs each skipped GitHub line by key type and reason, never
+  the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it runs
+  after) and runs `herald-os setup ssh --off --end-sessions`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle
@@ -316,7 +331,12 @@ The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] 
 `package-disk.sh` deletes the builder's `disk.qcow2` and the VHDX once they are converted, and the
 workflow removes the images after the builder, so the runner has room for every output.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
-unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start.
+unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start. Its
+optional `account` input (empty by default, so a run without it is unchanged) also appends the
+account `%pre` of `unattended.ks` with that name and a throwaway key
+(`linux/vm/account-kickstart.sh` fills it in), forwards port 2222 to the machine's SSH, and fails
+unless the key signs in as the account while root and passwords are refused. It needs a release
+whose image has `herald-os setup ssh`.
 
 On the image, apps install through Flatpak or into `~/.local` (the catalog picks those methods
 there); the system itself changes only by a whole new image.
@@ -341,6 +361,77 @@ switched from another bootc system is different: it gets a login screen and a lo
 
 - **Firewall:** firewalld with a `herald-os` zone that refuses incoming connections except LocalSend
   (port 53317) and mDNS. SSH is off in release images; the development VM's zone allows it.
+- **SSH:** `herald-os setup ssh --key <public key>` (or `--github <user>`) refuses without a key in
+  `~/.ssh/authorized_keys` (unless `--passwords`) and without firewalld running (unless
+  `--no-firewall`, which warns, or `--offline-firewall`, which saves the rule with
+  `firewall-offline-cmd` for when firewalld starts and still requires the rate limit). Skipped
+  GitHub lines are printed with their line number, key type and reason, never the key. Given keys
+  must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or RSA of 2048 bits or more, and their
+  fingerprints are printed before they go in; GitHub's list comes through
+  `curl --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M` with timeouts, and its
+  weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
+  (`PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+  `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
+  distributions' `50-` files), reads `sshd_config` and its includes for a `Match` block that sets
+  any of those or `AuthenticationMethods` to something weaker, and refuses an `Include` under a
+  `Match` (its file would be conditional, which the scan does not follow). Lines are read as sshd
+  reads them: the keyword in any case, then spaces or an `=` (`Include=/x`, `include = /x`), then
+  arguments split like OpenSSH's `argv_split` (quotes, backslash escapes, `#` starting a comment
+  only at the start of a word), several patterns to an Include, relative ones under `/etc/ssh` (one
+  starting with `~`, which sshd does not expand there, is refused). A line with an unclosed quote,
+  an Include that names no file, or one written with `=` or quotes that matches nothing stops it.
+  Reading fails closed: every file is read as root (`cat --`), Include globs are expanded as root by
+  `sh -c` with the pattern as an argument (globbing only, `IFS` empty) and the names returned
+  NUL-separated, and any file or listing that cannot be read, or Includes nested past sshd's 16,
+  stop it; and checks `sshd -T`, and `sshd -T -C` for the account from 127.0.0.1 and for the account
+  and root from 203.0.113.1; on any mismatch the file is taken back. The rate limit is per source:
+  firewalld's rich-rule `limit` is one bucket for every address (anyone could use it up) and its
+  direct interface is deprecated and needs iptables, so it is an nftables table of its own,
+  `inet herald_os_ssh` (hooked at `filter - 10`, before firewalld's, which leaves other tables
+  alone), that drops new connections to sshd's ports past 4 a minute from one IPv4 address or IPv6
+  /64, with dynamic sets that forget an address after 5 minutes. `/etc/herald-os/ssh-limit.nft`
+  holds it and `herald-os-ssh-limit.service` (in `/etc/systemd/system`) loads it at boot. Drop-ins
+  in `sshd.service.d` and `sshd.socket.d` (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and
+  `After=` `herald-os-ssh-limit.service`) keep sshd and its socket stopped when the limit fails, at
+  boot or later; `--off` removes them first. Run again while the limit is active, `on` swaps the
+  table in place with `nft -f` rather than restarting the unit, which would restart sshd through
+  `Requires=`. The firewalld zone gets `rule service name="ssh" accept` (runtime and permanent), and
+  `restorecon` runs on `~/.ssh` and the files it writes. Files in the home folder are written as the
+  account, also when the first boot runs it as root. `--off` disables `sshd.service` and
+  `sshd.socket`, removes the drop-in, the rate limit (unit, file and table) and the rule (with
+  `firewall-offline-cmd` when firewalld is stopped), leaves `authorized_keys`, and ends logind
+  sessions whose Service is `sshd` with `--end-sessions` or when the person says so in a terminal
+  (the caller's own last, after everything else). `reset-helper apply` runs `--off --end-sessions`,
+  and `herald-os-reset.service` is ordered before sshd. `--status [--json]` reports it without root
+  where it can. With `--json`, stdout always gets one object with the same keys and `error` (null,
+  or why there is no state, with the other keys null), whatever goes wrong. Files it owns as root
+  (the drop-in, the limit's files) are looked at with `lstat` and read with `O_NOFOLLOW`: a link in
+  their place is reported as `"tampered"` and never followed, `on` refuses to write through it, and
+  `--off` removes it, dangling or not. `~/.ssh` or `authorized_keys` owned by someone else, or that
+  cannot be looked into, is refused with what to run, and any file error ends in a plain message
+  rather than a traceback. It asks sudo for the password (`sudo -v`) before it changes anything, so
+  the prompt is not timed. Every command it runs (nft, firewall-cmd, sshd, systemctl, curl and the
+  rest) has a timeout (`SSH_TIMEOUT`, 120 s), in a process group of its own that gets SIGTERM (which
+  sudo passes on) and then SIGKILL when it runs out. If any step after the checks fails, or anything
+  else stops it (Ctrl+C, SIGTERM, SIGHUP, a file error, a command that times out), `on` puts back
+  what it changed (files, units, the table, which it loads again with `nft -f` when one was there,
+  the firewall rule, the keys it added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129
+  for SIGHUP and 124 for a timeout, with no traceback; INT, TERM and HUP are ignored while it puts
+  things back, and the earlier handlers come back after. The rollback fails closed, socket first: a
+  unit counts as running before only if `is-active` said exactly active, reloading or activating,
+  and as enabled only if `is-enabled` said exactly enabled, enabled-runtime, indirect, generated or
+  alias; anything else counts as closed, and is stopped or disabled again unless systemctl plainly
+  reports it so now (a state it cannot report in time counts as open). Its 300 s are a hard cap:
+  each command gets what is left; once that is spent, only stopping and disabling sshd are still
+  tried, and what it skipped is listed. After the first `sudo -v` (interactive, since `sudo -n -v`
+  refuses verifypw=all rules), every root command uses `sudo -n`, so an expired cache fails at once
+  rather than stopping on SIGTTIN in the background. A rollback that could not do everything says it
+  is incomplete and what to check, not that SSH is as it was. A firewall rule that was not there
+  before is removed unless its query says it is absent, and asked about again at the end, for an add
+  that finished late; `--status` lists `warnings`, such as sshd requiring a limit that is not
+  running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be an account
+  name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers it, with a
+  mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,

@@ -1,9 +1,13 @@
 """linux/image/unattended.ks erases one disk, the one its %pre picks, and leaves every other disk alone."""
 
+import base64
 import os
 import re
+import shlex
 import shutil
+import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 KICKSTART = (ROOT / "linux" / "image" / "unattended.ks").read_text()
 INCLUDE = "/tmp/herald-os-disk.ks"
-PRE = re.search(r"^%pre [^\n]*\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
+PRE = re.search(r"^%pre [^\n]*--log=/tmp/herald-os-disk\.log\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
 # The bash that runs the %pre and the fakes: Anaconda has bash 5, macOS CI has bash 3.2, so both
 # must work. HERALD_OS_TEST_BASH=/path/to/bash-3.2 runs them under another one.
 BASH = shutil.which(os.environ.get("HERALD_OS_TEST_BASH", "bash"))
@@ -238,7 +242,7 @@ def command_lines() -> list[tuple[str, str]]:
 def test_the_include_is_one_top_level_command_before_the_storage_commands():
     commands = [line for section, line in command_lines() if section == ""]
     includes = [line for _, line in command_lines() if line.lstrip().startswith("%include")]
-    assert includes == [f"%include {INCLUDE}"]
+    assert includes == [f"%include {INCLUDE}", f"%include {ACCOUNT_INCLUDE}"]
     words = [line.split()[0] for line in commands]
     at = words.index("%include")
     assert words[at : at + 3] == ["%include", "zerombr", "autopart"]
@@ -271,19 +275,19 @@ BASH_4_ONLY = {
 }
 
 
-@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+@pytest.mark.parametrize("script", ["%pre", "account %pre", "lsblk", "findmnt", "readlink"])
 def test_the_scripts_need_only_bash_3_2(script):
-    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    text = {"%pre": PRE, "account %pre": ACCOUNT_PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     found = {name for name, pattern in BASH_4_ONLY.items() if re.search(pattern, code)}
     assert found == set()
 
 
-@pytest.mark.parametrize("script", ["%pre", "lsblk", "findmnt", "readlink"])
+@pytest.mark.parametrize("script", ["%pre", "account %pre", "lsblk", "findmnt", "readlink"])
 def test_the_scripts_pass_shellcheck(script, tmp_path):
     if not shutil.which("shellcheck"):
         pytest.skip("shellcheck is not installed")
-    text = {"%pre": PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
+    text = {"%pre": PRE, "account %pre": ACCOUNT_PRE, "lsblk": LSBLK, "findmnt": FINDMNT, "readlink": READLINK}[script]
     path = tmp_path / "script.sh"
     path.write_text(text if text.startswith("#!") else "#!/usr/bin/env bash\n" + text)
     found = subprocess.run(["shellcheck", "--shell=bash", str(path)], capture_output=True, text=True, check=False)
@@ -439,11 +443,475 @@ def test_anaconda_reads_it_as_one_disk(tmp_path):
 
     found, out, _ = run_pre(tmp_path, TWO_DISKS, with_disk(BY_ID), links=[f"{BY_ID} /dev/vdb"])
     assert found.returncode == 0, found.stderr
+    account = tmp_path / "account.ks"
+    account.write_text("# nothing chosen\n")
     handler = makeVersion("F44")
-    parser_module.KickstartParser(handler).readKickstartFromString(KICKSTART.replace(INCLUDE, str(out)))
+    parser_module.KickstartParser(handler).readKickstartFromString(KICKSTART.replace(INCLUDE, str(out)).replace(ACCOUNT_INCLUDE, str(account)))
     assert handler.ignoredisk.onlyuse == ["vdb"]
     assert handler.clearpart.type == CLEARPART_TYPE_ALL
     assert handler.clearpart.drives == ["vdb"]
     assert handler.zerombr.zerombr
     assert handler.autopart.autopart and handler.autopart.encrypted
-    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash"]
+    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash"]
+
+
+# The account %pre: the account's name and the SSH keys that may sign in to it, checked (and GitHub's
+# keys read) before anything is erased, and written into the installed system by a %post it makes.
+ACCOUNT_INCLUDE = "/tmp/herald-os-account.ks"
+ACCOUNT_PRE = re.search(r"^%pre [^\n]*--log=/tmp/herald-os-account\.log\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
+
+
+def _string(data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + data
+
+
+def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None, bits: int = 2048) -> str:
+    name = (data_kind or kind).encode()
+    if name == b"ssh-rsa":
+        modulus = ((1 << (bits - 1)) | (seed * 2 + 1)).to_bytes(bits // 8 + 1, "big")
+        blob = _string(name) + _string(b"\x01\x00\x01") + _string(modulus)
+    else:
+        blob = _string(name) + _string(bytes([seed]) * 32)
+    return f"{kind} {base64.b64encode(blob).decode()} {comment}".strip()
+
+
+def with_settings(pre: str = ACCOUNT_PRE, **settings: str) -> str:
+    for name, value in settings.items():
+        assert f'\n{name}=""\n' in pre
+        pre = pre.replace(f'\n{name}=""\n', f"\n{name}={shlex.quote(value)}\n", 1)
+    return pre
+
+
+def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None, keygen_fails: bool = False, no_accounts: bool = False) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    """The account %pre, with a stand-in curl that answers for github.com from `github` (and with
+    `keygen_fails`, an ssh-keygen that cannot read any key)."""
+    bin_dir, pages = tmp_path / "bin", tmp_path / "pages"
+    bin_dir.mkdir()
+    pages.mkdir()
+    (bin_dir / "bash").symlink_to(BASH)
+    (bin_dir / "python3").symlink_to(sys.executable)
+    for name, text in (github or {}).items():
+        (pages / f"{name}.keys").write_text(text)
+    (bin_dir / "curl").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$PAGES/curl-calls"\nurl="${!#}"\npage="$PAGES/${url##*/}"\n[[ -f "$page" ]] || exit 22\ncat "$page"\n')
+    (bin_dir / "curl").chmod(0o755)
+    for database, lines in (("passwd", ["root:x:0:0::/root:/bin/bash", "svc:x:990:990::/:/sbin/nologin", "nobody:x:65534:65534::/:/sbin/nologin"]),
+                            ("group", ["root:x:0:", "builders:x:985:"])):
+        (pages / database).write_text("" if no_accounts else "".join(f"{line}\n" for line in lines))
+    (bin_dir / "getent").write_text('#!/usr/bin/env bash\ngrep "^$2:" "$PAGES/$1"\n')
+    (bin_dir / "getent").chmod(0o755)
+    if keygen_fails:
+        (bin_dir / "ssh-keygen").write_text("#!/bin/sh\nexit 255\n")
+        (bin_dir / "ssh-keygen").chmod(0o755)
+    out, console = tmp_path / "account.ks", tmp_path / "console"
+    console.write_text("")
+    found = subprocess.run(
+        ["bash", "-c", pre.replace(ACCOUNT_INCLUDE, str(out)).replace("/dev/console", str(console))],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "PAGES": str(pages)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return found, out, console
+
+
+def installed(tmp_path: Path, include: Path) -> dict[str, str]:
+    """What the %post the account %pre wrote leaves in the installed system's /etc/herald-os."""
+    post = re.search(r"^%post [^\n]*\n(.*?)^%end$", include.read_text(), re.M | re.S)
+    if not post:
+        return {}
+    etc = tmp_path / "etc"
+    found = subprocess.run(["bash", "-euc", post.group(1).replace("/etc/herald-os", str(etc / "herald-os"))], capture_output=True, text=True, check=False)
+    assert found.returncode == 0, found.stderr
+    return {path.name: path.read_text() for path in sorted((etc / "herald-os").iterdir())}
+
+
+def account_refused(found: subprocess.CompletedProcess, out: Path, console: Path, *said: str) -> bool:
+    told = [found.stderr, console.read_text()]
+    return found.returncode != 0 and not out.exists() and all("nothing was erased" in text for text in told) and all(words in text for words in said for text in told)
+
+
+def test_with_nothing_chosen_the_install_writes_nothing_and_ssh_stays_off(tmp_path):
+    found, out, _ = run_account_pre(tmp_path)
+    assert found.returncode == 0, found.stderr
+    assert "%post" not in out.read_text() and installed(tmp_path, out) == {}
+    assert "the account: hermes; SSH: off" in found.stderr
+
+
+def test_the_chosen_name_and_keys_reach_the_installed_system(tmp_path):
+    one, two = public_key(seed=1), public_key("ecdsa-sha2-nistp256", seed=2, comment="it's \"mine\" HERALD_OS_KEYS")
+    pre = with_settings(ACCOUNT="luke", SSH_KEYS=f"# laptop\n  {one}\n\n{two}\n")
+    found, out, _ = run_account_pre(tmp_path, pre)
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": "user=luke\n", "ssh-keys": f"{one}\n{two}\n"}
+    assert "the account: luke; SSH: on at the first start, for 2 key(s) only" in found.stderr
+
+
+def test_keys_alone_are_for_hermes(tmp_path):
+    found, out, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key()))
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{public_key()}\n"}
+
+
+def test_github_keys_are_read_while_the_installer_is_online_and_marked(tmp_path):
+    one, two = public_key(comment="", seed=1), public_key(comment="", seed=2)
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": f"{one}\n{two}\nssh-dss AAAA\n"})
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{one} github:octocat\n{two} github:octocat\n"}
+
+
+@pytest.mark.parametrize("name", ["Luke", "1luke", "lu ke", "luke;reboot", "a" * 33])
+def test_an_unusable_account_name_stops_the_install_before_any_disk_is_erased(tmp_path, name):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), "is not an account name")
+
+
+@pytest.mark.parametrize("key", [public_key("ssh-dss"), f"restrict {public_key()}", "ssh-ed25519 AAAA", public_key(data_kind="ssh-rsa"), "hello"])
+def test_a_line_that_is_not_a_public_key_stops_the_install(tmp_path, key):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{public_key()}\n{key}")), "that sshd should not take")
+
+
+def test_a_github_account_that_cannot_be_read_or_has_no_keys_stops_the_install(tmp_path):
+    for name, (github, said) in {
+        "missing": ({}, "could not read https://github.com/missing.keys"),
+        "empty": ({"empty": "\n"}, "empty has no SSH keys on GitHub"),
+        "-bad-": ({}, "is not a GitHub user name"),
+    }.items():
+        attempt = tmp_path / name
+        attempt.mkdir()
+        assert account_refused(*run_account_pre(attempt, with_settings(GITHUB_KEYS=name), github), said), name
+
+
+def test_anaconda_reads_the_account_s_post(tmp_path):
+    parser_module = pytest.importorskip("pykickstart.parser")
+    from pykickstart.constants import KS_SCRIPT_POST
+    from pykickstart.version import makeVersion
+
+    (tmp_path / "disk").mkdir()
+    (tmp_path / "account").mkdir()
+    disk, disk_out, _ = run_pre(tmp_path / "disk", ["vda disk 0 0 "])
+    found, out, _ = run_account_pre(tmp_path / "account", with_settings(ACCOUNT="luke", SSH_KEYS=public_key()))
+    assert disk.returncode == 0 and found.returncode == 0, found.stderr
+    handler = makeVersion("F44")
+    text = KICKSTART.replace(INCLUDE, str(disk_out)).replace(ACCOUNT_INCLUDE, str(out))
+    parser_module.KickstartParser(handler).readKickstartFromString(text)
+    posts = [script for script in handler.scripts if script.type == KS_SCRIPT_POST]
+    assert len(posts) == 1 and posts[0].interp == "/usr/bin/bash" and posts[0].errorOnFail and posts[0].inChroot
+    assert "user=luke" in posts[0].script and "/etc/herald-os/ssh-keys" in posts[0].script
+
+
+def test_the_account_pre_stops_on_error_and_logs_where_the_installer_keeps_logs():
+    header = next(line for line in KICKSTART.splitlines() if line.startswith("%pre ") and "herald-os-account" in line)
+    assert "--erroronfail" in header and "--log=/tmp/herald-os-account.log" in header
+    everything = [line for _, line in command_lines()]
+    assert everything.index(f"%include {ACCOUNT_INCLUDE}") > everything.index("reboot")
+
+
+@pytest.mark.parametrize("check, old, new, settings", [
+    ("account name", '[[ "$ACCOUNT" =~ $account_pattern ]] ||', "true ||", {"ACCOUNT": "luke;reboot"}),
+    ("reserved names", '[[ "$reserved" != *[[:space:]]"$ACCOUNT"[[:space:]]* && "$ACCOUNT" != systemd-* ]] ||', "true ||", {"ACCOUNT": "wheel"}),
+    ("systemd names", ' && "$ACCOUNT" != systemd-* ]] ||', " ]] ||", {"ACCOUNT": "systemd-oom"}),
+    ("system ids", "(( known_id < 1000 || known_id > 60000 ))", "false", {"ACCOUNT": "svc"}),
+    ("key", '  reason="$(valid_key "$line")" ||\n', "  true ||\n", {"SSH_KEYS": f'command="sh" {public_key()}'}),
+    ("key data", "if kind != fields[0].encode() or len(blob) <= at:", "if False:", {"SSH_KEYS": public_key(data_kind="ssh-dss")}),
+    ("github name", '[[ "$name" =~ $github_pattern ]] ||', "true ||", {"GITHUB_KEYS": "-bad-"}),
+])
+def test_each_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings):
+    assert ACCOUNT_PRE.count(old) == 1, f"the account %pre no longer has exactly one {old!r}"
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mutant").mkdir()
+    github = {"-bad-": public_key()}
+    assert account_refused(*run_account_pre(tmp_path / "real", with_settings(**settings), github))
+    assert not account_refused(*run_account_pre(tmp_path / "mutant", with_settings(ACCOUNT_PRE.replace(old, new), **settings), github)), check
+
+
+
+CURL_LIMITS = "--proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M"
+
+
+def test_github_s_page_is_read_over_https_only_with_few_redirects_and_a_size_cap(tmp_path):
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": public_key() + "\n"})
+    assert found.returncode == 0, found.stderr
+    calls = (tmp_path / "pages" / "curl-calls").read_text().splitlines()
+    assert len(calls) == 1 and CURL_LIMITS in calls[0] and "--max-time" in calls[0] and "--connect-timeout" in calls[0]
+    assert calls[0].endswith(" https://github.com/octocat.keys")
+
+
+def test_a_github_page_over_1_mib_stops_the_install(tmp_path):
+    big = public_key() + "\n" + "#" * (1 << 20) + "\n"
+    assert account_refused(*run_account_pre(tmp_path, with_settings(GITHUB_KEYS="big"), github={"big": big}), "could not read https://github.com/big.keys")
+
+
+@pytest.mark.parametrize("bits, taken", [(2048, True), (4096, True), (2047, False), (1024, False)])
+def test_an_rsa_key_needs_2048_bits(tmp_path, bits, taken):
+    found, out, console = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key("ssh-rsa", bits=bits)))
+    if taken:
+        assert found.returncode == 0, found.stderr
+        assert installed(tmp_path, out) == {"ssh-keys": public_key("ssh-rsa", bits=bits) + "\n"}
+    else:
+        assert account_refused(found, out, console, "RSA of 2048 bits or more")
+
+
+def test_weak_github_keys_are_skipped_and_said(tmp_path):
+    weak, good = public_key("ssh-rsa", comment="", bits=1024), public_key(comment="", seed=5)
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="mixed"), github={"mixed": f"{weak}\n{good}\n"})
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{good} github:mixed\n"}
+    assert "https://github.com/mixed.keys line 1: skipping a key of type ssh-rsa: an RSA key of 1024 bits is too short (2048 at least)" in found.stderr
+    assert weak.split()[1][:16] not in found.stderr
+
+
+@pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
+def test_each_key_s_fingerprint_goes_into_the_log(tmp_path):
+    found, _, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key(comment="laptop")))
+    listing = subprocess.run(["ssh-keygen", "-lf", "-"], input=public_key(comment="laptop") + "\n", capture_output=True, text=True).stdout.strip()
+    assert found.returncode == 0 and f"herald-os: key 1: {listing}" in found.stderr
+
+
+@pytest.mark.parametrize("check, old, new, settings, github", [
+    ("RSA bits", "if bits < 2048:", "if False:", {"SSH_KEYS": public_key("ssh-rsa", bits=1024)}, {}),
+    ("page size", "  (( ${#page} <= 1048576 )) || return 1\n", "", {"GITHUB_KEYS": "big"}, {"big": public_key() + "\n" + "#" * (1 << 20)}),
+])
+def test_each_new_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings, github):
+    assert ACCOUNT_PRE.count(old) == 1, f"the account %pre no longer has exactly one {old!r}"
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mutant").mkdir()
+    assert account_refused(*run_account_pre(tmp_path / "real", with_settings(**settings), github))
+    assert not account_refused(*run_account_pre(tmp_path / "mutant", with_settings(ACCOUNT_PRE.replace(old, new), **settings), github)), check
+
+
+@pytest.mark.parametrize("limit", ["--proto =https", "--proto-redir =https", "--max-redirs 3", "--max-filesize 1M"])
+def test_each_curl_limit_is_caught_when_taken_out(tmp_path, limit):
+    assert ACCOUNT_PRE.count(f" {limit} ") == 1
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(f" {limit} ", " ", 1), GITHUB_KEYS="octocat"), github={"octocat": public_key() + "\n"})
+    assert found.returncode == 0
+    assert limit not in (tmp_path / "pages" / "curl-calls").read_text()
+
+
+@pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
+def test_taking_out_the_fingerprints_is_caught(tmp_path):
+    old = '  fingerprint "$line" "$number"\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, "  :\n"), SSH_KEYS=public_key()))
+    assert found.returncode == 0 and "herald-os: key 1: 256 SHA256:" not in found.stderr
+
+
+
+def test_the_account_is_checked_before_the_disk():
+    sections = re.findall(r"^%pre [^\n]*--log=(\S+)", KICKSTART, re.M)
+    assert sections == ["/tmp/herald-os-account.log", "/tmp/herald-os-disk.log"]
+
+
+@pytest.mark.parametrize("name", ["root", "bin", "daemon", "nobody", "sshd", "greetd", "wheel", "users", "video", "systemd-network", "systemd-oom", "admin"])
+def test_a_system_or_reserved_name_stops_the_install(tmp_path, name):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), "system account's or group's name")
+
+
+@pytest.mark.parametrize("name, what", [("svc", "a system account here (id 990)"), ("builders", "a system group here (id 985)")])
+def test_a_name_the_installer_resolves_to_a_system_id_stops_the_install(tmp_path, name, what):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), what)
+
+
+@pytest.mark.parametrize("name", ["luke", "hermes", "systemdfan", "wheelie", "_ops"])
+def test_a_person_s_name_is_taken(tmp_path, name):
+    found, out, _ = run_account_pre(tmp_path, with_settings(ACCOUNT=name))
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": f"user={name}\n"}
+
+
+def test_every_skipped_github_line_is_logged_with_its_type_and_reason_never_the_key(tmp_path):
+    dss, mismatched, short, good = public_key("ssh-dss", comment=""), public_key(data_kind="ssh-rsa", comment=""), public_key("ssh-rsa", comment="", bits=1024), public_key(comment="", seed=8)
+    page = f"{dss}\n\n{mismatched}\n$(reboot) AAAA\n{short}\n{good}\n"
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": page})
+    assert found.returncode == 0, found.stderr
+    log = found.stderr
+    url = "https://github.com/octocat.keys"
+    assert f"{url} line 1: skipping a key of type ssh-dss: not a key type sshd takes" in log
+    assert f"{url} line 3: skipping a key of type ssh-ed25519: the key's data is of another type" in log
+    assert f"{url} line 4: skipping a key of type unknown: not a key type sshd takes" in log
+    assert f"{url} line 5: skipping a key of type ssh-rsa: an RSA key of 1024 bits is too short (2048 at least)" in log
+    assert log.count("skipping") == 4
+    for key in (dss, mismatched, short):
+        assert key.split()[1][:16] not in log
+    assert installed(tmp_path, out) == {"ssh-keys": f"{good} github:octocat\n"}
+
+
+def test_a_refused_ssh_keys_line_names_its_type_and_reason_not_the_key(tmp_path):
+    short = public_key("ssh-rsa", bits=1024)
+    found, out, console = run_account_pre(tmp_path, with_settings(SSH_KEYS=short))
+    assert account_refused(found, out, console, "a key of type ssh-rsa that sshd should not take (an RSA key of 1024 bits is too short (2048 at least))")
+    assert short.split()[1][:16] not in found.stderr
+
+
+def test_taking_out_the_skipped_line_log_is_caught(tmp_path):
+    old = '      say "https://github.com/$name.keys line $number: skipping a key of type $(key_type "$line"): $reason"\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    page = public_key("ssh-dss", comment="") + "\n" + public_key(comment="") + "\n"
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, ""), GITHUB_KEYS="octocat"), github={"octocat": page})
+    assert found.returncode == 0 and "skipping" not in found.stderr
+
+
+def test_logging_the_key_instead_of_its_type_is_caught(tmp_path):
+    old = '  if [[ "$first" =~ ^[A-Za-z0-9@._-]{1,48}$ ]]; then echo "$first"; else echo unknown; fi\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    bad = public_key("ssh-dss", comment="")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, '  echo "$1"\n'), GITHUB_KEYS="octocat"), github={"octocat": bad + "\n" + public_key(comment="") + "\n"})
+    assert bad.split()[1][:16] in found.stderr
+
+
+# The installer test's optional account path (.github/workflows/installer-test.yml), and the snippet
+# linux/vm/account-kickstart.sh makes for it.
+WORKFLOW = ROOT / ".github" / "workflows" / "installer-test.yml"
+SNIPPET = ROOT / "linux" / "vm" / "account-kickstart.sh"
+
+
+def workflow() -> dict:
+    yaml = pytest.importorskip("yaml")
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+def test_the_installer_test_s_account_path_is_off_unless_asked_for():
+    flow = workflow()
+    triggers = flow.get("on", flow.get(True))
+    assert list(triggers) == ["workflow_dispatch"]
+    account = triggers["workflow_dispatch"]["inputs"]["account"]
+    assert account["default"] == "" and account.get("required") is False
+    steps = flow["jobs"]["install"]["steps"]
+    uses = [step for step in steps if "${{ inputs.account }}" in str(step)]
+    # The input reaches the scripts only through the environment, never pasted into one.
+    assert uses and all("inputs.account" not in step.get("run", "") and step["env"]["ACCOUNT"] == "${{ inputs.account }}" for step in uses)
+    for step in uses:
+        assert 'if [[ -n "$ACCOUNT" ]]' in step["run"] or "${ACCOUNT:+" in step["run"]
+
+
+def test_the_installer_test_s_scripts_parse_and_keep_the_private_key_out_of_the_artifact(tmp_path):
+    steps = workflow()["jobs"]["install"]["steps"]
+    for number, step in enumerate(step for step in steps if "run" in step):
+        script = tmp_path / f"step-{number}.sh"
+        script.write_text(step["run"])
+        assert subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True).returncode == 0, step["name"]
+    artifact = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact"))
+    paths = artifact["with"]["path"].split()
+    assert "ssh.log" in paths and not any("test-key" in path for path in paths)
+    boot = next(step for step in steps if step.get("name") == "Boot what was installed")["run"]
+    assert "hostfwd=tcp:127.0.0.1:2222-:22" in boot and "Permission denied (publickey)" in boot and "root@127.0.0.1" in boot
+    assert boot.rstrip().endswith('[[ -z "$failed" ]]')
+
+
+def test_the_snippet_is_the_account_pre_with_the_settings_filled_in(tmp_path):
+    key = tmp_path / "key.pub"
+    key.write_text(public_key(comment="installer test") + "\n")
+    made = subprocess.run(["bash", str(SNIPPET), "luke", str(key)], capture_output=True, text=True, check=True).stdout
+    assert made.splitlines()[0] == f"%include {ACCOUNT_INCLUDE}"
+    pre = re.search(r"^%pre [^\n]*\n(.*?)^%end$", made, re.M | re.S).group(1)
+    assert "ACCOUNT=luke" in pre.splitlines() and 'ACCOUNT=""' not in pre and 'SSH_KEYS=""' not in pre
+    found, out, _ = run_account_pre(tmp_path, pre)
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": "user=luke\n", "ssh-keys": public_key(comment="installer test") + "\n"}
+
+
+def test_anaconda_reads_a_kickstart_with_the_snippet_appended(tmp_path):
+    parser_module = pytest.importorskip("pykickstart.parser")
+    from pykickstart.version import makeVersion
+
+    key = tmp_path / "key.pub"
+    key.write_text(public_key() + "\n")
+    made = subprocess.run(["bash", str(SNIPPET), "luke", str(key)], capture_output=True, text=True, check=True).stdout
+    (tmp_path / "pre").mkdir()
+    pre = re.search(r"^%pre [^\n]*\n(.*?)^%end$", made, re.M | re.S).group(1)
+    found, out, _ = run_account_pre(tmp_path / "pre", pre)
+    assert found.returncode == 0, found.stderr
+    handler = makeVersion("F44")
+    iso_kickstart = "ostreecontainer --url=ghcr.io/iamlukethedev/herald-os:stable\nxconfig --startxonboot\ntext\nzerombr\nrootpw --lock\npoweroff\n"
+    parser_module.KickstartParser(handler).readKickstartFromString(iso_kickstart + made.replace(ACCOUNT_INCLUDE, str(out)))
+    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash"]
+
+
+def test_the_snippet_refuses_when_the_settings_are_not_where_it_looks(tmp_path):
+    (tmp_path / "vm").mkdir()
+    (tmp_path / "image").mkdir()
+    shutil.copy(SNIPPET, tmp_path / "vm" / SNIPPET.name)
+    (tmp_path / "image" / "unattended.ks").write_text(KICKSTART.replace('\nSSH_KEYS=""\n', '\nSSH_KEYS="x"\n'))
+    key = tmp_path / "key.pub"
+    key.write_text(public_key() + "\n")
+    found = subprocess.run(["bash", str(tmp_path / "vm" / SNIPPET.name), "luke", str(key)], capture_output=True, text=True)
+    assert found.returncode == 1 and 'no ACCOUNT="" and SSH_KEYS=""' in found.stderr
+
+
+
+# The log names a key by its number and type when ssh-keygen cannot give a fingerprint, never by any
+# part of the key.
+NO_KEYGEN = "command -v herald-os-no-such-keygen"
+
+
+def test_when_ssh_keygen_cannot_read_a_key_the_log_has_its_number_and_type_only(tmp_path):
+    one, two = public_key(seed=1, comment="laptop"), public_key("ecdsa-sha2-nistp256", seed=2, comment="phone")
+    found, out, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{one}\n{two}"), keygen_fails=True)
+    assert found.returncode == 0, found.stderr
+    assert "herald-os: key 1: type ssh-ed25519 (no fingerprint: ssh-keygen could not read it)" in found.stderr
+    assert "herald-os: key 2: type ecdsa-sha2-nistp256 (no fingerprint: ssh-keygen could not read it)" in found.stderr
+    for key in (one, two):
+        assert key.split()[1][:12] not in found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{one}\n{two}\n"}
+
+
+def test_without_ssh_keygen_the_log_has_each_key_s_number_and_type_only(tmp_path):
+    assert ACCOUNT_PRE.count("command -v ssh-keygen") == 2
+    key = public_key(comment="laptop")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace("command -v ssh-keygen", NO_KEYGEN), SSH_KEYS=key))
+    assert found.returncode == 0, found.stderr
+    assert "herald-os: key 1: type ssh-ed25519 (no fingerprint: no ssh-keygen here)" in found.stderr
+    assert key.split()[1][:12] not in found.stderr
+
+
+def test_logging_part_of_the_key_when_ssh_keygen_fails_is_caught(tmp_path):
+    old = 'say "key $2: type $(key_type "$1") (no fingerprint:'
+    assert ACCOUNT_PRE.count(old) == 1
+    key = public_key(comment="laptop")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, 'say "key $2: ${1:0:40} (no fingerprint:'), SSH_KEYS=key), keygen_fails=True)
+    assert key.split()[1][:12] in found.stderr
+
+
+def test_the_installer_test_s_retry_loop_has_no_unused_variable():
+    boot = next(step for step in workflow()["jobs"]["install"]["steps"] if step.get("name") == "Boot what was installed")["run"]
+    assert "for _ in $(seq 1 20); do" in boot and "for try in" not in boot
+    if shutil.which("shellcheck"):
+        script = "#!/usr/bin/env bash\n" + boot
+        found = subprocess.run(["shellcheck", "--shell=bash", "-"], input=script, capture_output=True, text=True)
+        assert "SC2034" not in found.stdout, found.stdout
+
+
+
+# The reserved names are checked on their own, with getent knowing no account and no group at all.
+RESERVED = set(re.search(r'^reserved="([^"]*)"', ACCOUNT_PRE, re.M).group(1).split())
+
+
+def test_the_reserved_names_cover_fedoras_system_accounts_and_groups():
+    assert {"root", "bin", "daemon", "nobody", "sshd", "dbus", "polkitd", "greetd", "chrony", "tss",
+            "wheel", "users", "video", "input", "render", "audio", "kvm", "ssh_keys", "admin"} <= RESERVED
+
+
+@pytest.mark.parametrize("name", sorted(RESERVED) + ["systemd-resolve"])
+def test_each_reserved_name_is_refused_without_getent_knowing_it(tmp_path, name):
+    # getent knows no account and no group at all here: only the list refuses them.
+    found, out, console = run_account_pre(tmp_path, with_settings(ACCOUNT=name), no_accounts=True)
+    assert (tmp_path / "pages" / "passwd").read_text() == ""
+    assert account_refused(found, out, console, "system account's or group's name")
+
+
+def test_dropping_sshd_from_the_reserved_names_is_caught(tmp_path):
+    assert ACCOUNT_PRE.count("nfsnobody sshd dbus") == 1
+    found, out, console = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace("nfsnobody sshd dbus", "nfsnobody dbus"), ACCOUNT="sshd"), no_accounts=True)
+    assert found.returncode == 0 and not account_refused(found, out, console)
+
+
+
+def test_sshd_is_a_reserved_name():
+    assert "sshd" in RESERVED
+    assert re.search(r"(?<![\w-])sshd(?![\w-])", re.search(r'^reserved="([^"]*)"', ACCOUNT_PRE, re.M).group(1))
+
+
+def test_the_kickstart_s_github_fetch_has_exactly_these_limits():
+    fetch = re.search(r"curl ([^\n]*?)\\\n\s*([^\n]*?) \"https://github.com/\$1.keys\"", ACCOUNT_PRE)
+    assert fetch, "the account %pre no longer fetches GitHub's keys with curl"
+    words = (fetch.group(1) + " " + fetch.group(2)).split()
+    assert words == ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3", "--max-filesize", "1M",
+                     "--retry", "3", "--connect-timeout", "10", "--max-time", "30"]
