@@ -1636,7 +1636,10 @@ or a scanner, use it up and lock the owner out.
 - **An nftables table of Herald's own.** `table inet herald_os_ssh` hooks input at priority
   `filter - 10`, before firewalld's table, and drops new connections to sshd's ports past 4 a
   minute (burst 4) from one IPv4 address or one IPv6 /64, using dynamic sets whose entries expire
-  after 5 minutes. A drop in any table is final, so a connection it lets through still needs the
+  after 5 minutes. It counts packets that open a connection (conntrack state new), so a client's
+  resent SYNs count too: one whose first SYN was dropped, or that times out and retries, uses up
+  more of its allowance, and an address over the limit keeps being dropped while it retries, until
+  the rate allows again. Clients behind one NAT address share an allowance. A drop in any table is final, so a connection it lets through still needs the
   zone's `rule service name="ssh" accept`. firewalld manages only its own table and leaves this
   one alone on reload. The table is not tied to a zone: on interfaces whose zone does not allow
   SSH, firewalld refuses those connections anyway.

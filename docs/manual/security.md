@@ -33,8 +33,11 @@ three redirects, and nothing over 1 MiB. Then it:
   overrules its settings, if a file is included from inside a `Match` block, or if any sshd file
   cannot be read, it takes its change back and leaves SSH off;
 - drops new SSH connections past four a minute from any one address (an IPv6 /64 counts as one),
-  so guessing is slow and one guesser cannot lock everyone else out. sshd cannot start without
-  this limit: if it ever fails to load, SSH stays off rather than running unlimited;
+  so guessing is slow and one guesser cannot lock everyone else out. Every attempt to connect
+  counts, including the ones a client repeats on its own when an answer is slow, so a flaky
+  connection or several computers behind one router can reach the limit sooner; wait a minute and
+  try again. sshd cannot start without this limit: if it ever fails to load, SSH stays off rather
+  than running unlimited;
 - opens SSH in the firewall, and starts `sshd` and keeps it on after restarts;
 - prints the computer's host-key fingerprints, to compare the first time you connect, and the
   `ssh` command for each of its addresses.
