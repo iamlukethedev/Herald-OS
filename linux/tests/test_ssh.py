@@ -33,6 +33,8 @@ cli = importlib.util.module_from_spec(_SPEC)
 _LOADER.exec_module(cli)
 
 REAL_RUN = subprocess.run
+# The CLI's own ssh_run, for the tests where a command runs for real.
+REAL_SSH_RUN = cli.ssh_run
 # How the stand-in sshd reads a setting, written independently of the CLI's parser.
 SETTING = re.compile(r"(\S+?)(\s*=\s*|\s+)(.*)$")
 REQUIRED_PATHS = cli.SSH_LIMIT_REQUIRED
@@ -1973,6 +1975,88 @@ def pending_signals_raise_nothing(machine: System, tmp_path: Path, capsys) -> bo
     return result in ("exit 130", "exit 143") and not unraised and "race condition" not in err and "Traceback" not in err
 
 
+# Round 10: as sudo with use_pty runs a command: in a session of its own, under a parent that waits for it. It
+# ignores SIGTERM, writes its session to $2, and adds its rule ($4, the layer) after $3 seconds.
+LANDS_LATE = """#!/bin/sh
+exec setsid --wait sh -c 'trap "" TERM HUP INT; echo $$ >"$2"; sleep "$3"; echo "$4" >>"$1"; sleep 30' sh "$@"
+"""
+# The same, but letting go of the pipes at once, so nothing waits on its output.
+LANDS_LATE_QUIET = LANDS_LATE.replace("trap", "exec </dev/null >/dev/null 2>&1; trap")
+
+
+def lands_late(machine: System, monkeypatch, tmp_path: Path, delay: float, kill_works: bool = True, quiet: bool = False) -> dict:
+    """The runtime add runs the stub for real, through the CLI's own ssh_run, as do the root `kill`s
+    that end it (refused when not kill_works). What it adds goes into the stand-in's rules as soon as
+    firewall-cmd is asked anything, or by calling `merge`."""
+    paths = {"landed": tmp_path / "landed", "session": tmp_path / "session", "stub": tmp_path / "firewall-add"}
+    paths["stub"].write_text(LANDS_LATE_QUIET if quiet else LANDS_LATE)
+    paths["stub"].chmod(0o755)
+    stand_in = machine.module.ssh_run
+    # The CLI's own ssh_run, with the module's globals (its ssh_kill, a mutant's included).
+    real_ssh_run = types.FunctionType(REAL_SSH_RUN.__code__, vars(machine.module), "ssh_run", REAL_SSH_RUN.__defaults__)
+
+    def run(argv, timeout=None, input=None, **kwargs):
+        bare = argv[2:] if argv[:2] == ["sudo", "-n"] else argv
+        if any(arg.startswith("--add-rich-rule") for arg in bare) and "--permanent" not in bare:
+            return real_ssh_run([str(paths["stub"]), str(paths["landed"]), str(paths["session"]), str(delay), "runtime"], timeout, input, **kwargs)
+        if bare[:1] == ["kill"]:
+            if not kill_works:
+                return subprocess.CompletedProcess(bare, 1, "", "sudo: a password is required\n")
+            return real_ssh_run(bare, timeout, input, **kwargs)
+        return stand_in(argv, timeout, input, **kwargs)
+    monkeypatch.setattr(machine.module, "ssh_run", run)
+    real = machine.firewall
+
+    def merge():
+        if paths["landed"].exists():
+            for layer in paths["landed"].read_text().split():
+                machine.rules[layer].add(RULE)
+            paths["landed"].unlink()
+
+    def firewall(tool, args, root):
+        merge()
+        return real(tool, args, root)
+    machine.firewall = firewall
+    paths["merge"] = merge
+    return paths
+
+
+def in_session(session: int) -> list[int]:
+    """The live processes in a session, read from /proc here, not by the CLI."""
+    found = []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if int(fields[3]) == session and fields[0] != "Z":
+            found.append(int(pid))
+    return sorted(found)
+
+
+def a_root_command_left_running_is_ended(machine: System, tmp_path: Path, capsys, quiet: bool = True) -> bool:
+    """The add lets go of its pipes and adds its rule after the run: nothing of it may be left, and
+    the run may not wait for it to end by itself."""
+    import time
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "SSH_TIMEOUT", 1)
+        patch.setattr(machine.module, "SSH_KILL_GRACE", 1)
+        paths = lands_late(machine, patch, tmp_path, 4, quiet=quiet)
+        started = time.monotonic()
+        outcome(machine, "--key", public_key())
+        quick = time.monotonic() - started < 15
+        session = int(paths["session"].read_text())
+        try:
+            return quick and in_session(session) == []
+        finally:
+            for pid in in_session(session):
+                os.kill(pid, signal.SIGKILL)
+
+
+def a_root_command_holding_the_pipes_is_not_waited_for(machine: System, tmp_path: Path, capsys) -> bool:
+    return a_root_command_left_running_is_ended(machine, tmp_path, capsys, quiet=False)
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2072,6 +2156,9 @@ MUTANTS = {
     "a timeout other than two minutes": (the_timeout_is_two_minutes, "SSH_TIMEOUT = 120\n", "SSH_TIMEOUT = 1200\n"),
     "SIG_IGN with a signal still pending": (pending_signals_raise_nothing, "    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})\n", "    ssh_signals({each: signal.SIG_IGN for each in (signal.SIGINT, *SSH_STOPS)})\n"),
     "a second handler acting again": (a_second_call_does_nothing, '    if SSH_STOP["by"] is not None:\n        return\n', ""),
+    "a root command left running not noted": (a_root_command_left_running_is_ended, '        SSH_LEFT.append({"argv": list(process.args), "tree": tree})\n', "        pass\n"),
+    "what is left never ended": (a_root_command_left_running_is_ended, "        if not pids:\n            break\n", "        break\n"),
+    "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=SSH_KILL_GRACE)\n", "            process.communicate()\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -3555,3 +3642,63 @@ def test_a_static_unit_is_not_disabled_or_listed_as_disabled(machine, monkeypatc
     err = refused(machine, capsys, "--key", public_key())
     assert ["systemctl", "disable", "sshd.service"] not in machine.changes()
     assert "sshd.service disabled" not in err and machine.units["sshd.service"][0] == "static"
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 10: a root command left running after its timeout is ended before the last look at the rules.
+@pytest.mark.parametrize("delay, quiet", [(1.5, False), (4, False), (4, True)])
+def test_a_firewall_add_left_running_as_root_is_ended_and_its_rule_does_not_outlive_the_run(machine, monkeypatch, capsys, tmp_path, delay, quiet):
+    """The add outlives its timeout and the group kill (as a root command under sudo would), and adds
+    its rule either while the rollback runs (1.5 s) or only later (4 s): either way, once `on` has
+    exited, the rule is not there and nothing of the command is left."""
+    import time
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
+    paths = lands_late(machine, monkeypatch, tmp_path, delay, quiet=quiet)
+    started = time.monotonic()
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    # Not by waiting for the command to end by itself: it would go on for 30 s more.
+    assert time.monotonic() - started < 15
+    session = int(paths["session"].read_text())
+    try:
+        assert in_session(session) == [], err
+        time.sleep(delay + 0.5)
+        paths["merge"]()
+        assert machine.rules == {"runtime": set(), "permanent": set()}, err
+        assert "still running" not in err and "SSH is as it was before this run" in err
+    finally:
+        for pid in in_session(session):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_a_root_command_that_cannot_be_ended_makes_the_rollback_incomplete_with_the_commands_to_close(machine, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 1)
+    paths = lands_late(machine, monkeypatch, tmp_path, 30, kill_works=False)
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    session = int(paths["session"].read_text())
+    try:
+        assert in_session(session)
+        assert "the rollback is incomplete" in err and "was still running as root when the rollback ended" in err
+        assert "close it with: sudo firewall-cmd --zone=herald-os '--remove-rich-rule=rule service name=\"ssh\" accept'; " \
+               "sudo firewall-cmd --permanent --zone=herald-os '--remove-rich-rule=rule service name=\"ssh\" accept'" in err
+    finally:
+        for pid in in_session(session):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_a_killed_command_s_whole_tree_is_noted_when_part_of_it_outlives_the_group(tmp_path, quick, monkeypatch):
+    monkeypatch.setattr(cli, "SSH_LEFT", [])
+    # Root's `kill` without sudo: the command is this account's own.
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    session = tmp_path / "session"
+    with pytest.raises(subprocess.TimeoutExpired):
+        REAL_SSH_RUN(["setsid", "--wait", "sh", "-c", f"trap '' TERM; echo $$ >{session}; sleep 30"])
+    try:
+        assert len(cli.SSH_LEFT) == 1 and cli.ssh_alive(cli.SSH_LEFT[0]["tree"]) == in_session(int(session.read_text()))
+        assert cli.ssh_reap(5) == [] and cli.SSH_LEFT == [] and in_session(int(session.read_text())) == []
+    finally:
+        for pid in in_session(int(session.read_text())):
+            os.kill(pid, signal.SIGKILL)

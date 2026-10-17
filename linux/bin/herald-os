@@ -66,6 +66,7 @@ import json
 import os
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -3178,21 +3179,125 @@ def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = N
     return subprocess.CompletedProcess(argv, process.returncode, out, err)
 
 
+# Commands that were still running after ssh_kill: a root command under sudo, in a session of its
+# own when sudo uses a pty, which neither the group's SIGKILL nor this account can reach. Each is the
+# command and its process tree as it was when it was killed; ssh_reap ends them as root.
+SSH_LEFT: list[dict] = []
+
+
+def ssh_processes() -> dict[int, tuple[int, int, int, int, str]]:
+    """Every process: pid -> (parent, group, session, start time, state), from /proc/<pid>/stat, which
+    anyone can read, root's processes included. Raises OSError when /proc cannot be listed."""
+    found = {}
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry.name}/stat", "rb") as handle:
+                text = handle.read().decode(errors="replace")
+            # The name, in parentheses, may hold spaces and parentheses itself.
+            fields = text[text.rindex(")") + 2:].split()
+            found[int(entry.name)] = (int(fields[1]), int(fields[2]), int(fields[3]), int(fields[19]), fields[0])
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
+
+
+def ssh_tree(pid: int) -> dict:
+    """A command and every process under it (with its start time, so a reused pid is not taken for
+    it), and their groups and sessions, but for this process's own."""
+    processes = ssh_processes()
+    children: dict[int, list[int]] = {}
+    for each, (parent, *_) in processes.items():
+        children.setdefault(parent, []).append(each)
+    members: dict[int, int] = {}
+    todo = [pid]
+    while todo:
+        each = todo.pop()
+        if each in processes and each not in members:
+            members[each] = processes[each][3]
+            todo += children.get(each, [])
+    own = {os.getpgrp(), os.getsid(0)}
+    return {"pids": members, "groups": {processes[each][1] for each in members} - own,
+            "sessions": {processes[each][2] for each in members} - own}
+
+
+def ssh_alive(tree: dict) -> list[int]:
+    """What of a tree still runs: its own processes, and any other in its groups or sessions (what it
+    started after it was looked at). A zombie has ended. Raises OSError when /proc cannot be listed."""
+    return sorted(pid for pid, (_, group, session, start, state) in ssh_processes().items()
+                  if pid > 1 and pid != os.getpid() and state not in ("Z", "X")
+                  and (tree["pids"].get(pid) == start or group in tree["groups"] or session in tree["sessions"]))
+
+
 def ssh_kill(process: subprocess.Popen) -> None:
     """End a command's whole group: SIGTERM first, which sudo passes on to the command it runs (in a
     session of its own when sudo uses a pty), then SIGKILL after a short grace. The SIGKILL reaches
-    the group, which is sudo, but not a root command in a session of its own under it: the SIGTERM
-    sudo passes on is what ends that command."""
-    for signum, grace in ((signal.SIGTERM, SSH_KILL_GRACE), (signal.SIGKILL, None)):
+    the group, which is sudo, but not a root command in a session of its own under it. Whatever of
+    the command's tree still runs after that goes into SSH_LEFT, for ssh_reap. The waits are on the
+    process, not its output: a root command left running may hold the pipes open."""
+    try:
+        tree = ssh_tree(process.pid)
+    except OSError:
+        tree = None
+    for signum in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(process.pid, signum)
         except (ProcessLookupError, PermissionError):
             pass
         try:
-            process.communicate(timeout=grace)
-            return
+            process.wait(timeout=SSH_KILL_GRACE)
+            break
         except subprocess.TimeoutExpired:
             continue
+    for stream in (process.stdin, process.stdout, process.stderr):
+        try:
+            if stream:
+                stream.close()
+        except OSError:
+            pass
+    try:
+        left = tree is None or bool(ssh_alive(tree))
+    except OSError:
+        left = True
+    if left:
+        SSH_LEFT.append({"argv": list(process.args), "tree": tree})
+
+
+def ssh_reap(timeout: float) -> list[str]:
+    """End what SSH_LEFT holds as root (`kill`, through sudo -n unless this is root): SIGTERM, then
+    SIGKILL after SSH_KILL_GRACE, then wait until none of it is left, all within `timeout`. Returns
+    the commands it could not see end (the rest leave SSH_LEFT)."""
+    deadline = time.monotonic() + timeout
+
+    def alive() -> list[int] | None:
+        try:
+            return sorted({pid for left in SSH_LEFT if left["tree"] for pid in ssh_alive(left["tree"])})
+        except OSError:
+            return None
+    for signum, wait in ((signal.SIGTERM, SSH_KILL_GRACE), (signal.SIGKILL, None)):
+        pids = alive()
+        if not pids:
+            break
+        try:
+            ssh_run(as_root(["kill", "-s", signum.name[3:], "--", *map(str, pids)]),
+                    timeout=max(1.0, min(10.0, deadline - time.monotonic())))
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        until = deadline if wait is None else min(deadline, time.monotonic() + wait)
+        while alive() and time.monotonic() < until:
+            time.sleep(0.1)
+    still = []
+    for left in list(SSH_LEFT):
+        try:
+            running = left["tree"] is None or bool(ssh_alive(left["tree"]))
+        except OSError:
+            running = True
+        if running:
+            still.append(" ".join(left["argv"]))
+        else:
+            SSH_LEFT.remove(left)
+    return still
 
 
 def root_run(argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
@@ -4056,6 +4161,9 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
             ssh_run(["sudo", "-n", "-v"], timeout=SSH_SUDO_RENEW)
         except (subprocess.TimeoutExpired, OSError):
             pass
+    # A command this run killed but that went on running as root could still change things after
+    # they are put back; it is ended first, so what the rollback reads is how things stay.
+    ssh_reap(limit(False) or 0)
     # Fail closed, on each count apart: a unit that was not plainly running before is stopped unless it
     # is plainly stopped now, and one that was not plainly enabled before is disabled unless it is
     # plainly disabled now. A state systemctl could not report in time is not plainly anything.
@@ -4099,8 +4207,19 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")
     # A rule that was not there before goes unless the query plainly says it is absent (exit 1): one it
     # could not ask about may be there. The rules are asked about again at the very end, so an add whose
-    # command was killed but finished late is taken out too.
+    # command was killed but finished late is taken out too. Before that last look, every command this
+    # run killed has to have ended (each gets ended as root, with at least SSH_ROLLBACK_LAST for it):
+    # firewalld answers its D-Bus calls one at a time, in order, so once the command that sent an add
+    # has ended, a query sent after it sees the rule if it was added at all. No `firewall-cmd --reload`:
+    # it would also throw away runtime changes that are not this run's.
     for final in (False, True):
+        if final:
+            running = ssh_reap(limit(True))
+            for command in running:
+                again = [("" if os.geteuid() == 0 else "sudo ") + shlex.join([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"])
+                         for (tool, zone, permanent), had in before["rules"].items() if not had]
+                trouble(f"`{command}` was still running as root when the rollback ended, so it may still change things"
+                        + (f"; if SSH is open in the firewall after it ends, close it with: {'; '.join(again)}" if again else ""))
         for (tool, zone, permanent), had in before["rules"].items():
             if had:
                 continue
@@ -4237,6 +4356,7 @@ def ssh_on(opts: dict) -> int:
     # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
     ssh_sudo()
+    SSH_LEFT.clear()
     watch = ssh_watch_arrivals()
     stops = ssh_signals({signum: ssh_stopped for signum in (signal.SIGINT, *SSH_STOPS)})
     try:
