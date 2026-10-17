@@ -2892,6 +2892,24 @@ def test_a_command_that_hangs_during_the_rollback_is_passed_over(machine, monkey
     assert snapshot(machine) == before
 
 
+def test_a_step_that_hangs_during_the_rollback_is_reported_once(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    real = machine.firewall
+    remove = ["rm", "-f", str(cli.SSHD_DROP_IN)]
+
+    def refuse_then_hang(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            machine.hang = [remove]
+            return "", 11
+        return real(tool, args, root)
+    monkeypatch.setattr(machine, "firewall", refuse_then_hang)
+    err = refused(machine, capsys, "--key", public_key())
+    machine.hang = []
+    warnings = [line for line in err.splitlines() if line.startswith("herald-os: WARNING:") and " ".join(remove) in line]
+    assert warnings == [f"herald-os: WARNING: `{' '.join(remove)}` did not finish within 1 s while putting things back"]
+    assert "could not put back" not in err and "the rollback is incomplete" in err
+
+
 
 # ---------------------------------------------------------------------------------------------
 # Round 7: SIGTERM and SIGHUP go through the rollback and exit 143 and 129.

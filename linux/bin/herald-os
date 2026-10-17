@@ -4013,18 +4013,19 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         return min(ssh_limit(None), left) if left > 0 else None
 
     def run(argv: list[str], essential: bool = False) -> subprocess.CompletedProcess:
-        # A command that hangs or cannot run is reported and passed over, so the steps after it still
-        # happen; one there is no time left for is skipped. Either reads as exit code 124: not done.
+        # A command that hangs or cannot run is reported here and passed over, so the steps after it
+        # still happen; one there is no time left for is skipped. Either comes back with no exit code
+        # (None): not done, and already accounted for.
         timeout = limit(essential)
         if timeout is None:
             skipped.append(" ".join(argv))
-            return subprocess.CompletedProcess(argv, 124, "", "")
+            return subprocess.CompletedProcess(argv, None, "", "")
         try:
             return root_run(argv, timeout)
         except (subprocess.TimeoutExpired, OSError) as exc:
             why = f"did not finish within {timeout:.0f} s" if isinstance(exc, subprocess.TimeoutExpired) else f"failed ({exc})"
             trouble(f"`{' '.join(argv)}` {why} while putting things back")
-            return subprocess.CompletedProcess(argv, 124, "", "")
+            return subprocess.CompletedProcess(argv, None, "", "")
 
     def state(unit: str) -> tuple[str, str]:
         # Each of the two questions gets what is left at that moment; with no time to ask, the answer
@@ -4043,8 +4044,8 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         result = run(argv, essential)
         if result.returncode == 0:
             undone.append(what)
-        elif not (result.returncode == 124 and " ".join(argv) in skipped):
-            refusal = (result.stderr or "").strip().splitlines()[-1:] if result.returncode != 124 else []
+        elif result.returncode is not None:
+            refusal = (result.stderr or "").strip().splitlines()[-1:]
             trouble(f"could not put back {what}: `{' '.join(argv)}` failed" + (f" ({refusal[0]})" if refusal else ""))
 
     # sudo may have forgotten the password by now; renew its time while it still remembers.
