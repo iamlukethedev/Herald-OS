@@ -482,8 +482,9 @@ def with_settings(pre: str = ACCOUNT_PRE, **settings: str) -> str:
     return pre
 
 
-def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
-    """The account %pre, with a stand-in curl that answers for github.com from `github`."""
+def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None, keygen_fails: bool = False) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    """The account %pre, with a stand-in curl that answers for github.com from `github` (and with
+    `keygen_fails`, an ssh-keygen that cannot read any key)."""
     bin_dir, pages = tmp_path / "bin", tmp_path / "pages"
     bin_dir.mkdir()
     pages.mkdir()
@@ -498,6 +499,9 @@ def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, st
         (pages / database).write_text("".join(f"{line}\n" for line in lines))
     (bin_dir / "getent").write_text('#!/usr/bin/env bash\ngrep "^$2:" "$PAGES/$1"\n')
     (bin_dir / "getent").chmod(0o755)
+    if keygen_fails:
+        (bin_dir / "ssh-keygen").write_text("#!/bin/sh\nexit 255\n")
+        (bin_dir / "ssh-keygen").chmod(0o755)
     out, console = tmp_path / "account.ks", tmp_path / "console"
     console.write_text("")
     found = subprocess.run(
@@ -659,7 +663,7 @@ def test_weak_github_keys_are_skipped_and_said(tmp_path):
 def test_each_key_s_fingerprint_goes_into_the_log(tmp_path):
     found, _, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key(comment="laptop")))
     listing = subprocess.run(["ssh-keygen", "-lf", "-"], input=public_key(comment="laptop") + "\n", capture_output=True, text=True).stdout.strip()
-    assert found.returncode == 0 and f"herald-os: key: {listing}" in found.stderr
+    assert found.returncode == 0 and f"herald-os: key 1: {listing}" in found.stderr
 
 
 @pytest.mark.parametrize("check, old, new, settings, github", [
@@ -684,10 +688,10 @@ def test_each_curl_limit_is_caught_when_taken_out(tmp_path, limit):
 
 @pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
 def test_taking_out_the_fingerprints_is_caught(tmp_path):
-    old = '  [[ -z "$line" ]] || fingerprint "$line"\n'
+    old = '  fingerprint "$line" "$number"\n'
     assert ACCOUNT_PRE.count(old) == 1
     found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, "  :\n"), SSH_KEYS=public_key()))
-    assert found.returncode == 0 and "herald-os: key: 256 SHA256:" not in found.stderr
+    assert found.returncode == 0 and "herald-os: key 1: 256 SHA256:" not in found.stderr
 
 
 
@@ -830,3 +834,46 @@ def test_the_snippet_refuses_when_the_settings_are_not_where_it_looks(tmp_path):
     key.write_text(public_key() + "\n")
     found = subprocess.run(["bash", str(tmp_path / "vm" / SNIPPET.name), "luke", str(key)], capture_output=True, text=True)
     assert found.returncode == 1 and 'no ACCOUNT="" and SSH_KEYS=""' in found.stderr
+
+
+
+# The log names a key by its number and type when ssh-keygen cannot give a fingerprint, never by any
+# part of the key.
+NO_KEYGEN = "command -v herald-os-no-such-keygen"
+
+
+def test_when_ssh_keygen_cannot_read_a_key_the_log_has_its_number_and_type_only(tmp_path):
+    one, two = public_key(seed=1, comment="laptop"), public_key("ecdsa-sha2-nistp256", seed=2, comment="phone")
+    found, out, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{one}\n{two}"), keygen_fails=True)
+    assert found.returncode == 0, found.stderr
+    assert "herald-os: key 1: type ssh-ed25519 (no fingerprint: ssh-keygen could not read it)" in found.stderr
+    assert "herald-os: key 2: type ecdsa-sha2-nistp256 (no fingerprint: ssh-keygen could not read it)" in found.stderr
+    for key in (one, two):
+        assert key.split()[1][:12] not in found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{one}\n{two}\n"}
+
+
+def test_without_ssh_keygen_the_log_has_each_key_s_number_and_type_only(tmp_path):
+    assert ACCOUNT_PRE.count("command -v ssh-keygen") == 2
+    key = public_key(comment="laptop")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace("command -v ssh-keygen", NO_KEYGEN), SSH_KEYS=key))
+    assert found.returncode == 0, found.stderr
+    assert "herald-os: key 1: type ssh-ed25519 (no fingerprint: no ssh-keygen here)" in found.stderr
+    assert key.split()[1][:12] not in found.stderr
+
+
+def test_logging_part_of_the_key_when_ssh_keygen_fails_is_caught(tmp_path):
+    old = 'say "key $2: type $(key_type "$1") (no fingerprint:'
+    assert ACCOUNT_PRE.count(old) == 1
+    key = public_key(comment="laptop")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, 'say "key $2: ${1:0:40} (no fingerprint:'), SSH_KEYS=key), keygen_fails=True)
+    assert key.split()[1][:12] in found.stderr
+
+
+def test_the_installer_test_s_retry_loop_has_no_unused_variable():
+    boot = next(step for step in workflow()["jobs"]["install"]["steps"] if step.get("name") == "Boot what was installed")["run"]
+    assert "for _ in $(seq 1 20); do" in boot and "for try in" not in boot
+    if shutil.which("shellcheck"):
+        script = "#!/usr/bin/env bash\n" + boot
+        found = subprocess.run(["shellcheck", "--shell=bash", "-"], input=script, capture_output=True, text=True)
+        assert "SC2034" not in found.stdout, found.stdout

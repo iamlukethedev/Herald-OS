@@ -111,7 +111,7 @@ jobs:
             # the per-address limit (4 new connections a minute), which counts the runner as one address.
             ssh_to() { ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=known_hosts "$@"; }
             signed_in=""
-            for try in $(seq 1 20); do
+            for _ in $(seq 1 20); do
               if ssh_to -i test-key "$ACCOUNT@127.0.0.1" 'id -un; systemctl is-active sshd herald-os-ssh-limit; cat /etc/herald-os/install.conf' >ssh.log 2>&1; then
                 signed_in=1
                 break

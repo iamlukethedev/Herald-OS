@@ -88,12 +88,14 @@ key_type() {
   if [[ "$first" =~ ^[A-Za-z0-9@._-]{1,48}$ ]]; then echo "$first"; else echo unknown; fi
 }
 
-# Each key's fingerprint, for the log, when the installer has ssh-keygen.
+# Each key's fingerprint, for the log, when the installer has ssh-keygen; otherwise its number and
+# type alone, never any of the key.
 fingerprint() {
-  if command -v ssh-keygen >/dev/null 2>&1; then
-    say "key: $(ssh-keygen -lf - <<<"$1" 2>/dev/null || echo "${1:0:40}...")"
+  local listing
+  if command -v ssh-keygen >/dev/null 2>&1 && listing="$(ssh-keygen -lf - <<<"$1" 2>/dev/null)"; then
+    say "key $2: $listing"
   else
-    say "key: ${1:0:40}..."
+    say "key $2: type $(key_type "$1") (no fingerprint: $(command -v ssh-keygen >/dev/null 2>&1 && echo "ssh-keygen could not read it" || echo "no ssh-keygen here"))"
   fi
 }
 
@@ -163,8 +165,11 @@ for name in $GITHUB_KEYS; do
     refuse "$name has no SSH keys on GitHub (https://github.com/$name.keys), so nothing was erased."
 done
 
+number=0
 while IFS= read -r line; do
-  [[ -z "$line" ]] || fingerprint "$line"
+  [[ -n "$line" ]] || continue
+  number=$((number + 1))
+  fingerprint "$line" "$number"
 done <<<"$keys"
 say "the account: ${ACCOUNT:-hermes}; SSH: $([[ -n "$keys" ]] && echo "on at the first start, for $(grep -c . <<<"$keys") key(s) only" || echo off)"
 # The keys go through base64, so nothing in a comment can end the here-document early.
