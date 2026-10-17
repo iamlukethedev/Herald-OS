@@ -4113,15 +4113,36 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
 SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 
 
+# The first signal that stops `on`, and the read end of the pipe Python's own C handler writes each
+# signal's number to the moment it arrives (signal.set_wakeup_fd), so the first can be told even when
+# several arrive before any Python handler runs (Python then runs them by number, not by arrival).
+SSH_STOP: dict = {"by": None, "arrivals": None}
+
+
+def ssh_ignored(signum: int, frame) -> None:
+    """INT, TERM and HUP while `on` is stopping: nothing. A Python handler that does nothing rather
+    than SIG_IGN, because a signal that arrived before the switch to SIG_IGN would make Python raise
+    "ignored due to race condition" wherever it next checks, the rollback included."""
+
+
 def ssh_stopped(signum: int, frame) -> None:
-    # INT, TERM and HUP are ignored from this moment, before anything is raised, so no second signal
-    # can land between here and the rollback, which goes on ignoring them until it is done.
-    for each in (signal.SIGINT, *SSH_STOPS):
-        signal.signal(each, signal.SIG_IGN)
-    if signum == signal.SIGINT:
+    if SSH_STOP["by"] is not None:
+        return
+    first = signum
+    if SSH_STOP["arrivals"] is not None:
+        try:
+            arrived = os.read(SSH_STOP["arrivals"], 64)
+        except OSError:
+            arrived = b""
+        first = next((number for number in arrived if number in (signal.SIGINT, *SSH_STOPS)), signum)
+    SSH_STOP["by"] = first
+    # INT, TERM and HUP do nothing from this moment, before anything is raised, so no second signal can
+    # land between here and the rollback, which goes on ignoring them until it is done.
+    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})
+    if first == signal.SIGINT:
         raise KeyboardInterrupt
-    print(f"herald-os: stopped by {signal.Signals(signum).name}; putting back what this run changed", file=sys.stderr)
-    raise SystemExit(128 + signum)
+    print(f"herald-os: stopped by {signal.Signals(first).name}; putting back what this run changed", file=sys.stderr)
+    raise SystemExit(128 + first)
 
 
 def ssh_signals(handlers: dict) -> dict:
@@ -4131,9 +4152,35 @@ def ssh_signals(handlers: dict) -> dict:
     for signum, handler in handlers.items():
         try:
             previous[signum] = signal.signal(signum, handler)
-        except ValueError:
+        except (ValueError, OSError):
             break
     return previous
+
+
+def ssh_watch_arrivals() -> tuple | None:
+    """Have Python's C handler write each signal's number to a pipe as it arrives; what to give back
+    to ssh_unwatch_arrivals(). Nothing outside the main thread."""
+    read, write = os.pipe()
+    os.set_blocking(read, False)
+    os.set_blocking(write, False)
+    try:
+        previous = signal.set_wakeup_fd(write, warn_on_full_buffer=False)
+    except ValueError:
+        os.close(read)
+        os.close(write)
+        return None
+    SSH_STOP.update(by=None, arrivals=read)
+    return previous, read, write
+
+
+def ssh_unwatch_arrivals(watch: tuple | None) -> None:
+    SSH_STOP.update(by=None, arrivals=None)
+    if watch is None:
+        return
+    previous, read, write = watch
+    signal.set_wakeup_fd(previous)
+    os.close(read)
+    os.close(write)
 
 
 NO_LIMIT = (
@@ -4185,6 +4232,7 @@ def ssh_on(opts: dict) -> int:
     # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
     ssh_sudo()
+    watch = ssh_watch_arrivals()
     stops = ssh_signals({signum: ssh_stopped for signum in (signal.SIGINT, *SSH_STOPS)})
     try:
         before = ssh_snapshot()
@@ -4208,7 +4256,7 @@ def ssh_on(opts: dict) -> int:
             # Whatever stopped it (a refusal, a signal, a file error, a command that timed out), what this
             # run changed goes back before the exception goes on as it was. Another signal must not cut
             # that short, so INT, TERM and HUP are ignored until it is done.
-            ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})
+            ignored = ssh_signals({signum: ssh_ignored for signum in (signal.SIGINT, *SSH_STOPS)})
             try:
                 undone, troubles = ssh_rollback(before)
                 if wrote_keys:
@@ -4243,6 +4291,7 @@ def ssh_on(opts: dict) -> int:
             raise
     finally:
         ssh_signals(stops)
+        ssh_unwatch_arrivals(watch)
     count = len(authorized(updated))
     print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
     print(f"    keys: {count} in {keys_file}" + (f" ({len(added)} added)" if added else ""))

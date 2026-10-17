@@ -1780,8 +1780,29 @@ def signals_ignored_from_the_handler(module, signum: int) -> bool:
             module.ssh_stopped(signum, None)
         except (SystemExit, KeyboardInterrupt):
             pass
-        return all(signal.getsignal(s) is signal.SIG_IGN for s in saved)
+        return all(signal.getsignal(s) is module.ssh_ignored for s in saved)
     finally:
+        module.SSH_STOP["by"] = None
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def a_second_call_does_nothing(machine: System, tmp_path: Path, capsys) -> bool:
+    """Once one signal has stopped `on`, the handler does nothing more, whatever calls it again."""
+    module = machine.module
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        try:
+            module.ssh_stopped(signal.SIGTERM, None)
+        except SystemExit:
+            pass
+        try:
+            module.ssh_stopped(signal.SIGINT, None)
+        except BaseException:
+            return False
+        return module.SSH_STOP["by"] == signal.SIGTERM
+    finally:
+        module.SSH_STOP["by"] = None
         for s, handler in saved.items():
             signal.signal(s, handler)
 
@@ -1926,6 +1947,32 @@ def the_timeout_is_two_minutes(machine: System, tmp_path: Path, capsys) -> bool:
     return machine.module.SSH_TIMEOUT == 120 and {timeout for argv, timeout in machine.timeouts if argv != ["-v"]} == {120}
 
 
+def pending_signals_raise_nothing(machine: System, tmp_path: Path, capsys) -> bool:
+    """TERM and INT both arrive before any Python handler has run (they were blocked), so the second
+    is still pending when the first's handler switches handlers: nothing may be raised for it."""
+    import sys
+    unraised, real = [], machine.systemctl
+    saved_hook = sys.unraisablehook
+
+    def systemctl(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            both = {signal.SIGTERM, signal.SIGINT}
+            signal.pthread_sigmask(signal.SIG_BLOCK, both)
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGINT)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, both)
+        return real(args, root)
+    machine.systemctl = systemctl
+    sys.unraisablehook = lambda report: unraised.append(report)
+    capsys.readouterr()
+    try:
+        result = outcome(machine, "--key", public_key())
+    finally:
+        sys.unraisablehook = saved_hook
+    err = capsys.readouterr().err
+    return result in ("exit 130", "exit 143") and not unraised and "race condition" not in err and "Traceback" not in err
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2003,12 +2050,12 @@ MUTANTS = {
     "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "        except BaseException:\n            # Whatever stopped it", "        except SystemExit:\n            # Whatever stopped it"),
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
-    "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})", "            ignored = {}"),
+    "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            ignored = ssh_signals({signum: ssh_ignored for signum in (signal.SIGINT, *SSH_STOPS)})", "            ignored = {}"),
     "commands without a timeout": (every_command_has_a_timeout, "    return timeout or SSH_TIMEOUT\n", "    return timeout\n"),
     "a hang stops the rollback": (a_hang_in_the_rollback_is_passed_over, "        except (subprocess.TimeoutExpired, OSError) as exc:\n            why =", "        except ZeroDivisionError as exc:\n            why ="),
     "SIGTERM not handled": (sigterm_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGHUP,)"),
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
-    "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
+    "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + first)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
     "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
@@ -2020,9 +2067,11 @@ MUTANTS = {
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
     "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return max(min(ssh_limit(None), left), last)\n", "            return min(ssh_limit(None), left) if left > 0 else None\n"),
     "the budget only a guide": (the_budget_is_a_hard_cap, "        return min(ssh_limit(None), left) if left > 0 else None\n", "        return ssh_limit(None)\n"),
-    "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    for each in (signal.SIGINT, *SSH_STOPS):\n        signal.signal(each, signal.SIG_IGN)\n", ""),
+    "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})\n", ""),
     "keys counted as written whatever happened": (keys_never_written_as_root_without_ssh_keygen, "                if wrote_keys:\n", "                if True:\n"),
     "a timeout other than two minutes": (the_timeout_is_two_minutes, "SSH_TIMEOUT = 120\n", "SSH_TIMEOUT = 1200\n"),
+    "SIG_IGN with a signal still pending": (pending_signals_raise_nothing, "    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})\n", "    ssh_signals({each: signal.SIG_IGN for each in (signal.SIGINT, *SSH_STOPS)})\n"),
+    "a second handler acting again": (a_second_call_does_nothing, '    if SSH_STOP["by"] is not None:\n        return\n', ""),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2736,7 +2785,7 @@ def test_a_second_ctrl_c_during_the_rollback_is_ignored_and_the_handler_comes_ba
         machine.setup("--key", public_key())
     assert stopped.value.code == 130
     # The rollback ran with SIGINT ignored, so the real SIGINT sent in the middle of it changed nothing.
-    assert seen and all(state is signal.SIG_IGN for state in seen)
+    assert seen and all(state is cli.ssh_ignored for state in seen)
     assert snapshot(machine) == before
     assert signal.getsignal(signal.SIGINT) is handler
     assert "SSH is as it was before this run; put back:" in capsys.readouterr().err
@@ -2857,7 +2906,7 @@ def test_a_real_signal_partway_puts_everything_back_and_exits_with_its_code(mach
     assert "SSH is as it was before this run; put back:" in err and "Traceback" not in err
     assert snapshot(machine) == before
     # The same signal sent again during the rollback was ignored, and every handler is back.
-    assert seen and all(state is signal.SIG_IGN for state in seen)
+    assert seen and all(state is cli.ssh_ignored for state in seen)
     assert {s: signal.getsignal(s) for s in handlers} == handlers
 
 
@@ -3187,8 +3236,9 @@ def test_the_handler_ignores_int_term_and_hup_before_it_raises(signum, raised, c
     try:
         with pytest.raises(raised):
             cli.ssh_stopped(signum, None)
-        assert all(signal.getsignal(s) is signal.SIG_IGN for s in saved)
+        assert all(signal.getsignal(s) is cli.ssh_ignored for s in saved)
     finally:
+        cli.SSH_STOP["by"] = None
         for s, handler in saved.items():
             signal.signal(s, handler)
 
@@ -3354,3 +3404,105 @@ def test_the_command_timeout_is_exactly_two_minutes(machine):
 
 def test_keys_never_written_are_not_claimed_as_taken_out_as_root_and_without_ssh_keygen(machine, capsys):
     assert keys_never_written_as_root_without_ssh_keygen(machine, Path("/nonexistent"), capsys)
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 10: signals in quick succession leave clean output and the first one's exit code.
+@pytest.mark.parametrize("first, second, code", [(signal.SIGTERM, signal.SIGINT, 143), (signal.SIGINT, signal.SIGTERM, 130),
+                                                 (signal.SIGHUP, signal.SIGTERM, 129), (signal.SIGHUP, signal.SIGHUP, 129)])
+def test_two_signals_one_after_the_other_roll_back_once_and_cleanly(machine, capsys, first, second, code):
+    import sys
+    before = snapshot(machine)
+    unraised, saved_hook = [], sys.unraisablehook
+    real = machine.systemctl
+
+    def twice(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            try:
+                os.kill(os.getpid(), first)
+            finally:
+                os.kill(os.getpid(), second)
+        return real(args, root)
+    machine.systemctl = twice
+    sys.unraisablehook = lambda report: unraised.append(report)
+    try:
+        err = refused(machine, capsys, "--key", public_key(), code=code)
+    finally:
+        sys.unraisablehook = saved_hook
+    assert not unraised and "Exception ignored" not in err and "Traceback" not in err and "race condition" not in err
+    assert err.count("SSH is as it was before this run") == 1
+    assert snapshot(machine) == before
+
+
+@pytest.mark.parametrize("first, second", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM), (signal.SIGHUP, signal.SIGTERM)])
+def test_two_signals_that_arrive_together_raise_nothing(machine, capsys, first, second):
+    """Both blocked, both sent, then let in at once: the second is still pending when the first's
+    handler switches handlers. Nothing may be raised for it, and one of the two decides the code (which
+    one the kernel hands over first is its business: there is no first between signals let in at once)."""
+    import sys
+    unraised, saved_hook, real = [], sys.unraisablehook, machine.systemctl
+    def together(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            both = {first, second}
+            signal.pthread_sigmask(signal.SIG_BLOCK, both)
+            os.kill(os.getpid(), first)
+            os.kill(os.getpid(), second)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, both)
+        return real(args, root)
+    machine.systemctl = together
+    sys.unraisablehook = lambda report: unraised.append(report)
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            machine.setup("--key", public_key())
+    finally:
+        sys.unraisablehook = saved_hook
+    err = capsys.readouterr().err
+    assert not unraised and "Exception ignored" not in err and "Traceback" not in err
+    assert stopped.value.code in (128 + first, 128 + second)
+    assert err.count("SSH is as it was before this run") == 1
+
+
+TWO_SIGNALS = """
+import signal, subprocess, sys, time
+from pathlib import Path
+work, mark = Path({work!r}), Path({mark!r})
+child = subprocess.Popen([sys.executable, {driver!r}], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+for _ in range(200):
+    if mark.exists() or child.poll() is not None:
+        break
+    time.sleep(0.05)
+child.send_signal({first})
+time.sleep({gap})
+child.send_signal({second})
+out, err = child.communicate(timeout=60)
+print(child.returncode)
+sys.stderr.write(err)
+"""
+
+
+@pytest.mark.parametrize("first, second", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM), (signal.SIGHUP, signal.SIGTERM)])
+@pytest.mark.parametrize("gap", [0.0, 0.2])
+def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tmp_path, first, second, gap):
+    import sys
+    work, mark = tmp_path / "machine", tmp_path / "hanging"
+    work.mkdir()
+    driver = tmp_path / "driver.py"
+    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark)))
+    sender = tmp_path / "send.py"
+    sender.write_text(TWO_SIGNALS.format(work=str(work), mark=str(mark), driver=str(driver), first=int(first), second=int(second), gap=gap))
+    done = subprocess.run([sys.executable, str(sender)], capture_output=True, text=True, timeout=120)
+    code, err = int(done.stdout.strip().splitlines()[-1]), done.stderr
+    assert "Exception ignored" not in err and "Traceback" not in err and "race condition" not in err
+    assert err.count("SSH is as it was before this run") == 1
+    if gap:
+        # Given time, the first has been handled before the second arrives: its code is kept.
+        assert code == 128 + first
+    else:
+        # Sent back to back, the kernel may hand them over in either order; one of the two decides.
+        assert code in (128 + first, 128 + second)
+
+
+
+def test_once_a_signal_has_stopped_on_the_handler_does_nothing_more(machine, capsys):
+    assert a_second_call_does_nothing(machine, Path("/nonexistent"), capsys)
