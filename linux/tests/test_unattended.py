@@ -461,10 +461,17 @@ ACCOUNT_INCLUDE = "/tmp/herald-os-account.ks"
 ACCOUNT_PRE = re.search(r"^%pre [^\n]*--log=/tmp/herald-os-account\.log\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
 
 
-def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None) -> str:
+def _string(data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + data
+
+
+def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None, bits: int = 2048) -> str:
     name = (data_kind or kind).encode()
-    body = bytes([seed]) * 32
-    blob = struct.pack(">I", len(name)) + name + struct.pack(">I", len(body)) + body
+    if name == b"ssh-rsa":
+        modulus = ((1 << (bits - 1)) | (seed * 2 + 1)).to_bytes(bits // 8 + 1, "big")
+        blob = _string(name) + _string(b"\x01\x00\x01") + _string(modulus)
+    else:
+        blob = _string(name) + _string(bytes([seed]) * 32)
     return f"{kind} {base64.b64encode(blob).decode()} {comment}".strip()
 
 
@@ -484,7 +491,7 @@ def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, st
     (bin_dir / "python3").symlink_to(sys.executable)
     for name, text in (github or {}).items():
         (pages / f"{name}.keys").write_text(text)
-    (bin_dir / "curl").write_text('#!/usr/bin/env bash\nurl="${!#}"\npage="$PAGES/${url##*/}"\n[[ -f "$page" ]] || exit 22\ncat "$page"\n')
+    (bin_dir / "curl").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$PAGES/curl-calls"\nurl="${!#}"\npage="$PAGES/${url##*/}"\n[[ -f "$page" ]] || exit 22\ncat "$page"\n')
     (bin_dir / "curl").chmod(0o755)
     out, console = tmp_path / "account.ks", tmp_path / "console"
     console.write_text("")
@@ -593,7 +600,7 @@ def test_the_account_pre_stops_on_error_and_logs_where_the_installer_keeps_logs(
     ("account name", '[[ "$ACCOUNT" =~ $account_pattern && "$ACCOUNT" != root ]] ||', "true ||", {"ACCOUNT": "luke;reboot"}),
     ("root", ' && "$ACCOUNT" != root ]]', " ]]", {"ACCOUNT": "root"}),
     ("key", '  valid_key "$line" ||\n', "  true ||\n", {"SSH_KEYS": f'command="sh" {public_key()}'}),
-    ("key data", "blob[4:4 + size] == fields[0].encode()", "True", {"SSH_KEYS": public_key(data_kind="ssh-rsa")}),
+    ("key data", "kind == fields[0].encode()", "True", {"SSH_KEYS": public_key(data_kind="ssh-dss")}),
     ("github name", '[[ "$name" =~ $github_pattern ]] ||', "true ||", {"GITHUB_KEYS": "-bad-"}),
 ])
 def test_each_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings):
@@ -603,3 +610,73 @@ def test_each_account_check_is_caught_when_taken_out(tmp_path, check, old, new, 
     github = {"-bad-": public_key()}
     assert account_refused(*run_account_pre(tmp_path / "real", with_settings(**settings), github))
     assert not account_refused(*run_account_pre(tmp_path / "mutant", with_settings(ACCOUNT_PRE.replace(old, new), **settings), github)), check
+
+
+
+CURL_LIMITS = "--proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M"
+
+
+def test_github_s_page_is_read_over_https_only_with_few_redirects_and_a_size_cap(tmp_path):
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": public_key() + "\n"})
+    assert found.returncode == 0, found.stderr
+    calls = (tmp_path / "pages" / "curl-calls").read_text().splitlines()
+    assert len(calls) == 1 and CURL_LIMITS in calls[0] and "--max-time" in calls[0] and "--connect-timeout" in calls[0]
+    assert calls[0].endswith(" https://github.com/octocat.keys")
+
+
+def test_a_github_page_over_1_mib_stops_the_install(tmp_path):
+    big = public_key() + "\n" + "#" * (1 << 20) + "\n"
+    assert account_refused(*run_account_pre(tmp_path, with_settings(GITHUB_KEYS="big"), github={"big": big}), "could not read https://github.com/big.keys")
+
+
+@pytest.mark.parametrize("bits, taken", [(2048, True), (4096, True), (2047, False), (1024, False)])
+def test_an_rsa_key_needs_2048_bits(tmp_path, bits, taken):
+    found, out, console = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key("ssh-rsa", bits=bits)))
+    if taken:
+        assert found.returncode == 0, found.stderr
+        assert installed(tmp_path, out) == {"ssh-keys": public_key("ssh-rsa", bits=bits) + "\n"}
+    else:
+        assert account_refused(found, out, console, "RSA of 2048 bits or more")
+
+
+def test_weak_github_keys_are_skipped_and_said(tmp_path):
+    weak, good = public_key("ssh-rsa", comment="", bits=1024), public_key(comment="", seed=5)
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="mixed"), github={"mixed": f"{weak}\n{good}\n"})
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"ssh-keys": f"{good} github:mixed\n"}
+    assert "skipping a key of mixed's that sshd should not take" in found.stderr
+
+
+@pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
+def test_each_key_s_fingerprint_goes_into_the_log(tmp_path):
+    found, _, _ = run_account_pre(tmp_path, with_settings(SSH_KEYS=public_key(comment="laptop")))
+    listing = subprocess.run(["ssh-keygen", "-lf", "-"], input=public_key(comment="laptop") + "\n", capture_output=True, text=True).stdout.strip()
+    assert found.returncode == 0 and f"herald-os: key: {listing}" in found.stderr
+
+
+@pytest.mark.parametrize("check, old, new, settings, github", [
+    ("RSA bits", "ok = int.from_bytes(modulus, \"big\").bit_length() >= 2048", "ok = True", {"SSH_KEYS": public_key("ssh-rsa", bits=1024)}, {}),
+    ("page size", "  (( ${#page} <= 1048576 )) || return 1\n", "", {"GITHUB_KEYS": "big"}, {"big": public_key() + "\n" + "#" * (1 << 20)}),
+])
+def test_each_new_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings, github):
+    assert ACCOUNT_PRE.count(old) == 1, f"the account %pre no longer has exactly one {old!r}"
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mutant").mkdir()
+    assert account_refused(*run_account_pre(tmp_path / "real", with_settings(**settings), github))
+    assert not account_refused(*run_account_pre(tmp_path / "mutant", with_settings(ACCOUNT_PRE.replace(old, new), **settings), github)), check
+
+
+@pytest.mark.parametrize("limit", ["--proto =https", "--proto-redir =https", "--max-redirs 3", "--max-filesize 1M"])
+def test_each_curl_limit_is_caught_when_taken_out(tmp_path, limit):
+    assert ACCOUNT_PRE.count(f" {limit} ") == 1
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(f" {limit} ", " ", 1), GITHUB_KEYS="octocat"), github={"octocat": public_key() + "\n"})
+    assert found.returncode == 0
+    assert limit not in (tmp_path / "pages" / "curl-calls").read_text()
+
+
+@pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
+def test_taking_out_the_fingerprints_is_caught(tmp_path):
+    old = '  [[ -z "$line" ]] || fingerprint "$line"\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, "  :\n"), SSH_KEYS=public_key()))
+    assert found.returncode == 0 and "herald-os: key: 256 SHA256:" not in found.stderr

@@ -47,12 +47,15 @@ The second `%pre` section, at the very end of the file, has three settings, all 
 - `SSH_KEYS=""`: public keys that may sign in to that account over SSH, one a line between the
   quotes, as `~/.ssh/id_ed25519.pub` has them.
 - `GITHUB_KEYS=""`: GitHub accounts, separated by spaces, whose public keys may sign in
-  (`https://github.com/<name>.keys`). The installer reads them while it is online, so the PC does not
-  need GitHub later.
+  (`https://github.com/<name>.keys`). The installer reads them while it is online, over HTTPS only
+  and up to 1 MiB, so the PC does not need GitHub later. Keys sshd should not take (RSA under 2048
+  bits, DSA) are skipped, and the log says so.
 
 With any key, the first start turns SSH on for those keys only, with `herald-os setup ssh` (see
 [Security](security.md#ssh)): no passwords, never root, and at most four new connections a minute
-through the firewall. With none, SSH stays off. A name or key that is not usable, or a GitHub
+from any one address. With none, SSH stays off. Keys in `SSH_KEYS` must be Ed25519, ECDSA, security
+keys, or RSA of 2048 bits or more. The log lists each key's fingerprint when the installer has
+`ssh-keygen`, and the first start's journal always does. A name or key that is not usable, or a GitHub
 account that cannot be read or has no keys, stops the install before it erases anything, and
 `/tmp/herald-os-account.log` says why.
 

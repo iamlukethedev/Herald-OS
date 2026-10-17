@@ -157,20 +157,50 @@ refuse() {
   exit 1
 }
 
-# A public key sshd takes: a type it accepts, then key data that names the same type.
+# A public key sshd takes: a type it accepts, key data that names the same type, and for RSA a
+# modulus of 2048 bits or more (DSA and unknown types are not taken). The installer may have no
+# ssh-keygen, so Python reads the key; the first start checks it again with ssh-keygen.
 valid_key() {
   python3 -c '
 import base64, sys
 types = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
          "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com")
+def string(blob, at):
+    size = int.from_bytes(blob[at:at + 4], "big")
+    if len(blob) < at + 4 + size:
+        raise ValueError("short")
+    return blob[at + 4:at + 4 + size], at + 4 + size
 fields = sys.argv[1].split()
 try:
     blob = base64.b64decode(fields[1], validate=True)
-    size = int.from_bytes(blob[:4], "big")
-    sys.exit(0 if fields[0] in types and len(blob) > 4 + size and blob[4:4 + size] == fields[0].encode() else 1)
+    kind, at = string(blob, 0)
+    ok = fields[0] in types and kind == fields[0].encode() and len(blob) > at
+    if ok and kind == b"ssh-rsa":
+        _, at = string(blob, at)
+        modulus, _ = string(blob, at)
+        ok = int.from_bytes(modulus, "big").bit_length() >= 2048
+    sys.exit(0 if ok else 1)
 except (IndexError, ValueError):
     sys.exit(1)
 ' "$1"
+}
+
+# Each key's fingerprint, for the log, when the installer has ssh-keygen.
+fingerprint() {
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    say "key: $(ssh-keygen -lf - <<<"$1" 2>/dev/null || echo "${1:0:40}...")"
+  else
+    say "key: ${1:0:40}..."
+  fi
+}
+
+# GitHub's key page: https all the way, at most three redirects, and nothing past 1 MiB.
+github_page() {
+  local page
+  page="$(curl -fsSL --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M \
+    --retry 3 --connect-timeout 10 --max-time 30 "https://github.com/$1.keys")" || return 1
+  (( ${#page} <= 1048576 )) || return 1
+  printf '%s\n' "$page"
 }
 
 account_pattern='^[a-z_][a-z0-9_-]{0,31}$'
@@ -186,19 +216,23 @@ while IFS= read -r line; do
   line="${line#"${line%%[![:space:]]*}"}"
   [[ -z "$line" || "$line" == \#* ]] && continue
   valid_key "$line" ||
-    refuse "SSH_KEYS has a line that is not an SSH public key (${line:0:40}...), so nothing was erased." \
-      "Put one public key on each line, as ~/.ssh/id_ed25519.pub has it."
+    refuse "SSH_KEYS has a line that is not an SSH public key sshd should take (${line:0:40}...), so nothing was erased." \
+      "Put one public key on each line, as ~/.ssh/id_ed25519.pub has it: Ed25519, ECDSA, a security key, or RSA of 2048 bits or more."
   keys+="$line"$'\n'
 done <<<"$SSH_KEYS"
 for name in $GITHUB_KEYS; do
   [[ "$name" =~ $github_pattern ]] ||
     refuse "GITHUB_KEYS names \"$name\", which is not a GitHub user name, so nothing was erased."
-  found="$(curl -fsSL --retry 3 --max-time 30 "https://github.com/$name.keys")" ||
+  found="$(github_page "$name")" ||
     refuse "could not read https://github.com/$name.keys, so nothing was erased." \
       "Check the name and the network, or put the keys in SSH_KEYS instead."
   count=0
   while IFS= read -r line; do
-    if [[ -z "$line" ]] || ! valid_key "$line"; then continue; fi
+    [[ -n "$line" ]] || continue
+    if ! valid_key "$line"; then
+      say "skipping a key of $name's that sshd should not take: ${line:0:40}..."
+      continue
+    fi
     [[ "$line" == *" "*" "* ]] || line="$line github:$name"
     keys+="$line"$'\n'
     count=$((count + 1))
@@ -207,6 +241,9 @@ for name in $GITHUB_KEYS; do
     refuse "$name has no SSH keys on GitHub (https://github.com/$name.keys), so nothing was erased."
 done
 
+while IFS= read -r line; do
+  [[ -z "$line" ]] || fingerprint "$line"
+done <<<"$keys"
 say "the account: ${ACCOUNT:-hermes}; SSH: $([[ -n "$keys" ]] && echo "on at the first start, for $(grep -c . <<<"$keys") key(s) only" || echo off)"
 # The keys go through base64, so nothing in a comment can end the here-document early.
 {

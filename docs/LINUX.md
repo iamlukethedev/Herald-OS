@@ -293,8 +293,8 @@ switching to it, and changing its packages, Flatpaks and branding.
   erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
   `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.
   `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output. A second `%pre`
-  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (GitHub's keys are read there,
-  while the installer is online) and writes `/tmp/herald-os-account.ks`, a `%post` that leaves
+  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (RSA needs 2048 bits; GitHub's
+  keys are read there, while the installer is online, with the same curl limits as the CLI) and writes `/tmp/herald-os-account.ks`, a `%post` that leaves
   `/etc/herald-os/install.conf` (`user=<name>`) and `/etc/herald-os/ssh-keys` in the installed
   system. `firstboot.sh` names the session user from the first (env `HERMES_USER` still wins; a
   name that is not an account name or belongs to a system account is ignored) and, when there are
