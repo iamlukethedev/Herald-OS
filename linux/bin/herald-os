@@ -3911,6 +3911,7 @@ def ssh_rollback(before: dict) -> list[str]:
     nft = nft_command()
     if nft and not before["table"] and root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
         attempt([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], f"the table inet {SSH_LIMIT_TABLE} removed")
+    restored: set[Path] = set()
     for path, text in before["files"].items():
         if read_nofollow(path) == text and (text is not None or not os.path.lexists(path)):
             continue
@@ -3919,10 +3920,17 @@ def ssh_rollback(before: dict) -> list[str]:
         else:
             try:
                 install_file(text, path)
+                restored.add(path)
                 undone.append(f"{path} put back")
             except (SystemExit, OSError):
                 warn(f"could not put back {path}")
     root_run(["systemctl", "daemon-reload"])
+    # A table that was there before is loaded again from the file just put back, in one transaction
+    # as the in-place reload does, when that file changed or the table is gone.
+    if nft and before["table"] and before["files"][SSH_LIMIT_RULES] is not None and (
+        SSH_LIMIT_RULES in restored or root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode != 0
+    ):
+        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")
     for (tool, zone, permanent), had in before["rules"].items():
         query = root_run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
         if not had and query.returncode == 0:

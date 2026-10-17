@@ -1489,6 +1489,19 @@ def interrupted_after_the_firewall(machine: System, tmp_path: Path, capsys) -> b
     return machine.rules == {"runtime": set(), "permanent": set()} and not machine.limited() and not machine.drop_in.exists()
 
 
+def a_live_table_follows_the_restored_file(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    old = machine.table
+    (machine.etc / "sshd_config.d" / "20-port.conf").write_text("Port 2222\n")
+    real = machine.firewall
+    machine.firewall = lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root)
+    try:
+        outcome(machine, "--key", public_key(seed=2))
+    finally:
+        machine.firewall = real
+    return machine.table == old and machine.limit_rules.read_text() == old
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1562,6 +1575,7 @@ MUTANTS = {
     "a longer GitHub timeout": (the_github_fetch_is_exactly_this, '"--connect-timeout", "10", "--max-time", "20",', '"--connect-timeout", "10", "--max-time", "200",'),
     "match only in lower case": (match_is_found_in_any_case, "        settings.append((number, keyword.lower(),", "        settings.append((number, keyword,"),
     "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "    except BaseException:\n        # Whatever stopped it", "    except SystemExit:\n        # Whatever stopped it"),
+    "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2231,3 +2245,24 @@ def test_a_command_that_times_out_partway_puts_everything_back_and_goes_on(machi
     with pytest.raises(subprocess.TimeoutExpired):
         machine.setup("--key", public_key())
     assert snapshot(machine) == before
+
+
+def test_a_failed_rerun_loads_the_table_that_was_there_again(machine, monkeypatch, capsys):
+    machine.setup("--key", public_key())
+    old = machine.table
+    (machine.etc / "sshd_config.d" / "20-port.conf").write_text("Port 2222\n")
+    real = machine.firewall
+    # The re-run swaps in a table for port 2222, then the firewall step fails.
+    monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
+    err = refused(machine, capsys, "--key", public_key(seed=2))
+    assert machine.table == old and machine.limit_rules.read_text() == old and "tcp dport { 22 }" in machine.table
+    assert f"the table inet herald_os_ssh loaded again from {machine.limit_rules}" in err
+    reloads = [argv for _, argv in machine.calls if argv[:2] == ["/usr/sbin/nft", "-f"]]
+    assert len(reloads) == 2 and machine.on() and machine.limited()
+
+
+def test_a_rollback_with_no_table_before_does_not_load_one(machine, monkeypatch, capsys):
+    real = machine.firewall
+    monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
+    refused(machine, capsys, "--key", public_key())
+    assert machine.table is None and not any(argv[:2] == ["/usr/sbin/nft", "-f"] for _, argv in machine.calls)
