@@ -3406,6 +3406,11 @@ def sshd_files(path: Path | None = None, depth: int = 0) -> tuple[list[tuple[str
             problems.append(f"{path}: Includes nest deeper than 16 files")
             break
         for pattern in args:
+            if pattern.startswith("~"):
+                # sshd expands ~ only in ssh_config; here it would read /etc/ssh/~..., which is unlikely
+                # to be what was meant, so the file it was meant to name goes unchecked.
+                problems.append(f"{path} line {number}: Include {pattern} starts with ~, which sshd does not expand in sshd_config")
+                continue
             names, problem = sshd_include(pattern)
             if problem:
                 problems.append(problem)

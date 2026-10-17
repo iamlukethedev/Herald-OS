@@ -1502,6 +1502,11 @@ def a_live_table_follows_the_restored_file(machine: System, tmp_path: Path, caps
     return machine.table == old and machine.limit_rules.read_text() == old
 
 
+def a_tilde_include_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text("Include ~/sshd.conf\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1576,6 +1581,7 @@ MUTANTS = {
     "match only in lower case": (match_is_found_in_any_case, "        settings.append((number, keyword.lower(),", "        settings.append((number, keyword,"),
     "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "    except BaseException:\n        # Whatever stopped it", "    except SystemExit:\n        # Whatever stopped it"),
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
+    "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2266,3 +2272,12 @@ def test_a_rollback_with_no_table_before_does_not_load_one(machine, monkeypatch,
     monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
     refused(machine, capsys, "--key", public_key())
     assert machine.table is None and not any(argv[:2] == ["/usr/sbin/nft", "-f"] for _, argv in machine.calls)
+
+
+@pytest.mark.parametrize("line", ["Include ~/sshd.conf", "Include=~root/x.conf", 'Include /etc/ssh/a.conf "~/b.conf"'])
+def test_an_include_starting_with_a_tilde_is_refused(machine, capsys, line):
+    (machine.etc / "a.conf").write_text("X11Forwarding no\n")
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text(line.replace("/etc/ssh", str(machine.etc)) + "\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert "starts with ~, which sshd does not expand in sshd_config" in err
+    assert_backed_out(machine)
