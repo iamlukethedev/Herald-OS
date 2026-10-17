@@ -412,26 +412,34 @@ switched from another bootc system is different: it gets a login screen and a lo
   rather than a traceback. It asks sudo for the password (`sudo -v`) before it changes anything, so
   the prompt is not timed. Every command it runs (nft, firewall-cmd, sshd, systemctl, curl and the
   rest) has a timeout (`SSH_TIMEOUT`, 120 s), in a process group of its own that gets SIGTERM (which
-  sudo passes on) and then SIGKILL when it runs out. If any step after the checks fails, or anything
-  else stops it (Ctrl+C, SIGTERM, SIGHUP, a file error, a command that times out), `on` puts back
-  what it changed (files, units, the table, which it loads again with `nft -f` when one was there,
-  the firewall rule, the keys it added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129
-  for SIGHUP and 124 for a timeout, with no traceback; INT, TERM and HUP are ignored while it puts
-  things back, and the earlier handlers come back after. The rollback fails closed, socket first: a
-  unit counts as running before only if `is-active` said exactly active, reloading or activating,
-  and as enabled only if `is-enabled` said exactly enabled, enabled-runtime, indirect, generated or
-  alias; anything else counts as closed, and is stopped or disabled again unless systemctl plainly
-  reports it so now (a state it cannot report in time counts as open). Its 300 s are a hard cap:
-  each command gets what is left; once that is spent, only stopping and disabling sshd are still
-  tried, and what it skipped is listed. After the first `sudo -v` (interactive, since `sudo -n -v`
-  refuses verifypw=all rules), every root command uses `sudo -n`, so an expired cache fails at once
-  rather than stopping on SIGTTIN in the background. A rollback that could not do everything says it
-  is incomplete and what to check, not that SSH is as it was. A firewall rule that was not there
-  before is removed unless its query says it is absent, and asked about again at the end, for an add
-  that finished late; `--status` lists `warnings`, such as sshd requiring a limit that is not
-  running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be an account
-  name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers it, with a
-  mutant of each safety check.
+  sudo passes on) and then SIGKILL when it runs out. What of a killed command still runs after that
+  (a root command under sudo, in a session of its own, which neither the SIGKILL nor the account can
+  reach) is noted, process tree, groups and sessions, and the rollback ends it as root (`kill`, TERM
+  then KILL) and waits until none of it is left before it looks at the firewall for the last time;
+  one it cannot see end makes the rollback incomplete, with the exact `firewall-cmd` commands that
+  remove the rule. If any step after the checks fails, or anything else stops it (Ctrl+C, SIGTERM,
+  SIGHUP, a file error, a command that times out), `on` puts back what it changed (files, units, the
+  table, which it loads again with `nft -f` when one was there, the firewall rule, the keys it
+  added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129 for SIGHUP and 124 for a timeout,
+  with no traceback; INT, TERM and HUP are ignored while it puts things back (several in quick
+  succession give clean output and the first one's code), and the earlier handlers come back after.
+  The rollback fails closed, socket first: a unit counts as running before only if `is-active` said
+  exactly active, reloading or activating, and as enabled only if `is-enabled` said exactly enabled,
+  enabled-runtime, indirect, generated or alias; anything else counts as closed, and is stopped or
+  disabled again unless systemctl plainly reports it so now (a state it cannot report in time counts
+  as open; a static unit has nothing to disable). Its 300 s are a wall-clock cap, killing included:
+  each command gets what is left less what is held back, a share (15 s, or an eighth of the budget)
+  for each of sshd's stop and disable still to come, one for taking out the keys and two for the
+  end; what it skips is listed. After the first `sudo -v` (interactive, since `sudo -n -v` refuses
+  verifypw=all rules), every root command uses `sudo -n`, so an expired cache fails at once rather
+  than stopping on SIGTTIN in the background. A rollback that could not do everything says it is
+  incomplete and what to check, not that SSH is as it was. A firewall rule or limit table that was
+  not there before is removed unless its query plainly says it is absent (a listing sudo refused
+  names the table and the `nft delete table` to run), and the rule is asked about again at the end,
+  for an add that finished late; `--status` lists `warnings`, such as sshd requiring a limit that is
+  not running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be an
+  account name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers
+  it, with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
