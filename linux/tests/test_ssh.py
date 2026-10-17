@@ -2085,6 +2085,54 @@ def a_table_not_listed_is_reported(machine: System, tmp_path: Path, capsys) -> b
     return "remove it with: sudo /usr/sbin/nft delete table inet herald_os_ssh" in capsys.readouterr().err
 
 
+def a_file_put_back_splits_its_time(machine: System, tmp_path: Path, capsys) -> bool:
+    """A limit file from an earlier `on` is put back by two commands (install, restorecon): together
+    they get what one command would, as daemon-reload, right after, does."""
+    module, saved = machine.module, machine.module.SSH_ROLLBACK_BUDGET
+    module.SSH_ROLLBACK_BUDGET = 20
+    real = machine.systemctl
+    try:
+        outcome(machine, "--key", public_key())
+        machine.limit_rules.write_text("# an older limit\n")
+        machine.systemctl = lambda args, root: ("", 1) if args == ["enable", "sshd.service"] else real(args, root)
+        machine.timeouts.clear()
+        outcome(machine, "--key", public_key())
+    finally:
+        module.SSH_ROLLBACK_BUDGET, machine.systemctl = saved, real
+    install = [timeout for argv, timeout in machine.timeouts if argv[:1] == ["install"] and argv[-1] == str(machine.limit_rules)]
+    label = [timeout for argv, timeout in machine.timeouts if argv == ["restorecon", str(machine.limit_rules)]]
+    reload = [timeout for argv, timeout in machine.timeouts if argv == ["systemctl", "daemon-reload"]]
+    return bool(install and label and reload) and machine.limit_rules.read_text() == "# an older limit\n" \
+        and install[-1] + label[-1] <= reload[-1]
+
+
+def the_budget_is_five_minutes(machine: System, tmp_path: Path, capsys) -> bool:
+    """Once the rollback has set its deadline, its clock moves on 290 s: with 300 s, it runs out."""
+    import time
+    armed: list[float] = []
+    real = machine.firewall
+
+    def clock() -> float:
+        now = time.monotonic()
+        if machine.rolling_back:
+            armed.append(now)
+            return now + (290 if len(armed) > 1 else 0)
+        return now
+
+    def refuse(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            machine.rolling_back = True
+            return "", 11
+        return real(tool, args, root)
+    machine.rolling_back = False
+    machine.firewall = refuse
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "time", types.SimpleNamespace(monotonic=clock, sleep=time.sleep))
+        outcome(machine, "--key", public_key())
+    machine.firewall = real
+    return "ran out of time (300 s) putting things back; skipped:" in capsys.readouterr().err
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2188,6 +2236,8 @@ MUTANTS = {
     "what is left never ended": (a_root_command_left_running_is_ended, "        if not pids:\n            break\n", "        break\n"),
     "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=grace)\n", "            process.communicate()\n"),
     "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
+    "a file put back with each command's full time": (a_file_put_back_splits_its_time, "slot(ssh_limit(None), parts=2)", "slot(ssh_limit(None))"),
+    "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
