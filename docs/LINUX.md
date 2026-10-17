@@ -329,7 +329,11 @@ The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] 
 `package-disk.sh` deletes the builder's `disk.qcow2` and the VHDX once they are converted, and the
 workflow removes the images after the builder, so the runner has room for every output.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
-unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start.
+unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start. Its
+optional `account` input (empty by default, so a run without it is unchanged) also appends the account
+`%pre` of `unattended.ks` with that name and a throwaway key (`linux/vm/account-kickstart.sh`
+fills it in), forwards port 2222 to the machine's SSH, and fails unless the key signs in as the
+account while root and passwords are refused. It needs a release whose image has `herald-os setup ssh`.
 
 On the image, apps install through Flatpak or into `~/.local` (the catalog picks those methods
 there); the system itself changes only by a whole new image.

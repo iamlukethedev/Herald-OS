@@ -752,3 +752,81 @@ def test_logging_the_key_instead_of_its_type_is_caught(tmp_path):
     found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, '  echo "$1"\n'), GITHUB_KEYS="octocat"), github={"octocat": bad + "\n" + public_key(comment="") + "\n"})
     assert bad.split()[1][:16] in found.stderr
 
+
+# The installer test's optional account path (.github/workflows/installer-test.yml), and the snippet
+# linux/vm/account-kickstart.sh makes for it.
+WORKFLOW = ROOT / ".github" / "workflows" / "installer-test.yml"
+SNIPPET = ROOT / "linux" / "vm" / "account-kickstart.sh"
+
+
+def workflow() -> dict:
+    yaml = pytest.importorskip("yaml")
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+def test_the_installer_test_s_account_path_is_off_unless_asked_for():
+    flow = workflow()
+    triggers = flow.get("on", flow.get(True))
+    assert list(triggers) == ["workflow_dispatch"]
+    account = triggers["workflow_dispatch"]["inputs"]["account"]
+    assert account["default"] == "" and account.get("required") is False
+    steps = flow["jobs"]["install"]["steps"]
+    uses = [step for step in steps if "${{ inputs.account }}" in str(step)]
+    # The input reaches the scripts only through the environment, never pasted into one.
+    assert uses and all("inputs.account" not in step.get("run", "") and step["env"]["ACCOUNT"] == "${{ inputs.account }}" for step in uses)
+    for step in uses:
+        assert 'if [[ -n "$ACCOUNT" ]]' in step["run"] or "${ACCOUNT:+" in step["run"]
+
+
+def test_the_installer_test_s_scripts_parse_and_keep_the_private_key_out_of_the_artifact(tmp_path):
+    steps = workflow()["jobs"]["install"]["steps"]
+    for number, step in enumerate(step for step in steps if "run" in step):
+        script = tmp_path / f"step-{number}.sh"
+        script.write_text(step["run"])
+        assert subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True).returncode == 0, step["name"]
+    artifact = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact"))
+    paths = artifact["with"]["path"].split()
+    assert "ssh.log" in paths and not any("test-key" in path for path in paths)
+    boot = next(step for step in steps if step.get("name") == "Boot what was installed")["run"]
+    assert "hostfwd=tcp:127.0.0.1:2222-:22" in boot and "Permission denied (publickey)" in boot and "root@127.0.0.1" in boot
+    assert boot.rstrip().endswith('[[ -z "$failed" ]]')
+
+
+def test_the_snippet_is_the_account_pre_with_the_settings_filled_in(tmp_path):
+    key = tmp_path / "key.pub"
+    key.write_text(public_key(comment="installer test") + "\n")
+    made = subprocess.run(["bash", str(SNIPPET), "luke", str(key)], capture_output=True, text=True, check=True).stdout
+    assert made.splitlines()[0] == f"%include {ACCOUNT_INCLUDE}"
+    pre = re.search(r"^%pre [^\n]*\n(.*?)^%end$", made, re.M | re.S).group(1)
+    assert "ACCOUNT=luke" in pre.splitlines() and 'ACCOUNT=""' not in pre and 'SSH_KEYS=""' not in pre
+    found, out, _ = run_account_pre(tmp_path, pre)
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": "user=luke\n", "ssh-keys": public_key(comment="installer test") + "\n"}
+
+
+def test_anaconda_reads_a_kickstart_with_the_snippet_appended(tmp_path):
+    parser_module = pytest.importorskip("pykickstart.parser")
+    from pykickstart.version import makeVersion
+
+    key = tmp_path / "key.pub"
+    key.write_text(public_key() + "\n")
+    made = subprocess.run(["bash", str(SNIPPET), "luke", str(key)], capture_output=True, text=True, check=True).stdout
+    (tmp_path / "pre").mkdir()
+    pre = re.search(r"^%pre [^\n]*\n(.*?)^%end$", made, re.M | re.S).group(1)
+    found, out, _ = run_account_pre(tmp_path / "pre", pre)
+    assert found.returncode == 0, found.stderr
+    handler = makeVersion("F44")
+    iso_kickstart = "ostreecontainer --url=ghcr.io/iamlukethedev/herald-os:stable\nxconfig --startxonboot\ntext\nzerombr\nrootpw --lock\npoweroff\n"
+    parser_module.KickstartParser(handler).readKickstartFromString(iso_kickstart + made.replace(ACCOUNT_INCLUDE, str(out)))
+    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash"]
+
+
+def test_the_snippet_refuses_when_the_settings_are_not_where_it_looks(tmp_path):
+    (tmp_path / "vm").mkdir()
+    (tmp_path / "image").mkdir()
+    shutil.copy(SNIPPET, tmp_path / "vm" / SNIPPET.name)
+    (tmp_path / "image" / "unattended.ks").write_text(KICKSTART.replace('\nSSH_KEYS=""\n', '\nSSH_KEYS="x"\n'))
+    key = tmp_path / "key.pub"
+    key.write_text(public_key() + "\n")
+    found = subprocess.run(["bash", str(tmp_path / "vm" / SNIPPET.name), "luke", str(key)], capture_output=True, text=True)
+    assert found.returncode == 1 and 'no ACCOUNT="" and SSH_KEYS=""' in found.stderr
