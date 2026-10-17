@@ -16,6 +16,7 @@ import pwd
 import re
 import shlex
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -1507,6 +1508,31 @@ def a_tilde_include_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
 
 
+def second_ctrl_c(machine: System, seen: list) -> None:
+    """Ctrl+C once just after the runtime firewall rule goes in, and again while the rollback takes it out."""
+    real = machine.firewall
+
+    def interrupt(tool, args, root):
+        if any(arg.startswith("--remove-rich-rule") for arg in args):
+            seen.append(signal.getsignal(signal.SIGINT))
+            os.kill(os.getpid(), signal.SIGINT)
+        out = real(tool, args, root)
+        if "--permanent" in args and any(arg.startswith("--add-rich-rule") for arg in args):
+            raise KeyboardInterrupt
+        return out
+    machine.firewall = interrupt
+
+
+def a_second_ctrl_c_does_not_cut_the_rollback_short(machine: System, tmp_path: Path, capsys) -> bool:
+    seen: list = []
+    second_ctrl_c(machine, seen)
+    try:
+        machine.setup("--key", public_key())
+    except KeyboardInterrupt:
+        pass
+    return bool(seen) and machine.rules == {"runtime": set(), "permanent": set()} and not machine.limited()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1582,6 +1608,7 @@ MUTANTS = {
     "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "    except BaseException:\n        # Whatever stopped it", "    except SystemExit:\n        # Whatever stopped it"),
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
+    "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)", "            interrupt = None"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2281,3 +2308,43 @@ def test_an_include_starting_with_a_tilde_is_refused(machine, capsys, line):
     err = refused(machine, capsys, "--key", public_key())
     assert "starts with ~, which sshd does not expand in sshd_config" in err
     assert_backed_out(machine)
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 6: a second Ctrl+C while the rollback runs is ignored, and the handler comes back after.
+def test_a_second_ctrl_c_during_the_rollback_is_ignored_and_the_handler_comes_back(machine, capsys):
+    before, handler, seen = snapshot(machine), signal.getsignal(signal.SIGINT), []
+    second_ctrl_c(machine, seen)
+    with pytest.raises(KeyboardInterrupt):
+        machine.setup("--key", public_key())
+    # The rollback ran with SIGINT ignored, so the real SIGINT sent in the middle of it changed nothing.
+    assert seen and all(state is signal.SIG_IGN for state in seen)
+    assert snapshot(machine) == before
+    assert signal.getsignal(signal.SIGINT) is handler
+    assert "SSH is as it was before this run; put back:" in capsys.readouterr().err
+
+
+def test_the_handler_comes_back_even_when_the_rollback_itself_fails(machine, monkeypatch, capsys):
+    handler = signal.getsignal(signal.SIGINT)
+    machine.limit_fails = True
+    monkeypatch.setattr(cli, "ssh_rollback", lambda before: (_ for _ in ()).throw(RuntimeError("rollback broke")))
+    with pytest.raises(RuntimeError):
+        machine.setup("--key", public_key())
+    assert signal.getsignal(signal.SIGINT) is handler
+
+
+def test_a_rollback_outside_the_main_thread_still_runs(machine, capsys):
+    import threading
+    machine.limit_fails = True
+    before, done = snapshot(machine), []
+
+    def run():
+        try:
+            machine.setup("--key", public_key())
+        except SystemExit as stopped:
+            done.append(stopped.code)
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    assert done == [1] and snapshot(machine) == before

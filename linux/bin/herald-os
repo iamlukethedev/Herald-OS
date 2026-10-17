@@ -4010,21 +4010,30 @@ def ssh_on(opts: dict) -> int:
         root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
     except BaseException:
         # Whatever stopped it (a refusal, Ctrl+C, a file error, a command that timed out), what this run
-        # changed goes back before the exception goes on as it was.
-        undone = ssh_rollback(before)
-        if added:
-            try:
-                if had_keys_file:
-                    write_authorized(account, current)
-                else:
-                    with as_account(account):
-                        keys_file.unlink(missing_ok=True)
-                        if not had_folder:
-                            ssh_dir(account).rmdir()
-                undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
-            except (SystemExit, OSError):
-                warn(f"could not take the added keys back out of {keys_file}")
-        print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
+        # changed goes back before the exception goes on as it was. A second Ctrl+C must not cut that
+        # short, so SIGINT is ignored until it is done (signal() works only in the main thread).
+        try:
+            interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        except ValueError:
+            interrupt = None
+        try:
+            undone = ssh_rollback(before)
+            if added:
+                try:
+                    if had_keys_file:
+                        write_authorized(account, current)
+                    else:
+                        with as_account(account):
+                            keys_file.unlink(missing_ok=True)
+                            if not had_folder:
+                                ssh_dir(account).rmdir()
+                    undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
+                except (SystemExit, OSError):
+                    warn(f"could not take the added keys back out of {keys_file}")
+            print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
+        finally:
+            if interrupt is not None:
+                signal.signal(signal.SIGINT, interrupt)
         raise
     count = len(authorized(updated))
     print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
