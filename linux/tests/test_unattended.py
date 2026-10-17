@@ -482,7 +482,7 @@ def with_settings(pre: str = ACCOUNT_PRE, **settings: str) -> str:
     return pre
 
 
-def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None, keygen_fails: bool = False) -> tuple[subprocess.CompletedProcess, Path, Path]:
+def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, str] | None = None, keygen_fails: bool = False, no_accounts: bool = False) -> tuple[subprocess.CompletedProcess, Path, Path]:
     """The account %pre, with a stand-in curl that answers for github.com from `github` (and with
     `keygen_fails`, an ssh-keygen that cannot read any key)."""
     bin_dir, pages = tmp_path / "bin", tmp_path / "pages"
@@ -496,7 +496,7 @@ def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, st
     (bin_dir / "curl").chmod(0o755)
     for database, lines in (("passwd", ["root:x:0:0::/root:/bin/bash", "svc:x:990:990::/:/sbin/nologin", "nobody:x:65534:65534::/:/sbin/nologin"]),
                             ("group", ["root:x:0:", "builders:x:985:"])):
-        (pages / database).write_text("".join(f"{line}\n" for line in lines))
+        (pages / database).write_text("" if no_accounts else "".join(f"{line}\n" for line in lines))
     (bin_dir / "getent").write_text('#!/usr/bin/env bash\ngrep "^$2:" "$PAGES/$1"\n')
     (bin_dir / "getent").chmod(0o755)
     if keygen_fails:
@@ -877,3 +877,27 @@ def test_the_installer_test_s_retry_loop_has_no_unused_variable():
         script = "#!/usr/bin/env bash\n" + boot
         found = subprocess.run(["shellcheck", "--shell=bash", "-"], input=script, capture_output=True, text=True)
         assert "SC2034" not in found.stdout, found.stdout
+
+
+
+# The reserved names are checked on their own, with getent knowing no account and no group at all.
+RESERVED = set(re.search(r'^reserved="([^"]*)"', ACCOUNT_PRE, re.M).group(1).split())
+
+
+def test_the_reserved_names_cover_fedoras_system_accounts_and_groups():
+    assert {"root", "bin", "daemon", "nobody", "sshd", "dbus", "polkitd", "greetd", "chrony", "tss",
+            "wheel", "users", "video", "input", "render", "audio", "kvm", "ssh_keys", "admin"} <= RESERVED
+
+
+@pytest.mark.parametrize("name", sorted(RESERVED) + ["systemd-resolve"])
+def test_each_reserved_name_is_refused_without_getent_knowing_it(tmp_path, name):
+    # getent knows no account and no group at all here: only the list refuses them.
+    found, out, console = run_account_pre(tmp_path, with_settings(ACCOUNT=name), no_accounts=True)
+    assert (tmp_path / "pages" / "passwd").read_text() == ""
+    assert account_refused(found, out, console, "system account's or group's name")
+
+
+def test_dropping_sshd_from_the_reserved_names_is_caught(tmp_path):
+    assert ACCOUNT_PRE.count("nfsnobody sshd dbus") == 1
+    found, out, console = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace("nfsnobody sshd dbus", "nfsnobody dbus"), ACCOUNT="sshd"), no_accounts=True)
+    assert found.returncode == 0 and not account_refused(found, out, console)
