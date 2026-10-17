@@ -1871,14 +1871,14 @@ def everything_hangs_in_the_rollback(machine: System) -> float:
 
 def the_budget_is_a_hard_cap(machine: System, tmp_path: Path, capsys) -> bool:
     module = machine.module
-    saved = module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST
-    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST = 1, 0.5, 0.25
+    saved = module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW
+    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW = 1, 0.5, 0.25, 0.25
     try:
         # The budget, plus the floor for sshd's four always-tried steps (stop and disable, twice), plus
         # slack; without the cap, each of some thirty commands takes the full second.
         return everything_hangs_in_the_rollback(machine) < 0.5 + 4 * 0.25 + 1.5
     finally:
-        module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST = saved
+        module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW = saved
 
 
 def sudo_never_asks_again(machine: System, tmp_path: Path, capsys) -> bool:
@@ -3193,6 +3193,20 @@ def test_sudo_is_asked_first_untimed_in_a_terminal_and_nothing_changes_when_it_r
     assert (["-v"], None) in machine.timeouts
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="as root, the rollback has no sudo to renew")
+@pytest.mark.parametrize("budget", [300, 0])
+def test_the_rollback_renews_sudo_with_a_plain_ten_second_timeout(machine, monkeypatch, capsys, budget):
+    # Even with the budget spent, the renewal is timed.
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", budget)
+    odd_before(machine, "sshd.service", "disabled", "inactive")
+    machine.timeouts.clear()
+    machine.sudo_modes.clear()
+    refused(machine, capsys, "--key", public_key())
+    assert ("-n", ["-v"]) in machine.sudo_modes
+    assert cli.SSH_SUDO_RENEW == 10
+    assert [timeout for argv, timeout in machine.timeouts if argv == ["-v"]][-1] == cli.SSH_SUDO_RENEW
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="the account stands in for the tester, who must not be root")
 def test_as_root_there_is_no_sudo(machine, monkeypatch, tmp_path):
     machine.is_root = True
@@ -3343,6 +3357,7 @@ def test_the_rollback_budget_is_a_hard_cap_even_when_every_command_hangs(machine
     monkeypatch.setattr(cli, "SSH_TIMEOUT", 4)
     monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 2)
     monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 0.5)
+    monkeypatch.setattr(cli, "SSH_SUDO_RENEW", 0.5)
     elapsed = everything_hangs_in_the_rollback(machine)
     # Without the cap, each of the many commands could take 4 s.
     assert elapsed < 2 + 4 * 0.5 + 2

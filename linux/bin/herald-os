@@ -3986,6 +3986,8 @@ def ssh_snapshot() -> dict:
 # SSH_ROLLBACK_LAST each, and whatever else is left is reported as skipped.
 SSH_ROLLBACK_BUDGET = 300
 SSH_ROLLBACK_LAST = 15
+# How long renewing sudo's time at the start of the rollback may take, out of the budget.
+SSH_SUDO_RENEW = 10
 # The units that must end up closed, whatever the time.
 SSH_ESSENTIAL_UNITS = ("sshd.service", "sshd.socket")
 
@@ -4051,7 +4053,7 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
     # sudo may have forgotten the password by now; renew its time while it still remembers.
     if os.geteuid() != 0:
         try:
-            ssh_run(["sudo", "-n", "-v"], timeout=min(10, limit(False) or 0) or None)
+            ssh_run(["sudo", "-n", "-v"], timeout=SSH_SUDO_RENEW)
         except (subprocess.TimeoutExpired, OSError):
             pass
     # Fail closed, on each count apart: a unit that was not plainly running before is stopped unless it
