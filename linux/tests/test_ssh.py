@@ -147,6 +147,8 @@ class System:
         self.unlistable: set[str] = set()
         # The limit unit fails when it starts (nft refuses the table, the kernel lacks nf_tables).
         self.limit_fails = False
+        # How often systemd restarted sshd because a unit it Requires= was restarted.
+        self.sshd_bounced = 0
         self.calls: list[tuple[bool, list[str]]] = []
         self.units = {name: ["disabled", "inactive"] for name in ("sshd.service", "sshd.socket", "herald-os-ssh-limit.service")}
         self.table: str | None = None
@@ -242,6 +244,9 @@ class System:
                 return "", 1
             if argv[1:] == ["list", "table", "inet", "herald_os_ssh"]:
                 return (self.table or "", 0 if self.table else 1)
+            if argv[1] == "-f":
+                self.table = Path(argv[2]).read_text()
+                return "", 0
             if argv[1:] == ["delete", "table", "inet", "herald_os_ssh"]:
                 code = 0 if self.table else 1
                 self.table = None
@@ -281,6 +286,9 @@ class System:
         if args == ["reload-or-restart", "sshd.service"]:
             return "", 0 if self.start("sshd.service") else 1
         if args == ["restart", limit]:
+            # Requires= passes a restart on: whatever needs the limit and runs is restarted with it.
+            bounced = [unit for unit in ("sshd.service", "sshd.socket") if self.units[unit][1] == "active" and limit in self.requires(unit)]
+            self.sshd_bounced += len(bounced)
             return "", 0 if self.start(limit) else 1
         if args[:2] == ["disable", "--now"]:
             self.units[args[2]] = ["disabled", "inactive"]
@@ -1378,6 +1386,12 @@ def comments_start_only_a_word(machine: System, tmp_path: Path, capsys) -> bool:
     return machine.module.sshd_words("/etc/ssh/a#b.conf # note") == ["/etc/ssh/a#b.conf"]
 
 
+def a_rerun_does_not_bounce_sshd(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    outcome(machine, "--key", public_key(seed=2))
+    return machine.sshd_bounced == 0 and machine.on() and machine.limited()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1442,6 +1456,7 @@ MUTANTS = {
     "an unclosed quote elsewhere let through": (unclosed_quotes_anywhere_are_refused, '                    found.append(f"{name} line {number}: {keyword} has a quote that is never closed, so it cannot be read the way sshd reads it")', "                    pass"),
     "quotes not grouping": (quotes_group_words, """        elif char in "'\\"" and quote in ("", char):""", "        elif False:"),
     "# inside a word a comment": (comments_start_only_a_word, '        elif not quote and char == "#" and not started:', '        elif not quote and char == "#":'),
+    "a re-run restarts the limit": (a_rerun_does_not_bounce_sshd, "    if running:\n        # Restarting", "    if False:\n        # Restarting"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -1909,3 +1924,37 @@ def test_quoted_include_names_reach_the_root_side_listing_whole(machine):
     assert f"{machine.etc}/two words.conf" in listed and f"{machine.etc}/plain.conf" in listed
     read = [argv[2] for _, argv in machine.calls if argv[:2] == ["cat", "--"]]
     assert f"{machine.etc}/two words.conf" in read
+
+
+
+def test_running_it_again_while_on_swaps_the_table_in_place_and_does_not_restart_sshd(machine):
+    machine.setup("--key", public_key())
+    assert machine.on() and machine.limited()
+    (machine.etc / "sshd_config.d" / "20-port.conf").write_text("Port 2222\n")
+    machine.calls.clear()
+    assert machine.setup("--key", public_key(seed=2)) == 0
+    changes = machine.changes()
+    assert ["systemctl", "restart", "herald-os-ssh-limit.service"] not in changes
+    assert ["/usr/sbin/nft", "-f", str(machine.limit_rules)] in changes
+    assert machine.sshd_bounced == 0 and machine.on() and machine.limited()
+    assert "tcp dport { 2222 }" in machine.table
+    # sshd itself gets a reload for its own settings, which keeps the sessions it has.
+    assert ["systemctl", "reload-or-restart", "sshd.service"] in changes
+
+
+def test_the_first_time_the_unit_is_started_and_a_stopped_limit_is_started_again(machine):
+    machine.setup("--key", public_key())
+    assert ["systemctl", "restart", "herald-os-ssh-limit.service"] in machine.changes()
+    machine.units["herald-os-ssh-limit.service"][1] = "failed"
+    machine.table = None
+    machine.calls.clear()
+    machine.setup("--key", public_key())
+    assert ["systemctl", "restart", "herald-os-ssh-limit.service"] in machine.changes() and machine.limited()
+
+
+def test_restarting_the_limit_while_sshd_runs_would_bounce_it(machine):
+    """The stand-in passes a restart on as Requires= does, so the test above means something."""
+    machine.setup("--key", public_key())
+    machine.units["sshd.socket"] = ["enabled", "active"]
+    assert machine.systemctl(["restart", "herald-os-ssh-limit.service"], True) == ("", 0)
+    assert machine.sshd_bounced == 2

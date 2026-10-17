@@ -3760,9 +3760,15 @@ def ssh_limit_on(ports: list[str]) -> None:
     install_file(ssh_limit_unit(nft), SSH_LIMIT_UNIT)
     for path in SSH_LIMIT_REQUIRED:
         install_file(ssh_limit_requirement(), path)
+    running = unit_state(SSH_LIMIT_UNIT.name)[1] == "active"
     root_step(["systemctl", "daemon-reload"], "Reloading systemd")
     root_step(["systemctl", "enable", SSH_LIMIT_UNIT.name], "Enabling the SSH rate limit")
-    root_step(["systemctl", "restart", SSH_LIMIT_UNIT.name], "Loading the SSH rate limit")
+    if running:
+        # Restarting the unit would restart sshd too (it Requires= it). nft -f swaps the table in one
+        # transaction instead, so there is never a moment without it; the counts start over.
+        root_step([nft, "-f", str(SSH_LIMIT_RULES)], "Reloading the SSH rate limit")
+    else:
+        root_step(["systemctl", "restart", SSH_LIMIT_UNIT.name], "Loading the SSH rate limit")
     if root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode != 0:
         die(f"the rate limit did not load (nft list table inet {SSH_LIMIT_TABLE}), so sshd is not started. `journalctl -u {SSH_LIMIT_UNIT.name}` says why.", 1)
 
