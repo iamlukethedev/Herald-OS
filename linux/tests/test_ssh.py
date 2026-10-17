@@ -2936,6 +2936,7 @@ def test_sudo_is_asked_first_untimed_in_a_terminal_and_nothing_changes_when_it_r
     assert (["-v"], None) in machine.timeouts
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="the account stands in for the tester, who must not be root")
 def test_as_root_there_is_no_sudo(machine, monkeypatch, tmp_path):
     machine.is_root = True
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
