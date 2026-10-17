@@ -387,23 +387,25 @@ switched from another bootc system is different: it gets a login screen and a lo
   past 4 a minute from one IPv4 address or IPv6 /64, with dynamic sets that forget an address after 5
   minutes. `/etc/herald-os/ssh-limit.nft` holds it and `herald-os-ssh-limit.service` (in
   `/etc/systemd/system`) loads it at boot. Drop-ins in `sshd.service.d` and `sshd.socket.d`
-  (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and `After=` `herald-os-ssh-limit.service`) keep sshd and its socket
-  stopped when the limit fails, at boot or later; `--off` removes them first. The firewalld zone gets `rule service name="ssh" accept`
-  (runtime and permanent), and `restorecon` runs on `~/.ssh` and the files it writes. Files in the
-  home folder are written as the account, also when the first boot runs it as root. `--off` disables
-  `sshd.service` and `sshd.socket`, removes the drop-in, the rate limit (unit, file and table) and the
-  rule (with `firewall-offline-cmd` when firewalld is stopped), leaves `authorized_keys`, and ends
-  logind sessions whose Service is `sshd` with `--end-sessions` or when the person says so in a
-  terminal (the caller's own last, after everything else). `reset-helper apply` runs
-  `--off --end-sessions`, and `herald-os-reset.service` is ordered before sshd. `--status [--json]`
-  reports it without root where it can. With `--json`, stdout always gets one object with the same
-  keys and `error` (null, or why there is no state, with the other keys null), whatever goes wrong.
-  Files it owns as root (the drop-in, the limit's files) are looked at with `lstat` and read with
-  `O_NOFOLLOW`: a link in their place is reported as `"tampered"` and never followed, `on` refuses
-  to write through it, and `--off` removes it, dangling or not. `~/.ssh` or `authorized_keys` owned
-  by someone else, or that cannot be looked into, is refused with what to run, and any file error
-  ends in a plain message rather than a traceback. `linux/tests/test_ssh.py` covers it, with a mutant
-  of each safety check.
+  (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and `After=` `herald-os-ssh-limit.service`) keep
+  sshd and its socket stopped when the limit fails, at boot or later; `--off` removes them first.
+  Run again while the limit is active, `on` swaps the table in place with `nft -f` rather than
+  restarting the unit, which would restart sshd through `Requires=`. The firewalld zone gets
+  `rule service name="ssh" accept` (runtime and permanent), and `restorecon` runs on `~/.ssh` and
+  the files it writes. Files in the home folder are written as the account, also when the first boot
+  runs it as root. `--off` disables `sshd.service` and `sshd.socket`, removes the drop-in, the rate
+  limit (unit, file and table) and the rule (with `firewall-offline-cmd` when firewalld is stopped),
+  leaves `authorized_keys`, and ends logind sessions whose Service is `sshd` with `--end-sessions`
+  or when the person says so in a terminal (the caller's own last, after everything else).
+  `reset-helper apply` runs `--off --end-sessions`, and `herald-os-reset.service` is ordered before
+  sshd. `--status [--json]` reports it without root where it can. With `--json`, stdout always gets
+  one object with the same keys and `error` (null, or why there is no state, with the other keys
+  null), whatever goes wrong. Files it owns as root (the drop-in, the limit's files) are looked at
+  with `lstat` and read with `O_NOFOLLOW`: a link in their place is reported as `"tampered"` and
+  never followed, `on` refuses to write through it, and `--off` removes it, dangling or not.
+  `~/.ssh` or `authorized_keys` owned by someone else, or that cannot be looked into, is refused
+  with what to run, and any file error ends in a plain message rather than a traceback.
+  `linux/tests/test_ssh.py` covers it, with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
