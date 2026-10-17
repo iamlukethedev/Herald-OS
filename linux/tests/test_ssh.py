@@ -37,7 +37,35 @@ REAL_RUN = subprocess.run
 SETTING = re.compile(r"(\S+?)(\s*=\s*|\s+)(.*)$")
 REQUIRED_PATHS = cli.SSH_LIMIT_REQUIRED
 SSH_KEYGEN = shutil.which("ssh-keygen")
-pytestmark = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
+needs_ssh_keygen = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
+# What `ssh-keygen -lf` names each type, for the listing the stand-in makes without it.
+KEYGEN_NAMES = {"ssh-ed25519": "ED25519", "ssh-rsa": "RSA", "ssh-dss": "DSA", "sk-ssh-ed25519@openssh.com": "ED25519-SK",
+                "sk-ecdsa-sha2-nistp256@openssh.com": "ECDSA-SK", "ecdsa-sha2-nistp256": "ECDSA",
+                "ecdsa-sha2-nistp384": "ECDSA", "ecdsa-sha2-nistp521": "ECDSA"}
+
+
+def keygen_listing(text: str) -> subprocess.CompletedProcess:
+    """`ssh-keygen -lf -` for one key: the real one when it is installed, else the same listing made
+    here (bits, SHA256 fingerprint, comment, type), so the tests do not depend on it."""
+    if SSH_KEYGEN:
+        return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=text, capture_output=True, text=True, check=False)
+    import hashlib
+    try:
+        kind, data, *comment = text.split()
+        blob = base64.b64decode(data, validate=True)
+        name = blob[4:4 + int.from_bytes(blob[:4], "big")].decode()
+        if name != kind or kind not in KEYGEN_NAMES:
+            raise ValueError(kind)
+        at = 4 + len(name)
+        if kind == "ssh-rsa":
+            at += 4 + int.from_bytes(blob[at:at + 4], "big")
+            bits = int.from_bytes(blob[at + 4:at + 4 + int.from_bytes(blob[at:at + 4], "big")], "big").bit_length()
+        else:
+            bits = {"ssh-dss": 1024, "ecdsa-sha2-nistp384": 384, "ecdsa-sha2-nistp521": 521}.get(kind, 256)
+    except (ValueError, IndexError):
+        return subprocess.CompletedProcess(["ssh-keygen"], 255, "", "(stdin) is not a public key file.\n")
+    fingerprint = base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+    return subprocess.CompletedProcess(["ssh-keygen"], 0, f"{bits} SHA256:{fingerprint} {' '.join(comment) or 'no comment'} ({KEYGEN_NAMES[kind]})\n", "")
 
 DROP_IN = (
     "# Written by `herald-os setup ssh`; `herald-os setup ssh --off` removes it.\n"
@@ -236,7 +264,7 @@ class System:
         if argv == ["-v"]:
             return subprocess.CompletedProcess(argv, 0 if self.sudo_lets_in else 1, "", "")
         if argv[:3] == ["ssh-keygen", "-lf", "-"]:
-            return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=input, capture_output=True, text=True, check=False)
+            return keygen_listing(input)
         out, code = self.answer(argv, root or self.is_root)
         if any(argv[:len(prefix)] == prefix for prefix in self.hang_after):
             self.hang += self.then_hang
@@ -557,6 +585,7 @@ def test_ssh_keygen_s_listing_says_which_keys_are_strong_enough():
     ("sk-ecdsa-sha2-nistp256@openssh.com", 0, True), ("ssh-rsa", 2048, True), ("ssh-rsa", 3072, True),
     ("ssh-rsa", 2047, False), ("ssh-rsa", 1024, False),
 ])
+@needs_ssh_keygen
 def test_the_real_ssh_keygen_reads_the_bits_and_type(kind, bits, taken):
     listing, weakness = cli.key_listing(public_key(kind, bits=bits or 2048))
     assert (weakness is None) == taken, (listing, weakness)
@@ -667,8 +696,8 @@ def test_each_given_key_s_fingerprint_is_shown_before_it_goes_in(machine, capsys
     capsys.readouterr()
     assert machine.setup("--key", one, "--key", two) == 0
     out = capsys.readouterr().out
-    first = REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=one + "\n", capture_output=True, text=True).stdout.strip()
-    second = REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=two + "\n", capture_output=True, text=True).stdout.strip()
+    first = keygen_listing(one + "\n").stdout.strip()
+    second = keygen_listing(two + "\n").stdout.strip()
     assert f"key {first}: there already" in out and f"key {second}: adding" in out
     assert out.index(second) < out.index("SSH is on")
 
@@ -1862,6 +1891,41 @@ def expire_sudo_after_the_limit(machine: System) -> None:
     machine.systemctl = systemctl
 
 
+def keys_never_written_as_root_without_ssh_keygen(machine: System, tmp_path: Path, capsys) -> bool:
+    """As root (an account of its own, not the tester's), with no ssh-keygen anywhere, and the write
+    into ~/.ssh failing: the keys were never written, so the rollback must not claim to take them out."""
+    import test_ssh as here
+    saved = (here.SSH_KEYGEN, machine.module.os.geteuid, machine.module.pwd.getpwnam, machine.module.tempfile.mkstemp,
+             machine.module.os.getgroups, machine.module.os.setgroups, machine.module.os.setegid, machine.module.os.seteuid)
+    account = pwd.struct_passwd(("me", "x", 4242, os.getgid(), "", str(machine.home), "/bin/bash"))
+    real_mkstemp = machine.module.tempfile.mkstemp
+
+    def refuse(*args, **kwargs):
+        if kwargs.get("dir") == machine.ssh:
+            raise PermissionError(13, "Permission denied", str(machine.ssh))
+        return real_mkstemp(*args, **kwargs)
+    here.SSH_KEYGEN = None
+    machine.is_root = True
+    os_module = machine.module.os
+    os_module.geteuid = lambda: 0
+    machine.module.pwd.getpwnam = lambda name: account
+    machine.module.tempfile.mkstemp = refuse
+    os_module.getgroups, os_module.setgroups, os_module.setegid, os_module.seteuid = (lambda: [0]), (lambda g: None), (lambda g: None), (lambda u: None)
+    capsys.readouterr()
+    try:
+        result = outcome(machine, "--user", "me", "--key", public_key())
+    finally:
+        (here.SSH_KEYGEN, os_module.geteuid, machine.module.pwd.getpwnam, machine.module.tempfile.mkstemp,
+         os_module.getgroups, os_module.setgroups, os_module.setegid, os_module.seteuid) = saved
+    err = capsys.readouterr().err
+    return result == "exit 1" and "Permission denied" in err and "taken out" not in err and "could not take" not in err
+
+
+def the_timeout_is_two_minutes(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    return machine.module.SSH_TIMEOUT == 120 and {timeout for argv, timeout in machine.timeouts if argv != ["-v"]} == {120}
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1957,6 +2021,8 @@ MUTANTS = {
     "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return max(min(ssh_limit(None), left), last)\n", "            return min(ssh_limit(None), left) if left > 0 else None\n"),
     "the budget only a guide": (the_budget_is_a_hard_cap, "        return min(ssh_limit(None), left) if left > 0 else None\n", "        return ssh_limit(None)\n"),
     "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    for each in (signal.SIGINT, *SSH_STOPS):\n        signal.signal(each, signal.SIG_IGN)\n", ""),
+    "keys counted as written whatever happened": (keys_never_written_as_root_without_ssh_keygen, "                if wrote_keys:\n", "                if True:\n"),
+    "a timeout other than two minutes": (the_timeout_is_two_minutes, "SSH_TIMEOUT = 120\n", "SSH_TIMEOUT = 1200\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -3264,3 +3330,27 @@ def test_a_rollback_with_a_hung_step_is_incomplete_and_one_without_trouble_is_co
     monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
     err = refused(machine, capsys, "--key", public_key())
     assert err.rstrip().splitlines()[-1].startswith("herald-os: SSH is as it was before this run")
+
+
+
+def test_the_stand_in_s_listing_matches_ssh_keygen_for_every_type(monkeypatch):
+    # The types public_key() makes valid keys of (its ECDSA keys are all on P-256).
+    kinds = ["ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com"]
+    keys = [public_key(kind) for kind in kinds] + [public_key("ssh-rsa", bits=1024), public_key("ssh-rsa", bits=3072)]
+    if SSH_KEYGEN:
+        real = [keygen_listing(key + "\n").stdout for key in keys]
+        monkeypatch.setattr(__import__("test_ssh"), "SSH_KEYGEN", None)
+        assert [keygen_listing(key + "\n").stdout for key in keys] == real
+    else:
+        assert all(keygen_listing(key + "\n").returncode == 0 for key in keys)
+    assert keygen_listing("not a key\n").returncode != 0
+
+
+def test_the_command_timeout_is_exactly_two_minutes(machine):
+    assert cli.SSH_TIMEOUT == 120 and cli.ssh_limit(None) == 120 and cli.ssh_limit(5) == 5
+    machine.setup("--key", public_key())
+    assert {timeout for argv, timeout in machine.timeouts if argv != ["-v"]} == {120}
+
+
+def test_keys_never_written_are_not_claimed_as_taken_out_as_root_and_without_ssh_keygen(machine, capsys):
+    assert keys_never_written_as_root_without_ssh_keygen(machine, Path("/nonexistent"), capsys)
