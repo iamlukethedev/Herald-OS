@@ -1622,15 +1622,22 @@ def handlers_come_back(machine: System, tmp_path: Path, capsys) -> bool:
 
 
 def keys_never_written_are_not_taken_out(machine: System, tmp_path: Path, capsys) -> bool:
+    # Writing into ~/.ssh fails (as for a read-only folder, also when this runs as root).
     machine.ssh.mkdir(mode=0o700)
     machine.keys_file.write_text(public_key(seed=9) + "\n")
     machine.keys_file.chmod(0o600)
-    machine.ssh.chmod(0o500)
+    real = machine.module.tempfile.mkstemp
+
+    def refuse(*args, **kwargs):
+        if kwargs.get("dir") == machine.ssh:
+            raise PermissionError(13, "Permission denied", str(machine.ssh))
+        return real(*args, **kwargs)
+    machine.module.tempfile.mkstemp = refuse
     capsys.readouterr()
     try:
         outcome(machine, "--key", public_key())
     finally:
-        machine.ssh.chmod(0o700)
+        machine.module.tempfile.mkstemp = real
     return "could not take the added keys back out" not in capsys.readouterr().err
 
 
