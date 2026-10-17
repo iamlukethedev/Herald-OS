@@ -1080,7 +1080,7 @@ def test_without_keys_from_the_install_ssh_stays_off(tmp_path, keys):
 def test_keys_from_the_install_turn_ssh_on_for_the_session_user_through_setup_ssh(tmp_path):
     result, calls = first_boot_ssh(tmp_path, "ssh-ed25519 AAAA me@laptop\n")
     assert result.returncode == 0
-    assert calls == f"herald-os setup ssh --user luke --keys-file {tmp_path / 'ssh-keys'}\n"
+    assert calls == f"herald-os setup ssh --user luke --keys-file {tmp_path / 'ssh-keys'} --offline-firewall\n"
 
 
 def test_when_setup_ssh_refuses_the_first_boot_goes_on_with_ssh_off(tmp_path):
@@ -1108,7 +1108,15 @@ def test_a_reset_turns_ssh_off_and_forgets_the_install_s_keys():
 
 
 def test_the_first_boot_never_turns_ssh_on_without_a_firewall():
-    assert "--no-firewall" not in function_in(FIRSTBOOT.read_text(), "ssh_keys")
+    ssh = function_in(FIRSTBOOT.read_text(), "ssh_keys")
+    assert "--no-firewall" not in ssh and "--offline-firewall" in ssh
+
+
+def test_the_first_boot_runs_after_firewalld_and_wants_it():
+    unit = (ROOT / "linux" / "image" / "herald-os-firstboot.service").read_text()
+    fields = {line.split("=", 1)[0]: line.split("=", 1)[1].split() for line in unit.splitlines() if "=" in line and not line.startswith("#")}
+    assert "firewalld.service" in fields["After"] and "firewalld.service" in fields["Wants"]
+    assert "greetd.service" in fields["Before"]
 
 
 def firstboot_mutant(old: str, new: str) -> str:
@@ -1135,10 +1143,16 @@ def first_boot_survives_a_refusal(tmp_path: Path, script: str | None) -> bool:
     return result.returncode == 0 and "done" in result.stdout
 
 
+def first_boot_saves_the_rule_offline(tmp_path: Path, script: str | None) -> bool:
+    _, calls = first_boot_ssh(tmp_path, "ssh-ed25519 AAAA me\n", script=script)
+    return calls.rstrip().endswith("--offline-firewall")
+
+
 FIRSTBOOT_MUTANTS = {
     "any name": (keeps_odd_names_out, 'if [[ ! "$name" =~ $pattern ]]; then', "if false; then"),
     "system accounts": (keeps_system_accounts_out, "(( uid < ${min:-1000} || uid > ${max:-60000} ))", "false"),
     "ssh without keys": (ssh_off_without_keys, "if ! grep -q '[^[:space:]]' \"$SSH_KEYS\" 2>/dev/null; then", "if false; then"),
+    "firewalld not up stops SSH": (first_boot_saves_the_rule_offline, ' --keys-file "$SSH_KEYS" --offline-firewall ||', ' --keys-file "$SSH_KEYS" ||'),
     "a refusal stops the first boot": (first_boot_survives_a_refusal, ' ||\n    echo "WARNING: SSH did not turn on', '\n    echo "WARNING: SSH did not turn on'),
 }
 

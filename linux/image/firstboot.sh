@@ -383,14 +383,17 @@ system_phase() {
 
 # SSH for an install that gave public keys: on for those keys only, through the command people use,
 # before Hermes's install, which can wait long for a network. Without keys it stays off, as the image
-# ships it, and so does it when the command refuses.
+# ships it, and so does it when the command refuses. herald-os-firstboot.service starts after
+# firewalld; should firewalld still not be up, --offline-firewall saves its rule for when it is. sshd
+# starts only once the rate limit is loaded: without nft, or without firewalld installed at all, the
+# command refuses, and says why above the warning.
 ssh_keys() {
   if ! grep -q '[^[:space:]]' "$SSH_KEYS" 2>/dev/null; then
     echo "no SSH keys from the install: SSH stays off"
     return 0
   fi
-  herald-os setup ssh --user "$HERMES_USER" --keys-file "$SSH_KEYS" ||
-    echo "WARNING: SSH did not turn on, so it stays off (see above; herald-os setup ssh --status)"
+  herald-os setup ssh --user "$HERMES_USER" --keys-file "$SSH_KEYS" --offline-firewall ||
+    echo "WARNING: SSH did not turn on, so it stays off (the reason is above; herald-os setup ssh --status)"
 }
 
 # Hermes Agent for the session user: installed unless it is there already, in whichever layout

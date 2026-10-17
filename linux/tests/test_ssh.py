@@ -626,7 +626,9 @@ def test_weak_github_keys_are_skipped_and_a_user_with_only_weak_ones_is_refused(
     machine.github["https://github.com/mixed.keys"] = (f"{weak}\n{good}\n", 0)
     assert machine.setup("--github", "mixed") == 0
     assert machine.keys_file.read_text() == f"{good} github:mixed\n"
-    assert "skipping 1024 SHA256:" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "skipping a key of type ssh-rsa (1024 bits): an RSA key of 1024 bits is too short" in out
+    assert weak.split()[1] not in out and weak.split()[1][:20] not in out
     machine.github["https://github.com/weak.keys"] = (f"{weak}\n", 0)
     assert "none of weak's SSH keys on GitHub" in refused(machine, capsys, "--github", "weak")
 
@@ -876,7 +878,7 @@ def test_status_says_when_the_firewall_needs_root_to_tell(machine, capsys):
 # Arguments, root and the rest of the CLI.
 @pytest.mark.parametrize("args", [
     ["--off", "--key", "x"], ["--status", "--passwords"], ["--off", "--status"], ["--json"], ["--key"], ["--bogus"], ["on"],
-    ["--end-sessions"], ["--key", "x", "--end-sessions"], ["--off", "--no-firewall"], ["--status", "--end-sessions"],
+    ["--end-sessions"], ["--key", "x", "--end-sessions"], ["--off", "--no-firewall"], ["--status", "--end-sessions"], ["--off", "--offline-firewall"],
 ])
 def test_arguments_that_do_not_go_together_are_refused(machine, capsys, args):
     refused(machine, capsys, *args, code=2)
@@ -921,7 +923,7 @@ def test_setup_ssh_is_dispatched_and_its_flags_are_in_the_help(monkeypatch, caps
     seen = []
     monkeypatch.setattr(cli, "setup_ssh", lambda args: seen.append(args) or 0)
     assert cli.main(["setup", "ssh", "--status"]) == 0 and seen == [["--status"]]
-    for flag in ("--key", "--github", "--keys-file", "--passwords", "--no-firewall", "--user", "--off", "--end-sessions", "--status", "--json"):
+    for flag in ("--key", "--github", "--keys-file", "--passwords", "--no-firewall", "--offline-firewall", "--user", "--off", "--end-sessions", "--status", "--json"):
         assert flag in cli.COMMANDS["setup"], flag
 
 
@@ -1161,6 +1163,26 @@ def json_errors_are_json(machine: System, tmp_path: Path, capsys) -> bool:
     return result == "exit 2" and "only root" in state["error"]
 
 
+def offline_rule_is_saved(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.firewalld = False
+    return outcome(machine, "--key", public_key(), "--offline-firewall") == 0 and machine.rules["permanent"] == {RULE} and machine.limited()
+
+
+def offline_needs_the_rate_limit(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.firewalld = False
+    machine.installed.discard("nft")
+    return outcome(machine, "--key", public_key(), "--offline-firewall") == "exit 127" and not machine.on()
+
+
+def skipped_github_lines_are_said(machine: System, tmp_path: Path, capsys) -> bool:
+    bad = public_key("ssh-dss", comment="")
+    machine.github["https://github.com/octocat.keys"] = (f"{bad}\n{public_key(comment='')}\n", 0)
+    capsys.readouterr()
+    outcome(machine, "--github", "octocat")
+    out = capsys.readouterr().out
+    return "line 1: skipping a key of type ssh-dss: not a key type sshd takes" in out and bad.split()[1][:16] not in out
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1178,15 +1200,19 @@ MUTANTS = {
     "--key not checked": (bad_keys_are_refused, "        key = ssh_key(text)\n        if not key:", "        key = text\n        if not key:"),
     "key data not checked": (mismatched_key_data_is_refused, "blob[4:4 + size] != fields[0].encode()", "False"),
     "short RSA taken": (short_rsa_is_refused, 'if kind == "RSA" and int(fields[0]) < RSA_MIN_BITS:', "if False:"),
-    "weak GitHub keys taken": (weak_github_keys_are_skipped, "            if weakness:\n                print(", "            if False:\n                print("),
+    "weak GitHub keys taken": (weak_github_keys_are_skipped, "            if weakness:\n                bits =", "            if False:\n                bits ="),
     "fingerprints not shown": (fingerprints_are_shown, "        print(f\"    key {listing}: {'adding' if key in added else 'there already'}\")", "        pass"),
     "GitHub over any protocol": (github_fetch_is_https_only, '"--proto", "=https", "--proto-redir", "=https", ', ""),
     "GitHub redirects unbounded": (github_fetch_is_https_only, '"--max-redirs", "3",', ""),
     "GitHub page size unbounded": (github_page_is_capped, "if len(result.stdout.encode()) > GITHUB_MAX_BYTES:", "if False:"),
     "one limit for every address": (rate_limited_per_address, "add @sources4 {{ ip saddr {over} }}", "{over}"),
     "no rate limit": (rate_limited_per_address, "    if nft:\n        ssh_limit_on(ports)", "    if False:\n        ssh_limit_on(ports)"),
-    "firewall not opened": (firewall_opened, 'opened = firewall_open() if firewall else "none running (--no-firewall)"', 'opened = "none"'),
-    "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not opts["no_firewall"]:', "if False:"),
+    "firewall not opened": (firewall_opened, 'opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"', 'opened = "none"'),
+    "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not offline and not opts["no_firewall"]:', "if False:"),
+    "offline rule not saved": (offline_rule_is_saved, '    root_step(["firewall-offline-cmd", f"--zone={name}", f"--add-rich-rule={SSH_RICH_RULE}"], "Saving SSH\'s firewall rule")\n', ""),
+    "offline without the rate limit": (offline_needs_the_rate_limit, "    if (firewall or offline) and not nft:", "    if firewall and not nft:"),
+    "skipped GitHub lines not said": (skipped_github_lines_are_said, '            print(f"    {url} line {number}: skipping a key of type {ssh_key_type(line)}: {problem}")', "            pass"),
+    "the whole key logged": (skipped_github_lines_are_said, '    return first if re.fullmatch(r"[A-Za-z0-9@._-]{1,48}", first) else "unknown"', "    return text"),
     "no warning without firewalld": (warns_without_firewalld, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    return\n    print("),
     "off keeps the saved rule": (off_closes_everything, 'for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):', "for permanent in ([],):"),
     "off keeps the drop-in": (off_closes_everything, "    if os.path.lexists(SSHD_DROP_IN):\n", "    if False:\n"),
@@ -1347,3 +1373,75 @@ def test_status_json_has_the_same_keys_when_it_works(machine, capsys):
     machine.setup("--status", "--json")
     state = json.loads(capsys.readouterr().out)
     assert set(state) == SCHEMA and state["error"] is None and set(cli.SSH_STATE_KEYS) | {"error"} == SCHEMA
+
+
+
+# ---------------------------------------------------------------------------------------------
+# The first boot (--offline-firewall), and what is said about GitHub lines that are skipped.
+def test_the_reasons_a_line_is_not_a_key_and_its_type_never_its_key():
+    assert cli.ssh_key_problem(public_key()) is None
+    assert cli.ssh_key_problem(public_key("ssh-dss")) == "not a key type sshd takes"
+    assert cli.ssh_key_problem("ssh-ed25519") == "not a type and a key"
+    assert cli.ssh_key_problem("ssh-ed25519 ***") == "the key is not base64"
+    assert cli.ssh_key_problem(public_key(data_kind="ssh-rsa")) == "the key's data is of another type"
+    assert cli.ssh_key_problem(f"{public_key()}\n{public_key(seed=2)}") == "more than one line"
+    assert cli.ssh_key_type(public_key("ssh-dss")) == "ssh-dss"
+    assert cli.ssh_key_type("sk-ssh-ed25519@openssh.com AAAA") == "sk-ssh-ed25519@openssh.com"
+    for odd in ("", "   ", "$(reboot) AAAA", "x" * 49 + " AAAA", "type\x1b[31m AAAA"):
+        assert cli.ssh_key_type(odd) == "unknown", odd
+
+
+def test_every_skipped_github_line_is_said_with_its_type_and_reason_and_never_its_key(machine, capsys):
+    dss, mismatched, short = public_key("ssh-dss", comment=""), public_key(data_kind="ssh-rsa", comment=""), public_key("ssh-rsa", comment="", bits=1024)
+    good = public_key(comment="", seed=7)
+    machine.github["https://github.com/octocat.keys"] = (f"{dss}\n\n{mismatched}\nnot-a-key\n{short}\n{good}\n", 0)
+    assert machine.setup("--github", "octocat") == 0
+    out = capsys.readouterr().out
+    url = "https://github.com/octocat.keys"
+    assert f"{url} line 1: skipping a key of type ssh-dss: not a key type sshd takes" in out
+    assert f"{url} line 3: skipping a key of type ssh-ed25519: the key's data is of another type" in out
+    assert f"{url} line 4: skipping a key of type not-a-key: not a type and a key" in out
+    assert "skipping a key of type ssh-rsa (1024 bits): an RSA key of 1024 bits is too short" in out
+    assert out.count("skipping") == 4
+    for key in (dss, mismatched, short, good):
+        assert key.split()[1][:16] not in out
+
+
+def test_the_first_boot_saves_the_rule_offline_when_firewalld_is_not_up_and_limits_before_sshd(machine, capsys):
+    machine.firewalld = False
+    assert machine.setup("--key", public_key(), "--offline-firewall") == 0
+    captured = capsys.readouterr()
+    assert machine.rules == {"runtime": set(), "permanent": {RULE}} and machine.limited() and machine.on()
+    assert "saved in the firewall zone herald-os for when firewalld starts" in captured.out
+    assert "WARNING: firewalld is not running yet" in captured.err and "--no-firewall" not in captured.err
+    order = [argv for _, argv in machine.calls if not looks(argv)]
+    assert order.index(["systemctl", "restart", "herald-os-ssh-limit.service"]) < order.index(["systemctl", "reload-or-restart", "sshd.service"])
+
+
+def test_with_firewalld_up_offline_changes_nothing(machine):
+    assert machine.setup("--key", public_key(), "--offline-firewall") == 0
+    assert machine.rules == {"runtime": {RULE}, "permanent": {RULE}}
+
+
+def test_offline_without_firewall_offline_cmd_or_nft_leaves_ssh_off(machine, capsys):
+    machine.firewalld = False
+    machine.installed.discard("firewall-offline-cmd")
+    err = refused(machine, capsys, "--key", public_key(), "--offline-firewall")
+    assert "firewalld is not running and firewall-offline-cmd is not installed" in err and not machine.on()
+    machine.installed.add("firewall-offline-cmd")
+    machine.installed.discard("nft")
+    assert "rate-limited per address" in refused(machine, capsys, "--key", public_key(), "--offline-firewall", code=127)
+    assert not machine.on() and machine.changes() == []
+
+
+def test_sshd_never_starts_when_the_rate_limit_does_not_load(machine, capsys, monkeypatch):
+    machine.firewalld = False
+    real = machine.systemctl
+    def no_table(args, root):
+        out = real(args, root)
+        if args[:1] == ["restart"]:
+            machine.table = None
+        return out
+    monkeypatch.setattr(machine, "systemctl", no_table)
+    assert "the rate limit did not load" in refused(machine, capsys, "--key", public_key(), "--offline-firewall")
+    assert not machine.on()

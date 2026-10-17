@@ -351,7 +351,9 @@ switched from another bootc system is different: it gets a login screen and a lo
   (port 53317) and mDNS. SSH is off in release images; the development VM's zone allows it.
 - **SSH:** `herald-os setup ssh --key <public key>` (or `--github <user>`) refuses without a key in
   `~/.ssh/authorized_keys` (unless `--passwords`) and without firewalld running (unless
-  `--no-firewall`, which warns). Given keys must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or
+  `--no-firewall`, which warns, or `--offline-firewall`, which saves the rule with
+  `firewall-offline-cmd` for when firewalld starts and still requires the rate limit). Skipped GitHub
+  lines are printed with their line number, key type and reason, never the key. Given keys must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or
   RSA of 2048 bits or more, and their fingerprints are printed before they go in; GitHub's list comes
   through `curl --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M` with timeouts,
   and its weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`

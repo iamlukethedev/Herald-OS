@@ -160,7 +160,7 @@ COMMANDS: dict[str, str] = {
     "omakase": "Install the curated software set (omakase install | omakase list)",
     "wm": "A window-manager action: wm <niri action> [args] (on Hyprland the same names, or a dispatcher)",
     "omarchy": "omarchy install | remove | status: run Herald OS inside Omarchy (theme hook, menu entry, keys)",
-    "setup": "setup [--yes]: once per user after installing (Hermes Agent and the bridge plugin) | setup --undo: take back its changes to Hermes | setup fingerprint | setup fido2 | setup ssh [--key <public key>] [--github <user>] [--keys-file <file>] [--passwords] [--no-firewall] [--user <name>]: SSH for keys only, never root, rate-limited per address | setup ssh --off [--end-sessions] | setup ssh --status [--json]",
+    "setup": "setup [--yes]: once per user after installing (Hermes Agent and the bridge plugin) | setup --undo: take back its changes to Hermes | setup fingerprint | setup fido2 | setup ssh [--key <public key>] [--github <user>] [--keys-file <file>] [--passwords] [--no-firewall | --offline-firewall] [--user <name>]: SSH for keys only, never root, rate-limited per address | setup ssh --off [--end-sessions] | setup ssh --status [--json]",
     "state": "Dump the shell's window-manager state",
     "debug": "Print diagnostics for bug reports",
     "commands": "List commands",
@@ -3124,7 +3124,7 @@ GITHUB_CURL = [
 # in as the account and as root, so a Match block for any of them shows.
 SSH_PROBE_ADDRESS = "203.0.113.1"
 SSH_USAGE = (
-    "setup ssh [--key <public key>]... [--github <user>]... [--keys-file <file>] [--passwords] [--no-firewall] [--user <name>]"
+    "setup ssh [--key <public key>]... [--github <user>]... [--keys-file <file>] [--passwords] [--no-firewall | --offline-firewall] [--user <name>]"
     " | setup ssh --off [--end-sessions] | setup ssh --status [--json] [--user <name>]"
 )
 
@@ -3152,22 +3152,36 @@ def warn(message: str) -> None:
     print(f"herald-os: WARNING: {message}", file=sys.stderr)
 
 
-def ssh_key(text: str) -> str | None:
-    """One public key the way authorized_keys takes it (type, key, comment), or None for anything else:
-    several lines, options in front, a type sshd no longer takes, or key data of another type (pure; tested)."""
+def ssh_key_problem(text: str) -> str | None:
+    """Why a line is not one public key the way authorized_keys takes it (type, key, comment), or None
+    when it is: several lines, options in front, a type sshd no longer takes, or key data of another
+    type (pure; tested)."""
     if "\n" in text.strip() or "\r" in text:
-        return None
+        return "more than one line"
     fields = text.split()
-    if len(fields) < 2 or fields[0] not in SSH_KEY_TYPES:
-        return None
+    if len(fields) < 2:
+        return "not a type and a key"
+    if fields[0] not in SSH_KEY_TYPES:
+        return "not a key type sshd takes"
     try:
         blob = base64.b64decode(fields[1], validate=True)
     except ValueError:
-        return None
+        return "the key is not base64"
     size = int.from_bytes(blob[:4], "big")
     if len(blob) <= 4 + size or blob[4:4 + size] != fields[0].encode():
-        return None
-    return " ".join(fields)
+        return "the key's data is of another type"
+    return None
+
+
+def ssh_key(text: str) -> str | None:
+    """The key as authorized_keys takes it, or None when it is not one (pure; tested)."""
+    return None if ssh_key_problem(text) else " ".join(text.split())
+
+
+def ssh_key_type(text: str) -> str:
+    """A key line's type, safe to log; never any of the key itself (pure; tested)."""
+    first = (text.split() or [""])[0]
+    return first if re.fullmatch(r"[A-Za-z0-9@._-]{1,48}", first) else "unknown"
 
 
 def key_weakness(listing: str) -> str | None:
@@ -3423,7 +3437,15 @@ def github_keys(user: str) -> list[str]:
         die(f"could not read {url} (curl exit {result.returncode}). Nothing was changed.", 1)
     if len(result.stdout.encode()) > GITHUB_MAX_BYTES:
         die(f"{url} is larger than a key list can be (1 MiB). Nothing was changed.", 1)
-    keys = [key for key in map(ssh_key, result.stdout.splitlines()) if key]
+    keys = []
+    for number, line in enumerate(result.stdout.splitlines(), 1):
+        if not line.strip():
+            continue
+        problem = ssh_key_problem(line)
+        if problem:
+            print(f"    {url} line {number}: skipping a key of type {ssh_key_type(line)}: {problem}")
+        else:
+            keys.append(" ".join(line.split()))
     if not keys:
         die(f"{user} has no SSH keys on GitHub ({url}). Nothing was changed.", 1)
     return [key if len(key.split()) > 2 else f"{key} github:{user}" for key in keys]
@@ -3461,7 +3483,8 @@ def given_keys(opts: dict) -> list[tuple[str, str]]:
         for key in github_keys(user):
             listing, weakness = key_listing(key)
             if weakness:
-                print(f"    github.com/{user}.keys: skipping {listing or key[:40] + '…'}: {weakness}")
+                bits = listing.split()[0] if listing[:1].isdigit() else "unknown"
+                print(f"    github.com/{user}.keys: skipping a key of type {ssh_key_type(key)} ({bits} bits): {weakness}")
             else:
                 taken.append((key, listing))
         if not taken:
@@ -3648,6 +3671,16 @@ def firewall_open() -> str:
     return f"open in the firewall zone {zone}"
 
 
+def firewall_save() -> str:
+    """firewalld's rule, saved with firewall-offline-cmd while firewalld is stopped."""
+    zone = root_run(["firewall-offline-cmd", "--get-default-zone"])
+    name = zone.stdout.strip() if zone.returncode == 0 else ""
+    if not name:
+        die("firewall-offline-cmd cannot tell the default zone, so SSH's rule could not be saved; sshd is not started.", 1)
+    root_step(["firewall-offline-cmd", f"--zone={name}", f"--add-rich-rule={SSH_RICH_RULE}"], "Saving SSH's firewall rule")
+    return f"saved in the firewall zone {name} for when firewalld starts (it is not running now)"
+
+
 def firewall_close() -> str:
     found = firewall_zone()
     if not found:
@@ -3712,8 +3745,12 @@ def ssh_on(opts: dict) -> int:
     keys = given_keys(opts)
     sshd = sshd_command()
     firewall = firewalld_running()
-    if not firewall and not opts["no_firewall"]:
-        die("firewalld is not running, so SSH would be open to every network with nothing else closed. "
+    # --offline-firewall (the first boot): firewalld is installed and enabled but not up yet, so its
+    # rule is saved with firewall-offline-cmd and applies once it starts; the rate limit is there first.
+    offline = not firewall and opts["offline_firewall"] and bool(shutil.which("firewall-offline-cmd"))
+    if not firewall and not offline and not opts["no_firewall"]:
+        die("firewalld is not running" + (" and firewall-offline-cmd is not installed" if opts["offline_firewall"] else "")
+            + ", so SSH would be open to every network with nothing else closed. "
             "Start it (sudo systemctl enable --now firewalld) and run this again, or add --no-firewall to turn SSH on "
             "without one. Nothing was changed.", 1)
     for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT):
@@ -3721,7 +3758,7 @@ def ssh_on(opts: dict) -> int:
             die(f"{path} is a link or not a regular file, which setup ssh never writes: something else put it there. "
                 "Look at it, remove it (herald-os setup ssh --off does), and run this again. Nothing was changed.", 1)
     nft = nft_command()
-    if firewall and not nft:
+    if (firewall or offline) and not nft:
         die("nft (nftables) is not installed, so SSH cannot be rate-limited per address (sudo dnf install nftables). Nothing was changed.", 127)
     current = read_authorized(account)
     updated, added = with_keys(current, [key for key, _ in keys])
@@ -3733,7 +3770,7 @@ def ssh_on(opts: dict) -> int:
             "instead with --passwords. Nothing was changed.",
             1,
         )
-    if not firewall:
+    if not firewall and not offline:
         warn(NO_FIREWALL)
     for key, listing in keys:
         print(f"    key {listing}: {'adding' if key in added else 'there already'}")
@@ -3745,7 +3782,7 @@ def ssh_on(opts: dict) -> int:
     else:
         limit = "not rate-limited (nft is not installed)"
         warn("nft is not installed, so SSH is not rate-limited")
-    opened = firewall_open() if firewall else "none running (--no-firewall)"
+    opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
     root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
     root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
     count = len(authorized(updated))
@@ -3760,7 +3797,9 @@ def ssh_on(opts: dict) -> int:
     for address in addresses():
         print(f"    ssh {account.pw_name}@{address}")
     print("    To turn it off again: herald-os setup ssh --off")
-    if not firewall:
+    if offline:
+        warn("firewalld is not running yet: SSH's rule is saved for when it starts, and until then the rate limit is all that stands between sshd and the network")
+    elif not firewall:
         warn(NO_FIREWALL)
     return 0
 
@@ -3875,9 +3914,9 @@ def ssh_status(opts: dict) -> int:
 
 
 def ssh_args(args: list[str]) -> dict:
-    opts: dict = {"keys": [], "github": [], "files": [], "user": None, "passwords": False, "off": False, "status": False, "json": False, "no_firewall": False, "end_sessions": False}
+    opts: dict = {"keys": [], "github": [], "files": [], "user": None, "passwords": False, "off": False, "status": False, "json": False, "no_firewall": False, "offline_firewall": False, "end_sessions": False}
     values = {"--key": "keys", "--github": "github", "--keys-file": "files"}
-    flags = {"--passwords": "passwords", "--off": "off", "--status": "status", "--json": "json", "--no-firewall": "no_firewall", "--end-sessions": "end_sessions"}
+    flags = {"--passwords": "passwords", "--off": "off", "--status": "status", "--json": "json", "--no-firewall": "no_firewall", "--offline-firewall": "offline_firewall", "--end-sessions": "end_sessions"}
     at = 0
     while at < len(args):
         name, equals, value = args[at].partition("=")
@@ -3896,7 +3935,7 @@ def ssh_args(args: list[str]) -> dict:
         else:
             die(f"setup ssh: unknown argument {args[at]!r}\n  {SSH_USAGE}", 2)
         at += 1
-    gives = opts["keys"] or opts["github"] or opts["files"] or opts["passwords"] or opts["no_firewall"]
+    gives = opts["keys"] or opts["github"] or opts["files"] or opts["passwords"] or opts["no_firewall"] or opts["offline_firewall"]
     if (
         (opts["off"] and (opts["status"] or gives))
         or (opts["status"] and gives)
