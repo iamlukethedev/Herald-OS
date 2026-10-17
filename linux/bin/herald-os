@@ -3151,16 +3151,68 @@ def as_root(argv: list[str]) -> list[str]:
 SSH_TIMEOUT = 120
 
 
-def ssh_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=SSH_TIMEOUT, **kwargs)
+# How long a command that timed out gets to end on SIGTERM before its group is sent SIGKILL.
+SSH_KILL_GRACE = 3
 
 
-def root_run(argv: list[str]) -> subprocess.CompletedProcess:
-    return ssh_run(as_root(argv))
+def ssh_limit(timeout: float | None) -> float:
+    return timeout or SSH_TIMEOUT
 
 
-def root_step(argv: list[str], what: str) -> None:
-    result = root_run(argv)
+def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = None) -> subprocess.CompletedProcess:
+    """A command in a process group of its own, so a timeout ends all of it. A new group, not a new
+    session: the terminal stays, so sudo still finds the credentials cached for it."""
+    limit = ssh_limit(timeout)
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, process_group=0)
+    try:
+        out, err = process.communicate(input, timeout=limit)
+    except BaseException as error:
+        ssh_kill(process)
+        if isinstance(error, subprocess.TimeoutExpired):
+            raise subprocess.TimeoutExpired(argv, limit) from None
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, out, err)
+
+
+def ssh_kill(process: subprocess.Popen) -> None:
+    """End a command's whole group: SIGTERM first, which sudo passes on to the command it runs (in a
+    session of its own when sudo uses a pty), then SIGKILL after a short grace."""
+    for signum, grace in ((signal.SIGTERM, SSH_KILL_GRACE), (signal.SIGKILL, None)):
+        try:
+            os.killpg(process.pid, signum)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            process.communicate(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def root_run(argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
+    return ssh_run(as_root(argv), timeout=timeout)
+
+
+def ssh_sudo() -> None:
+    """Have sudo ask for the password, if it wants one, before anything changes and before any command
+    is timed: the prompt waits for the person, however long they take."""
+    if os.geteuid() == 0:
+        return
+    if sys.stdin.isatty():
+        code = subprocess.call(["sudo", "-v"])
+    else:
+        try:
+            code = ssh_run(["sudo", "-n", "-v"]).returncode
+        except subprocess.TimeoutExpired:
+            code = 1
+    if code != 0:
+        die("setup ssh needs root through sudo, which did not let it in (in a terminal it asks for your "
+            "password; elsewhere it needs a password-free rule, or run this as root). Nothing was changed.", 1)
+
+
+def root_step(argv: list[str], what: str, timeout: float | None = None) -> None:
+    result = root_run(argv, timeout)
     if result.returncode != 0:
         output = (result.stderr or result.stdout or "").strip()
         die(f"{what} failed: `{' '.join(argv)}` (exit {result.returncode}){': ' + output if output else ''}", 1)
@@ -3675,17 +3727,17 @@ def sshd_configure(account: pwd.struct_passwd, passwords: bool, sshd: str) -> li
     return ports or ["22"]
 
 
-def install_file(text: str, dest: Path) -> None:
+def install_file(text: str, dest: Path, timeout: float | None = None) -> None:
     """A root-owned 0644 file written through sudo, labelled for SELinux."""
     fd, name = tempfile.mkstemp(prefix="herald-os-", suffix=dest.suffix)
     try:
         with os.fdopen(fd, "w") as out:
             out.write(text)
-        root_step(["install", "-D", "-m", "0644", name, str(dest)], f"Writing {dest}")
+        root_step(["install", "-D", "-m", "0644", name, str(dest)], f"Writing {dest}", timeout)
     finally:
         os.unlink(name)
     if shutil.which("restorecon"):
-        root_run(["restorecon", str(dest)])
+        root_run(["restorecon", str(dest)], timeout)
 
 
 def unit_loaded(unit: str) -> bool:
@@ -3693,10 +3745,10 @@ def unit_loaded(unit: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "loaded"
 
 
-def unit_state(unit: str) -> tuple[str, str]:
+def unit_state(unit: str, timeout: float | None = None) -> tuple[str, str]:
     """(is-enabled, is-active) as systemctl prints them; neither needs root."""
-    enabled = ssh_run(["systemctl", "is-enabled", unit]).stdout.strip()
-    active = ssh_run(["systemctl", "is-active", unit]).stdout.strip()
+    enabled = ssh_run(["systemctl", "is-enabled", unit], timeout).stdout.strip()
+    active = ssh_run(["systemctl", "is-active", unit], timeout).stdout.strip()
     return enabled or "unknown", active or "unknown"
 
 
@@ -4052,6 +4104,7 @@ def ssh_on(opts: dict) -> int:
     # From here on, a step that fails takes back everything this run changed, keys included, so a
     # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
+    ssh_sudo()
     stops = ssh_signals({signum: ssh_stopped for signum in SSH_STOPS})
     try:
         before = ssh_snapshot()
@@ -4131,6 +4184,7 @@ def ssh_off(opts: dict) -> int:
     if sessions and not end and sys.stdin.isatty():
         yours = " (yours too, last)" if os.environ.get("XDG_SESSION_ID") in sessions else ""
         end = input(f"End the {len(sessions)} SSH session(s) open now{yours}? [y/N] ").strip().lower() in ("y", "yes")
+    ssh_sudo()
     for unit in SSH_UNITS:
         if unit_loaded(unit):
             root_step(["systemctl", "disable", "--now", unit], f"Stopping {unit}")

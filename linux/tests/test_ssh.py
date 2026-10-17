@@ -195,6 +195,13 @@ class System:
         monkeypatch.setattr(module.pwd, "getpwuid", lambda uid: self.account)
         monkeypatch.setattr(module.shutil, "which", lambda name, path=None: f"/usr/sbin/{name}" if name in self.installed else None)
         monkeypatch.setattr(module.subprocess, "run", self.run)
+        # Every command setup ssh runs goes through ssh_run; here it comes to the stand-in, with the
+        # timeout ssh_run itself would use.
+        monkeypatch.setattr(module, "ssh_run", lambda argv, timeout=None, input=None: self.run(argv, timeout=module.ssh_limit(timeout), input=input))
+        # `sudo -v` in a terminal, which asks for the password.
+        monkeypatch.setattr(module.subprocess, "call", lambda argv, **kwargs: self.run(argv).returncode)
+        # sudo lets this account in (False: it wants a password nobody can type).
+        self.sudo_lets_in = True
         monkeypatch.delenv("XDG_SESSION_ID", raising=False)
 
     def main_config(self, *before: str) -> None:
@@ -213,6 +220,8 @@ class System:
         self.timeouts.append((argv, timeout))
         if any(argv[:len(prefix)] == prefix for prefix in self.hang):
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
+        if argv == ["-v"]:
+            return subprocess.CompletedProcess(argv, 0 if self.sudo_lets_in else 1, "", "")
         if argv[:3] == ["ssh-keygen", "-lf", "-"]:
             return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=input, capture_output=True, text=True, check=False)
         out, code = self.answer(argv, root or self.is_root)
@@ -1759,7 +1768,7 @@ MUTANTS = {
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
     "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})", "            ignored = {}"),
-    "commands without a timeout": (every_command_has_a_timeout, "check=False, timeout=SSH_TIMEOUT, **kwargs)", "check=False, **kwargs)"),
+    "commands without a timeout": (every_command_has_a_timeout, "    return timeout or SSH_TIMEOUT\n", "    return timeout\n"),
     "a hang stops the rollback": (a_hang_in_the_rollback_is_passed_over, "        except (subprocess.TimeoutExpired, OSError) as exc:\n            why =", "        except ZeroDivisionError as exc:\n            why ="),
     "SIGTERM not handled": (sigterm_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGHUP,)"),
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
@@ -2780,3 +2789,82 @@ def test_keys_are_taken_back_out_when_restorecon_hangs_after_they_were_written(m
     err = refused(machine, capsys, "--key", public_key(), code=124)
     assert "restorecon -R" in err and "the 1 key(s) added to" in err
     assert snapshot(machine) == before
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 8: commands in a process group of their own, sudo first, and a rollback with a time budget.
+@pytest.fixture
+def quick(monkeypatch):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
+
+
+def test_a_command_that_times_out_takes_its_whole_group_with_it(tmp_path, quick):
+    mark = tmp_path / "late"
+    with pytest.raises(subprocess.TimeoutExpired) as stopped:
+        cli.ssh_run(["sh", "-c", f"(sleep 2; touch {mark}) & exec sleep 30"])
+    assert stopped.value.timeout == 1
+    import time
+    time.sleep(2.5)
+    assert not mark.exists()
+
+
+def test_a_command_that_times_out_gets_sigterm_first(tmp_path, quick):
+    mark = tmp_path / "term"
+    with pytest.raises(subprocess.TimeoutExpired):
+        cli.ssh_run(["sh", "-c", f"trap 'touch {mark}; exit 0' TERM; while :; do sleep 0.1; done"])
+    assert mark.exists()
+
+
+def test_a_command_that_ignores_sigterm_is_killed_after_the_grace(tmp_path, quick):
+    import time
+    pid_file = tmp_path / "pid"
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        cli.ssh_run(["sh", "-c", f"trap '' TERM; echo $$ >{pid_file}; while :; do sleep 0.1; done"])
+    assert time.monotonic() - started < 6
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+def test_commands_keep_the_terminal_s_session_but_have_a_group_of_their_own():
+    import sys
+    out = cli.ssh_run([sys.executable, "-c", "import os; print(os.getsid(0), os.getpgid(0), os.getpid())"]).stdout.split()
+    session, group, pid = map(int, out)
+    assert session == os.getsid(0) and group == pid and group != os.getpgid(0)
+
+
+def test_ssh_run_passes_input_and_returns_output():
+    done = cli.ssh_run(["sh", "-c", "cat; echo err >&2; exit 3"], input="hello\n")
+    assert (done.returncode, done.stdout, done.stderr) == (3, "hello\n", "err\n")
+
+
+def test_sudo_is_asked_first_untimed_in_a_terminal_and_nothing_changes_when_it_refuses(machine, monkeypatch, capsys):
+    machine.setup("--key", public_key())
+    first = next(at for at, (_, argv) in enumerate(machine.calls) if not looks(argv) and argv != ["-v"])
+    assert machine.calls.index((True, ["-v"])) < first
+    machine.calls.clear()
+    machine.sudo_lets_in = False
+    err = refused(machine, capsys, "--key", public_key(seed=2))
+    assert "needs root through sudo" in err and "Nothing was changed" in err
+    assert [argv for _, argv in machine.calls if not looks(argv)] == [["-v"]]
+    # In a terminal, `sudo -v` asks for the password; that is not timed.
+    machine.sudo_lets_in = True
+    machine.calls.clear()
+    machine.timeouts.clear()
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    machine.setup("--key", public_key(seed=3))
+    assert (["-v"], None) in machine.timeouts
+
+
+def test_as_root_there_is_no_sudo(machine, monkeypatch, tmp_path):
+    machine.is_root = True
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli.pwd, "getpwnam", lambda name: machine.account)
+    for name in ("getgroups", "setgroups", "setegid", "seteuid"):
+        monkeypatch.setattr(cli.os, name, (lambda *a: [0]) if name == "getgroups" else (lambda *a: None))
+    given = tmp_path / "keys"
+    given.write_text(public_key() + "\n")
+    machine.setup("--user", "me", "--keys-file", str(given))
+    assert not any(argv in (["-v"], ["sudo", "-v"]) for _, argv in machine.calls)
