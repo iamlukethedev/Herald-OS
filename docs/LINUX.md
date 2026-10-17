@@ -361,55 +361,58 @@ switched from another bootc system is different: it gets a login screen and a lo
 - **SSH:** `herald-os setup ssh --key <public key>` (or `--github <user>`) refuses without a key in
   `~/.ssh/authorized_keys` (unless `--passwords`) and without firewalld running (unless
   `--no-firewall`, which warns, or `--offline-firewall`, which saves the rule with
-  `firewall-offline-cmd` for when firewalld starts and still requires the rate limit). Skipped GitHub
-  lines are printed with their line number, key type and reason, never the key. Given keys must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or
-  RSA of 2048 bits or more, and their fingerprints are printed before they go in; GitHub's list comes
-  through `curl --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M` with timeouts,
-  and its weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
+  `firewall-offline-cmd` for when firewalld starts and still requires the rate limit). Skipped
+  GitHub lines are printed with their line number, key type and reason, never the key. Given keys
+  must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or RSA of 2048 bits or more, and their
+  fingerprints are printed before they go in; GitHub's list comes through
+  `curl --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M` with timeouts, and its
+  weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
   (`PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
   `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
-  distributions' `50-` files), reads `sshd_config` and its includes for a `Match` block that sets any
-  of those or `AuthenticationMethods` to something weaker, and refuses an `Include` under a `Match`
-  (its file would be conditional, which the scan does not follow). Lines are read as sshd reads
-  them: the keyword in any case, then spaces or an `=` (`Include=/x`, `include = /x`), then arguments
-  split like OpenSSH's `argv_split` (quotes, backslash escapes, `#` starting a comment only at the
-  start of a word), several patterns to an Include, relative ones under `/etc/ssh`. A line with an
-  unclosed quote, an Include that names no file, or one written with `=` or quotes that matches
-  nothing stops it. Reading fails closed: every file is
-  read as root (`cat --`), Include globs are expanded as root by `sh -c` with the pattern as an
-  argument (globbing only, `IFS` empty) and the names returned NUL-separated, and any file or listing
-  that cannot be read, or Includes nested past sshd's 16, stop it; and checks `sshd -T`, and
-  `sshd -T -C` for the account from 127.0.0.1 and for the account and root from 203.0.113.1; on any
-  mismatch the file is taken back. The rate limit is per source: firewalld's rich-rule `limit` is one
-  bucket for every address (anyone could use it up) and its direct interface is deprecated and needs
-  iptables, so it is an nftables table of its own, `inet herald_os_ssh` (hooked at `filter - 10`,
-  before firewalld's, which leaves other tables alone), that drops new connections to sshd's ports
-  past 4 a minute from one IPv4 address or IPv6 /64, with dynamic sets that forget an address after 5
-  minutes. `/etc/herald-os/ssh-limit.nft` holds it and `herald-os-ssh-limit.service` (in
-  `/etc/systemd/system`) loads it at boot. Drop-ins in `sshd.service.d` and `sshd.socket.d`
-  (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and `After=` `herald-os-ssh-limit.service`) keep
-  sshd and its socket stopped when the limit fails, at boot or later; `--off` removes them first.
-  Run again while the limit is active, `on` swaps the table in place with `nft -f` rather than
-  restarting the unit, which would restart sshd through `Requires=`. The firewalld zone gets
-  `rule service name="ssh" accept` (runtime and permanent), and `restorecon` runs on `~/.ssh` and
-  the files it writes. Files in the home folder are written as the account, also when the first boot
-  runs it as root. `--off` disables `sshd.service` and `sshd.socket`, removes the drop-in, the rate
-  limit (unit, file and table) and the rule (with `firewall-offline-cmd` when firewalld is stopped),
-  leaves `authorized_keys`, and ends logind sessions whose Service is `sshd` with `--end-sessions`
-  or when the person says so in a terminal (the caller's own last, after everything else).
-  `reset-helper apply` runs `--off --end-sessions`, and `herald-os-reset.service` is ordered before
-  sshd. `--status [--json]` reports it without root where it can. With `--json`, stdout always gets
-  one object with the same keys and `error` (null, or why there is no state, with the other keys
-  null), whatever goes wrong. Files it owns as root (the drop-in, the limit's files) are looked at
-  with `lstat` and read with `O_NOFOLLOW`: a link in their place is reported as `"tampered"` and
-  never followed, `on` refuses to write through it, and `--off` removes it, dangling or not.
-  `~/.ssh` or `authorized_keys` owned by someone else, or that cannot be looked into, is refused
-  with what to run, and any file error ends in a plain message rather than a traceback. If any step
-  after the checks fails, `on` puts back what it changed (files, units, the table, the firewall
-  rule, the keys it added) and lists it; `--status` lists `warnings`, such as sshd requiring a limit
-  that is not running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be
-  an account name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers
-  it, with a mutant of each safety check.
+  distributions' `50-` files), reads `sshd_config` and its includes for a `Match` block that sets
+  any of those or `AuthenticationMethods` to something weaker, and refuses an `Include` under a
+  `Match` (its file would be conditional, which the scan does not follow). Lines are read as sshd
+  reads them: the keyword in any case, then spaces or an `=` (`Include=/x`, `include = /x`), then
+  arguments split like OpenSSH's `argv_split` (quotes, backslash escapes, `#` starting a comment
+  only at the start of a word), several patterns to an Include, relative ones under `/etc/ssh` (one
+  starting with `~`, which sshd does not expand there, is refused). A line with an unclosed quote,
+  an Include that names no file, or one written with `=` or quotes that matches nothing stops it.
+  Reading fails closed: every file is read as root (`cat --`), Include globs are expanded as root by
+  `sh -c` with the pattern as an argument (globbing only, `IFS` empty) and the names returned
+  NUL-separated, and any file or listing that cannot be read, or Includes nested past sshd's 16,
+  stop it; and checks `sshd -T`, and `sshd -T -C` for the account from 127.0.0.1 and for the account
+  and root from 203.0.113.1; on any mismatch the file is taken back. The rate limit is per source:
+  firewalld's rich-rule `limit` is one bucket for every address (anyone could use it up) and its
+  direct interface is deprecated and needs iptables, so it is an nftables table of its own,
+  `inet herald_os_ssh` (hooked at `filter - 10`, before firewalld's, which leaves other tables
+  alone), that drops new connections to sshd's ports past 4 a minute from one IPv4 address or IPv6
+  /64, with dynamic sets that forget an address after 5 minutes. `/etc/herald-os/ssh-limit.nft`
+  holds it and `herald-os-ssh-limit.service` (in `/etc/systemd/system`) loads it at boot. Drop-ins
+  in `sshd.service.d` and `sshd.socket.d` (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and
+  `After=` `herald-os-ssh-limit.service`) keep sshd and its socket stopped when the limit fails, at
+  boot or later; `--off` removes them first. Run again while the limit is active, `on` swaps the
+  table in place with `nft -f` rather than restarting the unit, which would restart sshd through
+  `Requires=`. The firewalld zone gets `rule service name="ssh" accept` (runtime and permanent), and
+  `restorecon` runs on `~/.ssh` and the files it writes. Files in the home folder are written as the
+  account, also when the first boot runs it as root. `--off` disables `sshd.service` and
+  `sshd.socket`, removes the drop-in, the rate limit (unit, file and table) and the rule (with
+  `firewall-offline-cmd` when firewalld is stopped), leaves `authorized_keys`, and ends logind
+  sessions whose Service is `sshd` with `--end-sessions` or when the person says so in a terminal
+  (the caller's own last, after everything else). `reset-helper apply` runs `--off --end-sessions`,
+  and `herald-os-reset.service` is ordered before sshd. `--status [--json]` reports it without root
+  where it can. With `--json`, stdout always gets one object with the same keys and `error` (null,
+  or why there is no state, with the other keys null), whatever goes wrong. Files it owns as root
+  (the drop-in, the limit's files) are looked at with `lstat` and read with `O_NOFOLLOW`: a link in
+  their place is reported as `"tampered"` and never followed, `on` refuses to write through it, and
+  `--off` removes it, dangling or not. `~/.ssh` or `authorized_keys` owned by someone else, or that
+  cannot be looked into, is refused with what to run, and any file error ends in a plain message
+  rather than a traceback. If any step after the checks fails, or anything else stops it (Ctrl+C, a
+  file error, a command that times out), `on` puts back what it changed (files, units, the table,
+  which it loads again with `nft -f` when one was there, the firewall rule, the keys it added),
+  lists it, and lets the original error go on; `--status` lists `warnings`, such as sshd requiring a
+  limit that is not running. `--no-firewall` and `--offline-firewall` exclude each other, `--user`
+  must be an account name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py`
+  covers it, with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
