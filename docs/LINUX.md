@@ -293,19 +293,21 @@ switching to it, and changing its packages, Flatpaks and branding.
   erasing anything and writes why to `/tmp/herald-os-disk.log`, readable from the shell on
   `Ctrl+Alt+F2`; the copy it prints on the console may be hidden by the text installer.
   `linux/tests/test_unattended.py` runs the `%pre` against fake `lsblk` output. A second `%pre`
-  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (RSA needs 2048 bits; GitHub's
-  keys are read there, while the installer is online, with the same curl limits as the CLI) and writes `/tmp/herald-os-account.ks`, a `%post` that leaves
-  `/etc/herald-os/install.conf` (`user=<name>`) and `/etc/herald-os/ssh-keys` in the installed
-  system. `firstboot.sh` names the session user from the first (env `HERMES_USER` still wins; a
-  name that is not an account name or belongs to a system account is ignored) and, when there are
-  keys, runs `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys --offline-firewall`
-  before installing Hermes. `herald-os-firstboot.service` wants firewalld and starts after it; should
-  firewalld still not be up, `--offline-firewall` saves the rule with `firewall-offline-cmd`, and sshd
-  starts only once the rate limit has loaded. Without nft, or with no firewalld at all, SSH stays off
-  and the journal says why. The account `%pre` runs before the disk's and also refuses reserved and
-  system names (Fedora's system accounts and groups, `systemd-*`, and anything `getent` resolves to an
-  id below 1000), and it logs each skipped GitHub line by key type and reason, never the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it
-  runs after) and runs `herald-os setup ssh --off --end-sessions`.
+  takes `ACCOUNT=`, `SSH_KEYS=` and `GITHUB_KEYS=`, checks them (RSA needs 2048 bits; GitHub's keys
+  are read there, while the installer is online, with the same curl limits as the CLI) and writes
+  `/tmp/herald-os-account.ks`, a `%post` that leaves `/etc/herald-os/install.conf` (`user=<name>`)
+  and `/etc/herald-os/ssh-keys` in the installed system. `firstboot.sh` names the session user from
+  the first (env `HERMES_USER` still wins; a name that is not an account name or belongs to a system
+  account is ignored) and, when there are keys, runs
+  `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys --offline-firewall` before
+  installing Hermes. `herald-os-firstboot.service` wants firewalld and starts after it; should
+  firewalld still not be up, `--offline-firewall` saves the rule with `firewall-offline-cmd`, and
+  sshd starts only once the rate limit has loaded. Without nft, or with no firewalld at all, SSH
+  stays off and the journal says why. The account `%pre` runs before the disk's and also refuses
+  reserved and system names (Fedora's system accounts and groups, `systemd-*`, and anything `getent`
+  resolves to an id below 1000), and it logs each skipped GitHub line by key type and reason, never
+  the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it runs
+  after) and runs `herald-os setup ssh --off --end-sessions`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle
@@ -330,10 +332,11 @@ The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] 
 workflow removes the images after the builder, so the runner has room for every output.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
 unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start. Its
-optional `account` input (empty by default, so a run without it is unchanged) also appends the account
-`%pre` of `unattended.ks` with that name and a throwaway key (`linux/vm/account-kickstart.sh`
-fills it in), forwards port 2222 to the machine's SSH, and fails unless the key signs in as the
-account while root and passwords are refused. It needs a release whose image has `herald-os setup ssh`.
+optional `account` input (empty by default, so a run without it is unchanged) also appends the
+account `%pre` of `unattended.ks` with that name and a throwaway key
+(`linux/vm/account-kickstart.sh` fills it in), forwards port 2222 to the machine's SSH, and fails
+unless the key signs in as the account while root and passwords are refused. It needs a release
+whose image has `herald-os setup ssh`.
 
 On the image, apps install through Flatpak or into `~/.local` (the catalog picks those methods
 there); the system itself changes only by a whole new image.
@@ -406,16 +409,23 @@ switched from another bootc system is different: it gets a login screen and a lo
   their place is reported as `"tampered"` and never followed, `on` refuses to write through it, and
   `--off` removes it, dangling or not. `~/.ssh` or `authorized_keys` owned by someone else, or that
   cannot be looked into, is refused with what to run, and any file error ends in a plain message
-  rather than a traceback. Every command it runs (nft, firewall-cmd, sshd, systemctl, curl and the
-  rest) has a timeout (`SSH_TIMEOUT`, 120 s). If any step after the checks fails, or anything else
-  stops it (Ctrl+C, SIGTERM, SIGHUP, a file error, a command that times out), `on` puts back what it
-  changed (files, units, the table, which it loads again with `nft -f` when one was there, the
-  firewall rule, the keys it added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129 for
-  SIGHUP and 124 for a timeout, with no traceback; INT, TERM and HUP are ignored while it puts
-  things back, and the earlier handlers come back after; `--status` lists `warnings`, such as sshd
-  requiring a limit that is not running. `--no-firewall` and `--offline-firewall` exclude each
-  other, `--user` must be an account name and not root, and a flag given twice is refused.
-  `linux/tests/test_ssh.py` covers it, with a mutant of each safety check.
+  rather than a traceback. It asks sudo for the password (`sudo -v`) before it changes anything, so
+  the prompt is not timed. Every command it runs (nft, firewall-cmd, sshd, systemctl, curl and the
+  rest) has a timeout (`SSH_TIMEOUT`, 120 s), in a process group of its own that gets SIGTERM (which
+  sudo passes on) and then SIGKILL when it runs out. If any step after the checks fails, or anything
+  else stops it (Ctrl+C, SIGTERM, SIGHUP, a file error, a command that times out), `on` puts back
+  what it changed (files, units, the table, which it loads again with `nft -f` when one was there,
+  the firewall rule, the keys it added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129
+  for SIGHUP and 124 for a timeout, with no traceback; INT, TERM and HUP are ignored while it puts
+  things back, and the earlier handlers come back after. The rollback fails closed: sshd.service,
+  sshd.socket and the limit unit, if they were stopped and disabled before, are stopped and disabled
+  again unless systemctl plainly reports them so (a state it cannot report in time counts as open).
+  It has 300 s in all; once that is spent, only stopping and disabling sshd are still tried, and
+  what it skipped is listed. A firewall rule that was not there before is removed unless its query
+  says it is absent, and asked about again at the end, for an add that finished late; `--status`
+  lists `warnings`, such as sshd requiring a limit that is not running. `--no-firewall` and
+  `--offline-firewall` exclude each other, `--user` must be an account name and not root, and a flag
+  given twice is refused. `linux/tests/test_ssh.py` covers it, with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
