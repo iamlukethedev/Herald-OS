@@ -3163,16 +3163,18 @@ def ssh_limit(timeout: float | None) -> float:
     return timeout or SSH_TIMEOUT
 
 
-def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = None) -> subprocess.CompletedProcess:
+def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = None,
+            grace: float | None = None) -> subprocess.CompletedProcess:
     """A command in a process group of its own, so a timeout ends all of it. A new group, not a new
-    session: the terminal stays, so sudo still finds the credentials cached for it."""
+    session: the terminal stays, so sudo still finds the credentials cached for it. Ending it takes at
+    most twice `grace` (SSH_KILL_GRACE when not given) on top of the timeout."""
     limit = ssh_limit(timeout)
     process = subprocess.Popen(argv, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, process_group=0)
     try:
         out, err = process.communicate(input, timeout=limit)
     except BaseException as error:
-        ssh_kill(process)
+        ssh_kill(process, SSH_KILL_GRACE if grace is None else grace)
         if isinstance(error, subprocess.TimeoutExpired):
             raise subprocess.TimeoutExpired(argv, limit) from None
         raise
@@ -3230,9 +3232,9 @@ def ssh_alive(tree: dict) -> list[int]:
                   and (tree["pids"].get(pid) == start or group in tree["groups"] or session in tree["sessions"]))
 
 
-def ssh_kill(process: subprocess.Popen) -> None:
+def ssh_kill(process: subprocess.Popen, grace: float) -> None:
     """End a command's whole group: SIGTERM first, which sudo passes on to the command it runs (in a
-    session of its own when sudo uses a pty), then SIGKILL after a short grace. The SIGKILL reaches
+    session of its own when sudo uses a pty), then SIGKILL after `grace`. The SIGKILL reaches
     the group, which is sudo, but not a root command in a session of its own under it. Whatever of
     the command's tree still runs after that goes into SSH_LEFT, for ssh_reap. The waits are on the
     process, not its output: a root command left running may hold the pipes open."""
@@ -3246,7 +3248,7 @@ def ssh_kill(process: subprocess.Popen) -> None:
         except (ProcessLookupError, PermissionError):
             pass
         try:
-            process.wait(timeout=SSH_KILL_GRACE)
+            process.wait(timeout=grace)
             break
         except subprocess.TimeoutExpired:
             continue
@@ -3264,6 +3266,21 @@ def ssh_kill(process: subprocess.Popen) -> None:
         SSH_LEFT.append({"argv": list(process.args), "tree": tree})
 
 
+# What ending a command takes besides its two graces: closing its pipes and reading /proc for what of
+# it is left.
+SSH_KILL_SPARE = 0.2
+
+
+def ssh_slot(most: float, left: float) -> tuple[float, float] | None:
+    """A timeout of at most `most` and a kill grace for a command that must be over, killed or not,
+    within `left` seconds: the grace an eighth of that (at most SSH_KILL_GRACE), counted twice (SIGTERM,
+    then SIGKILL), with SSH_KILL_SPARE for looking at what is left. None when that leaves too little."""
+    length = min(most + 2 * SSH_KILL_GRACE + SSH_KILL_SPARE, left)
+    grace = min(SSH_KILL_GRACE, length / 8)
+    timeout = min(most, length - 2 * grace - SSH_KILL_SPARE)
+    return (timeout, grace) if timeout >= 0.1 else None
+
+
 def ssh_reap(timeout: float) -> list[str]:
     """End what SSH_LEFT holds as root (`kill`, through sudo -n unless this is root): SIGTERM, then
     SIGKILL after SSH_KILL_GRACE, then wait until none of it is left, all within `timeout`. Returns
@@ -3279,11 +3296,12 @@ def ssh_reap(timeout: float) -> list[str]:
         pids = alive()
         if not pids:
             break
-        try:
-            ssh_run(as_root(["kill", "-s", signum.name[3:], "--", *map(str, pids)]),
-                    timeout=max(1.0, min(10.0, deadline - time.monotonic())))
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        given = ssh_slot(10, deadline - time.monotonic())
+        if given:
+            try:
+                ssh_run(as_root(["kill", "-s", signum.name[3:], "--", *map(str, pids)]), timeout=given[0], grace=given[1])
+            except (subprocess.TimeoutExpired, OSError):
+                pass
         until = deadline if wait is None else min(deadline, time.monotonic() + wait)
         while alive() and time.monotonic() < until:
             time.sleep(0.1)
@@ -3300,8 +3318,8 @@ def ssh_reap(timeout: float) -> list[str]:
     return still
 
 
-def root_run(argv: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
-    return ssh_run(as_root(argv), timeout=timeout)
+def root_run(argv: list[str], timeout: float | None = None, grace: float | None = None) -> subprocess.CompletedProcess:
+    return ssh_run(as_root(argv), timeout=timeout, grace=grace)
 
 
 def ssh_sudo() -> None:
@@ -3321,8 +3339,8 @@ def ssh_sudo() -> None:
             "password; elsewhere it needs a password-free rule, or run this as root). Nothing was changed.", 1)
 
 
-def root_step(argv: list[str], what: str, timeout: float | None = None) -> None:
-    result = root_run(argv, timeout)
+def root_step(argv: list[str], what: str, timeout: float | None = None, grace: float | None = None) -> None:
+    result = root_run(argv, timeout, grace)
     if result.returncode != 0:
         output = (result.stderr or result.stdout or "").strip()
         die(f"{what} failed: `{' '.join(argv)}` (exit {result.returncode}){': ' + output if output else ''}", 1)
@@ -3691,7 +3709,8 @@ def read_authorized(account: pwd.struct_passwd) -> str:
     return ""
 
 
-def write_authorized(account: pwd.struct_passwd, text: str | None, written: list | None = None) -> None:
+def write_authorized(account: pwd.struct_passwd, text: str | None, written: list | None = None,
+                     timeout: float | None = None, grace: float | None = None) -> None:
     """~/.ssh 0700 and authorized_keys 0600, both the account's own: sshd ignores keys anyone else can
     change. The new text goes through a new file and a rename, so the file is never half written.
     `written` gets an entry the moment the new file is in place, before anything after it can fail."""
@@ -3713,7 +3732,7 @@ def write_authorized(account: pwd.struct_passwd, text: str | None, written: list
             keys_file.chmod(0o600)
     if folder.is_dir() and shutil.which("restorecon"):
         # SELinux: a file written elsewhere and moved in keeps the wrong label, and sshd cannot read it.
-        if root_run(["restorecon", "-R", str(folder)]).returncode != 0:
+        if root_run(["restorecon", "-R", str(folder)], timeout, grace).returncode != 0:
             warn(f"restorecon -R {folder} failed; with SELinux enforcing, sshd may not read the keys")
 
 
@@ -3837,17 +3856,17 @@ def sshd_configure(account: pwd.struct_passwd, passwords: bool, sshd: str) -> li
     return ports or ["22"]
 
 
-def install_file(text: str, dest: Path, timeout: float | None = None) -> None:
+def install_file(text: str, dest: Path, timeout: float | None = None, grace: float | None = None) -> None:
     """A root-owned 0644 file written through sudo, labelled for SELinux."""
     fd, name = tempfile.mkstemp(prefix="herald-os-", suffix=dest.suffix)
     try:
         with os.fdopen(fd, "w") as out:
             out.write(text)
-        root_step(["install", "-D", "-m", "0644", name, str(dest)], f"Writing {dest}", timeout)
+        root_step(["install", "-D", "-m", "0644", name, str(dest)], f"Writing {dest}", timeout, grace)
     finally:
         os.unlink(name)
     if shutil.which("restorecon"):
-        root_run(["restorecon", str(dest)], timeout)
+        root_run(["restorecon", str(dest)], timeout, grace)
 
 
 def unit_loaded(unit: str) -> bool:
@@ -4085,23 +4104,27 @@ def ssh_snapshot() -> dict:
     return before
 
 
-# The whole rollback gets this long, since it runs with signals ignored: a hard cap. Each command's
-# timeout is what is left of it at that moment (at most SSH_TIMEOUT), so no two commands can each
-# take the full remainder. Once it is spent, only stopping and disabling sshd are still tried, with
-# SSH_ROLLBACK_LAST each, and whatever else is left is reported as skipped.
+# The whole rollback gets this long, wall clock, since it runs with signals ignored: a hard cap, with
+# killing a command that hangs counted in. Each command may take what is left at that moment (with a
+# timeout of at most SSH_TIMEOUT), less what is held back: a share of the budget (SSH_ROLLBACK_LAST,
+# or an eighth of the budget when that is less) for each of sshd's two units' stop and disable that
+# has not come yet, one for taking out the keys this run added, and two for the end (ending what this
+# run left running, and the last look at the firewall). What there is no time left for is skipped and
+# reported.
 SSH_ROLLBACK_BUDGET = 300
 SSH_ROLLBACK_LAST = 15
-# How long renewing sudo's time at the start of the rollback may take, out of the budget.
+# How long renewing sudo's time at the start of the rollback may take (its timeout), out of the budget.
 SSH_SUDO_RENEW = 10
 # The units that must end up closed, whatever the time.
 SSH_ESSENTIAL_UNITS = ("sshd.service", "sshd.socket")
 
 
-def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
+def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
     """Put back what `on` changed since `before`: what it put back, and what it could not (a command
     that failed, hung or was refused by sudo, a step it ran out of time for), for the message. Each
     step is tried whatever the others do: a rollback that stops halfway is the state this is here to
-    avoid."""
+    avoid. `keys_out(timeout, grace, undone, trouble)` takes the keys this run added back out, inside
+    the same budget, once sshd is closed."""
     undone: list[str] = []
     skipped: list[str] = []
     troubles: list[str] = []
@@ -4110,25 +4133,28 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         warn(message)
         troubles.append(message)
     deadline = time.monotonic() + SSH_ROLLBACK_BUDGET
+    share = min(SSH_ROLLBACK_LAST, SSH_ROLLBACK_BUDGET / 8)
+    held = {"essential": 2 * len(SSH_ESSENTIAL_UNITS), "keys": 1 if keys_out else 0, "end": 2}
 
-    def limit(essential: bool) -> float | None:
-        """This command's timeout, or None when there is no time left for it. Only sshd's stop and
-        disable (essential) get a floor, and may run past the budget by that much."""
-        left, last = deadline - time.monotonic(), min(SSH_ROLLBACK_LAST, ssh_limit(None))
-        if essential:
-            return max(min(ssh_limit(None), left), last)
-        return min(ssh_limit(None), left) if left > 0 else None
+    def free(essential: bool = False) -> float:
+        """What is left of the budget less what is held back; an essential step may use its own share."""
+        return deadline - time.monotonic() - share * (sum(held.values()) - (1 if essential else 0))
+
+    def slot(most: float, essential: bool = False, parts: int = 1) -> tuple[float, float] | None:
+        """(timeout, grace) for each of `parts` commands, or None when there is no time left for them."""
+        return ssh_slot(most, free(essential) / parts)
 
     def run(argv: list[str], essential: bool = False) -> subprocess.CompletedProcess:
         # A command that hangs or cannot run is reported here and passed over, so the steps after it
         # still happen; one there is no time left for is skipped. Either comes back with no exit code
         # (None): not done, and already accounted for.
-        timeout = limit(essential)
-        if timeout is None:
+        given = slot(ssh_limit(None), essential)
+        if given is None:
             skipped.append(" ".join(argv))
             return subprocess.CompletedProcess(argv, None, "", "")
+        timeout, grace = given
         try:
-            return root_run(argv, timeout)
+            return root_run(argv, timeout, grace)
         except (subprocess.TimeoutExpired, OSError) as exc:
             why = f"did not finish within {timeout:.0f} s" if isinstance(exc, subprocess.TimeoutExpired) else f"failed ({exc})"
             trouble(f"`{' '.join(argv)}` {why} while putting things back")
@@ -4139,9 +4165,9 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         # is unknown, which counts as open.
         answers = []
         for question in ("is-enabled", "is-active"):
-            timeout = limit(False)
+            given = slot(ssh_limit(None))
             try:
-                answer = ssh_run(["systemctl", question, unit], timeout).stdout.strip() if timeout else ""
+                answer = ssh_run(["systemctl", question, unit], given[0], grace=given[1]).stdout.strip() if given else ""
             except (subprocess.TimeoutExpired, OSError):
                 answer = ""
             answers.append(answer or "unknown")
@@ -4156,14 +4182,15 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
             trouble(f"could not put back {what}: `{' '.join(argv)}` failed" + (f" ({refusal[0]})" if refusal else ""))
 
     # sudo may have forgotten the password by now; renew its time while it still remembers.
-    if os.geteuid() != 0:
+    renew = slot(SSH_SUDO_RENEW)
+    if os.geteuid() != 0 and renew:
         try:
-            ssh_run(["sudo", "-n", "-v"], timeout=SSH_SUDO_RENEW)
+            ssh_run(["sudo", "-n", "-v"], timeout=renew[0], grace=renew[1])
         except (subprocess.TimeoutExpired, OSError):
             pass
     # A command this run killed but that went on running as root could still change things after
     # they are put back; it is ended first, so what the rollback reads is how things stay.
-    ssh_reap(limit(False) or 0)
+    ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free())))
     # Fail closed, on each count apart: a unit that was not plainly running before is stopped unless it
     # is plainly stopped now, and one that was not plainly enabled before is disabled unless it is
     # plainly disabled now. A state systemctl could not report in time is not plainly anything.
@@ -4173,10 +4200,19 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         now_enabled, now_active = state(unit)
         if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
             attempt(["systemctl", "stop", unit], f"{unit} stopped", essential)
+        held["essential"] -= essential
         if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
             attempt(["systemctl", "disable", unit], f"{unit} disabled", essential)
+        held["essential"] -= essential
         if active != "failed" and state(unit)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
+    if keys_out:
+        held["keys"] = 0
+        given = slot(ssh_limit(None))
+        if given is None:
+            skipped.append("taking the added keys back out")
+        else:
+            keys_out(*given, undone, trouble)
     nft = nft_command()
     if nft and not before["table"] and run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
         attempt([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], f"the table inet {SSH_LIMIT_TABLE} removed")
@@ -4187,13 +4223,13 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
         if text is None:
             attempt(["rm", "-f", str(path)], f"{path} removed")
             continue
-        timeout = limit(False)
-        if timeout is None:
+        # Two commands (install, restorecon), so each gets half of what is left.
+        given = slot(ssh_limit(None), parts=2)
+        if given is None:
             skipped.append(f"putting back {path}")
             continue
         try:
-            # Two commands (install, restorecon), so each gets half of what is left.
-            install_file(text, path, timeout / 2)
+            install_file(text, path, *given)
             restored.add(path)
             undone.append(f"{path} put back")
         except (SystemExit, OSError, subprocess.TimeoutExpired):
@@ -4208,13 +4244,15 @@ def ssh_rollback(before: dict) -> tuple[list[str], list[str]]:
     # A rule that was not there before goes unless the query plainly says it is absent (exit 1): one it
     # could not ask about may be there. The rules are asked about again at the very end, so an add whose
     # command was killed but finished late is taken out too. Before that last look, every command this
-    # run killed has to have ended (each gets ended as root, with at least SSH_ROLLBACK_LAST for it):
+    # run killed has to have ended (ended as root, in what is held back for the end, less one share for
+    # the look itself, and at most as long as one command may take):
     # firewalld answers its D-Bus calls one at a time, in order, so once the command that sent an add
     # has ended, a query sent after it sees the rule if it was added at all. No `firewall-cmd --reload`:
     # it would also throw away runtime changes that are not this run's.
     for final in (False, True):
         if final:
-            running = ssh_reap(limit(True))
+            held["end"] = 0
+            running = ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free() - share)))
             for command in running:
                 again = [("" if os.geteuid() == 0 else "sudo ") + shlex.join([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"])
                          for (tool, zone, permanent), had in before["rules"].items() if not had]
@@ -4382,28 +4420,28 @@ def ssh_on(opts: dict) -> int:
             # run changed goes back before the exception goes on as it was. Another signal must not cut
             # that short, so INT, TERM and HUP are ignored until it is done.
             ignored = ssh_signals({signum: ssh_ignored for signum in (signal.SIGINT, *SSH_STOPS)})
-            try:
-                undone, troubles = ssh_rollback(before)
-                if wrote_keys:
-                    put_back: list = []
-                    try:
-                        if had_keys_file:
-                            write_authorized(account, current, put_back)
-                        else:
-                            with as_account(account):
-                                keys_file.unlink(missing_ok=True)
-                                put_back.append(keys_file)
-                                if not had_folder:
-                                    ssh_dir(account).rmdir()
+
+            def keys_out(timeout: float, grace: float, undone: list, trouble) -> None:
+                put_back: list = []
+                try:
+                    if had_keys_file:
+                        write_authorized(account, current, put_back, timeout, grace)
+                    else:
+                        with as_account(account):
+                            keys_file.unlink(missing_ok=True)
+                            put_back.append(keys_file)
+                            if not had_folder:
+                                ssh_dir(account).rmdir()
+                    undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
+                except (SystemExit, OSError, subprocess.TimeoutExpired):
+                    if put_back:
+                        # The keys are out; only what came after (restorecon, removing ~/.ssh) did not finish.
                         undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
-                    except (SystemExit, OSError, subprocess.TimeoutExpired):
-                        if put_back:
-                            # The keys are out; only what came after (restorecon, removing ~/.ssh) did not finish.
-                            undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
-                            troubles.append(f"the keys are out of {keys_file}, but tidying {ssh_dir(account)} after did not finish")
-                        else:
-                            troubles.append(f"could not take the added keys back out of {keys_file}")
-                        warn(troubles[-1])
+                        trouble(f"the keys are out of {keys_file}, but tidying {ssh_dir(account)} after did not finish")
+                    else:
+                        trouble(f"could not take the added keys back out of {keys_file}")
+            try:
+                undone, troubles = ssh_rollback(before, keys_out if wrote_keys else None)
                 put = "; ".join(undone) or "nothing"
                 if troubles:
                     print(f"herald-os: the rollback is incomplete, so SSH may not be as it was before this run. "

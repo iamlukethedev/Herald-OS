@@ -192,6 +192,13 @@ class System:
         # It leaves a mark first, so a test can tell when the command is hanging.
         self.hanger.write_text("#!/bin/sh\n[ -z \"$HANG_MARK\" ] || : >\"$HANG_MARK\"\nexec sleep 30\n")
         self.hanger.chmod(0o755)
+        # stubborn: a hanging command ignores SIGTERM and runs through the CLI's own ssh_run, so its
+        # timeout, SIGTERM, grace and SIGKILL are all real, and take the time they take.
+        self.stubborn = False
+        self.stubborn_hanger = tmp_path / "hang-stubbornly"
+        self.stubborn_hanger.write_text("#!/bin/sh\ntrap '' TERM\nexec sleep 30\n")
+        self.stubborn_hanger.chmod(0o755)
+        self.killed: list[list[str]] = []
         # Commands that take effect and then hang, as a systemctl can after it has enabled or started
         # a unit; and, once one of them has, the queries that hang from then on.
         self.hang_after: list[list[str]] = []
@@ -227,7 +234,7 @@ class System:
         monkeypatch.setattr(module.subprocess, "run", self.run)
         # Every command setup ssh runs goes through ssh_run; here it comes to the stand-in, with the
         # timeout ssh_run itself would use.
-        monkeypatch.setattr(module, "ssh_run", lambda argv, timeout=None, input=None: self.run(argv, timeout=module.ssh_limit(timeout), input=input))
+        monkeypatch.setattr(module, "ssh_run", lambda argv, timeout=None, input=None, grace=None: self.run(argv, timeout=module.ssh_limit(timeout), input=input, grace=grace))
         # `sudo -v` in a terminal, which asks for the password.
         monkeypatch.setattr(module.subprocess, "call", lambda argv, **kwargs: self.run(argv).returncode)
         # sudo lets this account in (False: it wants a password nobody can type).
@@ -243,7 +250,7 @@ class System:
         self.config.write_text("".join(f"{line}\n" for line in before) + f"Include {self.etc}/sshd_config.d/*.conf\n")
 
     # -- the stand-in ----------------------------------------------------------------------------
-    def run(self, argv, capture_output=False, text=False, check=False, timeout=None, input=None, **_):
+    def run(self, argv, capture_output=False, text=False, check=False, timeout=None, input=None, grace=None, **_):
         argv = list(argv)
         root = argv[:1] == ["sudo"]
         asks = False
@@ -262,6 +269,8 @@ class System:
             return subprocess.CompletedProcess(argv, 1, "", "sudo: a password is required\n")
         self.timeouts.append((argv, timeout))
         if any(argv[:len(prefix)] == prefix for prefix in self.hang):
+            if self.stubborn:
+                return self.hang_stubbornly(argv, timeout, grace)
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
         if argv == ["-v"]:
             return subprocess.CompletedProcess(argv, 0 if self.sudo_lets_in else 1, "", "")
@@ -272,6 +281,14 @@ class System:
             self.hang += self.then_hang
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
         return subprocess.CompletedProcess(argv, code, out, "" if code == 0 else f"{argv[0]}: refused")
+
+    def hang_stubbornly(self, argv: list[str], timeout: float | None, grace: float | None) -> subprocess.CompletedProcess:
+        real = types.FunctionType(REAL_SSH_RUN.__code__, vars(self.module), "ssh_run", REAL_SSH_RUN.__defaults__)
+        try:
+            return real([str(self.stubborn_hanger), *argv], timeout, None, grace)
+        except subprocess.TimeoutExpired:
+            self.killed.append(argv)
+            raise
 
     def answer(self, argv: list[str], root: bool) -> tuple[str, int]:
         tool = Path(argv[0]).name
@@ -1761,13 +1778,16 @@ def late_firewall_add(machine: System) -> None:
 
 
 def the_budget_keeps_sshd_closing(machine: System, tmp_path: Path, capsys) -> bool:
+    # sshd starts and systemctl hangs; from then on every query hangs, so whatever time is not held
+    # back for sshd's stop and disable goes on them.
     module, saved = machine.module, (machine.module.SSH_TIMEOUT, machine.module.SSH_ROLLBACK_BUDGET)
-    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET = 1, 0
+    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET = 1, 4
     machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
+    machine.then_hang = [["systemctl", "is-enabled"], ["systemctl", "is-active"]]
     try:
         outcome(machine, "--key", public_key())
     finally:
-        (module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET), machine.hang_after = saved, []
+        (module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET), machine.hang_after, machine.then_hang, machine.hang = saved, [], [], []
     return machine.units["sshd.service"] == ["disabled", "inactive"]
 
 
@@ -1874,11 +1894,10 @@ def everything_hangs_in_the_rollback(machine: System) -> float:
 def the_budget_is_a_hard_cap(machine: System, tmp_path: Path, capsys) -> bool:
     module = machine.module
     saved = module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW
-    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW = 1, 0.5, 0.25, 0.25
+    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW = 1, 3, 15, 10
     try:
-        # The budget, plus the floor for sshd's four always-tried steps (stop and disable, twice), plus
-        # slack; without the cap, each of some thirty commands takes the full second.
-        return everything_hangs_in_the_rollback(machine) < 0.5 + 4 * 0.25 + 1.5
+        # The budget and a little slack; without the cap, each of some thirty commands takes the full second.
+        return everything_hangs_in_the_rollback(machine) < 3 + 0.5
     finally:
         module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST, module.SSH_SUDO_RENEW = saved
 
@@ -2123,7 +2142,7 @@ MUTANTS = {
     "quotes not grouping": (quotes_group_words, """        elif char in "'\\"" and quote in ("", char):""", "        elif False:"),
     "# inside a word a comment": (comments_start_only_a_word, '        elif not quote and char == "#" and not started:', '        elif not quote and char == "#":'),
     "a re-run restarts the limit": (a_rerun_does_not_bounce_sshd, "    if running:\n        # Restarting", "    if False:\n        # Restarting"),
-    "a failed limit left in place": (a_failed_limit_is_rolled_back, "                undone, troubles = ssh_rollback(before)\n", "                undone, troubles = [], []\n"),
+    "a failed limit left in place": (a_failed_limit_is_rolled_back, "                undone, troubles = ssh_rollback(before, keys_out if wrote_keys else None)\n", "                undone, troubles = [], []\n"),
     "an incomplete rollback said to be complete": (an_incomplete_rollback_says_so, "                if troubles:\n", "                if False:\n"),
     "a stranded requirement unexplained": (a_stranded_requirement_is_explained, "    if required and limit_active != \"active\":", "    if False:"),
     "no rate limit said softly": (no_limit_is_said_plainly, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    if \"NO RATE LIMIT\" in message:\n        return\n    print("),
@@ -2141,7 +2160,7 @@ MUTANTS = {
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
     "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + first)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
-    "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
+    "keys never written taken out": (keys_never_written_are_not_taken_out, "keys_out if wrote_keys else None", "keys_out if added else None"),
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
     "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
     "a before of failed or unknown taken as running": (a_failed_before_is_stopped, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n"),
@@ -2149,16 +2168,16 @@ MUTANTS = {
     "the service stopped before its socket": (the_socket_is_stopped_first, 'SSH_ROLLBACK_UNITS = ("sshd.socket", "sshd.service", SSH_LIMIT_UNIT.name)', 'SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)'),
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
-    "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return max(min(ssh_limit(None), left), last)\n", "            return min(ssh_limit(None), left) if left > 0 else None\n"),
-    "the budget only a guide": (the_budget_is_a_hard_cap, "        return min(ssh_limit(None), left) if left > 0 else None\n", "        return ssh_limit(None)\n"),
+    "nothing held back for sshd": (the_budget_keeps_sshd_closing, "        return deadline - time.monotonic() - share * (sum(held.values()) - (1 if essential else 0))\n", "        return deadline - time.monotonic()\n"),
+    "the budget only a guide": (the_budget_is_a_hard_cap, "        return ssh_slot(most, free(essential) / parts)\n", "        return ssh_slot(most, 1e9)\n"),
     "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})\n", ""),
-    "keys counted as written whatever happened": (keys_never_written_as_root_without_ssh_keygen, "                if wrote_keys:\n", "                if True:\n"),
+    "keys counted as written whatever happened": (keys_never_written_as_root_without_ssh_keygen, "keys_out if wrote_keys else None", "keys_out"),
     "a timeout other than two minutes": (the_timeout_is_two_minutes, "SSH_TIMEOUT = 120\n", "SSH_TIMEOUT = 1200\n"),
     "SIG_IGN with a signal still pending": (pending_signals_raise_nothing, "    ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})\n", "    ssh_signals({each: signal.SIG_IGN for each in (signal.SIGINT, *SSH_STOPS)})\n"),
     "a second handler acting again": (a_second_call_does_nothing, '    if SSH_STOP["by"] is not None:\n        return\n', ""),
     "a root command left running not noted": (a_root_command_left_running_is_ended, '        SSH_LEFT.append({"argv": list(process.args), "tree": tree})\n', "        pass\n"),
     "what is left never ended": (a_root_command_left_running_is_ended, "        if not pids:\n            break\n", "        break\n"),
-    "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=SSH_KILL_GRACE)\n", "            process.communicate()\n"),
+    "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=grace)\n", "            process.communicate()\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2881,7 +2900,7 @@ def test_a_second_ctrl_c_during_the_rollback_is_ignored_and_the_handler_comes_ba
 def test_the_handler_comes_back_even_when_the_rollback_itself_fails(machine, monkeypatch, capsys):
     handler = signal.getsignal(signal.SIGINT)
     machine.limit_fails = True
-    monkeypatch.setattr(cli, "ssh_rollback", lambda before: (_ for _ in ()).throw(RuntimeError("rollback broke")))
+    monkeypatch.setattr(cli, "ssh_rollback", lambda before, keys_out=None: (_ for _ in ()).throw(RuntimeError("rollback broke")))
     with pytest.raises(RuntimeError):
         machine.setup("--key", public_key())
     assert signal.getsignal(signal.SIGINT) is handler
@@ -3281,9 +3300,9 @@ def test_sudo_is_asked_first_untimed_in_a_terminal_and_nothing_changes_when_it_r
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="as root, the rollback has no sudo to renew")
-@pytest.mark.parametrize("budget", [300, 0])
+@pytest.mark.parametrize("budget", [300, 4])
 def test_the_rollback_renews_sudo_with_a_plain_ten_second_timeout(machine, monkeypatch, capsys, budget):
-    # Even with the budget spent, the renewal is timed.
+    # Ten seconds, or what the budget leaves when that is less.
     monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", budget)
     odd_before(machine, "sshd.service", "disabled", "inactive")
     machine.timeouts.clear()
@@ -3291,7 +3310,8 @@ def test_the_rollback_renews_sudo_with_a_plain_ten_second_timeout(machine, monke
     refused(machine, capsys, "--key", public_key())
     assert ("-n", ["-v"]) in machine.sudo_modes
     assert cli.SSH_SUDO_RENEW == 10
-    assert [timeout for argv, timeout in machine.timeouts if argv == ["-v"]][-1] == cli.SSH_SUDO_RENEW
+    renewed = [timeout for argv, timeout in machine.timeouts if argv == ["-v"]][-1]
+    assert renewed == 10 if budget == 300 else 0 < renewed < budget
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="the account stands in for the tester, who must not be root")
@@ -3310,7 +3330,7 @@ def test_as_root_there_is_no_sudo(machine, monkeypatch, tmp_path):
 def test_the_rollback_keeps_to_its_time_budget_and_still_closes_sshd(machine, monkeypatch, capsys):
     import time
     monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
-    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 2)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 4)
     monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 1)
     # sshd starts and systemctl hangs; then every command hangs, save stopping and disabling sshd.
     machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
@@ -3331,21 +3351,22 @@ def test_the_rollback_keeps_to_its_time_budget_and_still_closes_sshd(machine, mo
     elapsed = time.monotonic() - started
     machine.hang = []
     assert machine.units["sshd.service"] == ["disabled", "inactive"]
-    assert "ran out of time (2 s) putting things back; skipped:" in err
-    assert elapsed < 20
+    assert "ran out of time (4 s) putting things back; skipped:" in err
+    assert elapsed < 4 + 1
 
 
-def test_once_the_budget_is_gone_stopping_and_disabling_sshd_are_still_tried(machine, monkeypatch, capsys):
+def test_once_the_free_time_is_gone_stopping_and_disabling_sshd_still_get_their_share(machine, monkeypatch, capsys):
     monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
-    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 0)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 4)
     machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
+    machine.then_hang = [["systemctl", "is-enabled"], ["systemctl", "is-active"]]
     err = refused(machine, capsys, "--key", public_key(), code=124)
-    machine.hang_after = []
+    machine.hang_after, machine.then_hang, machine.hang = [], [], []
     changes = machine.changes()
     assert ["systemctl", "stop", "sshd.service"] in changes and ["systemctl", "disable", "sshd.service"] in changes
     assert ["systemctl", "stop", "sshd.socket"] in changes and ["systemctl", "disable", "sshd.socket"] in changes
     assert machine.units["sshd.service"] == ["disabled", "inactive"]
-    assert "skipped:" in err and "rm -f" in err
+    assert "ran out of time (4 s) putting things back; skipped:" in err
 
 
 
@@ -3442,15 +3463,13 @@ def test_the_rollback_stops_the_socket_before_the_service(machine, capsys):
 
 def test_the_rollback_budget_is_a_hard_cap_even_when_every_command_hangs(machine, monkeypatch, capsys):
     monkeypatch.setattr(cli, "SSH_TIMEOUT", 4)
-    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 2)
-    monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 0.5)
-    monkeypatch.setattr(cli, "SSH_SUDO_RENEW", 0.5)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 6)
     elapsed = everything_hangs_in_the_rollback(machine)
     # Without the cap, each of the many commands could take 4 s.
-    assert elapsed < 2 + 4 * 0.5 + 2
+    assert elapsed < 6 + 0.5
     err = capsys.readouterr().err
-    assert "ran out of time (2 s) putting things back; skipped:" in err
-    # sshd's four steps were still tried, past the budget.
+    assert "ran out of time (6 s) putting things back; skipped:" in err
+    # sshd's four steps were still tried, in their share of the budget.
     tried = [argv for _, argv in machine.calls if argv[:1] == ["systemctl"] and argv[1] in ("stop", "disable") and argv[2] in ("sshd.service", "sshd.socket")]
     assert len(tried) == 4
 
@@ -3680,7 +3699,7 @@ def test_a_root_command_that_cannot_be_ended_makes_the_rollback_incomplete_with_
     err = refused(machine, capsys, "--key", public_key(), code=124)
     session = int(paths["session"].read_text())
     try:
-        assert in_session(session)
+        assert in_session(session), err
         assert "the rollback is incomplete" in err and "was still running as root when the rollback ended" in err
         assert "close it with: sudo firewall-cmd --zone=herald-os '--remove-rich-rule=rule service name=\"ssh\" accept'; " \
                "sudo firewall-cmd --permanent --zone=herald-os '--remove-rich-rule=rule service name=\"ssh\" accept'" in err
@@ -3702,3 +3721,29 @@ def test_a_killed_command_s_whole_tree_is_noted_when_part_of_it_outlives_the_gro
     finally:
         for pid in in_session(int(session.read_text())):
             os.kill(pid, signal.SIGKILL)
+
+
+
+@pytest.mark.parametrize("budget", [3, 6])
+def test_with_everything_hung_for_real_the_rollback_keeps_to_its_budget_wall_clock(machine, monkeypatch, capsys, budget):
+    """Every command in the rollback hangs and ignores SIGTERM, so each is killed through the CLI's
+    own ssh_run, grace and all, with the real SSH_TIMEOUT, SSH_KILL_GRACE and SSH_ROLLBACK_LAST: the
+    whole rollback still ends within its budget, and sshd's stop and disable were each tried."""
+    import time
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", budget)
+    machine.stubborn = True
+    timed: list[float] = []
+    real = cli.ssh_rollback
+
+    def rollback(*args):
+        started = time.monotonic()
+        try:
+            return real(*args)
+        finally:
+            timed.append(time.monotonic() - started)
+    monkeypatch.setattr(cli, "ssh_rollback", rollback)
+    everything_hangs_in_the_rollback(machine)
+    assert len(timed) == 1 and timed[0] < budget + 0.3, timed
+    assert len(machine.killed) >= 4
+    tried = [argv for _, argv in machine.calls if argv[:1] == ["systemctl"] and argv[1] in ("stop", "disable") and argv[2] in ("sshd.service", "sshd.socket")]
+    assert len(tried) == 4
