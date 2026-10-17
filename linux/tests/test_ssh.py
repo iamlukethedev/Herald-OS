@@ -1744,6 +1744,34 @@ def signals_ignored_from_the_handler(module, signum: int) -> bool:
             signal.signal(s, handler)
 
 
+def odd_before(machine: System, unit: str, enabled: str, active: str) -> None:
+    """The unit as systemctl reports it before `on`; the firewall step then fails, into the rollback."""
+    machine.units[unit] = [enabled, active]
+    real = machine.firewall
+    machine.firewall = lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root)
+
+
+def a_failed_before_is_stopped(machine: System, tmp_path: Path, capsys) -> bool:
+    # The limit runs from an earlier `on` (so the rollback leaves it, and nothing stops sshd through
+    # Requires=); sshd failed since. This run starts it, and then reports a failure.
+    outcome(machine, "--key", public_key())
+    machine.units["sshd.service"] = ["disabled", "failed"]
+    real = machine.systemctl
+
+    def started_then_failed(args, root):
+        out = real(args, root)
+        return ("", 1) if args == ["reload-or-restart", "sshd.service"] else out
+    machine.systemctl = started_then_failed
+    outcome(machine, "--key", public_key(seed=2))
+    return machine.units["sshd.service"][1] == "inactive"
+
+
+def a_linked_before_is_disabled(machine: System, tmp_path: Path, capsys) -> bool:
+    odd_before(machine, "sshd.service", "linked", "inactive")
+    outcome(machine, "--key", public_key())
+    return machine.units["sshd.service"][0] == "disabled"
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1827,8 +1855,10 @@ MUTANTS = {
     "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
     "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
-    "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
-    "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
+    "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
+    "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
+    "a before of failed or unknown taken as running": (a_failed_before_is_stopped, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n"),
+    "a before of linked taken as enabled": (a_linked_before_is_disabled, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n"),
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
     "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return last if essential else None\n", "            return None\n"),
@@ -3033,3 +3063,43 @@ def test_a_second_signal_right_after_the_first_cannot_skip_the_rollback(machine,
     err = refused(machine, capsys, "--key", public_key(), code=143)
     assert "stopped by SIGTERM" in err and "stopped by SIGHUP" not in err
     assert snapshot(machine) == before
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 9: the state before `on` is read strictly, and the socket goes before the service.
+@pytest.mark.parametrize("active", ["failed", "unknown", "", "deactivating", "maintenance"])
+def test_sshd_that_was_not_plainly_running_before_is_stopped_again(machine, capsys, active):
+    odd_before(machine, "sshd.service", "disabled", active)
+    refused(machine, capsys, "--key", public_key())
+    assert ["systemctl", "stop", "sshd.service"] in machine.changes()
+    assert machine.units["sshd.service"] == ["disabled", "inactive"]
+
+
+@pytest.mark.parametrize("enabled", ["linked", "linked-runtime", "static", "unknown", "", "masked-runtime", "transient"])
+def test_sshd_that_was_not_plainly_enabled_before_is_disabled_again(machine, capsys, enabled):
+    odd_before(machine, "sshd.service", enabled, "inactive")
+    refused(machine, capsys, "--key", public_key())
+    assert ["systemctl", "disable", "sshd.service"] in machine.changes()
+    assert machine.units["sshd.service"][0] == "disabled"
+
+
+@pytest.mark.parametrize("enabled, active", [("enabled", "active"), ("enabled-runtime", "reloading"), ("indirect", "activating"),
+                                             ("generated", "active"), ("alias", "active")])
+def test_a_unit_that_was_plainly_open_before_is_left_open(machine, monkeypatch, capsys, enabled, active):
+    odd_before(machine, "sshd.socket", enabled, active)
+    refused(machine, capsys, "--key", public_key())
+    # The rollback itself neither stops nor disables it (it may still go down with the limit, which
+    # this run made it require, and which the rollback stops: that is closed, not open).
+    assert ["systemctl", "stop", "sshd.socket"] not in machine.changes()
+    assert ["systemctl", "disable", "sshd.socket"] not in machine.changes()
+    assert machine.units["sshd.socket"][0] == enabled
+
+
+def test_the_two_counts_are_read_apart(machine, capsys):
+    # Enabled before but not running: this run's start is undone, its enabling is not.
+    odd_before(machine, "sshd.service", "enabled", "failed")
+    refused(machine, capsys, "--key", public_key())
+    changes = machine.changes()
+    assert ["systemctl", "stop", "sshd.service"] in changes and ["systemctl", "disable", "sshd.service"] not in changes
+    assert machine.units["sshd.service"] == ["enabled", "inactive"]

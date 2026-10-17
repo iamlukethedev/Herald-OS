@@ -3941,8 +3941,14 @@ def addresses() -> list[str]:
 # The units the rollback answers for, sshd's first: if time or anything else runs short, those are
 # the ones that must end up closed.
 SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)
-# What systemctl prints for a unit that is plainly not running, and plainly will not start at boot.
-# Anything else (unknown after a timeout, activating, reloading, failed, ...) counts as open.
+# How a unit was before `on`, read strictly: it was running only if systemctl said exactly one of
+# these, and enabled only if exactly one of those. Anything else (failed, unknown, an empty or
+# timed-out answer, linked, linked-runtime, static, masked, not-found, ...) counts as closed, so
+# whatever this run may have started or enabled is stopped or disabled again.
+SSH_OPEN_ACTIVE = ("active", "reloading", "activating")
+SSH_OPEN_ENABLED = ("enabled", "enabled-runtime", "indirect", "generated", "alias")
+# How it is after: closed only when systemctl plainly says so. Anything else (unknown after a
+# timeout, activating, reloading, failed, ...) counts as open, and gets stopped or disabled.
 SSH_CLOSED_ACTIVE = ("inactive",)
 SSH_CLOSED_ENABLED = ("disabled", "masked", "not-found")
 
@@ -4027,15 +4033,16 @@ def ssh_rollback(before: dict) -> list[str]:
             ssh_run(["sudo", "-n", "-v"], timeout=10)
         except (subprocess.TimeoutExpired, OSError):
             pass
-    # Fail closed: a unit that was plainly closed before is stopped and disabled again unless it is
-    # plainly closed now. A state systemctl could not report in time is not plainly anything.
+    # Fail closed, on each count apart: a unit that was not plainly running before is stopped unless it
+    # is plainly stopped now, and one that was not plainly enabled before is disabled unless it is
+    # plainly disabled now. A state systemctl could not report in time is not plainly anything.
     for unit in SSH_ROLLBACK_UNITS:
         essential = unit in SSH_ESSENTIAL_UNITS
         enabled, active = before["units"][unit]
         now_enabled, now_active = state(unit, essential)
-        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
+        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
             attempt(["systemctl", "stop", unit], f"{unit} stopped", essential)
-        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
+        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
             attempt(["systemctl", "disable", unit], f"{unit} disabled", essential)
         if active != "failed" and state(unit, False)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
