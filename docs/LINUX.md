@@ -373,8 +373,14 @@ switched from another bootc system is different: it gets a login screen and a lo
   logind sessions whose Service is `sshd` with `--end-sessions` or when the person says so in a
   terminal (the caller's own last, after everything else). `reset-helper apply` runs
   `--off --end-sessions`, and `herald-os-reset.service` is ordered before sshd. `--status [--json]`
-  reports it without root where it can. `linux/tests/test_ssh.py` covers it, with a mutant of each
-  safety check.
+  reports it without root where it can. With `--json`, stdout always gets one object with the same
+  keys and `error` (null, or why there is no state, with the other keys null), whatever goes wrong.
+  Files it owns as root (the drop-in, the limit's files) are looked at with `lstat` and read with
+  `O_NOFOLLOW`: a link in their place is reported as `"tampered"` and never followed, `on` refuses
+  to write through it, and `--off` removes it, dangling or not. `~/.ssh` or `authorized_keys` owned
+  by someone else, or that cannot be looked into, is refused with what to run, and any file error
+  ends in a plain message rather than a traceback. `linux/tests/test_ssh.py` covers it, with a mutant
+  of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,

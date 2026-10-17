@@ -853,9 +853,9 @@ def test_status_says_whether_ssh_is_on_and_how(machine, capsys):
     assert machine.setup("--status", "--json") == 0
     state = json.loads(capsys.readouterr().out)
     assert state == {
-        "on": True, "enabled": True, "running": True, "socket": False, "dropIn": True, "passwords": False,
+        "on": True, "enabled": True, "running": True, "socket": False, "dropIn": "present", "passwords": False,
         "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "sessions": 1,
-        "user": "me", "keys": 1,
+        "user": "me", "keys": 1, "error": None,
     }
     before = len(machine.calls)
     machine.setup("--status")
@@ -887,6 +887,7 @@ def test_another_account_is_only_for_root(machine, capsys):
     assert "only root" in refused(machine, capsys, "--user", "someone", "--key", public_key(), code=2)
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="the account stands in for the tester, who must not be root")
 def test_as_root_it_writes_the_named_accounts_keys_as_that_account_and_runs_the_rest_without_sudo(machine, monkeypatch, tmp_path):
     seen = []
     machine.is_root = True
@@ -1094,6 +1095,72 @@ def root_only_through_sudo(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", public_key()) == 0 and machine.on()
 
 
+def linked_drop_in(machine: System, tmp_path: Path) -> Path:
+    """The drop-in as a link to a file that looks like Herald's, as someone with root might leave it."""
+    target = tmp_path / "elsewhere.conf"
+    target.write_text(DROP_IN)
+    machine.drop_in.symlink_to(target)
+    return target
+
+
+def as_root_without_account(machine: System, monkeypatch) -> None:
+    machine.is_root = True
+    monkeypatch.setattr(machine.module.os, "geteuid", lambda: 0)
+    monkeypatch.delenv("SUDO_USER", raising=False)
+
+
+def status_sees_a_linked_drop_in(machine: System, tmp_path: Path, capsys) -> bool:
+    linked_drop_in(machine, tmp_path)
+    capsys.readouterr()
+    outcome(machine, "--status", "--json")
+    state = json.loads(capsys.readouterr().out)
+    return state["dropIn"] == "tampered" and state["passwords"] is None
+
+
+def reads_do_not_follow_links(machine: System, tmp_path: Path, capsys) -> bool:
+    linked_drop_in(machine, tmp_path)
+    return machine.module.read_nofollow(machine.drop_in) is None
+
+
+def on_refuses_a_linked_drop_in(machine: System, tmp_path: Path, capsys) -> bool:
+    target = linked_drop_in(machine, tmp_path)
+    target.write_text("# someone else's\\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and target.read_text() == "# someone else's\\n" and not machine.on()
+
+
+def off_removes_a_dangling_link(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.drop_in.symlink_to(tmp_path / "gone.conf")
+    outcome(machine, "--off")
+    return not os.path.lexists(machine.drop_in)
+
+
+def someone_else_s_ssh_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.ssh.mkdir(mode=0o700)
+    machine.account = pwd.struct_passwd(("me", "x", os.getuid() + 4242, os.getgid(), "", str(machine.home), "/bin/bash"))
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.keys_file.exists()
+
+
+def file_errors_are_said_plainly(machine: System, tmp_path: Path, capsys) -> bool:
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(machine.ssh))
+    original = machine.module.tempfile.mkstemp
+    machine.module.tempfile.mkstemp = refuse
+    try:
+        return outcome(machine, "--key", public_key()) == "exit 1"
+    finally:
+        machine.module.tempfile.mkstemp = original
+
+
+def json_errors_are_json(machine: System, tmp_path: Path, capsys) -> bool:
+    capsys.readouterr()
+    result = outcome(machine, "--status", "--json", "--user", "someone-else")
+    try:
+        state = json.loads(capsys.readouterr().out)
+    except ValueError:
+        return False
+    return result == "exit 2" and "only root" in state["error"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1107,7 +1174,7 @@ MUTANTS = {
     "the account from outside not probed": (remote_probe_stops_it, '        f"user={account.pw_name},host=x,addr={SSH_PROBE_ADDRESS}",\n', ""),
     "authorized_keys left readable": (keys_file_is_private, "keys_file.chmod(0o600)", "keys_file.chmod(0o644)"),
     ".ssh left open": (keys_file_is_private, "folder.chmod(0o700)", "folder.chmod(0o755)"),
-    "links followed": (links_are_refused, "if path.is_symlink():", "if False:"),
+    "links followed": (links_are_refused, "if stat.S_ISLNK(info.st_mode):", "if False:"),
     "--key not checked": (bad_keys_are_refused, "        key = ssh_key(text)\n        if not key:", "        key = text\n        if not key:"),
     "key data not checked": (mismatched_key_data_is_refused, "blob[4:4 + size] != fields[0].encode()", "False"),
     "short RSA taken": (short_rsa_is_refused, 'if kind == "RSA" and int(fields[0]) < RSA_MIN_BITS:', "if False:"),
@@ -1122,12 +1189,19 @@ MUTANTS = {
     "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not opts["no_firewall"]:', "if False:"),
     "no warning without firewalld": (warns_without_firewalld, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    return\n    print("),
     "off keeps the saved rule": (off_closes_everything, 'for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):', "for permanent in ([],):"),
-    "off keeps the drop-in": (off_closes_everything, "    if SSHD_DROP_IN.exists():\n", "    if False:\n"),
+    "off keeps the drop-in": (off_closes_everything, "    if os.path.lexists(SSHD_DROP_IN):\n", "    if False:\n"),
     "off only stops sshd": (off_closes_everything, '["systemctl", "disable", "--now", unit]', '["systemctl", "is-active", unit]'),
     "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n", "\n"),
     "off ends no session": (off_ends_sessions_when_told, '        if root_run(["loginctl", "terminate-session", session]).returncode != 0:', "        if False:"),
     "off never asks": (off_asks_in_a_terminal, "    if sessions and not end and sys.stdin.isatty():", "    if False:"),
     "root without sudo": (root_only_through_sudo, '    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]', "    return argv"),
+    "status follows a linked drop-in": (status_sees_a_linked_drop_in, "    drop_in_state = file_state(SSHD_DROP_IN)\n", '    drop_in_state = "present" if SSHD_DROP_IN.is_file() else "absent"\n'),
+    "reads follow links": (reads_do_not_follow_links, "os.O_RDONLY | os.O_NOFOLLOW", "os.O_RDONLY"),
+    "on writes through a linked drop-in": (on_refuses_a_linked_drop_in, '        if file_state(path) == "tampered":', "        if False:"),
+    "off keeps a dangling linked drop-in": (off_removes_a_dangling_link, "    if os.path.lexists(SSHD_DROP_IN):", "    if SSHD_DROP_IN.exists():"),
+    "someone else's .ssh taken": (someone_else_s_ssh_is_refused, "            if info.st_uid != account.pw_uid:", "            if False:"),
+    "a traceback for a file error": (file_errors_are_said_plainly, "    except OSError as exc:\n        # Anything", "    except ZeroDivisionError as exc:\n        # Anything"),
+    "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
 
@@ -1138,3 +1212,138 @@ def test_each_safety_check_is_caught_when_taken_out(name, tmp_path, monkeypatch,
     (tmp_path / "mutant").mkdir()
     assert scenario(System(cli, tmp_path / "real", monkeypatch), tmp_path / "real", capsys), "the real CLI fails the scenario"
     assert not scenario(System(mutant(old, new), tmp_path / "mutant", monkeypatch), tmp_path / "mutant", capsys), f"the mutant ({name}) gets past it"
+
+
+
+# ---------------------------------------------------------------------------------------------
+# QA findings from a live run: a linked drop-in, someone else's ~/.ssh, --json errors.
+@pytest.mark.parametrize("as_root", [False, True])
+def test_status_reports_a_linked_drop_in_as_tampered_without_reading_it(machine, monkeypatch, tmp_path, capsys, as_root):
+    linked_drop_in(machine, tmp_path)
+    if as_root:
+        as_root_without_account(machine, monkeypatch)
+    machine.setup("--status", "--json")
+    state = json.loads(capsys.readouterr().out)
+    assert state["dropIn"] == "tampered" and state["passwords"] is None and state["error"] is None
+    machine.setup("--status")
+    out = capsys.readouterr().out
+    assert "is a link or not a regular file" in out and "keys only" not in out
+
+
+def test_status_tells_present_from_absent(machine, capsys):
+    machine.setup("--status", "--json")
+    assert json.loads(capsys.readouterr().out)["dropIn"] == "absent"
+    machine.drop_in.write_text(DROP_IN)
+    machine.setup("--status", "--json")
+    assert json.loads(capsys.readouterr().out)["dropIn"] == "present"
+
+
+def test_a_folder_in_place_of_the_drop_in_is_tampered_too(machine, capsys):
+    machine.drop_in.mkdir()
+    machine.setup("--status", "--json")
+    assert json.loads(capsys.readouterr().out)["dropIn"] == "tampered"
+
+
+def test_files_are_read_without_following_links(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("secret")
+    (tmp_path / "link").symlink_to(target)
+    assert cli.read_nofollow(target) == "secret"
+    assert cli.read_nofollow(tmp_path / "link") is None
+    assert cli.read_nofollow(tmp_path / "missing") is None
+    assert cli.read_nofollow(tmp_path) is None
+    assert cli.file_state(tmp_path / "link") == "tampered" and cli.file_state(target) == "present"
+    assert cli.file_state(tmp_path / "missing") == "absent" and cli.file_state(tmp_path) == "tampered"
+
+
+@pytest.mark.parametrize("which", ["drop_in", "limit_rules", "limit_unit"])
+def test_on_refuses_when_a_file_it_writes_is_a_link_and_writes_nothing_through_it(machine, tmp_path, capsys, which):
+    target = tmp_path / "target"
+    target.write_text("someone else's\n")
+    path = getattr(machine, which)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(target)
+    err = refused(machine, capsys, "--key", public_key())
+    assert "is a link or not a regular file" in err and "Nothing was changed" in err
+    assert target.read_text() == "someone else's\n" and machine.changes() == []
+
+
+def test_off_removes_links_in_place_of_its_files_even_dangling_ones(machine, tmp_path):
+    machine.drop_in.symlink_to(tmp_path / "gone")
+    machine.limit_rules.parent.mkdir(parents=True)
+    machine.limit_rules.symlink_to(tmp_path / "gone-too")
+    machine.setup("--off")
+    assert not os.path.lexists(machine.drop_in) and not os.path.lexists(machine.limit_rules)
+
+
+def test_an_ssh_folder_owned_by_someone_else_is_refused_plainly(machine, capsys):
+    # As a root-owned ~/.ssh is: the account is not its owner (made-up uid; chown would need root).
+    machine.ssh.mkdir(mode=0o700)
+    machine.keys_file.write_text(public_key() + "\n")
+    machine.account = pwd.struct_passwd(("me", "x", os.getuid() + 4242, os.getgid(), "", str(machine.home), "/bin/bash"))
+    err = refused(machine, capsys, "--key", public_key(seed=2))
+    assert f"{machine.ssh} belongs to" in err and "not me" in err and "sudo chown -R me:" in err and "Nothing was changed" in err
+    assert "Traceback" not in err and machine.changes() == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+def test_an_ssh_folder_it_cannot_look_into_is_refused_plainly(machine, capsys):
+    machine.ssh.mkdir(mode=0o700)
+    machine.ssh.chmod(0)
+    try:
+        err = refused(machine, capsys, "--key", public_key())
+    finally:
+        machine.ssh.chmod(0o700)
+    assert f"cannot look at {machine.keys_file}: Permission denied" in err and "Nothing was changed" in err
+    assert machine.changes() == []
+
+
+def test_a_file_error_nothing_foresaw_is_said_plainly_with_a_non_zero_exit(machine, monkeypatch, capsys):
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(machine.ssh))
+    monkeypatch.setattr(cli.tempfile, "mkstemp", refuse)
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"setup ssh stopped: Permission denied ({machine.ssh})" in err and "Traceback" not in err
+
+
+SCHEMA = {"on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "sessions", "user", "keys", "error"}
+
+
+def json_error(machine: System, capsys, *args: str) -> tuple[dict, int]:
+    with pytest.raises(SystemExit) as stopped:
+        machine.setup(*args)
+    captured = capsys.readouterr()
+    state = json.loads(captured.out)
+    assert set(state) == SCHEMA and captured.err == ""
+    assert all(state[key] is None for key in SCHEMA - {"error"})
+    return state, stopped.value.code
+
+
+def test_status_json_for_an_account_that_does_not_exist_is_json_with_an_error(machine, monkeypatch, capsys):
+    as_root_without_account(machine, monkeypatch)
+    monkeypatch.setattr(cli.pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
+    state, code = json_error(machine, capsys, "--status", "--json", "--user", "nobody-here")
+    assert code == 1 and state["error"] == "there is no account named nobody-here"
+
+
+@pytest.mark.parametrize("args, code, words", [
+    (["--status", "--json", "--user", "someone-else"], 2, "only root"),
+    (["--json"], 2, "do not go together"),
+    (["--status", "--json", "--bogus"], 2, "unknown argument"),
+    (["--status", "--json", "--user"], 2, "--user needs a value"),
+])
+def test_every_json_error_is_json_with_the_same_keys(machine, capsys, args, code, words):
+    state, exit_code = json_error(machine, capsys, *args)
+    assert exit_code == code and words in state["error"]
+
+
+def test_a_file_error_while_reading_the_status_is_json_too(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "ssh_state", lambda account: (_ for _ in ()).throw(PermissionError(13, "Permission denied", "/etc/ssh")))
+    state, code = json_error(machine, capsys, "--status", "--json")
+    assert code == 1 and state["error"].startswith("setup ssh stopped: Permission denied (/etc/ssh)")
+
+
+def test_status_json_has_the_same_keys_when_it_works(machine, capsys):
+    machine.setup("--status", "--json")
+    state = json.loads(capsys.readouterr().out)
+    assert set(state) == SCHEMA and state["error"] is None and set(cli.SSH_STATE_KEYS) | {"error"} == SCHEMA

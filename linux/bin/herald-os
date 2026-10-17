@@ -62,6 +62,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import glob
+import io
 import json
 import os
 import pwd
@@ -69,6 +70,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -3295,6 +3297,31 @@ def sshd_files(path: Path | None = None, depth: int = 0) -> list[tuple[str, str]
     return files
 
 
+def file_state(path: Path) -> str:
+    """"present" for a regular file, "absent", or "tampered" for a link or anything else in its place;
+    a link is never followed, so it cannot make someone else's file look like Herald's."""
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unknown"
+    return "present" if stat.S_ISREG(mode) else "tampered"
+
+
+def read_nofollow(path: Path) -> str | None:
+    """A regular file's text, or None for anything else, a link included (O_NOFOLLOW)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return None
+    with os.fdopen(fd) as handle:
+        return handle.read()
+
+
 def ssh_account(name: str | None, required: bool = True) -> pwd.struct_passwd | None:
     """Whose keys: the account this runs as or, as root (the first boot, sudo), the one --user names or
     the one sudo ran from. Never root, which sshd turns away anyway."""
@@ -3345,8 +3372,18 @@ def read_authorized(account: pwd.struct_passwd) -> str:
     keys_file = folder / "authorized_keys"
     with as_account(account):
         for path in (folder, keys_file):
-            if path.is_symlink():
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                die(f"cannot look at {path}: {exc.strerror}. It must be {account.pw_name}'s own (sudo chown -R {account.pw_name}: {folder}). Nothing was changed.", 1)
+            if stat.S_ISLNK(info.st_mode):
                 die(f"{path} is a link, which sshd does not trust either: make it a real {'folder' if path == folder else 'file'} and run this again. Nothing was changed.", 1)
+            if info.st_uid != account.pw_uid:
+                owner = next((entry.pw_name for entry in pwd.getpwall() if entry.pw_uid == info.st_uid), str(info.st_uid))
+                die(f"{path} belongs to {owner}, not {account.pw_name}, and sshd ignores keys there too. "
+                    f"`sudo chown -R {account.pw_name}: {folder}` gives it back; then run this again. Nothing was changed.", 1)
         try:
             return keys_file.read_text() if keys_file.exists() else ""
         except OSError as exc:
@@ -3456,7 +3493,7 @@ def sshd_configure(account: pwd.struct_passwd, passwords: bool, sshd: str) -> li
     # Fedora makes the host keys when sshd first starts, and `sshd -t` needs them now.
     if root_run(["systemctl", "start", "sshd-keygen.target"]).returncode != 0:
         root_step(["ssh-keygen", "-A"], "Making the SSH host keys")
-    before = SSHD_DROP_IN.read_text() if SSHD_DROP_IN.is_file() else None
+    before = read_nofollow(SSHD_DROP_IN)
     install_file(sshd_drop_in(passwords), SSHD_DROP_IN)
     problems, ports = match_weakening(sshd_files(), passwords), []
     test = root_run([sshd, "-t"])
@@ -3592,7 +3629,7 @@ def ssh_limit_off() -> None:
     nft = nft_command()
     if nft and root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
         root_step([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], "Removing the SSH rate limit")
-    removed = [path for path in (SSH_LIMIT_UNIT, SSH_LIMIT_RULES) if path.exists()]
+    removed = [path for path in (SSH_LIMIT_UNIT, SSH_LIMIT_RULES) if os.path.lexists(path)]
     for path in removed:
         root_step(["rm", "-f", str(path)], f"Removing {path}")
     if SSH_LIMIT_UNIT in removed:
@@ -3679,11 +3716,13 @@ def ssh_on(opts: dict) -> int:
         die("firewalld is not running, so SSH would be open to every network with nothing else closed. "
             "Start it (sudo systemctl enable --now firewalld) and run this again, or add --no-firewall to turn SSH on "
             "without one. Nothing was changed.", 1)
+    for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT):
+        if file_state(path) == "tampered":
+            die(f"{path} is a link or not a regular file, which setup ssh never writes: something else put it there. "
+                "Look at it, remove it (herald-os setup ssh --off does), and run this again. Nothing was changed.", 1)
     nft = nft_command()
     if firewall and not nft:
         die("nft (nftables) is not installed, so SSH cannot be rate-limited per address (sudo dnf install nftables). Nothing was changed.", 127)
-    if not firewall:
-        warn(NO_FIREWALL)
     current = read_authorized(account)
     updated, added = with_keys(current, [key for key, _ in keys])
     keys_file = ssh_dir(account) / "authorized_keys"
@@ -3694,6 +3733,8 @@ def ssh_on(opts: dict) -> int:
             "instead with --passwords. Nothing was changed.",
             1,
         )
+    if not firewall:
+        warn(NO_FIREWALL)
     for key, listing in keys:
         print(f"    key {listing}: {'adding' if key in added else 'there already'}")
     write_authorized(account, updated if added else None)
@@ -3734,7 +3775,7 @@ def ssh_off(opts: dict) -> int:
     for unit in SSH_UNITS:
         if unit_loaded(unit):
             root_step(["systemctl", "disable", "--now", unit], f"Stopping {unit}")
-    if SSHD_DROP_IN.exists():
+    if os.path.lexists(SSHD_DROP_IN):
         root_step(["rm", "-f", str(SSHD_DROP_IN)], f"Removing {SSHD_DROP_IN}")
     ssh_limit_off()
     firewall = firewall_close()
@@ -3757,7 +3798,8 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
     enabled, active = unit_state("sshd.service")
     socket_enabled, socket_active = unit_state("sshd.socket")
     limit_enabled, limit_active = unit_state(SSH_LIMIT_UNIT.name)
-    drop_in = SSHD_DROP_IN.read_text() if SSHD_DROP_IN.is_file() else None
+    drop_in_state = file_state(SSHD_DROP_IN)
+    drop_in = read_nofollow(SSHD_DROP_IN) if drop_in_state == "present" else None
     passwords = None
     if drop_in is not None:
         passwords = any(line.split()[:2] == ["PasswordAuthentication", "yes"] for line in drop_in.splitlines())
@@ -3783,7 +3825,7 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
         "enabled": enabled == "enabled",
         "running": active == "active",
         "socket": socket_enabled == "enabled" or socket_active == "active",
-        "dropIn": drop_in is not None,
+        "dropIn": drop_in_state,
         "passwords": passwords,
         "firewall": firewall,
         "rateLimit": limit_enabled == "enabled" and limit_active == "active",
@@ -3793,16 +3835,28 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
     }
 
 
+# --status --json always prints these keys and "error" (null, or why there is no state), so a reader
+# needs one schema; the state's keys are null when it could not be read.
+SSH_STATE_KEYS = ("on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "sessions", "user", "keys")
+
+
+def ssh_json(state: dict | None = None, error: str | None = None) -> str:
+    return json.dumps({**{key: None for key in SSH_STATE_KEYS}, **(state or {}), "error": error})
+
+
 def ssh_status(opts: dict) -> int:
     account = ssh_account(opts["user"], required=False)
     state = ssh_state(account)
     if opts["json"]:
-        print(json.dumps(state))
+        print(ssh_json(state))
         return 0
     how = "running" if state["running"] else "enabled, not running" if state["enabled"] else "its socket listens" if state["socket"] else ""
     print(f"SSH: {'on (' + how + ')' if state['on'] else 'off'}")
-    if state["dropIn"]:
+    if state["dropIn"] == "present":
         print(f"    sign-in: {'keys or a password' if state['passwords'] else 'keys only'}, never root ({SSHD_DROP_IN})")
+    elif state["dropIn"] in ("tampered", "unknown"):
+        print(f"    sign-in: WARNING: {SSHD_DROP_IN} is {'a link or not a regular file' if state['dropIn'] == 'tampered' else 'unreadable'}, "
+              "which setup ssh never writes; it is not counted (herald-os setup ssh --off removes it)")
     else:
         print("    sign-in: sshd's own settings (herald-os setup ssh has not set it up)")
     if state["user"]:
@@ -3854,13 +3908,36 @@ def ssh_args(args: list[str]) -> dict:
 
 
 def setup_ssh(args: list[str]) -> int:
-    """Turn SSH on for keys only (or passwords, when asked), off again, or say how it is."""
+    """Turn SSH on for keys only (or passwords, when asked), off again, or say how it is. With --json,
+    whatever happens, stdout gets one JSON object, an error included."""
+    if "--json" not in args:
+        return setup_ssh_run(args)
+    said = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(said):
+            return setup_ssh_run(args)
+    except SystemExit as stopped:
+        if stopped.code in (0, None):
+            raise
+        message = said.getvalue().strip().removeprefix("herald-os: ")
+        print(ssh_json(error=message or f"exit {stopped.code}"))
+        raise
+
+
+def setup_ssh_run(args: list[str]) -> int:
     opts = ssh_args(args)
-    if opts["status"]:
-        return ssh_status(opts)
-    if opts["off"]:
-        return ssh_off(opts)
-    return ssh_on(opts)
+    try:
+        if opts["status"]:
+            return ssh_status(opts)
+        if opts["off"]:
+            return ssh_off(opts)
+        return ssh_on(opts)
+    except OSError as exc:
+        # Anything the checks above did not foresee (a file that cannot be read or written) ends here,
+        # said plainly, rather than as a traceback.
+        die(f"setup ssh stopped: {exc.strerror or exc}{' (' + str(exc.filename) + ')' if exc.filename else ''}. "
+            "Fix that and run it again; herald-os setup ssh --status shows what is in place.", 1)
+    return 1
 
 
 OSTREE_BOOTED = Path("/run/ostree-booted")
