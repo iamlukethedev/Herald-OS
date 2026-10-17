@@ -1672,6 +1672,17 @@ def a_hung_step_leaves_sshd_closed(machine: System, step: list[str]) -> bool:
     return machine.units["sshd.service"] == ["disabled", "inactive"]
 
 
+def keys_are_taken_out_when_restorecon_hangs(machine: System, tmp_path: Path, capsys) -> bool:
+    module, saved = machine.module, machine.module.SSH_TIMEOUT
+    module.SSH_TIMEOUT = 1
+    machine.hang = [["restorecon", "-R"]]
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        module.SSH_TIMEOUT, machine.hang = saved, []
+    return not machine.keys_file.exists()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1757,6 +1768,7 @@ MUTANTS = {
     "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
     "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
+    "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2753,3 +2765,18 @@ def test_a_unit_that_was_on_before_is_left_on(machine, monkeypatch, capsys):
     refused(machine, capsys, "--key", public_key(seed=2))
     assert ["systemctl", "stop", "sshd.service"] not in machine.changes() and ["systemctl", "disable", "sshd.service"] not in machine.changes()
     assert machine.on()
+
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_keys_are_taken_back_out_when_restorecon_hangs_after_they_were_written(machine, monkeypatch, capsys, existing):
+    if existing:
+        machine.ssh.mkdir(mode=0o700)
+        machine.keys_file.write_text(public_key(seed=9) + "\n")
+        machine.keys_file.chmod(0o600)
+    before = snapshot(machine)
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    machine.hang = [["restorecon", "-R"]]
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    assert "restorecon -R" in err and "the 1 key(s) added to" in err
+    assert snapshot(machine) == before

@@ -3529,9 +3529,10 @@ def read_authorized(account: pwd.struct_passwd) -> str:
     return ""
 
 
-def write_authorized(account: pwd.struct_passwd, text: str | None) -> None:
+def write_authorized(account: pwd.struct_passwd, text: str | None, written: list | None = None) -> None:
     """~/.ssh 0700 and authorized_keys 0600, both the account's own: sshd ignores keys anyone else can
-    change. The new text goes through a new file and a rename, so the file is never half written."""
+    change. The new text goes through a new file and a rename, so the file is never half written.
+    `written` gets an entry the moment the new file is in place, before anything after it can fail."""
     folder = ssh_dir(account)
     keys_file = folder / "authorized_keys"
     with as_account(account):
@@ -3542,6 +3543,8 @@ def write_authorized(account: pwd.struct_passwd, text: str | None) -> None:
                 out.write(text)
             os.chmod(name, 0o600)
             os.replace(name, keys_file)
+            if written is not None:
+                written.append(keys_file)
         if folder.is_dir():
             folder.chmod(0o700)
         if keys_file.is_file():
@@ -4054,10 +4057,9 @@ def ssh_on(opts: dict) -> int:
         before = ssh_snapshot()
         with as_account(account):
             had_folder, had_keys_file = ssh_dir(account).is_dir(), keys_file.is_file()
-        wrote_keys = False
+        wrote_keys: list = []
         try:
-            write_authorized(account, updated if added else None)
-            wrote_keys = bool(added)
+            write_authorized(account, updated if added else None, wrote_keys)
             ports = sshd_configure(account, opts["passwords"], sshd)
             if nft:
                 ssh_limit_on(ports)
@@ -4077,17 +4079,24 @@ def ssh_on(opts: dict) -> int:
             try:
                 undone = ssh_rollback(before)
                 if wrote_keys:
+                    put_back: list = []
                     try:
                         if had_keys_file:
-                            write_authorized(account, current)
+                            write_authorized(account, current, put_back)
                         else:
                             with as_account(account):
                                 keys_file.unlink(missing_ok=True)
+                                put_back.append(keys_file)
                                 if not had_folder:
                                     ssh_dir(account).rmdir()
                         undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
                     except (SystemExit, OSError, subprocess.TimeoutExpired):
-                        warn(f"could not take the added keys back out of {keys_file}")
+                        if put_back:
+                            # The keys are out; only what came after (restorecon, removing ~/.ssh) did not finish.
+                            undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
+                            warn(f"the keys are out of {keys_file}, but tidying {ssh_dir(account)} after did not finish")
+                        else:
+                            warn(f"could not take the added keys back out of {keys_file}")
                 print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
             finally:
                 ssh_signals(ignored)
