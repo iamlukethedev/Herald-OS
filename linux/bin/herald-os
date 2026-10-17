@@ -3973,9 +3973,10 @@ def ssh_snapshot() -> dict:
     return before
 
 
-# The whole rollback gets this long, since it runs with signals ignored. Each command's timeout is
-# what is left of it (at most SSH_TIMEOUT); once it is spent, only stopping and disabling sshd are
-# still tried, with SSH_ROLLBACK_LAST each, and whatever else is left is reported as skipped.
+# The whole rollback gets this long, since it runs with signals ignored: a hard cap. Each command's
+# timeout is what is left of it at that moment (at most SSH_TIMEOUT), so no two commands can each
+# take the full remainder. Once it is spent, only stopping and disabling sshd are still tried, with
+# SSH_ROLLBACK_LAST each, and whatever else is left is reported as skipped.
 SSH_ROLLBACK_BUDGET = 300
 SSH_ROLLBACK_LAST = 15
 # The units that must end up closed, whatever the time.
@@ -3990,11 +3991,12 @@ def ssh_rollback(before: dict) -> list[str]:
     deadline = time.monotonic() + SSH_ROLLBACK_BUDGET
 
     def limit(essential: bool) -> float | None:
-        """This command's timeout, or None when there is no time left for it."""
+        """This command's timeout, or None when there is no time left for it. Only sshd's stop and
+        disable (essential) get a floor, and may run past the budget by that much."""
         left, last = deadline - time.monotonic(), min(SSH_ROLLBACK_LAST, ssh_limit(None))
-        if left <= 0:
-            return last if essential else None
-        return max(min(ssh_limit(None), left), last if essential else 1)
+        if essential:
+            return max(min(ssh_limit(None), left), last)
+        return min(ssh_limit(None), left) if left > 0 else None
 
     def run(argv: list[str], essential: bool = False) -> subprocess.CompletedProcess:
         # A command that hangs or cannot run is reported and passed over, so the steps after it still
@@ -4010,15 +4012,18 @@ def ssh_rollback(before: dict) -> list[str]:
             warn(f"`{' '.join(argv)}` {why} while putting things back")
             return subprocess.CompletedProcess(argv, 124, "", "")
 
-    def state(unit: str, essential: bool) -> tuple[str, str]:
-        timeout = limit(essential)
-        if timeout is None or deadline <= time.monotonic():
-            # No time to ask: unknown, which counts as open.
-            return "unknown", "unknown"
-        try:
-            return unit_state(unit, timeout)
-        except (subprocess.TimeoutExpired, OSError):
-            return "unknown", "unknown"
+    def state(unit: str) -> tuple[str, str]:
+        # Each of the two questions gets what is left at that moment; with no time to ask, the answer
+        # is unknown, which counts as open.
+        answers = []
+        for question in ("is-enabled", "is-active"):
+            timeout = limit(False)
+            try:
+                answer = ssh_run(["systemctl", question, unit], timeout).stdout.strip() if timeout else ""
+            except (subprocess.TimeoutExpired, OSError):
+                answer = ""
+            answers.append(answer or "unknown")
+        return answers[0], answers[1]
 
     def attempt(argv: list[str], what: str, essential: bool = False) -> None:
         result = run(argv, essential)
@@ -4030,7 +4035,7 @@ def ssh_rollback(before: dict) -> list[str]:
     # sudo may have forgotten the password by now; renew its time while it still remembers.
     if os.geteuid() != 0:
         try:
-            ssh_run(["sudo", "-n", "-v"], timeout=10)
+            ssh_run(["sudo", "-n", "-v"], timeout=min(10, limit(False) or 0) or None)
         except (subprocess.TimeoutExpired, OSError):
             pass
     # Fail closed, on each count apart: a unit that was not plainly running before is stopped unless it
@@ -4039,12 +4044,12 @@ def ssh_rollback(before: dict) -> list[str]:
     for unit in SSH_ROLLBACK_UNITS:
         essential = unit in SSH_ESSENTIAL_UNITS
         enabled, active = before["units"][unit]
-        now_enabled, now_active = state(unit, essential)
+        now_enabled, now_active = state(unit)
         if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
             attempt(["systemctl", "stop", unit], f"{unit} stopped", essential)
         if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
             attempt(["systemctl", "disable", unit], f"{unit} disabled", essential)
-        if active != "failed" and state(unit, False)[1] == "failed":
+        if active != "failed" and state(unit)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
     nft = nft_command()
     if nft and not before["table"] and run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
@@ -4061,7 +4066,8 @@ def ssh_rollback(before: dict) -> list[str]:
             skipped.append(f"putting back {path}")
             continue
         try:
-            install_file(text, path, timeout)
+            # Two commands (install, restorecon), so each gets half of what is left.
+            install_file(text, path, timeout / 2)
             restored.add(path)
             undone.append(f"{path} put back")
         except (SystemExit, OSError, subprocess.TimeoutExpired):

@@ -1787,6 +1787,37 @@ def the_socket_is_stopped_first(machine: System, tmp_path: Path, capsys) -> bool
     return stops[:2] == ["sshd.socket", "sshd.service"]
 
 
+def everything_hangs_in_the_rollback(machine: System) -> float:
+    """The firewall step fails; from then on every command hangs. How long `on` then takes, in seconds."""
+    import time
+    real = machine.firewall
+
+    def refuse_then_hang(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            machine.hang = [[]]
+            return "", 11
+        return real(tool, args, root)
+    machine.firewall = refuse_then_hang
+    started = time.monotonic()
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        machine.firewall, machine.hang = real, []
+    return time.monotonic() - started
+
+
+def the_budget_is_a_hard_cap(machine: System, tmp_path: Path, capsys) -> bool:
+    module = machine.module
+    saved = module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST
+    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST = 1, 0.5, 0.25
+    try:
+        # The budget, plus the floor for sshd's four always-tried steps (stop and disable, twice), plus
+        # slack; without the cap, each of some thirty commands takes the full second.
+        return everything_hangs_in_the_rollback(machine) < 0.5 + 4 * 0.25 + 1.5
+    finally:
+        module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET, module.SSH_ROLLBACK_LAST = saved
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1877,7 +1908,8 @@ MUTANTS = {
     "the service stopped before its socket": (the_socket_is_stopped_first, 'SSH_ROLLBACK_UNITS = ("sshd.socket", "sshd.service", SSH_LIMIT_UNIT.name)', 'SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)'),
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
-    "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return last if essential else None\n", "            return None\n"),
+    "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return max(min(ssh_limit(None), left), last)\n", "            return min(ssh_limit(None), left) if left > 0 else None\n"),
+    "the budget only a guide": (the_budget_is_a_hard_cap, "        return min(ssh_limit(None), left) if left > 0 else None\n", "        return ssh_limit(None)\n"),
     "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    for each in (signal.SIGINT, *SSH_STOPS):\n        signal.signal(each, signal.SIG_IGN)\n", ""),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
@@ -3124,3 +3156,18 @@ def test_the_two_counts_are_read_apart(machine, capsys):
 def test_the_rollback_stops_the_socket_before_the_service(machine, capsys):
     assert cli.SSH_ROLLBACK_UNITS[:2] == ("sshd.socket", "sshd.service")
     assert the_socket_is_stopped_first(machine, Path("/nonexistent"), capsys)
+
+
+
+def test_the_rollback_budget_is_a_hard_cap_even_when_every_command_hangs(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 4)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 2)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 0.5)
+    elapsed = everything_hangs_in_the_rollback(machine)
+    # Without the cap, each of the many commands could take 4 s.
+    assert elapsed < 2 + 4 * 0.5 + 2
+    err = capsys.readouterr().err
+    assert "ran out of time (2 s) putting things back; skipped:" in err
+    # sshd's four steps were still tried, past the budget.
+    tried = [argv for _, argv in machine.calls if argv[:1] == ["systemctl"] and argv[1] in ("stop", "disable") and argv[2] in ("sshd.service", "sshd.socket")]
+    assert len(tried) == 4
