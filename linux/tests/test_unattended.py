@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 KICKSTART = (ROOT / "linux" / "image" / "unattended.ks").read_text()
 INCLUDE = "/tmp/herald-os-disk.ks"
-PRE = re.search(r"^%pre [^\n]*\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
+PRE = re.search(r"^%pre [^\n]*--log=/tmp/herald-os-disk\.log\n(.*?)^%end$", KICKSTART, re.M | re.S).group(1)
 # The bash that runs the %pre and the fakes: Anaconda has bash 5, macOS CI has bash 3.2, so both
 # must work. HERALD_OS_TEST_BASH=/path/to/bash-3.2 runs them under another one.
 BASH = shutil.which(os.environ.get("HERALD_OS_TEST_BASH", "bash"))
@@ -493,6 +493,11 @@ def run_account_pre(tmp_path: Path, pre: str = ACCOUNT_PRE, github: dict[str, st
         (pages / f"{name}.keys").write_text(text)
     (bin_dir / "curl").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$PAGES/curl-calls"\nurl="${!#}"\npage="$PAGES/${url##*/}"\n[[ -f "$page" ]] || exit 22\ncat "$page"\n')
     (bin_dir / "curl").chmod(0o755)
+    for database, lines in (("passwd", ["root:x:0:0::/root:/bin/bash", "svc:x:990:990::/:/sbin/nologin", "nobody:x:65534:65534::/:/sbin/nologin"]),
+                            ("group", ["root:x:0:", "builders:x:985:"])):
+        (pages / database).write_text("".join(f"{line}\n" for line in lines))
+    (bin_dir / "getent").write_text('#!/usr/bin/env bash\ngrep "^$2:" "$PAGES/$1"\n')
+    (bin_dir / "getent").chmod(0o755)
     out, console = tmp_path / "account.ks", tmp_path / "console"
     console.write_text("")
     found = subprocess.run(
@@ -550,14 +555,14 @@ def test_github_keys_are_read_while_the_installer_is_online_and_marked(tmp_path)
     assert installed(tmp_path, out) == {"ssh-keys": f"{one} github:octocat\n{two} github:octocat\n"}
 
 
-@pytest.mark.parametrize("name", ["root", "Luke", "1luke", "lu ke", "luke;reboot", "a" * 33])
+@pytest.mark.parametrize("name", ["Luke", "1luke", "lu ke", "luke;reboot", "a" * 33])
 def test_an_unusable_account_name_stops_the_install_before_any_disk_is_erased(tmp_path, name):
     assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), "is not an account name")
 
 
 @pytest.mark.parametrize("key", [public_key("ssh-dss"), f"restrict {public_key()}", "ssh-ed25519 AAAA", public_key(data_kind="ssh-rsa"), "hello"])
 def test_a_line_that_is_not_a_public_key_stops_the_install(tmp_path, key):
-    assert account_refused(*run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{public_key()}\n{key}")), "not an SSH public key")
+    assert account_refused(*run_account_pre(tmp_path, with_settings(SSH_KEYS=f"{public_key()}\n{key}")), "that sshd should not take")
 
 
 def test_a_github_account_that_cannot_be_read_or_has_no_keys_stops_the_install(tmp_path):
@@ -597,10 +602,12 @@ def test_the_account_pre_stops_on_error_and_logs_where_the_installer_keeps_logs(
 
 
 @pytest.mark.parametrize("check, old, new, settings", [
-    ("account name", '[[ "$ACCOUNT" =~ $account_pattern && "$ACCOUNT" != root ]] ||', "true ||", {"ACCOUNT": "luke;reboot"}),
-    ("root", ' && "$ACCOUNT" != root ]]', " ]]", {"ACCOUNT": "root"}),
-    ("key", '  valid_key "$line" ||\n', "  true ||\n", {"SSH_KEYS": f'command="sh" {public_key()}'}),
-    ("key data", "kind == fields[0].encode()", "True", {"SSH_KEYS": public_key(data_kind="ssh-dss")}),
+    ("account name", '[[ "$ACCOUNT" =~ $account_pattern ]] ||', "true ||", {"ACCOUNT": "luke;reboot"}),
+    ("reserved names", '[[ "$reserved" != *[[:space:]]"$ACCOUNT"[[:space:]]* && "$ACCOUNT" != systemd-* ]] ||', "true ||", {"ACCOUNT": "wheel"}),
+    ("systemd names", ' && "$ACCOUNT" != systemd-* ]] ||', " ]] ||", {"ACCOUNT": "systemd-oom"}),
+    ("system ids", "(( known_id < 1000 || known_id > 60000 ))", "false", {"ACCOUNT": "svc"}),
+    ("key", '  reason="$(valid_key "$line")" ||\n', "  true ||\n", {"SSH_KEYS": f'command="sh" {public_key()}'}),
+    ("key data", "if kind != fields[0].encode() or len(blob) <= at:", "if False:", {"SSH_KEYS": public_key(data_kind="ssh-dss")}),
     ("github name", '[[ "$name" =~ $github_pattern ]] ||', "true ||", {"GITHUB_KEYS": "-bad-"}),
 ])
 def test_each_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings):
@@ -644,7 +651,8 @@ def test_weak_github_keys_are_skipped_and_said(tmp_path):
     found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="mixed"), github={"mixed": f"{weak}\n{good}\n"})
     assert found.returncode == 0, found.stderr
     assert installed(tmp_path, out) == {"ssh-keys": f"{good} github:mixed\n"}
-    assert "skipping a key of mixed's that sshd should not take" in found.stderr
+    assert "https://github.com/mixed.keys line 1: skipping a key of type ssh-rsa: an RSA key of 1024 bits is too short (2048 at least)" in found.stderr
+    assert weak.split()[1][:16] not in found.stderr
 
 
 @pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
@@ -655,7 +663,7 @@ def test_each_key_s_fingerprint_goes_into_the_log(tmp_path):
 
 
 @pytest.mark.parametrize("check, old, new, settings, github", [
-    ("RSA bits", "ok = int.from_bytes(modulus, \"big\").bit_length() >= 2048", "ok = True", {"SSH_KEYS": public_key("ssh-rsa", bits=1024)}, {}),
+    ("RSA bits", "if bits < 2048:", "if False:", {"SSH_KEYS": public_key("ssh-rsa", bits=1024)}, {}),
     ("page size", "  (( ${#page} <= 1048576 )) || return 1\n", "", {"GITHUB_KEYS": "big"}, {"big": public_key() + "\n" + "#" * (1 << 20)}),
 ])
 def test_each_new_account_check_is_caught_when_taken_out(tmp_path, check, old, new, settings, github):
@@ -680,3 +688,67 @@ def test_taking_out_the_fingerprints_is_caught(tmp_path):
     assert ACCOUNT_PRE.count(old) == 1
     found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, "  :\n"), SSH_KEYS=public_key()))
     assert found.returncode == 0 and "herald-os: key: 256 SHA256:" not in found.stderr
+
+
+
+def test_the_account_is_checked_before_the_disk():
+    sections = re.findall(r"^%pre [^\n]*--log=(\S+)", KICKSTART, re.M)
+    assert sections == ["/tmp/herald-os-account.log", "/tmp/herald-os-disk.log"]
+
+
+@pytest.mark.parametrize("name", ["root", "bin", "daemon", "nobody", "sshd", "greetd", "wheel", "users", "video", "systemd-network", "systemd-oom", "admin"])
+def test_a_system_or_reserved_name_stops_the_install(tmp_path, name):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), "system account's or group's name")
+
+
+@pytest.mark.parametrize("name, what", [("svc", "a system account here (id 990)"), ("builders", "a system group here (id 985)")])
+def test_a_name_the_installer_resolves_to_a_system_id_stops_the_install(tmp_path, name, what):
+    assert account_refused(*run_account_pre(tmp_path, with_settings(ACCOUNT=name)), what)
+
+
+@pytest.mark.parametrize("name", ["luke", "hermes", "systemdfan", "wheelie", "_ops"])
+def test_a_person_s_name_is_taken(tmp_path, name):
+    found, out, _ = run_account_pre(tmp_path, with_settings(ACCOUNT=name))
+    assert found.returncode == 0, found.stderr
+    assert installed(tmp_path, out) == {"install.conf": f"user={name}\n"}
+
+
+def test_every_skipped_github_line_is_logged_with_its_type_and_reason_never_the_key(tmp_path):
+    dss, mismatched, short, good = public_key("ssh-dss", comment=""), public_key(data_kind="ssh-rsa", comment=""), public_key("ssh-rsa", comment="", bits=1024), public_key(comment="", seed=8)
+    page = f"{dss}\n\n{mismatched}\n$(reboot) AAAA\n{short}\n{good}\n"
+    found, out, _ = run_account_pre(tmp_path, with_settings(GITHUB_KEYS="octocat"), github={"octocat": page})
+    assert found.returncode == 0, found.stderr
+    log = found.stderr
+    url = "https://github.com/octocat.keys"
+    assert f"{url} line 1: skipping a key of type ssh-dss: not a key type sshd takes" in log
+    assert f"{url} line 3: skipping a key of type ssh-ed25519: the key's data is of another type" in log
+    assert f"{url} line 4: skipping a key of type unknown: not a key type sshd takes" in log
+    assert f"{url} line 5: skipping a key of type ssh-rsa: an RSA key of 1024 bits is too short (2048 at least)" in log
+    assert log.count("skipping") == 4
+    for key in (dss, mismatched, short):
+        assert key.split()[1][:16] not in log
+    assert installed(tmp_path, out) == {"ssh-keys": f"{good} github:octocat\n"}
+
+
+def test_a_refused_ssh_keys_line_names_its_type_and_reason_not_the_key(tmp_path):
+    short = public_key("ssh-rsa", bits=1024)
+    found, out, console = run_account_pre(tmp_path, with_settings(SSH_KEYS=short))
+    assert account_refused(found, out, console, "a key of type ssh-rsa that sshd should not take (an RSA key of 1024 bits is too short (2048 at least))")
+    assert short.split()[1][:16] not in found.stderr
+
+
+def test_taking_out_the_skipped_line_log_is_caught(tmp_path):
+    old = '      say "https://github.com/$name.keys line $number: skipping a key of type $(key_type "$line"): $reason"\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    page = public_key("ssh-dss", comment="") + "\n" + public_key(comment="") + "\n"
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, ""), GITHUB_KEYS="octocat"), github={"octocat": page})
+    assert found.returncode == 0 and "skipping" not in found.stderr
+
+
+def test_logging_the_key_instead_of_its_type_is_caught(tmp_path):
+    old = '  if [[ "$first" =~ ^[A-Za-z0-9@._-]{1,48}$ ]]; then echo "$first"; else echo unknown; fi\n'
+    assert ACCOUNT_PRE.count(old) == 1
+    bad = public_key("ssh-dss", comment="")
+    found, _, _ = run_account_pre(tmp_path, with_settings(ACCOUNT_PRE.replace(old, '  echo "$1"\n'), GITHUB_KEYS="octocat"), github={"octocat": bad + "\n" + public_key(comment="") + "\n"})
+    assert bad.split()[1][:16] in found.stderr
+

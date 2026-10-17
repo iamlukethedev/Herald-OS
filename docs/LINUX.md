@@ -298,8 +298,13 @@ switching to it, and changing its packages, Flatpaks and branding.
   `/etc/herald-os/install.conf` (`user=<name>`) and `/etc/herald-os/ssh-keys` in the installed
   system. `firstboot.sh` names the session user from the first (env `HERMES_USER` still wins; a
   name that is not an account name or belongs to a system account is ignored) and, when there are
-  keys, runs `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys` before
-  installing Hermes. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it
+  keys, runs `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys --offline-firewall`
+  before installing Hermes. `herald-os-firstboot.service` wants firewalld and starts after it; should
+  firewalld still not be up, `--offline-firewall` saves the rule with `firewall-offline-cmd`, and sshd
+  starts only once the rate limit has loaded. Without nft, or with no firewalld at all, SSH stays off
+  and the journal says why. The account `%pre` runs before the disk's and also refuses reserved and
+  system names (Fedora's system accounts and groups, `systemd-*`, and anything `getent` resolves to an
+  id below 1000), and it logs each skipped GitHub line by key type and reason, never the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it
   runs after) and runs `herald-os setup ssh --off --end-sessions`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest

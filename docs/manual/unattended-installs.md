@@ -40,16 +40,21 @@ machine to leave them waiting for their owners.
 
 ## The account and SSH
 
-The second `%pre` section, at the very end of the file, has three settings, all empty to start with:
+The first `%pre` section, right after the commands at the top, has three settings, all empty to start
+with. It runs before the one that picks the disk, so nothing is erased when they are not usable:
 
 - `ACCOUNT=""`: the name of the account the first start makes (lowercase letters, digits, `-` and
-  `_`, starting with a letter or `_`). Empty, it is `hermes`, as without a kickstart.
+  `_`, starting with a letter or `_`). Empty, it is `hermes`, as without a kickstart. Names that
+  belong to the system are refused: `root`, the accounts and groups Fedora's packages use (`bin`,
+  `nobody`, `sshd`, `wheel`, `video`, any `systemd-…`, and so on), and any name the installer knows as
+  an account or group below 1000.
 - `SSH_KEYS=""`: public keys that may sign in to that account over SSH, one a line between the
   quotes, as `~/.ssh/id_ed25519.pub` has them.
 - `GITHUB_KEYS=""`: GitHub accounts, separated by spaces, whose public keys may sign in
   (`https://github.com/<name>.keys`). The installer reads them while it is online, over HTTPS only
   and up to 1 MiB, so the PC does not need GitHub later. Keys sshd should not take (RSA under 2048
-  bits, DSA) are skipped, and the log says so.
+  bits, DSA) are skipped, and the log names each skipped line with its key type and the reason,
+  never the key itself.
 
 With any key, the first start turns SSH on for those keys only, with `herald-os setup ssh` (see
 [Security](security.md#ssh)): no passwords, never root, and at most four new connections a minute
