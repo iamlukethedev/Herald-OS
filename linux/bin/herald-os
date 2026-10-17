@@ -4088,6 +4088,12 @@ SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 
 
 def ssh_stopped(signum: int, frame) -> None:
+    # INT, TERM and HUP are ignored from this moment, before anything is raised, so no second signal
+    # can land between here and the rollback, which goes on ignoring them until it is done.
+    for each in (signal.SIGINT, *SSH_STOPS):
+        signal.signal(each, signal.SIG_IGN)
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
     print(f"herald-os: stopped by {signal.Signals(signum).name}; putting back what this run changed", file=sys.stderr)
     raise SystemExit(128 + signum)
 
@@ -4153,7 +4159,7 @@ def ssh_on(opts: dict) -> int:
     # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
     ssh_sudo()
-    stops = ssh_signals({signum: ssh_stopped for signum in SSH_STOPS})
+    stops = ssh_signals({signum: ssh_stopped for signum in (signal.SIGINT, *SSH_STOPS)})
     try:
         before = ssh_snapshot()
         with as_account(account):

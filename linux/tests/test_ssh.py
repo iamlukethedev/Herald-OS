@@ -1727,6 +1727,23 @@ def the_budget_keeps_sshd_closing(machine: System, tmp_path: Path, capsys) -> bo
     return machine.units["sshd.service"] == ["disabled", "inactive"]
 
 
+def a_signal_ignores_the_rest_at_once(machine: System, tmp_path: Path, capsys) -> bool:
+    return signals_ignored_from_the_handler(machine.module, signal.SIGTERM)
+
+
+def signals_ignored_from_the_handler(module, signum: int) -> bool:
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        try:
+            module.ssh_stopped(signum, None)
+        except (SystemExit, KeyboardInterrupt):
+            pass
+        return all(signal.getsignal(s) is signal.SIG_IGN for s in saved)
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1815,6 +1832,7 @@ MUTANTS = {
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
     "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return last if essential else None\n", "            return None\n"),
+    "a gap before signals are ignored": (a_signal_ignores_the_rest_at_once, "    for each in (signal.SIGINT, *SSH_STOPS):\n        signal.signal(each, signal.SIG_IGN)\n", ""),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2665,6 +2683,7 @@ def test_signals_are_handled_only_while_on_changes_things(machine, capsys):
     machine.systemctl = look
     machine.setup("--key", public_key())
     assert all(seen[s] is cli.ssh_stopped for s in handlers)
+    assert signal.getsignal(signal.SIGINT) is not cli.ssh_stopped
     assert {s: signal.getsignal(s) for s in handlers} == handlers
 
 
@@ -2968,3 +2987,48 @@ def test_once_the_budget_is_gone_stopping_and_disabling_sshd_are_still_tried(mac
     assert ["systemctl", "stop", "sshd.socket"] in changes and ["systemctl", "disable", "sshd.socket"] in changes
     assert machine.units["sshd.service"] == ["disabled", "inactive"]
     assert "skipped:" in err and "rm -f" in err
+
+
+
+@pytest.mark.parametrize("signum, raised", [(signal.SIGTERM, SystemExit), (signal.SIGHUP, SystemExit), (signal.SIGINT, KeyboardInterrupt)])
+def test_the_handler_ignores_int_term_and_hup_before_it_raises(signum, raised, capsys):
+    saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        with pytest.raises(raised):
+            cli.ssh_stopped(signum, None)
+        assert all(signal.getsignal(s) is signal.SIG_IGN for s in saved)
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_ctrl_c_goes_through_the_same_handler_while_on_changes_things(machine):
+    seen = []
+    real = machine.systemctl
+
+    def look(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            seen.append(signal.getsignal(signal.SIGINT))
+        return real(args, root)
+    machine.systemctl = look
+    handler = signal.getsignal(signal.SIGINT)
+    machine.setup("--key", public_key())
+    assert seen == [cli.ssh_stopped] and signal.getsignal(signal.SIGINT) is handler
+
+
+def test_a_second_signal_right_after_the_first_cannot_skip_the_rollback(machine, capsys):
+    """TERM then, before the rollback has begun, HUP: the second finds every signal ignored already."""
+    before = snapshot(machine)
+    real = machine.systemctl
+
+    def twice(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            finally:
+                os.kill(os.getpid(), signal.SIGHUP)
+        return real(args, root)
+    machine.systemctl = twice
+    err = refused(machine, capsys, "--key", public_key(), code=143)
+    assert "stopped by SIGTERM" in err and "stopped by SIGHUP" not in err
+    assert snapshot(machine) == before
