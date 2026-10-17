@@ -1158,12 +1158,14 @@ def run_reset_apply(tmp_path: Path, helper: str) -> str:
     state.mkdir()
     (state / "reset-pending").write_text("hermes\n")
     calls.write_text("")
+    (tmp_path / "install.conf").write_text("user=luke\n")
+    (tmp_path / "ssh-keys").write_text("ssh-ed25519 AAAA me\n")
     bin_dir = tmp_path / "bin"
     for tool in ("loginctl", "userdel", "flatpak", "herald-os"):
         executable(bin_dir / tool, f'echo "{tool} $*" >>"$CALLS"')
     executable(bin_dir / "id", '[ "$1" = -u ] && echo 1000; exit 0')
     script = helper.replace("STATE=/var/lib/herald-os", f"STATE={shlex.quote(str(state))}")
-    script = script.replace("/etc/herald-os/ssh-keys", str(tmp_path / "ssh-keys")).replace("/etc/NetworkManager/system-connections/", str(tmp_path) + "/nm-")
+    script = script.replace("/etc/herald-os/ssh-keys", str(tmp_path / "ssh-keys")).replace("/etc/herald-os/install.conf", str(tmp_path / "install.conf")).replace("/etc/NetworkManager/system-connections/", str(tmp_path) + "/nm-")
     result = subprocess.run(["bash", "-c", script, "reset-helper", "apply"], env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls)}, capture_output=True, text=True, timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     return calls.read_text()
@@ -1177,3 +1179,23 @@ def test_a_reset_ends_ssh_sessions_and_turns_ssh_off(tmp_path):
     mutant = helper.replace("herald-os setup ssh --off --end-sessions >/dev/null", "herald-os setup ssh --off >/dev/null", 1)
     assert mutant != helper
     assert "--end-sessions" not in run_reset_apply(tmp_path / "mutant", mutant)
+
+
+
+def test_a_reset_forgets_the_install_s_account_name_and_keys_so_the_next_first_boot_makes_hermes(tmp_path):
+    helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
+    run_reset_apply(tmp_path, helper)
+    assert not (tmp_path / "install.conf").exists() and not (tmp_path / "ssh-keys").exists()
+    # What the first boot after it then picks: hermes, with no install.conf.
+    (tmp_path / "next").mkdir()
+    assert session_user(tmp_path / "next")[0] == "hermes"
+
+
+@pytest.mark.parametrize("kept", ["/etc/herald-os/install.conf", "/etc/herald-os/ssh-keys"])
+def test_keeping_either_install_setting_through_a_reset_is_caught(tmp_path, kept):
+    helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
+    line = "    rm -f /etc/herald-os/ssh-keys /etc/herald-os/install.conf\n"
+    assert helper.count(line) == 1
+    mutant = helper.replace(line, "    rm -f " + " ".join(path for path in ("/etc/herald-os/ssh-keys", "/etc/herald-os/install.conf") if path != kept) + "\n")
+    run_reset_apply(tmp_path, mutant)
+    assert (tmp_path / Path(kept).name).exists()

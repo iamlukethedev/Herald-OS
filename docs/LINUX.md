@@ -299,7 +299,8 @@ switching to it, and changing its packages, Flatpaks and branding.
   system. `firstboot.sh` names the session user from the first (env `HERMES_USER` still wins; a
   name that is not an account name or belongs to a system account is ignored) and, when there are
   keys, runs `herald-os setup ssh --user <name> --keys-file /etc/herald-os/ssh-keys` before
-  installing Hermes. `reset-helper apply` deletes the keys file and runs `herald-os setup ssh --off`.
+  installing Hermes. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it
+  runs after) and runs `herald-os setup ssh --off --end-sessions`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle

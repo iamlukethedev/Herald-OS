@@ -61,7 +61,8 @@ account that cannot be read or has no keys, stops the install before it erases a
 
 The account still has no password until someone sets one in the first-start setup, as without a
 kickstart: over SSH, set it with `passwd`. Resetting the PC (`herald-os reset`) turns SSH off again
-and forgets the keys from the kickstart.
+and forgets the kickstart's account name and keys: the PC starts over as if installed without them,
+with an account named `hermes` and SSH off.
 
 ## Running it
 
