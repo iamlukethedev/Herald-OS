@@ -120,6 +120,25 @@ describe('the model provider row', () => {
     ])
   })
 
+  it.each(['pt-BR', 'zh-CN'] as const)('tooltips the closed dropdown with its prompt in %s', async language => {
+    const host = await show(language)
+    const label = chooser(host)?.querySelector('span.truncate')
+
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(label?.getAttribute('title')).toBe(translated('settings.agents.provider.choose'))
+    expect(label?.getAttribute('title')).toBe(label?.textContent)
+  })
+
+  it('tooltips the closed dropdown with the whole name of the provider chosen', async () => {
+    const name = 'OpenRouter with a name too long to show whole'
+    vi.mocked(loadModelOptions).mockResolvedValue({ providers: [{ ...OPTIONS.providers[0], name, is_current: true }, ...OPTIONS.providers.slice(1)] } as ModelOptionsResult)
+    const host = await show('zh-CN')
+    const dropdown = [...host.querySelectorAll('button')].find(button => button.textContent === name)
+
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(dropdown?.querySelector('span.truncate')?.getAttribute('title')).toBe(name)
+  })
+
   it.each(['pt-BR', 'zh-CN'] as const)('asks for an API key in %s', async language => {
     const host = await show(language)
     await click(chooser(host))
