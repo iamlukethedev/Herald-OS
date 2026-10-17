@@ -3286,7 +3286,7 @@ def test_sshd_that_was_not_plainly_running_before_is_stopped_again(machine, caps
     assert machine.units["sshd.service"] == ["disabled", "inactive"]
 
 
-@pytest.mark.parametrize("enabled", ["linked", "linked-runtime", "static", "unknown", "", "masked-runtime", "transient"])
+@pytest.mark.parametrize("enabled", ["linked", "linked-runtime", "unknown", "", "masked-runtime", "transient"])
 def test_sshd_that_was_not_plainly_enabled_before_is_disabled_again(machine, capsys, enabled):
     odd_before(machine, "sshd.service", enabled, "inactive")
     refused(machine, capsys, "--key", public_key())
@@ -3506,3 +3506,19 @@ def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tm
 
 def test_once_a_signal_has_stopped_on_the_handler_does_nothing_more(machine, capsys):
     assert a_second_call_does_nothing(machine, Path("/nonexistent"), capsys)
+
+
+
+def test_a_static_unit_is_not_disabled_or_listed_as_disabled(machine, monkeypatch, capsys):
+    assert "static" in cli.SSH_CLOSED_ENABLED and "static" not in cli.SSH_OPEN_ENABLED
+    real = machine.systemctl
+
+    def static(args, root):
+        if args == ["enable", "sshd.service"]:
+            return "", 0
+        return real(args, root)
+    monkeypatch.setattr(machine, "systemctl", static)
+    odd_before(machine, "sshd.service", "static", "inactive")
+    err = refused(machine, capsys, "--key", public_key())
+    assert ["systemctl", "disable", "sshd.service"] not in machine.changes()
+    assert "sshd.service disabled" not in err and machine.units["sshd.service"][0] == "static"

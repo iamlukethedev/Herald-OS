@@ -3953,9 +3953,11 @@ SSH_ROLLBACK_UNITS = ("sshd.socket", "sshd.service", SSH_LIMIT_UNIT.name)
 SSH_OPEN_ACTIVE = ("active", "reloading", "activating")
 SSH_OPEN_ENABLED = ("enabled", "enabled-runtime", "indirect", "generated", "alias")
 # How it is after: closed only when systemctl plainly says so. Anything else (unknown after a
-# timeout, activating, reloading, failed, ...) counts as open, and gets stopped or disabled.
+# timeout, activating, reloading, failed, ...) counts as open, and gets stopped or disabled. A static
+# unit has nothing to disable (it starts only when something else pulls it in), so it is not listed
+# as disabled; before `on`, static still counts as not enabled (SSH_OPEN_ENABLED).
 SSH_CLOSED_ACTIVE = ("inactive",)
-SSH_CLOSED_ENABLED = ("disabled", "masked", "not-found")
+SSH_CLOSED_ENABLED = ("disabled", "masked", "not-found", "static")
 
 
 def ssh_snapshot() -> dict:
