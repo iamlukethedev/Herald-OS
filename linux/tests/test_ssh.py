@@ -2332,7 +2332,7 @@ def test_status_json_as_root_checks_its_arguments_too(machine, monkeypatch, caps
 
 # ---------------------------------------------------------------------------------------------
 # Round 5: anything that stops `on` rolls back; a table that was there is loaded again; ~ is refused.
-def test_ctrl_c_partway_puts_everything_back_and_goes_on_as_ctrl_c(machine, monkeypatch, capsys):
+def test_ctrl_c_partway_puts_everything_back_and_exits_130_without_a_traceback(machine, monkeypatch, capsys):
     before = snapshot(machine)
     real = machine.firewall
     def interrupt(tool, args, root):
@@ -2341,11 +2341,11 @@ def test_ctrl_c_partway_puts_everything_back_and_goes_on_as_ctrl_c(machine, monk
             raise KeyboardInterrupt
         return out
     monkeypatch.setattr(machine, "firewall", interrupt)
-    with pytest.raises(KeyboardInterrupt):
-        machine.setup("--key", public_key())
+    err = refused(machine, capsys, "--key", public_key(), code=130)
     assert snapshot(machine) == before
-    err = capsys.readouterr().err
     assert "SSH is as it was before this run; put back:" in err and "the firewall rule in herald-os removed" in err
+    assert "Traceback" not in err and "KeyboardInterrupt" not in err
+    assert err.rstrip().splitlines()[-1].startswith("herald-os: SSH is as it was before this run")
 
 
 def test_a_file_error_partway_puts_everything_back_and_is_said_plainly(machine, monkeypatch, capsys):
@@ -2410,8 +2410,9 @@ def test_an_include_starting_with_a_tilde_is_refused(machine, capsys, line):
 def test_a_second_ctrl_c_during_the_rollback_is_ignored_and_the_handler_comes_back(machine, capsys):
     before, handler, seen = snapshot(machine), signal.getsignal(signal.SIGINT), []
     second_ctrl_c(machine, seen)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(SystemExit) as stopped:
         machine.setup("--key", public_key())
+    assert stopped.value.code == 130
     # The rollback ran with SIGINT ignored, so the real SIGINT sent in the middle of it changed nothing.
     assert seen and all(state is signal.SIG_IGN for state in seen)
     assert snapshot(machine) == before

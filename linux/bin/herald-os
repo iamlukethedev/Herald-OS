@@ -4293,6 +4293,14 @@ def setup_ssh(args: list[str]) -> int:
 def setup_ssh_run(args: list[str]) -> int:
     opts = ssh_args(args)
     try:
+        return setup_ssh_act(opts)
+    except KeyboardInterrupt:
+        # Ctrl+C: what it means to say (what was put back) is said already; no traceback.
+        raise SystemExit(130) from None
+
+
+def setup_ssh_act(opts: dict) -> int:
+    try:
         if opts["status"]:
             return ssh_status(opts)
         if opts["off"]:
