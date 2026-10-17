@@ -289,6 +289,7 @@ export const zhCN: Translation = {
   'settings.decrease': '减少{name}',
   'settings.increase': '增加{name}',
   'settings.saveFailed': '无法保存设置',
+  'settings.somethingWentWrong': '出了点问题',
 
   'settings.section.general': '通用',
   'settings.section.appearance': '外观',

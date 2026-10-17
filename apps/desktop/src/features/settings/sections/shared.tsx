@@ -40,12 +40,27 @@ const KNOWN_ERRORS: ReadonlyMap<string, TextKey> = new Map<string, TextKey>([
   ['gateway not connected', 'settings.agents.gatewayNotConnected']
 ])
 
+/** `value` as text, or null when it has none: String() throws for an object without a prototype or a working toString. */
+function textOf(value: unknown): string | null {
+  try {
+    return String(value)
+  } catch {
+    return null
+  }
+}
+
 /** What went wrong, in the person's language when it is a message Herald knows; any other as it came. */
 export function errorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  const known = typeof message === 'string' ? KNOWN_ERRORS.get(message.trim().toLowerCase()) : undefined
+  const message = error instanceof Error ? error.message : error
+  const text = typeof message === 'string' ? message : textOf(message)
 
-  return known ? t(known) : typeof message === 'string' ? message : String(message)
+  if (text === null) {
+    return t('settings.somethingWentWrong')
+  }
+
+  const known = KNOWN_ERRORS.get(text.trim().toLowerCase())
+
+  return known ? t(known) : text
 }
 
 // ---- Search filter -------------------------------------------------------------------------

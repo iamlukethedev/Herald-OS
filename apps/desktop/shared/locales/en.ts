@@ -296,6 +296,8 @@ export const en = {
   'settings.decrease': 'Decrease {name}',
   'settings.increase': 'Increase {name}',
   'settings.saveFailed': 'Could not save setting',
+  // In place of an error that has no text to show.
+  'settings.somethingWentWrong': 'Something went wrong',
 
   'settings.section.general': 'General',
   'settings.section.appearance': 'Appearance',

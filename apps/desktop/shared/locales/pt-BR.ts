@@ -298,6 +298,7 @@ export const ptBR: Translation = {
   'settings.decrease': 'Diminuir {name}',
   'settings.increase': 'Aumentar {name}',
   'settings.saveFailed': 'Não foi possível salvar a configuração',
+  'settings.somethingWentWrong': 'Algo deu errado',
 
   'settings.section.general': 'Geral',
   'settings.section.appearance': 'Aparência',
