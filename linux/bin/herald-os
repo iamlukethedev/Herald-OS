@@ -3939,8 +3939,8 @@ def addresses() -> list[str]:
 
 
 # The units the rollback answers for, sshd's first: if time or anything else runs short, those are
-# the ones that must end up closed.
-SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)
+# the ones that must end up closed. The socket goes before the service, so it cannot start it again.
+SSH_ROLLBACK_UNITS = ("sshd.socket", "sshd.service", SSH_LIMIT_UNIT.name)
 # How a unit was before `on`, read strictly: it was running only if systemctl said exactly one of
 # these, and enabled only if exactly one of those. Anything else (failed, unknown, an empty or
 # timed-out answer, linked, linked-runtime, static, masked, not-found, ...) counts as closed, so

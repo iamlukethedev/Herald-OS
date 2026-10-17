@@ -1772,6 +1772,21 @@ def a_linked_before_is_disabled(machine: System, tmp_path: Path, capsys) -> bool
     return machine.units["sshd.service"][0] == "disabled"
 
 
+def the_socket_is_stopped_first(machine: System, tmp_path: Path, capsys) -> bool:
+    real = machine.systemctl
+
+    def socket_too(args, root):
+        out = real(args, root)
+        if args == ["reload-or-restart", "sshd.service"]:
+            machine.units["sshd.socket"] = ["enabled", "active"]
+            return "", 1
+        return out
+    machine.systemctl = socket_too
+    outcome(machine, "--key", public_key())
+    stops = [argv[2] for _, argv in machine.calls if argv[:2] == ["systemctl", "stop"]]
+    return stops[:2] == ["sshd.socket", "sshd.service"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1859,6 +1874,7 @@ MUTANTS = {
     "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
     "a before of failed or unknown taken as running": (a_failed_before_is_stopped, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n"),
     "a before of linked taken as enabled": (a_linked_before_is_disabled, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n"),
+    "the service stopped before its socket": (the_socket_is_stopped_first, 'SSH_ROLLBACK_UNITS = ("sshd.socket", "sshd.service", SSH_LIMIT_UNIT.name)', 'SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)'),
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
     "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
     "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return last if essential else None\n", "            return None\n"),
@@ -3103,3 +3119,8 @@ def test_the_two_counts_are_read_apart(machine, capsys):
     changes = machine.changes()
     assert ["systemctl", "stop", "sshd.service"] in changes and ["systemctl", "disable", "sshd.service"] not in changes
     assert machine.units["sshd.service"] == ["enabled", "inactive"]
+
+
+def test_the_rollback_stops_the_socket_before_the_service(machine, capsys):
+    assert cli.SSH_ROLLBACK_UNITS[:2] == ("sshd.socket", "sshd.service")
+    assert the_socket_is_stopped_first(machine, Path("/nonexistent"), capsys)
