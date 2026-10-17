@@ -1,15 +1,19 @@
-"""`herald-os setup ssh` (linux/bin/herald-os): SSH on for keys only and never root, rate-limited in
-the firewall, off again, and its status. The commands it runs as root go to a stand-in for systemctl,
-sshd, firewalld and the rest, which keeps their state; the files in the home folder and the drop-in
-are real, in a temporary directory. Each safety check also has a mutant: the CLI with that check
-taken out, which the same scenario must catch."""
+"""`herald-os setup ssh` (linux/bin/herald-os): SSH on for keys only and never root, rate-limited per
+address, off again, and its status. The commands it runs as root go to a stand-in for systemctl, sshd
+(`-T -C` with Match blocks), nft, firewalld, loginctl, sudo and the rest, which keeps their state; the
+files in the home folder, sshd's config and the drop-in are real, in a temporary directory, and
+`ssh-keygen -lf` is the real one. Each safety check also has a mutant: the CLI with that check taken
+out, which the same scenario must catch."""
 
 import base64
+import glob
 import importlib.machinery
 import importlib.util
+import ipaddress
 import json
 import os
 import pwd
+import shutil
 import stat
 import struct
 import subprocess
@@ -25,6 +29,10 @@ _SPEC = importlib.util.spec_from_loader("herald_os_cli_ssh", _LOADER)
 cli = importlib.util.module_from_spec(_SPEC)
 _LOADER.exec_module(cli)
 
+REAL_RUN = subprocess.run
+SSH_KEYGEN = shutil.which("ssh-keygen")
+pytestmark = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
+
 DROP_IN = (
     "# Written by `herald-os setup ssh`; `herald-os setup ssh --off` removes it.\n"
     "PermitRootLogin no\n"
@@ -32,16 +40,42 @@ DROP_IN = (
     "KbdInteractiveAuthentication no\n"
     "PermitEmptyPasswords no\n"
 )
-RULE = 'rule service name="ssh" accept limit value="4/m"'
+RULE = 'rule service name="ssh" accept'
+CURL_LIMITS = ["--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3", "--max-filesize", "1M"]
 # sshd's own defaults for what the drop-in sets.
-SSHD_DEFAULTS = {"permitrootlogin": "prohibit-password", "passwordauthentication": "yes", "kbdinteractiveauthentication": "yes", "permitemptypasswords": "no"}
+SSHD_DEFAULTS = {"port": "22", "permitrootlogin": "prohibit-password", "passwordauthentication": "yes", "kbdinteractiveauthentication": "yes", "permitemptypasswords": "no"}
+ROOT_PROBE = "user=root,host=x,addr=203.0.113.1"
+REMOTE_PROBE = "user=me,host=x,addr=203.0.113.1"
+
+# Key material ssh-keygen reads: the P-256 base point is a valid public point.
+P256 = b"\x04" + bytes.fromhex("6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296" "4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5")
 
 
-def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None) -> str:
-    """A public key line in OpenSSH's format, with made-up key material."""
-    name = (data_kind or kind).encode()
-    body = bytes([seed]) * 32
-    blob = struct.pack(">I", len(name)) + name + struct.pack(">I", len(body)) + body
+def _string(data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + data
+
+
+def _mpint(number: int) -> bytes:
+    data = number.to_bytes((number.bit_length() + 7) // 8, "big")
+    return _string(b"\0" + data if data[0] & 0x80 else data)
+
+
+def key_blob(kind: str, seed: int = 1, bits: int = 2048) -> bytes:
+    name = _string(kind.encode())
+    if kind == "ssh-rsa":
+        return name + _mpint(65537) + _mpint((1 << (bits - 1)) | (seed * 2 + 1))
+    if kind.startswith("ecdsa-sha2-"):
+        return name + _string(b"nistp256") + _string(P256)
+    if kind == "sk-ecdsa-sha2-nistp256@openssh.com":
+        return name + _string(b"nistp256") + _string(P256) + _string(b"ssh:")
+    if kind == "sk-ssh-ed25519@openssh.com":
+        return name + _string(bytes([seed]) * 32) + _string(b"ssh:")
+    return name + _string(bytes([seed]) * 32)
+
+
+def public_key(kind: str = "ssh-ed25519", comment: str = "me@laptop", seed: int = 1, data_kind: str | None = None, bits: int = 2048) -> str:
+    """A public key line in OpenSSH's format, with made-up key material that ssh-keygen reads."""
+    blob = key_blob(data_kind or kind, seed, bits)
     return f"{kind} {base64.b64encode(blob).decode()} {comment}".strip()
 
 
@@ -56,12 +90,37 @@ def looks(argv: list[str]) -> bool:
         return argv[1] in ("show", "is-enabled", "is-active")
     if tool.startswith("firewall"):
         return any(arg == "--get-default-zone" or arg.startswith("--query-") for arg in argv)
-    return tool in ("sshd", "ip", "curl") or argv[:2] == ["ssh-keygen", "-lf"]
+    if tool == "loginctl":
+        return argv[1] in ("list-sessions", "show-session")
+    if tool == "nft":
+        return argv[1] == "list"
+    return tool in ("sshd", "ip", "curl", "cat") or argv[:2] == ["ssh-keygen", "-lf"]
+
+
+def match_applies(condition: str, probe: str | None) -> bool:
+    """Whether a Match line applies to an `sshd -T -C` probe: all, User, Address, Host."""
+    if probe is None:
+        return False
+    spec = dict(part.split("=", 1) for part in probe.split(","))
+    words = condition.split()
+    if words == ["all"]:
+        return True
+    for criterion, value in zip(words[::2], words[1::2]):
+        criterion = criterion.lower()
+        if criterion == "user" and spec["user"] not in value.split(","):
+            return False
+        if criterion == "host" and spec["host"] not in value.split(","):
+            return False
+        if criterion == "address" and not any(ipaddress.ip_address(spec["addr"]) in ipaddress.ip_network(net, strict=False) for net in value.split(",")):
+            return False
+        if criterion not in ("user", "host", "address"):
+            return False
+    return True
 
 
 class System:
-    """A machine with sshd installed and off, firewalld running with the herald-os zone, and a person
-    whose home is in tmp_path. `module` is the CLI under test (a mutant, sometimes)."""
+    """A machine with sshd installed and off, firewalld running with the herald-os zone, nftables, and a
+    person whose home is in tmp_path. `module` is the CLI under test (a mutant, sometimes)."""
 
     def __init__(self, module, tmp_path: Path, monkeypatch):
         self.module = module
@@ -69,28 +128,43 @@ class System:
         self.home.mkdir(parents=True)
         self.etc = tmp_path / "etc-ssh"
         (self.etc / "sshd_config.d").mkdir(parents=True)
-        (self.etc / "ssh_host_ed25519_key.pub").write_text("ssh-ed25519 AAAA root@host\n")
+        (self.etc / "ssh_host_ed25519_key.pub").write_text(public_key(comment="root@host") + "\n")
+        self.config = self.etc / "sshd_config"
+        self.main_config()
         self.drop_in = self.etc / "sshd_config.d" / "10-herald-os.conf"
+        self.limit_rules = tmp_path / "etc-herald-os" / "ssh-limit.nft"
+        self.limit_unit = tmp_path / "etc-systemd" / "herald-os-ssh-limit.service"
         self.calls: list[tuple[bool, list[str]]] = []
-        self.units = {"sshd.service": ["disabled", "inactive"], "sshd.socket": ["disabled", "inactive"]}
+        self.units = {name: ["disabled", "inactive"] for name in ("sshd.service", "sshd.socket", "herald-os-ssh-limit.service")}
+        self.table: str | None = None
         self.firewalld = True
-        self.installed = {"sshd", "firewall-cmd", "firewall-offline-cmd", "restorecon", "curl", "ssh-keygen"}
+        self.installed = {"sshd", "firewall-cmd", "firewall-offline-cmd", "restorecon", "curl", "ssh-keygen", "nft"}
         self.zone = "herald-os"
         self.rules = {"runtime": set(), "permanent": set()}
         self.services: set[str] = set()
-        # sshd_config lines sshd reads before its Include line.
-        self.before_include: list[str] = []
         self.queries_need_root = False
         self.github: dict[str, tuple[str, int]] = {}
+        # Settings a probe gets that no file the CLI reads shows (as from a file it cannot see).
+        self.hidden: dict[str, dict[str, str]] = {}
+        # logind sessions: id -> service.
+        self.sessions: dict[str, str] = {}
         # The CLI runs as root (the first boot), so commands need no sudo to be root's.
         self.is_root = False
         self.account = pwd.struct_passwd(("me", "x", os.getuid(), os.getgid(), "", str(self.home), "/bin/bash"))
         monkeypatch.setattr(module, "SSHD_DROP_IN", self.drop_in)
+        monkeypatch.setattr(module, "SSHD_CONFIG", self.config)
         monkeypatch.setattr(module, "SSH_HOST_KEYS", self.etc)
+        monkeypatch.setattr(module, "SSH_LIMIT_RULES", self.limit_rules)
+        monkeypatch.setattr(module, "SSH_LIMIT_UNIT", self.limit_unit)
         monkeypatch.setattr(module.os, "geteuid", lambda: 1000)
         monkeypatch.setattr(module.pwd, "getpwuid", lambda uid: self.account)
         monkeypatch.setattr(module.shutil, "which", lambda name, path=None: f"/usr/sbin/{name}" if name in self.installed else None)
         monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.delenv("XDG_SESSION_ID", raising=False)
+
+    def main_config(self, *before: str) -> None:
+        """sshd_config: `before` ahead of its Include line, as Fedora's has its own settings after it."""
+        self.config.write_text("".join(f"{line}\n" for line in before) + f"Include {self.etc}/sshd_config.d/*.conf\n")
 
     # -- the stand-in ----------------------------------------------------------------------------
     def run(self, argv, capture_output=False, text=False, check=False, timeout=None, input=None, **_):
@@ -101,6 +175,8 @@ class System:
             if argv[:1] == ["-n"]:
                 argv = argv[1:]
         self.calls.append((root, argv))
+        if argv[:3] == ["ssh-keygen", "-lf", "-"]:
+            return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=input, capture_output=True, text=True, check=False)
         out, code = self.answer(argv, root or self.is_root)
         return subprocess.CompletedProcess(argv, code, out, "" if code == 0 else f"{argv[0]}: refused")
 
@@ -113,7 +189,12 @@ class System:
                 return "", 1  # host keys are root's
             if argv[1] == "-t":
                 return "", 0
-            return self.effective(), 0
+            return self.effective(argv[3] if argv[2:3] == ["-C"] else None), 0
+        if tool == "cat":
+            if not root:
+                return "", 1
+            path = Path(argv[1])
+            return (path.read_text(), 0) if path.is_file() else ("", 1)
         if tool == "ssh-keygen":
             if argv[1] == "-A":
                 return "", 0 if root else 1
@@ -121,6 +202,7 @@ class System:
         if tool == "install":
             if not root:
                 return "", 1
+            Path(argv[-1]).parent.mkdir(parents=True, exist_ok=True)
             Path(argv[-1]).write_text(Path(argv[-2]).read_text())
             Path(argv[-1]).chmod(0o644)
             return "", 0
@@ -131,8 +213,20 @@ class System:
             return "", 0
         if tool == "restorecon":
             return "", 0 if root else 1
+        if tool == "nft":
+            if not root:
+                return "", 1
+            if argv[1:] == ["list", "table", "inet", "herald_os_ssh"]:
+                return (self.table or "", 0 if self.table else 1)
+            if argv[1:] == ["delete", "table", "inet", "herald_os_ssh"]:
+                code = 0 if self.table else 1
+                self.table = None
+                return "", code
+            raise AssertionError(f"unexpected nft {argv}")
         if tool in ("firewall-cmd", "firewall-offline-cmd"):
             return self.firewall(tool, argv[1:], root)
+        if tool == "loginctl":
+            return self.loginctl(argv[1:], root)
         if tool == "ip":
             return ("2: enp1s0    inet 192.168.1.20/24 brd 192.168.1.255 scope global dynamic enp1s0\n"
                     "2: enp1s0    inet6 fd00::20/64 scope global dynamic\n"), 0
@@ -141,8 +235,10 @@ class System:
         raise AssertionError(f"unexpected command: {argv}")
 
     def systemctl(self, args: list[str], root: bool) -> tuple[str, int]:
+        limit = "herald-os-ssh-limit.service"
         if args[:4] == ["show", "-p", "LoadState", "--value"]:
-            return ("loaded\n" if args[4] in self.units else "not-found\n"), 0
+            loaded = args[4] != limit or self.limit_unit.exists()
+            return ("loaded\n" if loaded and args[4] in self.units else "not-found\n"), 0
         if args == ["is-active", "--quiet", "firewalld"]:
             return "", 0 if self.firewalld else 3
         if args[0] == "is-enabled":
@@ -153,31 +249,55 @@ class System:
             return state + "\n", 0 if state == "active" else 3
         if not root:
             return "", 1
-        if args == ["start", "sshd-keygen.target"]:
+        if args in (["start", "sshd-keygen.target"], ["daemon-reload"]):
             return "", 0
-        if args == ["enable", "sshd.service"]:
-            self.units["sshd.service"][0] = "enabled"
+        if args[0] == "enable":
+            self.units[args[1]][0] = "enabled"
             return "", 0
         if args == ["reload-or-restart", "sshd.service"]:
             self.units["sshd.service"][1] = "active"
             return "", 0
+        if args == ["restart", limit]:
+            self.units[limit][1] = "active"
+            self.table = self.limit_rules.read_text()
+            return "", 0
         if args[:2] == ["disable", "--now"]:
             self.units[args[2]] = ["disabled", "inactive"]
+            if args[2] == limit:
+                self.table = None
             return "", 0
         raise AssertionError(f"unexpected systemctl {args}")
 
-    def effective(self) -> str:
-        """`sshd -T`: the first value read wins, sshd_config before its Include, then sshd_config.d in order."""
-        values: dict[str, str] = {}
-        lines = list(self.before_include)
-        for file in sorted((self.etc / "sshd_config.d").glob("*.conf")):
-            lines += file.read_text().splitlines()
-        for line in lines:
-            if line.strip() and not line.startswith("#"):
-                key, value = line.split(None, 1)
-                values.setdefault(key.lower(), value.strip().lower())
-        for key, value in SSHD_DEFAULTS.items():
-            values.setdefault(key, value)
+    def config_lines(self, path: Path):
+        """sshd's config as sshd reads it: includes in place, and None where an included file ends."""
+        for raw in path.read_text().splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.lower().startswith("include "):
+                for found in sorted(glob.glob(line.split(None, 1)[1])):
+                    yield from self.config_lines(Path(found))
+                    yield None
+            else:
+                yield line
+
+    def effective(self, probe: str | None) -> str:
+        """`sshd -T [-C probe]`: the first value read wins, and a Match block that applies wins over it."""
+        everywhere: dict[str, str] = {}
+        matched: dict[str, str] = {}
+        applies = None
+        for line in self.config_lines(self.config):
+            if line is None:
+                applies = None
+                continue
+            key, value = line.split(None, 1)
+            if key.lower() == "match":
+                applies = match_applies(value, probe)
+            elif applies is None:
+                everywhere.setdefault(key.lower(), value.strip().lower())
+            elif applies:
+                matched.setdefault(key.lower(), value.strip().lower())
+        values = {**SSHD_DEFAULTS, **everywhere, **matched, **self.hidden.get(probe or "", {})}
         return "".join(f"{key} {value}\n" for key, value in values.items())
 
     def firewall(self, tool: str, args: list[str], root: bool) -> tuple[str, int]:
@@ -201,6 +321,16 @@ class System:
             return "", 0
         raise AssertionError(f"unexpected {tool} {args}")
 
+    def loginctl(self, args: list[str], root: bool) -> tuple[str, int]:
+        if args == ["list-sessions", "--no-legend"]:
+            return "".join(f"{session} 1000 me seat0 tty\n" for session in self.sessions), 0
+        if args[0] == "show-session":
+            return self.sessions.get(args[1], "") + "\n", 0 if args[1] in self.sessions else 1
+        if args[0] == "terminate-session" and root:
+            self.sessions.pop(args[1], None)
+            return "", 0
+        return "", 1
+
     # -- what the tests look at ------------------------------------------------------------------
     @property
     def ssh(self) -> Path:
@@ -212,6 +342,9 @@ class System:
 
     def on(self) -> bool:
         return self.units["sshd.service"] == ["enabled", "active"]
+
+    def limited(self) -> bool:
+        return self.units["herald-os-ssh-limit.service"] == ["enabled", "active"] and bool(self.table)
 
     def changes(self) -> list[list[str]]:
         """The commands that change something, rather than look."""
@@ -257,6 +390,33 @@ def test_a_public_key_is_one_line_of_a_type_sshd_takes_whose_data_names_that_typ
         assert cli.ssh_key(wrong) is None, wrong
 
 
+def test_ssh_keygen_s_listing_says_which_keys_are_strong_enough():
+    assert cli.key_weakness("256 SHA256:abc me (ED25519)") is None
+    assert cli.key_weakness("521 SHA256:abc me (ECDSA)") is None
+    assert cli.key_weakness("256 SHA256:abc me (ED25519-SK)") is None
+    assert cli.key_weakness("256 SHA256:abc me (ECDSA-SK)") is None
+    assert cli.key_weakness("2048 SHA256:abc me (RSA)") is None
+    assert cli.key_weakness("4096 SHA256:abc a comment with spaces (RSA)") is None
+    assert "too short" in cli.key_weakness("2047 SHA256:abc me (RSA)")
+    assert "too short" in cli.key_weakness("1024 SHA256:abc me (RSA)")
+    assert "not taken" in cli.key_weakness("1024 SHA256:abc me (DSA)")
+    assert "not taken" in cli.key_weakness("256 SHA256:abc me (XMSS)")
+    assert "cannot read" in cli.key_weakness("")
+    assert "cannot read" in cli.key_weakness("(stdin) is not a public key file.")
+
+
+@pytest.mark.parametrize("kind, bits, taken", [
+    ("ssh-ed25519", 0, True), ("ecdsa-sha2-nistp256", 0, True), ("sk-ssh-ed25519@openssh.com", 0, True),
+    ("sk-ecdsa-sha2-nistp256@openssh.com", 0, True), ("ssh-rsa", 2048, True), ("ssh-rsa", 3072, True),
+    ("ssh-rsa", 2047, False), ("ssh-rsa", 1024, False),
+])
+def test_the_real_ssh_keygen_reads_the_bits_and_type(kind, bits, taken):
+    listing, weakness = cli.key_listing(public_key(kind, bits=bits or 2048))
+    assert (weakness is None) == taken, (listing, weakness)
+    if kind == "ssh-rsa":
+        assert listing.startswith(f"{bits} SHA256:")
+
+
 def test_authorized_keys_lets_in_its_keys_with_or_without_options_and_nothing_else():
     one, two = public_key(seed=1), public_key("ssh-rsa", seed=2)
     text = f"# my laptop\n{one}\n\nfrom=\"10.0.0.0/8\",no-pty {two}\nssh-ed25519 broken\n#{public_key(seed=3)}\n"
@@ -289,6 +449,31 @@ def test_what_sshd_reports_must_match_the_drop_in():
     assert cli.sshd_overruled(good.replace("kbdinteractiveauthentication no\n", ""), passwords=False) == ["kbdinteractiveauthentication is not reported, not no"]
 
 
+def test_a_match_block_that_lets_in_more_is_found_in_any_file():
+    files = [
+        ("/etc/ssh/sshd_config", "PasswordAuthentication yes\nMatch User backup\n  # PermitRootLogin yes\n  X11Forwarding no\n"),
+        ("/etc/ssh/sshd_config.d/50-x.conf", "Match Address 10.0.0.0/8\n\tPasswordAuthentication yes\n"
+                                             "Match User admin\n  KbdInteractiveAuthentication=yes\n  PermitRootLogin prohibit-password\n"
+                                             "Match all\n  PermitEmptyPasswords yes\n  AuthenticationMethods publickey,keyboard-interactive:pam\n"),
+        ("/etc/ssh/sshd_config.d/60-y.conf", "Match Group ops\n  AuthenticationMethods password\n  ChallengeResponseAuthentication yes\n  PermitRootLogin no\n"),
+    ]
+    found = cli.match_weakening(files, passwords=False)
+    assert found == [
+        "/etc/ssh/sshd_config.d/50-x.conf line 2: PasswordAuthentication yes under Match Address 10.0.0.0/8",
+        "/etc/ssh/sshd_config.d/50-x.conf line 4: KbdInteractiveAuthentication yes under Match User admin",
+        "/etc/ssh/sshd_config.d/50-x.conf line 5: PermitRootLogin prohibit-password under Match User admin",
+        "/etc/ssh/sshd_config.d/50-x.conf line 7: PermitEmptyPasswords yes under Match all",
+        "/etc/ssh/sshd_config.d/50-x.conf line 8: AuthenticationMethods publickey,keyboard-interactive:pam under Match all",
+        "/etc/ssh/sshd_config.d/60-y.conf line 2: AuthenticationMethods password under Match Group ops",
+        "/etc/ssh/sshd_config.d/60-y.conf line 3: ChallengeResponseAuthentication yes under Match Group ops",
+    ]
+    # With passwords asked for, a Match that turns passwords on is no weaker; one that turns on more still is.
+    with_passwords = cli.match_weakening(files, passwords=True)
+    assert not any("PasswordAuthentication yes" in line or "AuthenticationMethods password" in line for line in with_passwords)
+    assert any("KbdInteractiveAuthentication" in line for line in with_passwords)
+    assert cli.match_weakening([("x", "Match User a\n  PasswordAuthentication no\n  AuthenticationMethods publickey\n")], passwords=False) == []
+
+
 # ---------------------------------------------------------------------------------------------
 # On.
 def test_without_a_key_it_refuses_and_changes_nothing(machine, capsys):
@@ -307,7 +492,7 @@ def test_an_authorized_keys_with_no_usable_key_counts_as_none(machine, capsys):
     assert machine.changes() == [] and machine.keys_file.read_text() == before
 
 
-def test_with_a_key_ssh_is_on_for_keys_only_rate_limited_and_it_says_how_to_reach_it(machine, capsys):
+def test_with_a_key_ssh_is_on_for_keys_only_rate_limited_per_address_and_it_says_how_to_reach_it(machine, capsys):
     key = public_key()
     assert machine.setup("--key", key) == 0
     out = capsys.readouterr().out
@@ -315,16 +500,30 @@ def test_with_a_key_ssh_is_on_for_keys_only_rate_limited_and_it_says_how_to_reac
     assert stat.S_IMODE(machine.ssh.stat().st_mode) == 0o700
     assert stat.S_IMODE(machine.keys_file.stat().st_mode) == 0o600
     assert machine.drop_in.read_text() == DROP_IN
-    assert machine.on()
+    assert machine.on() and machine.limited()
+    assert machine.limit_rules.read_text() == cli.ssh_limit_rules(["22"])
+    assert machine.limit_unit.read_text() == cli.ssh_limit_unit("/usr/sbin/nft")
     assert machine.rules == {"runtime": {RULE}, "permanent": {RULE}}
     assert ["restorecon", "-R", str(machine.ssh)] in machine.changes()
     assert ["restorecon", str(machine.drop_in)] in machine.changes()
     # Root only where it is needed: the home folder is written as the person.
-    assert all(root for root, argv in machine.calls if argv in machine.changes())
+    assert all(root for root, argv in machine.calls if argv in machine.changes() and argv[0] != "ssh-keygen")
     assert "keys only, no passwords" in out and "never root" in out
     assert "SHA256:hostkeyfingerprint" in out
     assert "ssh me@192.168.1.20" in out and "ssh me@fd00::20" in out
-    assert "4 new connections a minute" in out
+    assert "at most 4 a minute new connections from each address" in out
+
+
+def test_each_given_key_s_fingerprint_is_shown_before_it_goes_in(machine, capsys):
+    one, two = public_key(seed=1, comment="laptop"), public_key("ecdsa-sha2-nistp256", comment="phone")
+    machine.setup("--key", one)
+    capsys.readouterr()
+    assert machine.setup("--key", one, "--key", two) == 0
+    out = capsys.readouterr().out
+    first = REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=one + "\n", capture_output=True, text=True).stdout.strip()
+    second = REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=two + "\n", capture_output=True, text=True).stdout.strip()
+    assert f"key {first}: there already" in out and f"key {second}: adding" in out
+    assert out.index(second) < out.index("SSH is on")
 
 
 def test_a_key_already_in_authorized_keys_is_enough_and_the_file_is_kept_but_tightened(machine):
@@ -352,12 +551,13 @@ def test_passwords_only_with_the_explicit_flag_and_never_root_or_keyboard_intera
 def test_running_it_again_changes_nothing_more(machine, capsys):
     key = public_key()
     assert machine.setup("--key", key) == 0
-    first = (machine.keys_file.read_text(), machine.drop_in.read_text(), {k: set(v) for k, v in machine.rules.items()})
+    first = (machine.keys_file.read_text(), machine.drop_in.read_text(), machine.limit_rules.read_text(), {k: set(v) for k, v in machine.rules.items()})
     capsys.readouterr()
     assert machine.setup("--key", key) == 0
     assert "added" not in capsys.readouterr().out
-    assert (machine.keys_file.read_text(), machine.drop_in.read_text(), machine.rules) == first
+    assert (machine.keys_file.read_text(), machine.drop_in.read_text(), machine.limit_rules.read_text(), machine.rules) == first
     assert machine.keys_file.read_text().count(bare(key)) == 1
+    assert machine.limited()
 
 
 def test_a_second_key_is_added_beside_the_first(machine):
@@ -376,6 +576,19 @@ def test_a_key_that_is_not_one_is_refused_before_anything_changes(machine, capsy
     assert machine.changes() == [] and machine.keys_file.read_text() == f"{public_key(seed=9)}\n"
 
 
+@pytest.mark.parametrize("bits", [1024, 2047])
+def test_an_rsa_key_under_2048_bits_is_refused(machine, capsys, bits):
+    err = refused(machine, capsys, "--key", public_key("ssh-rsa", bits=bits), code=2)
+    assert f"an RSA key of {bits} bits is too short (2048 at least)" in err and "Nothing was changed" in err
+    assert machine.changes() == [] and not machine.ssh.exists()
+
+
+@pytest.mark.parametrize("kind", ["ssh-rsa", "ecdsa-sha2-nistp256", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com"])
+def test_rsa_of_2048_bits_ecdsa_and_security_keys_are_taken(machine, kind):
+    assert machine.setup("--key", public_key(kind)) == 0
+    assert machine.keys_file.read_text() == public_key(kind) + "\n"
+
+
 def test_a_keys_file_gives_its_keys_and_skips_comments(machine, tmp_path, capsys):
     one, two = public_key(seed=1), public_key(seed=2)
     given = tmp_path / "keys"
@@ -384,14 +597,41 @@ def test_a_keys_file_gives_its_keys_and_skips_comments(machine, tmp_path, capsys
     assert machine.keys_file.read_text() == f"{one}\n{two}\n"
     given.write_text(f"{one}\nnot a key\n")
     assert "line 2: not an SSH public key" in refused(machine, capsys, "--keys-file", str(given), code=2)
+    given.write_text(f"{one}\n{public_key('ssh-rsa', bits=1024)}\n")
+    assert "line 2: an RSA key of 1024 bits is too short" in refused(machine, capsys, "--keys-file", str(given), code=2)
 
 
-def test_github_keys_are_read_and_marked_and_a_user_without_keys_is_refused(machine, capsys):
+def test_github_keys_are_read_over_https_only_within_limits_and_marked(machine, capsys):
     one, two = public_key(comment="", seed=1), public_key(comment="", seed=2)
     machine.github["https://github.com/octocat.keys"] = (f"{one}\n{two}\nssh-dss AAAA\n", 0)
     assert machine.setup("--github", "octocat") == 0
     assert machine.keys_file.read_text() == f"{one} github:octocat\n{two} github:octocat\n"
-    capsys.readouterr()
+    curl = next(argv for _, argv in machine.calls if argv[0] == "curl")
+    assert curl[-1] == "https://github.com/octocat.keys"
+    for at in range(0, len(CURL_LIMITS), 2):
+        assert curl[curl.index(CURL_LIMITS[at]) + 1] == CURL_LIMITS[at + 1]
+    assert "--max-time" in curl and "--connect-timeout" in curl
+    out = capsys.readouterr().out
+    assert out.count(": adding") == 2 and "github:octocat (ED25519)" in out
+
+
+def test_a_github_page_over_1_mib_is_refused(machine, capsys):
+    machine.github["https://github.com/big.keys"] = (public_key() + "\n" + "#" * (1 << 20), 0)
+    assert "larger than a key list can be" in refused(machine, capsys, "--github", "big")
+    assert machine.changes() == []
+
+
+def test_weak_github_keys_are_skipped_and_a_user_with_only_weak_ones_is_refused(machine, capsys):
+    weak, good = public_key("ssh-rsa", comment="", bits=1024), public_key(comment="", seed=3)
+    machine.github["https://github.com/mixed.keys"] = (f"{weak}\n{good}\n", 0)
+    assert machine.setup("--github", "mixed") == 0
+    assert machine.keys_file.read_text() == f"{good} github:mixed\n"
+    assert "skipping 1024 SHA256:" in capsys.readouterr().out
+    machine.github["https://github.com/weak.keys"] = (f"{weak}\n", 0)
+    assert "none of weak's SSH keys on GitHub" in refused(machine, capsys, "--github", "weak")
+
+
+def test_a_github_user_without_keys_or_a_page_or_a_good_name_is_refused(machine, capsys):
     machine.github["https://github.com/nokeys.keys"] = ("", 0)
     assert "has no SSH keys on GitHub" in refused(machine, capsys, "--github", "nokeys")
     assert "could not read" in refused(machine, capsys, "--github", "missing")
@@ -413,32 +653,107 @@ def test_a_link_in_place_of_ssh_or_authorized_keys_is_refused(machine, tmp_path,
     assert (elsewhere / "authorized_keys").read_text() == "" and machine.changes() == []
 
 
-def test_when_an_earlier_sshd_setting_overrules_the_drop_in_it_is_taken_back_and_ssh_stays_off(machine, capsys):
-    machine.before_include = ["PasswordAuthentication yes"]
-    err = refused(machine, capsys, "--key", public_key())
-    assert "passwordauthentication is yes, not no" in err and "SSH stays as it was" in err
-    assert not machine.drop_in.exists() and not machine.on()
+def assert_backed_out(machine: System) -> None:
+    assert not machine.drop_in.exists() and not machine.on() and not machine.limited()
     assert machine.rules == {"runtime": set(), "permanent": set()}
+
+
+def test_when_an_earlier_sshd_setting_overrules_the_drop_in_it_is_taken_back_and_ssh_stays_off(machine, capsys):
+    machine.main_config("PasswordAuthentication yes")
+    err = refused(machine, capsys, "--key", public_key())
+    assert "passwordauthentication is yes, not no by default" in err and "SSH stays as it was" in err
+    assert_backed_out(machine)
+
+
+@pytest.mark.parametrize("block", [
+    "Match User alice\n  PasswordAuthentication yes",
+    "Match Address 10.0.0.0/8\n  KbdInteractiveAuthentication yes",
+    "Match User root\n  PermitRootLogin prohibit-password",
+    "Match Group wheel\n  PermitEmptyPasswords yes",
+    "Match all\n  AuthenticationMethods keyboard-interactive",
+])
+def test_a_match_block_that_lets_in_more_stops_it(machine, capsys, block):
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text(block + "\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert "under Match" in err and "50-site.conf line 2" in err
+    assert_backed_out(machine)
+
+
+def test_a_match_block_in_sshd_config_itself_stops_it(machine, capsys):
+    machine.config.write_text(machine.config.read_text() + "Match Address 203.0.113.0/24\n  PermitRootLogin yes\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert "sshd_config line 3: PermitRootLogin yes under Match Address 203.0.113.0/24" in err
+    assert f"permitrootlogin is yes, not no for {ROOT_PROBE}" in err
+    assert_backed_out(machine)
+
+
+@pytest.mark.parametrize("probe", [ROOT_PROBE, REMOTE_PROBE, "user=me,host=localhost,addr=127.0.0.1"])
+def test_sshd_is_asked_about_root_and_the_account_from_the_internet_and_any_mismatch_backs_out(machine, capsys, probe):
+    machine.hidden[probe] = {"passwordauthentication": "yes"}
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"passwordauthentication is yes, not no for {probe}" in err
+    assert_backed_out(machine)
+    asked = [argv[3] for _, argv in machine.calls if Path(argv[0]).name == "sshd" and argv[1:3] == ["-T", "-C"]]
+    assert {ROOT_PROBE, REMOTE_PROBE} <= set(asked)
 
 
 def test_when_the_drop_in_is_overruled_an_earlier_one_is_put_back(machine, capsys):
     machine.setup("--key", public_key())
-    machine.before_include = ["PermitRootLogin yes"]
+    machine.main_config("PermitRootLogin yes")
     refused(machine, capsys, "--passwords")
     assert machine.drop_in.read_text() == DROP_IN
 
 
-def test_without_firewalld_running_sshd_turns_on_and_it_says_nothing_was_opened(machine, capsys):
+def test_the_rate_limit_follows_the_port_sshd_listens_on(machine):
+    (machine.etc / "sshd_config.d" / "20-port.conf").write_text("Port 2222\n")
+    machine.setup("--key", public_key())
+    assert "tcp dport { 2222 } ct state new" in machine.limit_rules.read_text()
+
+
+def test_the_rate_limit_counts_each_address_on_its_own():
+    rules = cli.ssh_limit_rules(["22", "2222"])
+    assert rules.splitlines()[2:5] == ["table inet herald_os_ssh", "delete table inet herald_os_ssh", "table inet herald_os_ssh {"]
+    assert "type filter hook input priority filter - 10; policy accept;" in rules
+    assert "flags dynamic,timeout" in rules
+    assert "tcp dport { 22, 2222 } ct state new add @sources4 { ip saddr limit rate over 4/minute burst 4 packets } counter drop" in rules
+    assert "tcp dport { 22, 2222 } ct state new add @sources6 { ip6 saddr and ffff:ffff:ffff:ffff:: limit rate over 4/minute burst 4 packets } counter drop" in rules
+    unit = cli.ssh_limit_unit("/usr/sbin/nft")
+    assert "ExecStart=/usr/sbin/nft -f /etc/herald-os/ssh-limit.nft" in unit
+    assert "ExecStop=/usr/sbin/nft delete table inet herald_os_ssh" in unit
+    assert "Before=network-pre.target sshd.service sshd.socket" in unit and "WantedBy=multi-user.target" in unit
+    # firewalld's own rule has no limit of its own: one shared by every address could be used up by anyone.
+    assert "limit" not in cli.SSH_RICH_RULE
+
+
+@pytest.mark.skipif(os.geteuid() != 0 or not shutil.which("nft"), reason="checking an nftables file needs nft and root")
+def test_nft_takes_the_rate_limit(tmp_path):
+    path = tmp_path / "limit.nft"
+    path.write_text(cli.ssh_limit_rules(["22"]))
+    assert REAL_RUN(["nft", "-c", "-f", str(path)], capture_output=True, text=True).returncode == 0
+
+
+def test_without_firewalld_running_it_refuses_unless_told_and_then_warns_loudly(machine, capsys):
     machine.firewalld = False
-    assert machine.setup("--key", public_key()) == 0
-    assert machine.on() and machine.rules == {"runtime": set(), "permanent": set()}
-    assert "no firewall is running" in capsys.readouterr().out
+    err = refused(machine, capsys, "--key", public_key())
+    assert "firewalld is not running" in err and "--no-firewall" in err and "Nothing was changed" in err
+    assert machine.changes() == [] and not machine.on()
+    assert machine.setup("--key", public_key(), "--no-firewall") == 0
+    captured = capsys.readouterr()
+    assert captured.err.count("WARNING: firewalld is not running") == 2
+    assert machine.on() and machine.limited() and machine.rules == {"runtime": set(), "permanent": set()}
+    assert "none running (--no-firewall)" in captured.out
+
+
+def test_without_nft_it_refuses_while_firewalld_runs(machine, capsys):
+    machine.installed.discard("nft")
+    assert "rate-limited per address" in refused(machine, capsys, "--key", public_key(), code=127)
+    assert machine.changes() == []
 
 
 def test_a_zone_that_lets_ssh_in_already_is_pointed_out(machine, capsys):
     machine.services.add("ssh")
     machine.setup("--key", public_key())
-    assert "lets SSH in already, without a rate limit" in capsys.readouterr().out
+    assert "let SSH in already, by its own ssh service" in capsys.readouterr().out
 
 
 def test_without_sshd_installed_it_says_how_to_get_it(machine, capsys):
@@ -456,12 +771,19 @@ def test_off_takes_back_everything_on_did_and_leaves_the_keys(machine, capsys):
     capsys.readouterr()
     assert machine.setup("--off") == 0
     out = capsys.readouterr().out
-    assert machine.units == {"sshd.service": ["disabled", "inactive"], "sshd.socket": ["disabled", "inactive"]}
-    assert not machine.drop_in.exists()
+    assert machine.units == {name: ["disabled", "inactive"] for name in machine.units}
+    assert not machine.drop_in.exists() and not machine.limit_rules.exists() and not machine.limit_unit.exists()
+    assert machine.table is None
     assert machine.rules == {"runtime": set(), "permanent": set()}
     assert machine.keys_file.read_text() == f"{key}\n"
     assert "SSH is off" in out and "left as it is" in out
     assert machine.setup("--off") == 0
+
+
+def test_off_removes_a_rate_limit_table_left_without_its_unit(machine):
+    machine.table = "table inet herald_os_ssh {}"
+    machine.setup("--off")
+    assert machine.table is None
 
 
 def test_off_leaves_a_zones_own_ssh_service_and_says_so(machine, capsys):
@@ -479,21 +801,67 @@ def test_off_with_firewalld_stopped_removes_the_saved_rule(machine):
     assert machine.rules["permanent"] == set()
 
 
+def test_off_without_a_terminal_leaves_ssh_sessions_and_says_how_to_end_them(machine, capsys):
+    machine.setup("--key", public_key())
+    machine.sessions = {"7": "sshd", "2": "greetd"}
+    capsys.readouterr()
+    machine.setup("--off")
+    out = capsys.readouterr().out
+    assert machine.sessions == {"7": "sshd", "2": "greetd"}
+    assert "1 SSH session(s) are still open (7)" in out and "--off --end-sessions" in out and "loginctl terminate-session" in out
+
+
+def test_off_end_sessions_ends_only_ssh_sessions_and_the_caller_s_own_last(machine, monkeypatch, capsys):
+    machine.setup("--key", public_key())
+    machine.sessions = {"3": "sshd", "4": "sshd", "5": "greetd", "6": "sshd"}
+    monkeypatch.setenv("XDG_SESSION_ID", "3")
+    machine.setup("--off", "--end-sessions")
+    assert machine.sessions == {"5": "greetd"}
+    ended = [argv[2] for _, argv in machine.calls if argv[:2] == ["loginctl", "terminate-session"]]
+    assert ended == ["4", "6", "3"]
+    # Sessions end after everything else, so ending the caller's own cannot stop SSH half turned off.
+    last_change = max(at for at, (_, argv) in enumerate(machine.calls) if argv[:1] == ["rm"] or argv[:2] == ["systemctl", "disable"])
+    first_end = min(at for at, (_, argv) in enumerate(machine.calls) if argv[:2] == ["loginctl", "terminate-session"])
+    assert last_change < first_end
+
+
+@pytest.mark.parametrize("answer, ended", [("y", True), ("yes", True), ("", False), ("n", False)])
+def test_off_in_a_terminal_asks_whether_to_end_ssh_sessions(machine, monkeypatch, capsys, answer, ended):
+    machine.setup("--key", public_key())
+    machine.sessions = {"9": "sshd"}
+    asked = []
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or answer)
+    machine.setup("--off")
+    assert asked == ["End the 1 SSH session(s) open now? [y/N] "]
+    assert ("9" not in machine.sessions) == ended
+
+
+def test_off_does_not_ask_when_no_ssh_session_is_open(machine, monkeypatch):
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
+    machine.sessions = {"2": "greetd"}
+    assert machine.setup("--off") == 0
+
+
 def test_status_says_whether_ssh_is_on_and_how(machine, capsys):
     assert machine.setup("--status") == 0
     assert capsys.readouterr().out.startswith("SSH: off")
     machine.setup("--key", public_key())
+    machine.sessions = {"7": "sshd"}
     capsys.readouterr()
     assert machine.setup("--status", "--json") == 0
     state = json.loads(capsys.readouterr().out)
     assert state == {
         "on": True, "enabled": True, "running": True, "socket": False, "dropIn": True, "passwords": False,
-        "firewall": {"zone": "herald-os", "rateLimited": True, "open": False}, "user": "me", "keys": 1,
+        "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "sessions": 1,
+        "user": "me", "keys": 1,
     }
     before = len(machine.calls)
     machine.setup("--status")
     out = capsys.readouterr().out
-    assert "SSH: on (running)" in out and "keys only" in out and "rate-limited" in out
+    assert "SSH: on (running)" in out and "keys only" in out and "open (Herald OS's rule)" in out
+    assert "rate limit: at most 4 a minute new connections from each address" in out and "sessions: 1 open" in out
     # Status itself changes nothing and needs no root.
     assert machine.calls[before:] and all(looks(argv) and not root for root, argv in machine.calls[before:])
 
@@ -506,7 +874,10 @@ def test_status_says_when_the_firewall_needs_root_to_tell(machine, capsys):
 
 # ---------------------------------------------------------------------------------------------
 # Arguments, root and the rest of the CLI.
-@pytest.mark.parametrize("args", [["--off", "--key", "x"], ["--status", "--passwords"], ["--off", "--status"], ["--json"], ["--key"], ["--bogus"], ["on"]])
+@pytest.mark.parametrize("args", [
+    ["--off", "--key", "x"], ["--status", "--passwords"], ["--off", "--status"], ["--json"], ["--key"], ["--bogus"], ["on"],
+    ["--end-sessions"], ["--key", "x", "--end-sessions"], ["--off", "--no-firewall"], ["--status", "--end-sessions"],
+])
 def test_arguments_that_do_not_go_together_are_refused(machine, capsys, args):
     refused(machine, capsys, *args, code=2)
     assert machine.calls == []
@@ -529,7 +900,7 @@ def test_as_root_it_writes_the_named_accounts_keys_as_that_account_and_runs_the_
     given.write_text(public_key() + "\n")
     assert machine.setup("--user", "me", "--keys-file", str(given)) == 0
     assert machine.calls and not any(root for root, _ in machine.calls)
-    assert machine.on() and machine.keys_file.read_text() == public_key() + "\n"
+    assert machine.on() and machine.limited() and machine.keys_file.read_text() == public_key() + "\n"
     # Every stretch as the account starts with its groups and ids and ends back as root.
     assert seen[:3] == [("groups", []), ("gid", os.getgid()), ("uid", os.getuid())]
     assert seen[3:6] == [("uid", 0), ("gid", 0), ("groups", [0])]
@@ -542,14 +913,14 @@ def test_as_root_it_needs_to_be_told_whose_account_and_never_root(machine, monke
     assert "--user <name>" in refused(machine, capsys, "--key", public_key(), code=2)
     assert "--user <name>" in refused(machine, capsys, "--user", "root", "--key", public_key(), code=2)
     # Off and status need no account.
-    assert machine.setup("--off") == 0
+    assert machine.setup("--off", "--end-sessions") == 0
 
 
 def test_setup_ssh_is_dispatched_and_its_flags_are_in_the_help(monkeypatch, capsys):
     seen = []
     monkeypatch.setattr(cli, "setup_ssh", lambda args: seen.append(args) or 0)
     assert cli.main(["setup", "ssh", "--status"]) == 0 and seen == [["--status"]]
-    for flag in ("--key", "--github", "--keys-file", "--passwords", "--user", "--off", "--status", "--json"):
+    for flag in ("--key", "--github", "--keys-file", "--passwords", "--no-firewall", "--user", "--off", "--end-sessions", "--status", "--json"):
         assert flag in cli.COMMANDS["setup"], flag
 
 
@@ -583,56 +954,143 @@ def outcome(machine: System, *args: str):
         return f"error {error!r}"
 
 
-def refuses_without_keys(machine: System, tmp_path: Path) -> bool:
+def refuses_without_keys(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine) == "exit 1" and not machine.on() and machine.changes() == []
 
 
-def keys_only_never_root(machine: System, tmp_path: Path) -> bool:
+def keys_only_never_root(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", public_key()) == 0 and machine.drop_in.read_text() == DROP_IN and machine.on()
 
 
-def overruled_drop_in_stops_it(machine: System, tmp_path: Path) -> bool:
-    machine.before_include = ["PasswordAuthentication yes"]
+def overruled_drop_in_stops_it(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.main_config("PasswordAuthentication yes")
     return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on() and not machine.drop_in.exists()
 
 
-def overruled_root_login_stops_it(machine: System, tmp_path: Path) -> bool:
-    machine.before_include = ["PermitRootLogin yes"]
+def overruled_root_login_stops_it(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.main_config("PermitRootLogin yes")
     return outcome(machine, "--passwords") == "exit 1" and not machine.on()
 
 
-def keys_file_is_private(machine: System, tmp_path: Path) -> bool:
+def unseen_match_block_stops_it(machine: System, tmp_path: Path, capsys) -> bool:
+    # Only the scan of the files sees it: no probe is alice.
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text("Match User alice\n  PasswordAuthentication yes\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def root_probe_stops_it(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.hidden[ROOT_PROBE] = {"permitrootlogin": "yes"}
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def remote_probe_stops_it(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.hidden[REMOTE_PROBE] = {"passwordauthentication": "yes"}
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def keys_file_is_private(machine: System, tmp_path: Path, capsys) -> bool:
     outcome(machine, "--key", public_key())
     return stat.S_IMODE(machine.ssh.stat().st_mode) == 0o700 and stat.S_IMODE(machine.keys_file.stat().st_mode) == 0o600
 
 
-def links_are_refused(machine: System, tmp_path: Path) -> bool:
+def links_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     machine.ssh.symlink_to(elsewhere)
     return outcome(machine, "--key", public_key()) == "exit 1" and not (elsewhere / "authorized_keys").exists()
 
 
-def bad_keys_are_refused(machine: System, tmp_path: Path) -> bool:
+def bad_keys_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", f'command="sh" {public_key()}') == "exit 2" and not machine.ssh.exists()
 
 
-def mismatched_key_data_is_refused(machine: System, tmp_path: Path) -> bool:
-    return outcome(machine, "--key", public_key(data_kind="ssh-rsa")) == "exit 2" and not machine.ssh.exists()
+def mismatched_key_data_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    # ssh-keygen catches it in a given key too; in authorized_keys only this check does.
+    machine.ssh.mkdir(mode=0o700)
+    machine.keys_file.write_text(public_key(data_kind="ssh-rsa") + "\n")
+    return outcome(machine) == "exit 1" and not machine.on()
 
 
-def rate_limited(machine: System, tmp_path: Path) -> bool:
+def short_rsa_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    return outcome(machine, "--key", public_key("ssh-rsa", bits=1024)) == "exit 2" and not machine.ssh.exists()
+
+
+def weak_github_keys_are_skipped(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.github["https://github.com/mixed.keys"] = (public_key("ssh-rsa", comment="", bits=1024) + "\n" + public_key(comment="", seed=4) + "\n", 0)
+    return outcome(machine, "--github", "mixed") == 0 and "ssh-rsa" not in machine.keys_file.read_text()
+
+
+def fingerprints_are_shown(machine: System, tmp_path: Path, capsys) -> bool:
+    capsys.readouterr()
+    outcome(machine, "--key", public_key())
+    return "key 256 SHA256:" in capsys.readouterr().out
+
+
+def github_fetch_is_https_only(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.github["https://github.com/octocat.keys"] = (public_key() + "\n", 0)
+    outcome(machine, "--github", "octocat")
+    curl = next((argv for _, argv in machine.calls if argv[0] == "curl"), [])
+    return all(CURL_LIMITS[at] in curl and curl[curl.index(CURL_LIMITS[at]) + 1] == CURL_LIMITS[at + 1] for at in range(0, len(CURL_LIMITS), 2))
+
+
+def github_page_is_capped(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.github["https://github.com/big.keys"] = (public_key() + "\n" + "#" * (1 << 20), 0)
+    return outcome(machine, "--github", "big") == "exit 1" and not machine.ssh.exists()
+
+
+def rate_limited_per_address(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    return machine.limited() and "add @sources4 { ip saddr limit rate over" in (machine.table or "")
+
+
+def firewall_opened(machine: System, tmp_path: Path, capsys) -> bool:
     outcome(machine, "--key", public_key())
     return machine.rules == {"runtime": {RULE}, "permanent": {RULE}}
 
 
-def off_closes_everything(machine: System, tmp_path: Path) -> bool:
+def refuses_without_firewalld(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.firewalld = False
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def warns_without_firewalld(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.firewalld = False
+    capsys.readouterr()
+    outcome(machine, "--key", public_key(), "--no-firewall")
+    return "WARNING: firewalld is not running" in capsys.readouterr().err
+
+
+def off_closes_everything(machine: System, tmp_path: Path, capsys) -> bool:
     outcome(machine, "--key", public_key())
     outcome(machine, "--off")
-    return machine.units["sshd.service"] == ["disabled", "inactive"] and not machine.drop_in.exists() and machine.rules == {"runtime": set(), "permanent": set()}
+    return (
+        machine.units["sshd.service"] == ["disabled", "inactive"] and not machine.drop_in.exists()
+        and machine.rules == {"runtime": set(), "permanent": set()} and machine.table is None and not machine.limit_unit.exists()
+    )
 
 
-def root_only_through_sudo(machine: System, tmp_path: Path) -> bool:
+def off_ends_sessions_when_told(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.sessions = {"7": "sshd"}
+    outcome(machine, "--off", "--end-sessions")
+    return machine.sessions == {}
+
+
+def off_asks_in_a_terminal(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.sessions = {"7": "sshd"}
+    original = cli.sys.stdin.isatty
+    cli.sys.stdin.isatty = lambda: True
+    import builtins
+    asked, real_input = [], builtins.input
+    builtins.input = lambda prompt: asked.append(prompt) or "y"
+    try:
+        outcome(machine, "--off")
+    finally:
+        cli.sys.stdin.isatty = original
+        builtins.input = real_input
+    return bool(asked) and machine.sessions == {}
+
+
+def root_only_through_sudo(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", public_key()) == 0 and machine.on()
 
 
@@ -642,25 +1100,41 @@ MUTANTS = {
     "passwords on by default": (keys_only_never_root, "f\"PasswordAuthentication {'yes' if passwords else 'no'}\\n\"", '"PasswordAuthentication yes\\n"'),
     "keyboard-interactive left on": (keys_only_never_root, '"KbdInteractiveAuthentication no\\n"', '""'),
     "empty passwords left to sshd": (keys_only_never_root, '"PermitEmptyPasswords no\\n"', '""'),
-    "sshd's word not checked": (overruled_drop_in_stops_it, "problems = sshd_overruled(effective.stdout, passwords) if", "problems = [] if"),
+    "sshd's word not checked": (overruled_drop_in_stops_it, 'problems += [f"{problem} {where}" for problem in sshd_overruled(effective.stdout, passwords)]', "problems += []"),
     "root login not checked": (overruled_root_login_stops_it, '{"permitrootlogin": "no", ', "{"),
+    "Match blocks not read": (unseen_match_block_stops_it, "problems, ports = match_weakening(sshd_files(), passwords), []", "problems, ports = [], []"),
+    "root not probed": (root_probe_stops_it, '        f"user=root,host=x,addr={SSH_PROBE_ADDRESS}",\n', ""),
+    "the account from outside not probed": (remote_probe_stops_it, '        f"user={account.pw_name},host=x,addr={SSH_PROBE_ADDRESS}",\n', ""),
     "authorized_keys left readable": (keys_file_is_private, "keys_file.chmod(0o600)", "keys_file.chmod(0o644)"),
     ".ssh left open": (keys_file_is_private, "folder.chmod(0o700)", "folder.chmod(0o755)"),
     "links followed": (links_are_refused, "if path.is_symlink():", "if False:"),
     "--key not checked": (bad_keys_are_refused, "        key = ssh_key(text)\n        if not key:", "        key = text\n        if not key:"),
     "key data not checked": (mismatched_key_data_is_refused, "blob[4:4 + size] != fields[0].encode()", "False"),
-    "no rate limit": (rate_limited, 'accept limit value="4/m"\'', "accept'"),
+    "short RSA taken": (short_rsa_is_refused, 'if kind == "RSA" and int(fields[0]) < RSA_MIN_BITS:', "if False:"),
+    "weak GitHub keys taken": (weak_github_keys_are_skipped, "            if weakness:\n                print(", "            if False:\n                print("),
+    "fingerprints not shown": (fingerprints_are_shown, "        print(f\"    key {listing}: {'adding' if key in added else 'there already'}\")", "        pass"),
+    "GitHub over any protocol": (github_fetch_is_https_only, '"--proto", "=https", "--proto-redir", "=https", ', ""),
+    "GitHub redirects unbounded": (github_fetch_is_https_only, '"--max-redirs", "3",', ""),
+    "GitHub page size unbounded": (github_page_is_capped, "if len(result.stdout.encode()) > GITHUB_MAX_BYTES:", "if False:"),
+    "one limit for every address": (rate_limited_per_address, "add @sources4 {{ ip saddr {over} }}", "{over}"),
+    "no rate limit": (rate_limited_per_address, "    if nft:\n        ssh_limit_on(ports)", "    if False:\n        ssh_limit_on(ports)"),
+    "firewall not opened": (firewall_opened, 'opened = firewall_open() if firewall else "none running (--no-firewall)"', 'opened = "none"'),
+    "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not opts["no_firewall"]:', "if False:"),
+    "no warning without firewalld": (warns_without_firewalld, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    return\n    print("),
     "off keeps the saved rule": (off_closes_everything, 'for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):', "for permanent in ([],):"),
     "off keeps the drop-in": (off_closes_everything, "    if SSHD_DROP_IN.exists():\n", "    if False:\n"),
     "off only stops sshd": (off_closes_everything, '["systemctl", "disable", "--now", unit]', '["systemctl", "is-active", unit]'),
+    "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n", "\n"),
+    "off ends no session": (off_ends_sessions_when_told, '        if root_run(["loginctl", "terminate-session", session]).returncode != 0:', "        if False:"),
+    "off never asks": (off_asks_in_a_terminal, "    if sessions and not end and sys.stdin.isatty():", "    if False:"),
     "root without sudo": (root_only_through_sudo, '    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]', "    return argv"),
 }
 
 
 @pytest.mark.parametrize("name", MUTANTS)
-def test_each_safety_check_is_caught_when_taken_out(name, tmp_path, monkeypatch):
+def test_each_safety_check_is_caught_when_taken_out(name, tmp_path, monkeypatch, capsys):
     scenario, old, new = MUTANTS[name]
     (tmp_path / "real").mkdir()
     (tmp_path / "mutant").mkdir()
-    assert scenario(System(cli, tmp_path / "real", monkeypatch), tmp_path / "real"), "the real CLI fails the scenario"
-    assert not scenario(System(mutant(old, new), tmp_path / "mutant", monkeypatch), tmp_path / "mutant"), f"the mutant ({name}) gets past it"
+    assert scenario(System(cli, tmp_path / "real", monkeypatch), tmp_path / "real", capsys), "the real CLI fails the scenario"
+    assert not scenario(System(mutant(old, new), tmp_path / "mutant", monkeypatch), tmp_path / "mutant", capsys), f"the mutant ({name}) gets past it"

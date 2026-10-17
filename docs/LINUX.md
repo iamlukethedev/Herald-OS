@@ -349,17 +349,32 @@ switched from another bootc system is different: it gets a login screen and a lo
 - **Firewall:** firewalld with a `herald-os` zone that refuses incoming connections except LocalSend
   (port 53317) and mDNS. SSH is off in release images; the development VM's zone allows it.
 - **SSH:** `herald-os setup ssh --key <public key>` (or `--github <user>`) refuses without a key in
-  `~/.ssh/authorized_keys` (unless `--passwords`), writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
+  `~/.ssh/authorized_keys` (unless `--passwords`) and without firewalld running (unless
+  `--no-firewall`, which warns). Given keys must pass `ssh-keygen -lf` as Ed25519, ECDSA, `sk-*` or
+  RSA of 2048 bits or more, and their fingerprints are printed before they go in; GitHub's list comes
+  through `curl --proto =https --proto-redir =https --max-redirs 3 --max-filesize 1M` with timeouts,
+  and its weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
   (`PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
   `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
-  distributions' `50-` files), then checks `sshd -T` reports those values and takes the file back if
-  not. It enables `sshd`, adds the rich rule `rule service name="ssh" accept limit value="4/m"` to
-  firewalld's default zone (runtime and permanent) when firewalld runs, and runs `restorecon` on
-  `~/.ssh` and the drop-in. Files in the home folder are written as the account, also when the first
-  boot runs it as root. `--off` disables `sshd.service` and `sshd.socket`, removes the drop-in and the
-  rule (with `firewall-offline-cmd` when firewalld is stopped) and leaves `authorized_keys`;
-  `--status [--json]` reports it without root where it can. `linux/tests/test_ssh.py` covers it,
-  with a mutant of each safety check.
+  distributions' `50-` files), reads `sshd_config` and its includes (through sudo) for a `Match` block
+  that sets any of those or `AuthenticationMethods` to something weaker, and checks `sshd -T`, and
+  `sshd -T -C` for the account from 127.0.0.1 and for the account and root from 203.0.113.1; on any
+  mismatch the file is taken back. The rate limit is per source: firewalld's rich-rule `limit` is one
+  bucket for every address (anyone could use it up) and its direct interface is deprecated and needs
+  iptables, so it is an nftables table of its own, `inet herald_os_ssh` (hooked at `filter - 10`,
+  before firewalld's, which leaves other tables alone), that drops new connections to sshd's ports
+  past 4 a minute from one IPv4 address or IPv6 /64, with dynamic sets that forget an address after 5
+  minutes. `/etc/herald-os/ssh-limit.nft` holds it and `herald-os-ssh-limit.service` (in
+  `/etc/systemd/system`) loads it at boot. The firewalld zone gets `rule service name="ssh" accept`
+  (runtime and permanent), and `restorecon` runs on `~/.ssh` and the files it writes. Files in the
+  home folder are written as the account, also when the first boot runs it as root. `--off` disables
+  `sshd.service` and `sshd.socket`, removes the drop-in, the rate limit (unit, file and table) and the
+  rule (with `firewall-offline-cmd` when firewalld is stopped), leaves `authorized_keys`, and ends
+  logind sessions whose Service is `sshd` with `--end-sessions` or when the person says so in a
+  terminal (the caller's own last, after everything else). `reset-helper apply` runs
+  `--off --end-sessions`, and `herald-os-reset.service` is ordered before sshd. `--status [--json]`
+  reports it without root where it can. `linux/tests/test_ssh.py` covers it, with a mutant of each
+  safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
