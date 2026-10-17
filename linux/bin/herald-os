@@ -4045,8 +4045,10 @@ def ssh_on(opts: dict) -> int:
         before = ssh_snapshot()
         with as_account(account):
             had_folder, had_keys_file = ssh_dir(account).is_dir(), keys_file.is_file()
+        wrote_keys = False
         try:
             write_authorized(account, updated if added else None)
+            wrote_keys = bool(added)
             ports = sshd_configure(account, opts["passwords"], sshd)
             if nft:
                 ssh_limit_on(ports)
@@ -4065,7 +4067,7 @@ def ssh_on(opts: dict) -> int:
             ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})
             try:
                 undone = ssh_rollback(before)
-                if added:
+                if wrote_keys:
                     try:
                         if had_keys_file:
                             write_authorized(account, current)

@@ -1621,6 +1621,19 @@ def handlers_come_back(machine: System, tmp_path: Path, capsys) -> bool:
     return after == before
 
 
+def keys_never_written_are_not_taken_out(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.ssh.mkdir(mode=0o700)
+    machine.keys_file.write_text(public_key(seed=9) + "\n")
+    machine.keys_file.chmod(0o600)
+    machine.ssh.chmod(0o500)
+    capsys.readouterr()
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        machine.ssh.chmod(0o700)
+    return "could not take the added keys back out" not in capsys.readouterr().err
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1703,6 +1716,7 @@ MUTANTS = {
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
     "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
+    "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2606,3 +2620,21 @@ def test_setup_ssh_killed_while_a_command_hangs_puts_everything_back(tmp_path, s
     assert result == {"code": code, "same": True}, err
     assert f"stopped by {signal.Signals(signum).name}" in err and "SSH is as it was before this run" in err
     assert "Traceback" not in err
+
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only folder")
+@pytest.mark.parametrize("existing", [False, True])
+def test_keys_that_were_never_written_are_not_reported_as_left_behind(machine, capsys, existing):
+    machine.ssh.mkdir(mode=0o700)
+    if existing:
+        machine.keys_file.write_text(public_key(seed=9) + "\n")
+        machine.keys_file.chmod(0o600)
+    machine.ssh.chmod(0o500)
+    try:
+        err = refused(machine, capsys, "--key", public_key())
+    finally:
+        machine.ssh.chmod(0o700)
+    assert "setup ssh stopped: Permission denied" in err and "SSH is as it was before this run" in err
+    assert "could not take the added keys back out" not in err and "taken out" not in err
+    assert (machine.keys_file.read_text() if existing else machine.keys_file.exists()) == (public_key(seed=9) + "\n" if existing else False)
