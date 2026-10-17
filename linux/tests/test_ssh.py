@@ -1841,6 +1841,27 @@ def sudo_never_asks_again(machine: System, tmp_path: Path, capsys) -> bool:
     return bool(machine.sudo_modes) and all(mode == "-n" for mode, argv in machine.sudo_modes if argv != ["-v"])
 
 
+def an_incomplete_rollback_says_so(machine: System, tmp_path: Path, capsys) -> bool:
+    expire_sudo_after_the_limit(machine)
+    capsys.readouterr()
+    outcome(machine, "--key", public_key())
+    last = capsys.readouterr().err.rstrip().splitlines()[-1]
+    return last.startswith("herald-os: the rollback is incomplete")
+
+
+def expire_sudo_after_the_limit(machine: System) -> None:
+    """sudo's cached password runs out just after the limit is loaded; the next step then fails."""
+    real = machine.systemctl
+
+    def systemctl(args, root):
+        out = real(args, root)
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            machine.sudo_cached = False
+            return "", 1
+        return out
+    machine.systemctl = systemctl
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1907,7 +1928,8 @@ MUTANTS = {
     "quotes not grouping": (quotes_group_words, """        elif char in "'\\"" and quote in ("", char):""", "        elif False:"),
     "# inside a word a comment": (comments_start_only_a_word, '        elif not quote and char == "#" and not started:', '        elif not quote and char == "#":'),
     "a re-run restarts the limit": (a_rerun_does_not_bounce_sshd, "    if running:\n        # Restarting", "    if False:\n        # Restarting"),
-    "a failed limit left in place": (a_failed_limit_is_rolled_back, "        undone = ssh_rollback(before)\n", "        undone = []\n"),
+    "a failed limit left in place": (a_failed_limit_is_rolled_back, "                undone, troubles = ssh_rollback(before)\n", "                undone, troubles = [], []\n"),
+    "an incomplete rollback said to be complete": (an_incomplete_rollback_says_so, "                if troubles:\n", "                if False:\n"),
     "a stranded requirement unexplained": (a_stranded_requirement_is_explained, "    if required and limit_active != \"active\":", "    if False:"),
     "no rate limit said softly": (no_limit_is_said_plainly, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    if \"NO RATE LIMIT\" in message:\n        return\n    print("),
     "both firewall flags taken": (the_two_firewall_flags_exclude_each_other, '    if opts["no_firewall"] and opts["offline_firewall"]:', "    if False:"),
@@ -3208,3 +3230,37 @@ def test_after_the_first_sudo_v_every_root_command_uses_sudo_n_even_in_a_termina
     assert modes and set(modes) == {"-n"}
     # The one that may ask is the first: `sudo -v`, in the terminal's foreground.
     assert machine.calls[[argv for _, argv in machine.calls].index(["-v"])][1] == ["-v"]
+
+
+def test_when_sudo_forgets_the_password_midway_it_fails_at_once_and_the_rollback_says_it_is_incomplete(machine, monkeypatch, capsys):
+    import time
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    expire_sudo_after_the_limit(machine)
+    started = time.monotonic()
+    err = refused(machine, capsys, "--key", public_key())
+    # No sudo stopped in the background until its timeout: each refusal came at once.
+    assert time.monotonic() - started < 10
+    assert "a password is required" in err
+    last = err.rstrip().splitlines()[-1]
+    assert last.startswith("herald-os: the rollback is incomplete, so SSH may not be as it was before this run. Check: ")
+    assert "herald-os setup ssh --status" in last and "herald-os setup ssh --off" in last
+    assert "SSH is as it was before this run" not in err
+
+
+def test_a_rollback_with_a_hung_step_is_incomplete_and_one_without_trouble_is_complete(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    real = machine.firewall
+
+    def refuse_then_hang(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            machine.hang = [["systemctl", "daemon-reload"]]
+            return "", 11
+        return real(tool, args, root)
+    monkeypatch.setattr(machine, "firewall", refuse_then_hang)
+    err = refused(machine, capsys, "--key", public_key())
+    machine.hang = []
+    last = err.rstrip().splitlines()[-1]
+    assert last.startswith("herald-os: the rollback is incomplete") and "`systemctl daemon-reload` did not finish" in last
+    monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
+    err = refused(machine, capsys, "--key", public_key())
+    assert err.rstrip().splitlines()[-1].startswith("herald-os: SSH is as it was before this run")
