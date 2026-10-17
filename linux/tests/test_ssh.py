@@ -1449,7 +1449,7 @@ def no_limit_is_said_plainly(machine: System, tmp_path: Path, capsys) -> bool:
     machine.installed.discard("nft")
     capsys.readouterr()
     outcome(machine, "--key", public_key(), "--no-firewall")
-    return capsys.readouterr().err.count("THERE IS NO RATE LIMIT") == 2
+    return capsys.readouterr().err.count("THERE IS NO RATE LIMIT") == 1
 
 
 def the_two_firewall_flags_exclude_each_other(machine: System, tmp_path: Path, capsys) -> bool:
@@ -2308,7 +2308,9 @@ def test_without_nft_no_firewall_only_with_firewalld_stopped_and_it_says_there_i
     machine.firewalld = False
     assert machine.setup("--key", public_key(), "--no-firewall") == 0
     captured = capsys.readouterr()
-    assert captured.err.count("WARNING: THERE IS NO RATE LIMIT: nft is not installed") == 2
+    # Said once, at the end, with the result.
+    assert captured.err.count("WARNING: THERE IS NO RATE LIMIT: nft is not installed") == 1
+    assert captured.err.rstrip().splitlines()[-1].startswith("herald-os: WARNING: THERE IS NO RATE LIMIT")
     assert "NO RATE LIMIT (nft is not installed)" in captured.out and machine.on() and not machine.limited()
     machine.setup("--status", "--json")
     assert "sshd is running without the per-address rate limit" in json.loads(capsys.readouterr().out)["warnings"]

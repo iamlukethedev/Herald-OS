@@ -4033,8 +4033,6 @@ def ssh_on(opts: dict) -> int:
         )
     if not firewall and not offline:
         warn(NO_FIREWALL)
-    if not nft:
-        warn(NO_LIMIT)
     for key, listing in keys:
         print(f"    key {listing}: {'adding' if key in added else 'there already'}")
     # From here on, a step that fails takes back everything this run changed, keys included, so a
