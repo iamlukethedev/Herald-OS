@@ -30,6 +30,7 @@ cli = importlib.util.module_from_spec(_SPEC)
 _LOADER.exec_module(cli)
 
 REAL_RUN = subprocess.run
+REQUIRED_PATHS = cli.SSH_LIMIT_REQUIRED
 SSH_KEYGEN = shutil.which("ssh-keygen")
 pytestmark = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
 
@@ -134,6 +135,14 @@ class System:
         self.drop_in = self.etc / "sshd_config.d" / "10-herald-os.conf"
         self.limit_rules = tmp_path / "etc-herald-os" / "ssh-limit.nft"
         self.limit_unit = tmp_path / "etc-systemd" / "herald-os-ssh-limit.service"
+        # The CLI's own list, moved under tmp_path, so a mutant that drops one is tested as it is.
+        self.required = tuple(tmp_path / "etc-systemd" / path.relative_to("/etc/systemd/system") for path in module.SSH_LIMIT_REQUIRED)
+        # Files root cannot read either (a broken mount, an SELinux denial), and Include patterns
+        # whose listing fails.
+        self.unreadable: set[Path] = set()
+        self.unlistable: set[str] = set()
+        # The limit unit fails when it starts (nft refuses the table, the kernel lacks nf_tables).
+        self.limit_fails = False
         self.calls: list[tuple[bool, list[str]]] = []
         self.units = {name: ["disabled", "inactive"] for name in ("sshd.service", "sshd.socket", "herald-os-ssh-limit.service")}
         self.table: str | None = None
@@ -156,6 +165,7 @@ class System:
         monkeypatch.setattr(module, "SSH_HOST_KEYS", self.etc)
         monkeypatch.setattr(module, "SSH_LIMIT_RULES", self.limit_rules)
         monkeypatch.setattr(module, "SSH_LIMIT_UNIT", self.limit_unit)
+        monkeypatch.setattr(module, "SSH_LIMIT_REQUIRED", self.required)
         monkeypatch.setattr(module.os, "geteuid", lambda: 1000)
         monkeypatch.setattr(module.pwd, "getpwuid", lambda uid: self.account)
         monkeypatch.setattr(module.shutil, "which", lambda name, path=None: f"/usr/sbin/{name}" if name in self.installed else None)
@@ -187,14 +197,24 @@ class System:
         if tool == "sshd":
             if not root:
                 return "", 1  # host keys are root's
-            if argv[1] == "-t":
-                return "", 0
-            return self.effective(argv[3] if argv[2:3] == ["-C"] else None), 0
+            try:
+                effective = self.effective(argv[3] if argv[2:3] == ["-C"] else None)
+            except ValueError:
+                return "", 255
+            return ("", 0) if argv[1] == "-t" else (effective, 0)
         if tool == "cat":
+            assert argv[1] == "--", argv
             if not root:
                 return "", 1
-            path = Path(argv[1])
-            return (path.read_text(), 0) if path.is_file() else ("", 1)
+            path = Path(argv[2])
+            return (path.read_text(), 0) if path.is_file() and path not in self.unreadable else ("", 1)
+        if tool == "env" and argv[1:4] == ["LC_ALL=C", "sh", "-c"]:
+            # The root-side Include listing, run for real (the paths are in tmp_path); sshd_config.d
+            # is root's alone, as on Fedora.
+            if not root or argv[-1] in self.unlistable:
+                return "", 1
+            listed = REAL_RUN(argv, capture_output=True, text=True)
+            return listed.stdout, listed.returncode
         if tool == "ssh-keygen":
             if argv[1] == "-A":
                 return "", 0 if root else 1
@@ -255,12 +275,9 @@ class System:
             self.units[args[1]][0] = "enabled"
             return "", 0
         if args == ["reload-or-restart", "sshd.service"]:
-            self.units["sshd.service"][1] = "active"
-            return "", 0
+            return "", 0 if self.start("sshd.service") else 1
         if args == ["restart", limit]:
-            self.units[limit][1] = "active"
-            self.table = self.limit_rules.read_text()
-            return "", 0
+            return "", 0 if self.start(limit) else 1
         if args[:2] == ["disable", "--now"]:
             self.units[args[2]] = ["disabled", "inactive"]
             if args[2] == limit:
@@ -268,15 +285,59 @@ class System:
             return "", 0
         raise AssertionError(f"unexpected systemctl {args}")
 
-    def config_lines(self, path: Path):
-        """sshd's config as sshd reads it: includes in place, and None where an included file ends."""
+    def requires(self, unit: str) -> list[str]:
+        """What a unit's drop-ins in /etc/systemd/system/<unit>.d say it Requires=, read from disk."""
+        found = []
+        for path in self.required:
+            if path.parent.name == f"{unit}.d" and path.is_file() and not path.is_symlink():
+                found += [line.split("=", 1)[1] for line in path.read_text().splitlines() if line.startswith("Requires=")]
+        return found
+
+    def start(self, unit: str) -> bool:
+        """systemd starting a unit: what it Requires= starts first, and a failure leaves it stopped."""
+        limit = "herald-os-ssh-limit.service"
+        if unit == limit:
+            if self.limit_fails or not self.limit_unit.exists():
+                self.units[limit][1] = "failed"
+                self.table = None
+                return False
+            self.units[limit][1] = "active"
+            self.table = self.limit_rules.read_text()
+            return True
+        for needed in self.requires(unit):
+            if self.units.get(needed, ["", ""])[1] != "active" and not self.start(needed):
+                self.units[unit][1] = "inactive"
+                return False
+        self.units[unit][1] = "active"
+        return True
+
+    def boot(self) -> None:
+        """A restart: nothing runs, then every enabled unit starts, each after what it needs."""
+        self.table = None
+        for state in self.units.values():
+            state[1] = "inactive"
+        for unit in ("herald-os-ssh-limit.service", "sshd.socket", "sshd.service"):
+            if self.units[unit][0] == "enabled":
+                self.start(unit)
+
+    def connect(self) -> bool:
+        """A connection to port 22: sshd.service answers, or sshd.socket starts it."""
+        if self.units["sshd.service"][1] == "active":
+            return True
+        return self.units["sshd.socket"][1] == "active" and self.start("sshd.service")
+
+    def config_lines(self, path: Path, depth: int = 0):
+        """sshd's config as sshd reads it: includes in place, and None where an included file ends.
+        Like sshd, it gives up on Includes nested too deep."""
+        if depth > 32:
+            raise ValueError("Include nested too deep")
         for raw in path.read_text().splitlines():
             line = raw.split("#", 1)[0].strip()
             if not line:
                 continue
             if line.lower().startswith("include "):
                 for found in sorted(glob.glob(line.split(None, 1)[1])):
-                    yield from self.config_lines(Path(found))
+                    yield from self.config_lines(Path(found), depth + 1)
                     yield None
             else:
                 yield line
@@ -345,6 +406,9 @@ class System:
 
     def limited(self) -> bool:
         return self.units["herald-os-ssh-limit.service"] == ["enabled", "active"] and bool(self.table)
+
+    def sshd_needs_the_limit(self) -> bool:
+        return all("herald-os-ssh-limit.service" in self.requires(unit) for unit in ("sshd.service", "sshd.socket"))
 
     def changes(self) -> list[list[str]]:
         """The commands that change something, rather than look."""
@@ -856,7 +920,7 @@ def test_status_says_whether_ssh_is_on_and_how(machine, capsys):
     state = json.loads(capsys.readouterr().out)
     assert state == {
         "on": True, "enabled": True, "running": True, "socket": False, "dropIn": "present", "passwords": False,
-        "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "sessions": 1,
+        "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "limitRequired": True, "sessions": 1,
         "user": "me", "keys": 1, "error": None,
     }
     before = len(machine.calls)
@@ -1183,6 +1247,73 @@ def skipped_github_lines_are_said(machine: System, tmp_path: Path, capsys) -> bo
     return "line 1: skipping a key of type ssh-dss: not a key type sshd takes" in out and bad.split()[1][:16] not in out
 
 
+def sshd_waits_for_the_limit_at_boot(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    machine.units["sshd.socket"][0] = "enabled"
+    machine.limit_fails = True
+    machine.boot()
+    return machine.units["sshd.service"][1] != "active" and machine.units["sshd.socket"][1] != "active" and not machine.connect()
+
+
+def the_socket_waits_for_the_limit_at_boot(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    machine.units["sshd.service"][0] = "disabled"
+    machine.units["sshd.socket"][0] = "enabled"
+    machine.limit_fails = True
+    machine.boot()
+    return machine.units["sshd.socket"][1] != "active" and not machine.connect()
+
+
+def the_requirement_orders_and_requires(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    return all(path.is_file() and path.read_text() == cli.ssh_limit_requirement() for path in machine.required)
+
+
+def off_removes_the_requirement(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    outcome(machine, "--off")
+    return not any(os.path.lexists(path) for path in machine.required)
+
+
+def include_under_match_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    extra = machine.etc / "extra.conf"
+    extra.write_text("PasswordAuthentication yes\n")
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text(f"Match User alice\n  Include {extra}\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def unreadable_files_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    hidden = machine.etc / "sshd_config.d" / "50-hidden.conf"
+    hidden.write_text("Match User alice\n  PasswordAuthentication yes\n")
+    machine.unreadable.add(hidden)
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def unreadable_main_config_is_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.unreadable.add(machine.config)
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def unlistable_includes_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.unlistable.add(f"{machine.etc}/sshd_config.d/*.conf")
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
+def includes_are_listed_as_root(machine: System, tmp_path: Path, capsys) -> bool:
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text("Match User alice\n  PasswordAuthentication yes\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and "50-site.conf line 2" in capsys.readouterr().err
+
+
+def deep_includes_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
+    # Deeper than this checks, though not too deep for the stand-in sshd, so only this check stops it.
+    chain = [machine.etc / f"chain-{level}.conf" for level in range(20)]
+    for here, below in zip(chain, chain[1:]):
+        here.write_text(f"Include {below}\n")
+    chain[-1].write_text("Match User alice\n  PasswordAuthentication yes\n")
+    (machine.etc / "sshd_config.d" / "50-chain.conf").write_text(f"Include {chain[0]}\n")
+    return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1191,7 +1322,7 @@ MUTANTS = {
     "empty passwords left to sshd": (keys_only_never_root, '"PermitEmptyPasswords no\\n"', '""'),
     "sshd's word not checked": (overruled_drop_in_stops_it, 'problems += [f"{problem} {where}" for problem in sshd_overruled(effective.stdout, passwords)]', "problems += []"),
     "root login not checked": (overruled_root_login_stops_it, '{"permitrootlogin": "no", ', "{"),
-    "Match blocks not read": (unseen_match_block_stops_it, "problems, ports = match_weakening(sshd_files(), passwords), []", "problems, ports = [], []"),
+    "Match blocks not read": (unseen_match_block_stops_it, "    problems, ports = problems + match_weakening(files, passwords), []", "    ports = []"),
     "root not probed": (root_probe_stops_it, '        f"user=root,host=x,addr={SSH_PROBE_ADDRESS}",\n', ""),
     "the account from outside not probed": (remote_probe_stops_it, '        f"user={account.pw_name},host=x,addr={SSH_PROBE_ADDRESS}",\n', ""),
     "authorized_keys left readable": (keys_file_is_private, "keys_file.chmod(0o600)", "keys_file.chmod(0o644)"),
@@ -1217,7 +1348,7 @@ MUTANTS = {
     "off keeps the saved rule": (off_closes_everything, 'for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):', "for permanent in ([],):"),
     "off keeps the drop-in": (off_closes_everything, "    if os.path.lexists(SSHD_DROP_IN):\n", "    if False:\n"),
     "off only stops sshd": (off_closes_everything, '["systemctl", "disable", "--now", unit]', '["systemctl", "is-active", unit]'),
-    "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n", "\n"),
+    "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n    firewall = firewall_close()", "    firewall = firewall_close()"),
     "off ends no session": (off_ends_sessions_when_told, '        if root_run(["loginctl", "terminate-session", session]).returncode != 0:', "        if False:"),
     "off never asks": (off_asks_in_a_terminal, "    if sessions and not end and sys.stdin.isatty():", "    if False:"),
     "root without sudo": (root_only_through_sudo, '    return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]', "    return argv"),
@@ -1227,6 +1358,17 @@ MUTANTS = {
     "off keeps a dangling linked drop-in": (off_removes_a_dangling_link, "    if os.path.lexists(SSHD_DROP_IN):", "    if SSHD_DROP_IN.exists():"),
     "someone else's .ssh taken": (someone_else_s_ssh_is_refused, "            if info.st_uid != account.pw_uid:", "            if False:"),
     "a traceback for a file error": (file_errors_are_said_plainly, "    except OSError as exc:\n        # Anything", "    except ZeroDivisionError as exc:\n        # Anything"),
+    "sshd not tied to the limit": (sshd_waits_for_the_limit_at_boot, "    for path in SSH_LIMIT_REQUIRED:\n        install_file(ssh_limit_requirement(), path)\n", ""),
+    "the socket not tied to the limit": (the_socket_waits_for_the_limit_at_boot, '    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"),\n', ""),
+    "the requirement only wants the limit": (sshd_waits_for_the_limit_at_boot, '        f"Requires={SSH_LIMIT_UNIT.name}\\n"', '        f"Wants={SSH_LIMIT_UNIT.name}\\n"'),
+    "the requirement not ordered after the limit": (the_requirement_orders_and_requires, '        f"After={SSH_LIMIT_UNIT.name}\\n"\n', ""),
+    "off keeps the requirement": (off_removes_the_requirement, "    for path in required:\n        root_step([\"rm\", \"-f\", str(path)], f\"Removing {path}\")\n", ""),
+    "an Include under Match let through": (include_under_match_is_refused, '            elif match is not None and keyword.lower() == "include":', "            elif False:"),
+    "an unreadable file skipped": (unreadable_files_are_refused, '        return [], [f"cannot read {path}: {(result.stderr or \'\').strip() or \'exit \' + str(result.returncode)}"]', "        return [], []"),
+    "an unreadable sshd_config skipped": (unreadable_main_config_is_refused, "    files, problems = sshd_files()\n", "    files, problems = sshd_files()\n    problems = []\n"),
+    "an unlistable Include skipped": (unlistable_includes_are_refused, "            if problem:\n                problems.append(problem)\n", ""),
+    "Includes listed as the caller": (includes_are_listed_as_root, '    result = root_run(["env", "LC_ALL=C", "sh", "-c", SSHD_GLOB, "sh", full])', '    result = subprocess.run(["env", "LC_ALL=C", "sh", "-c", SSHD_GLOB, "sh", full], capture_output=True, text=True)'),
+    "deep Includes cut short": (deep_includes_are_refused, '            problems.append(f"{path}: Includes nest deeper than 16 files")\n            break\n', "            break\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -1332,7 +1474,7 @@ def test_a_file_error_nothing_foresaw_is_said_plainly_with_a_non_zero_exit(machi
     assert f"setup ssh stopped: Permission denied ({machine.ssh})" in err and "Traceback" not in err
 
 
-SCHEMA = {"on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "sessions", "user", "keys", "error"}
+SCHEMA = {"on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "sessions", "user", "keys", "error"}
 
 
 def json_error(machine: System, capsys, *args: str) -> tuple[dict, int]:
@@ -1445,3 +1587,152 @@ def test_sshd_never_starts_when_the_rate_limit_does_not_load(machine, capsys, mo
     monkeypatch.setattr(machine, "systemctl", no_table)
     assert "the rate limit did not load" in refused(machine, capsys, "--key", public_key(), "--offline-firewall")
     assert not machine.on()
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 3: sshd needs the rate limit; Includes under Match; sshd's files read as root, failing closed.
+def test_sshd_and_its_socket_require_the_limit_and_start_after_it(machine, capsys):
+    assert cli.ssh_limit_requirement().splitlines()[2:] == ["[Unit]", "Requires=herald-os-ssh-limit.service", "After=herald-os-ssh-limit.service"]
+    machine.setup("--key", public_key())
+    assert [path.read_text() for path in machine.required] == [cli.ssh_limit_requirement()] * 2
+    assert [path.parent.name for path in machine.required] == ["sshd.service.d", "sshd.socket.d"]
+    assert REQUIRED_PATHS == (Path("/etc/systemd/system/sshd.service.d/10-herald-os-ssh-limit.conf"),
+                              Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"))
+    assert machine.sshd_needs_the_limit()
+    # Written before systemd reloads and before the limit starts.
+    changes = machine.changes()
+    written = max(next(at for at, argv in enumerate(changes) if argv[0] == "install" and argv[-1] == str(path)) for path in machine.required)
+    assert written < changes.index(["systemctl", "daemon-reload"]) < changes.index(["systemctl", "restart", "herald-os-ssh-limit.service"])
+    capsys.readouterr()
+    machine.setup("--status", "--json")
+    assert json.loads(capsys.readouterr().out)["limitRequired"] is True
+
+
+@pytest.mark.parametrize("enabled", [("sshd.service",), ("sshd.socket",), ("sshd.service", "sshd.socket")])
+def test_when_the_limit_fails_at_boot_sshd_stays_stopped_socket_activation_included(machine, enabled):
+    machine.setup("--key", public_key())
+    for unit in ("sshd.service", "sshd.socket"):
+        machine.units[unit][0] = "enabled" if unit in enabled else "disabled"
+    machine.limit_fails = True
+    machine.boot()
+    assert machine.units["herald-os-ssh-limit.service"][1] == "failed" and machine.table is None
+    assert machine.units["sshd.service"][1] != "active" and machine.units["sshd.socket"][1] != "active"
+    assert not machine.connect()
+
+
+@pytest.mark.parametrize("enabled", [("sshd.service",), ("sshd.socket",)])
+def test_when_the_limit_loads_at_boot_sshd_comes_up_after_it(machine, enabled):
+    machine.setup("--key", public_key())
+    for unit in ("sshd.service", "sshd.socket"):
+        machine.units[unit][0] = "enabled" if unit in enabled else "disabled"
+    machine.boot()
+    assert machine.limited() and machine.connect() and machine.units["sshd.service"][1] == "active"
+
+
+def test_when_the_limit_fails_while_turning_on_sshd_is_not_started(machine, capsys):
+    machine.limit_fails = True
+    assert "Loading the SSH rate limit failed" in refused(machine, capsys, "--key", public_key())
+    assert not machine.on()
+
+
+def test_off_removes_the_requirement_before_stopping_the_limit(machine, tmp_path):
+    machine.setup("--key", public_key())
+    machine.calls.clear()
+    machine.setup("--off")
+    assert not any(os.path.lexists(path) for path in machine.required)
+    changes = machine.changes()
+    removed = max(changes.index(["rm", "-f", str(path)]) for path in machine.required)
+    assert removed < changes.index(["systemctl", "disable", "--now", "herald-os-ssh-limit.service"])
+    machine.required[0].symlink_to(tmp_path / "gone")
+    machine.setup("--off")
+    assert not os.path.lexists(machine.required[0])
+
+
+def test_without_nft_a_requirement_left_from_before_is_removed_so_sshd_can_start(machine, capsys):
+    machine.setup("--key", public_key())
+    machine.installed.discard("nft")
+    machine.firewalld = False
+    assert machine.setup("--key", public_key(), "--no-firewall") == 0
+    assert not any(os.path.lexists(path) for path in machine.required) and machine.on()
+
+
+def test_on_refuses_a_link_in_place_of_the_requirement(machine, tmp_path, capsys):
+    machine.required[1].parent.mkdir(parents=True)
+    machine.required[1].symlink_to(tmp_path / "elsewhere")
+    assert "is a link or not a regular file" in refused(machine, capsys, "--key", public_key())
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_an_include_under_a_match_block_is_refused():
+    files = [("/etc/ssh/sshd_config", "Include /etc/ssh/sshd_config.d/*.conf\nMatch User backup\n  Include /etc/ssh/backup.conf\n")]
+    assert cli.match_weakening(files, passwords=False) == [
+        "/etc/ssh/sshd_config line 3: Include /etc/ssh/backup.conf under Match User backup, which setup ssh does not check (move the Include above the first Match)",
+    ]
+    assert cli.match_weakening([("x", "Include /a.conf\nMatch all\n  X11Forwarding no\n")], passwords=False) == []
+
+
+def test_turning_on_with_an_include_under_match_backs_out(machine, capsys):
+    extra = machine.etc / "extra.conf"
+    extra.write_text("X11Forwarding no\n")
+    machine.config.write_text(machine.config.read_text() + f"Match Address 10.0.0.0/8\n  Include {extra}\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"Include {extra} under Match Address 10.0.0.0/8" in err and "SSH stays as it was" in err
+    assert_backed_out(machine)
+
+
+@pytest.mark.parametrize("which", ["main", "included"])
+def test_a_file_root_cannot_read_stops_it(machine, capsys, which):
+    path = machine.config if which == "main" else machine.etc / "sshd_config.d" / "50-site.conf"
+    path.write_text(path.read_text() if which == "main" else "X11Forwarding no\n")
+    machine.unreadable.add(path)
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"cannot read {path}" in err and "SSH stays as it was" in err
+    assert_backed_out(machine)
+
+
+def test_an_include_root_cannot_list_stops_it(machine, capsys):
+    pattern = f"{machine.etc}/sshd_config.d/*.conf"
+    machine.unlistable.add(pattern)
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"cannot list Include {pattern}" in err
+    assert_backed_out(machine)
+
+
+def test_includes_are_listed_as_root_without_the_names_running_anything(machine, tmp_path, capsys):
+    odd = ["50 two words.conf", "51-$(touch PWNED).conf", "52-`touch PWNED2`.conf", "53-new\nline.conf", "-54.conf"]
+    for name in odd:
+        (machine.etc / "sshd_config.d" / name).write_text("X11Forwarding no\n")
+    (machine.etc / "sshd_config.d" / "55-$(id).conf").write_text("Match User alice\n  PasswordAuthentication yes\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert f"{machine.etc}/sshd_config.d/55-$(id).conf line 2: PasswordAuthentication yes under Match User alice" in err
+    assert not list(tmp_path.rglob("PWNED*")) and not list(Path.cwd().glob("PWNED*"))
+    listings = [(root, argv) for root, argv in machine.calls if argv[:4] == ["env", "LC_ALL=C", "sh", "-c"]]
+    assert listings and all(root and argv[4] == cli.SSHD_GLOB and argv[5] == "sh" for root, argv in listings)
+    read = [argv[2] for _, argv in machine.calls if argv[:2] == ["cat", "--"]]
+    assert {str(machine.etc / "sshd_config.d" / name) for name in odd} <= set(read)
+
+
+def test_a_relative_include_is_listed_under_etc_ssh(machine, monkeypatch, capsys):
+    machine.config.write_text("Include sshd_config.d/*.conf\n")
+    (machine.etc / "sshd_config.d" / "50-site.conf").write_text("Match User alice\n  PermitRootLogin yes\n")
+    err = refused(machine, capsys, "--key", public_key())
+    assert "50-site.conf line 2: PermitRootLogin yes under Match User alice" in err
+
+
+def test_includes_that_nest_without_end_are_refused(machine, capsys):
+    loop = machine.etc / "sshd_config.d" / "50-loop.conf"
+    loop.write_text(f"Include {loop}\n")
+    assert "Includes nest deeper than 16 files" in refused(machine, capsys, "--key", public_key())
+    assert_backed_out(machine)
+
+
+def test_the_include_listing_script_expands_globs_and_nothing_else(tmp_path):
+    for name in ("a.conf", "b c.conf", "$(touch PWNED).conf"):
+        (tmp_path / name).write_text("")
+    listed = REAL_RUN(["sh", "-c", cli.SSHD_GLOB, "sh", f"{tmp_path}/*.conf"], capture_output=True, text=True, cwd=tmp_path)
+    assert sorted(listed.stdout.split("\0")[:-1]) == sorted(str(tmp_path / name) for name in ("a.conf", "b c.conf", "$(touch PWNED).conf"))
+    for pattern in (f"{tmp_path}/none-*.conf", "$(touch PWNED2)", f"{tmp_path}/a.conf; touch PWNED3"):
+        assert REAL_RUN(["sh", "-c", cli.SSHD_GLOB, "sh", pattern], capture_output=True, text=True, cwd=tmp_path).stdout == ""
+    assert not list(tmp_path.glob("PWNED"))
+    assert not (tmp_path / "PWNED2").exists() and not (tmp_path / "PWNED3").exists()

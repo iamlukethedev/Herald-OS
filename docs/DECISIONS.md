@@ -1642,8 +1642,10 @@ or a scanner, use it up and lock the owner out.
   SSH, firewalld refuses those connections anyway.
 - **Loaded at boot by a unit `setup ssh` writes.** `/etc/herald-os/ssh-limit.nft` replaces the
   table each time it loads, and `/etc/systemd/system/herald-os-ssh-limit.service` loads it before
-  `network-pre.target` and sshd. `setup ssh --off` stops the unit (which deletes the table) and
-  removes both files. Nothing is in the image itself, so a machine that never turns SSH on has
+  `network-pre.target` and sshd. `sshd.service` and `sshd.socket` each get a drop-in with
+  `Requires=` and `After=` on it, so a limit that fails leaves sshd stopped instead of running
+  without it, and stopping the limit stops sshd too. `setup ssh --off` removes the drop-ins, stops
+  the unit (which deletes the table) and removes its files. Nothing is in the image itself, so a machine that never turns SSH on has
   neither the table nor the unit.
 - **firewalld required by default.** Without firewalld running, `setup ssh` refuses unless
   `--no-firewall`, which warns, and still loads the limit when `nft` is there.

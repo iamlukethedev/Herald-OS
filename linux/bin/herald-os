@@ -61,7 +61,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import glob
 import io
 import json
 import os
@@ -3104,6 +3103,12 @@ SSH_RICH_RULE = 'rule service name="ssh" accept'
 SSH_LIMIT_TABLE = "herald_os_ssh"
 SSH_LIMIT_RULES = Path("/etc/herald-os/ssh-limit.nft")
 SSH_LIMIT_UNIT = Path("/etc/systemd/system/herald-os-ssh-limit.service")
+# sshd.service and sshd.socket require the limit and start after it, so when it fails (at boot or
+# later) systemd leaves sshd stopped, and stopping it stops sshd too.
+SSH_LIMIT_REQUIRED = (
+    Path("/etc/systemd/system/sshd.service.d/10-herald-os-ssh-limit.conf"),
+    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"),
+)
 SSH_LIMIT_RATE = "4/minute"
 # What sshd accepts today; DSA keys are gone from OpenSSH 9.8.
 SSH_KEY_TYPES = (
@@ -3276,7 +3281,8 @@ def sshd_weaker(key: str, value: str, passwords: bool) -> bool:
 def match_weakening(files: list[tuple[str, str]], passwords: bool) -> list[str]:
     """Settings under a Match block, in any of sshd's files, that let in more than the drop-in: such a
     block wins over it for the connections it matches. A Match lasts until the next one or the end of
-    its file (pure; tested)."""
+    its file. An Include under a Match is refused outright: everything in the included file would be
+    conditional, and this check reads each file on its own (pure; tested)."""
     found = []
     for name, text in files:
         match = None
@@ -3288,27 +3294,54 @@ def match_weakening(files: list[tuple[str, str]], passwords: bool) -> list[str]:
             keyword, value = parsed.groups()
             if keyword.lower() == "match":
                 match = value
+            elif match is not None and keyword.lower() == "include":
+                found.append(f"{name} line {number}: Include {value} under Match {match}, which setup ssh does not check "
+                             "(move the Include above the first Match)")
             elif match is not None and sshd_weaker(keyword.lower(), value, passwords):
                 found.append(f"{name} line {number}: {keyword} {value} under Match {match}")
     return found
 
 
-def sshd_files(path: Path | None = None, depth: int = 0) -> list[tuple[str, str]]:
-    """sshd_config and every file it includes, read as root (Fedora keeps them root's alone)."""
-    path = path or SSHD_CONFIG
-    result = root_run(["cat", str(path)])
+# Lists what an Include pattern matches, as root (only root may list Fedora's sshd_config.d): the
+# pattern is an argument, expanded by the shell's globbing alone (IFS empty, so no splitting, and no
+# other expansion of its text), and the names come back NUL-separated, whatever they contain.
+SSHD_GLOB = 'IFS=; for f in $1; do if [ -e "$f" ] || [ -L "$f" ]; then printf "%s\\0" "$f"; fi; done'
+
+
+def sshd_include(pattern: str) -> tuple[list[str], str | None]:
+    """The files an Include pattern names, sorted, or why they could not be listed."""
+    full = pattern if pattern.startswith("/") else str(SSHD_CONFIG.parent / pattern)
+    result = root_run(["env", "LC_ALL=C", "sh", "-c", SSHD_GLOB, "sh", full])
     if result.returncode != 0:
-        return [(str(path), "")] if depth else []
-    files = [(str(path), result.stdout)]
-    if depth < 8:
-        for line in result.stdout.splitlines():
-            fields = line.split("#", 1)[0].split()
-            if fields[:1] and fields[0].lower() == "include":
-                for pattern in fields[1:]:
-                    full = pattern if pattern.startswith("/") else str(SSHD_CONFIG.parent / pattern)
-                    for found in sorted(glob.glob(full)):
-                        files += sshd_files(Path(found), depth + 1)
-    return files
+        return [], f"cannot list Include {pattern}: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}"
+    return sorted(name for name in result.stdout.split("\0") if name), None
+
+
+def sshd_files(path: Path | None = None, depth: int = 0) -> tuple[list[tuple[str, str]], list[str]]:
+    """sshd_config and every file it includes, read as root (Fedora keeps them root's alone), and why
+    any of them could not be read: a file this cannot read is one it cannot vouch for."""
+    path = path or SSHD_CONFIG
+    result = root_run(["cat", "--", str(path)])
+    if result.returncode != 0:
+        return [], [f"cannot read {path}: {(result.stderr or '').strip() or 'exit ' + str(result.returncode)}"]
+    files, problems = [(str(path), result.stdout)], []
+    for line in result.stdout.splitlines():
+        fields = line.split("#", 1)[0].split()
+        if not (fields[:1] and fields[0].lower() == "include"):
+            continue
+        if depth >= 16:
+            # sshd's own limit (READCONF_MAX_DEPTH); deeper, sshd refuses the config anyway.
+            problems.append(f"{path}: Includes nest deeper than 16 files")
+            break
+        for pattern in fields[1:]:
+            names, problem = sshd_include(pattern)
+            if problem:
+                problems.append(problem)
+            for name in names:
+                more, trouble = sshd_files(Path(name), depth + 1)
+                files += more
+                problems += trouble
+    return files, problems
 
 
 def file_state(path: Path) -> str:
@@ -3518,7 +3551,8 @@ def sshd_configure(account: pwd.struct_passwd, passwords: bool, sshd: str) -> li
         root_step(["ssh-keygen", "-A"], "Making the SSH host keys")
     before = read_nofollow(SSHD_DROP_IN)
     install_file(sshd_drop_in(passwords), SSHD_DROP_IN)
-    problems, ports = match_weakening(sshd_files(), passwords), []
+    files, problems = sshd_files()
+    problems, ports = problems + match_weakening(files, passwords), []
     test = root_run([sshd, "-t"])
     if test.returncode != 0:
         problems.append((test.stderr or test.stdout or "").strip() or f"sshd -t exit {test.returncode}")
@@ -3633,12 +3667,25 @@ def nft_command() -> str | None:
     return shutil.which("nft") or shutil.which("nft", path="/usr/sbin:/usr/bin")
 
 
+def ssh_limit_requirement() -> str:
+    """The drop-in that makes sshd.service and sshd.socket need the limit (pure; tested)."""
+    return (
+        "# Written by `herald-os setup ssh`; `herald-os setup ssh --off` removes it.\n"
+        "# No sshd without the per-address rate limit: if it fails, sshd does not start.\n"
+        "[Unit]\n"
+        f"Requires={SSH_LIMIT_UNIT.name}\n"
+        f"After={SSH_LIMIT_UNIT.name}\n"
+    )
+
+
 def ssh_limit_on(ports: list[str]) -> None:
     nft = nft_command()
     if not nft:
         die("nft (nftables) is not installed, so SSH cannot be rate-limited per address (sudo dnf install nftables).", 127)
     install_file(ssh_limit_rules(ports), SSH_LIMIT_RULES)
     install_file(ssh_limit_unit(nft), SSH_LIMIT_UNIT)
+    for path in SSH_LIMIT_REQUIRED:
+        install_file(ssh_limit_requirement(), path)
     root_step(["systemctl", "daemon-reload"], "Reloading systemd")
     root_step(["systemctl", "enable", SSH_LIMIT_UNIT.name], "Enabling the SSH rate limit")
     root_step(["systemctl", "restart", SSH_LIMIT_UNIT.name], "Loading the SSH rate limit")
@@ -3647,6 +3694,12 @@ def ssh_limit_on(ports: list[str]) -> None:
 
 
 def ssh_limit_off() -> None:
+    # sshd's requirement goes first: with it gone, stopping the limit stops nothing else.
+    required = [path for path in SSH_LIMIT_REQUIRED if os.path.lexists(path)]
+    for path in required:
+        root_step(["rm", "-f", str(path)], f"Removing {path}")
+    if required:
+        root_run(["systemctl", "daemon-reload"])
     if unit_loaded(SSH_LIMIT_UNIT.name):
         root_step(["systemctl", "disable", "--now", SSH_LIMIT_UNIT.name], "Stopping the SSH rate limit")
     nft = nft_command()
@@ -3753,7 +3806,7 @@ def ssh_on(opts: dict) -> int:
             + ", so SSH would be open to every network with nothing else closed. "
             "Start it (sudo systemctl enable --now firewalld) and run this again, or add --no-firewall to turn SSH on "
             "without one. Nothing was changed.", 1)
-    for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT):
+    for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT, *SSH_LIMIT_REQUIRED):
         if file_state(path) == "tampered":
             die(f"{path} is a link or not a regular file, which setup ssh never writes: something else put it there. "
                 "Look at it, remove it (herald-os setup ssh --off does), and run this again. Nothing was changed.", 1)
@@ -3780,6 +3833,8 @@ def ssh_on(opts: dict) -> int:
         ssh_limit_on(ports)
         limit = f"at most {SSH_LIMIT_RATE.replace('/', ' a ')} new connections from each address"
     else:
+        # A requirement left from an earlier `on` would keep sshd from starting at all.
+        ssh_limit_off()
         limit = "not rate-limited (nft is not installed)"
         warn("nft is not installed, so SSH is not rate-limited")
     opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
@@ -3868,6 +3923,7 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
         "passwords": passwords,
         "firewall": firewall,
         "rateLimit": limit_enabled == "enabled" and limit_active == "active",
+        "limitRequired": all(file_state(path) == "present" for path in SSH_LIMIT_REQUIRED),
         "sessions": len(ssh_sessions()),
         "user": account.pw_name if account else None,
         "keys": keys,
@@ -3876,7 +3932,7 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
 
 # --status --json always prints these keys and "error" (null, or why there is no state), so a reader
 # needs one schema; the state's keys are null when it could not be read.
-SSH_STATE_KEYS = ("on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "sessions", "user", "keys")
+SSH_STATE_KEYS = ("on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "sessions", "user", "keys")
 
 
 def ssh_json(state: dict | None = None, error: str | None = None) -> str:
@@ -3908,7 +3964,8 @@ def ssh_status(opts: dict) -> int:
     else:
         door = "open (Herald OS's rule)" if firewall["rule"] else "open (the zone's own ssh service)" if firewall["service"] else "closed"
         print(f"    firewall: SSH {door} in zone {firewall['zone']}")
-    print(f"    rate limit: {'at most ' + SSH_LIMIT_RATE.replace('/', ' a ') + ' new connections from each address' if state['rateLimit'] else 'none'}")
+    print(f"    rate limit: {'at most ' + SSH_LIMIT_RATE.replace('/', ' a ') + ' new connections from each address' if state['rateLimit'] else 'none'}"
+          + ("; sshd needs it to start" if state["limitRequired"] else ""))
     print(f"    sessions: {state['sessions']} open over SSH")
     return 0
 

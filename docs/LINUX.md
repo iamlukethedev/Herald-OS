@@ -368,8 +368,12 @@ switched from another bootc system is different: it gets a login screen and a lo
   and its weaker keys are skipped. It writes `/etc/ssh/sshd_config.d/10-herald-os.conf`
   (`PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
   `PermitEmptyPasswords no`; sshd keeps the first value it reads, and `10-` sorts before the
-  distributions' `50-` files), reads `sshd_config` and its includes (through sudo) for a `Match` block
-  that sets any of those or `AuthenticationMethods` to something weaker, and checks `sshd -T`, and
+  distributions' `50-` files), reads `sshd_config` and its includes for a `Match` block that sets any
+  of those or `AuthenticationMethods` to something weaker, and refuses an `Include` under a `Match`
+  (its file would be conditional, which the scan does not follow). Reading fails closed: every file is
+  read as root (`cat --`), Include globs are expanded as root by `sh -c` with the pattern as an
+  argument (globbing only, `IFS` empty) and the names returned NUL-separated, and any file or listing
+  that cannot be read, or Includes nested past sshd's 16, stop it; and checks `sshd -T`, and
   `sshd -T -C` for the account from 127.0.0.1 and for the account and root from 203.0.113.1; on any
   mismatch the file is taken back. The rate limit is per source: firewalld's rich-rule `limit` is one
   bucket for every address (anyone could use it up) and its direct interface is deprecated and needs
@@ -377,7 +381,9 @@ switched from another bootc system is different: it gets a login screen and a lo
   before firewalld's, which leaves other tables alone), that drops new connections to sshd's ports
   past 4 a minute from one IPv4 address or IPv6 /64, with dynamic sets that forget an address after 5
   minutes. `/etc/herald-os/ssh-limit.nft` holds it and `herald-os-ssh-limit.service` (in
-  `/etc/systemd/system`) loads it at boot. The firewalld zone gets `rule service name="ssh" accept`
+  `/etc/systemd/system`) loads it at boot. Drop-ins in `sshd.service.d` and `sshd.socket.d`
+  (`10-herald-os-ssh-limit.conf`, `Requires=` and `After=` the limit's unit) keep sshd and its socket
+  stopped when the limit fails, at boot or later; `--off` removes them first. The firewalld zone gets `rule service name="ssh" accept`
   (runtime and permanent), and `restorecon` runs on `~/.ssh` and the files it writes. Files in the
   home folder are written as the account, also when the first boot runs it as root. `--off` disables
   `sshd.service` and `sshd.socket`, removes the drop-in, the rate limit (unit, file and table) and the
