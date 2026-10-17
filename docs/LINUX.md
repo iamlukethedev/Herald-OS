@@ -417,15 +417,21 @@ switched from another bootc system is different: it gets a login screen and a lo
   what it changed (files, units, the table, which it loads again with `nft -f` when one was there,
   the firewall rule, the keys it added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129
   for SIGHUP and 124 for a timeout, with no traceback; INT, TERM and HUP are ignored while it puts
-  things back, and the earlier handlers come back after. The rollback fails closed: sshd.service,
-  sshd.socket and the limit unit, if they were stopped and disabled before, are stopped and disabled
-  again unless systemctl plainly reports them so (a state it cannot report in time counts as open).
-  It has 300 s in all; once that is spent, only stopping and disabling sshd are still tried, and
-  what it skipped is listed. A firewall rule that was not there before is removed unless its query
-  says it is absent, and asked about again at the end, for an add that finished late; `--status`
-  lists `warnings`, such as sshd requiring a limit that is not running. `--no-firewall` and
-  `--offline-firewall` exclude each other, `--user` must be an account name and not root, and a flag
-  given twice is refused. `linux/tests/test_ssh.py` covers it, with a mutant of each safety check.
+  things back, and the earlier handlers come back after. The rollback fails closed, socket first: a
+  unit counts as running before only if `is-active` said exactly active, reloading or activating,
+  and as enabled only if `is-enabled` said exactly enabled, enabled-runtime, indirect, generated or
+  alias; anything else counts as closed, and is stopped or disabled again unless systemctl plainly
+  reports it so now (a state it cannot report in time counts as open). Its 300 s are a hard cap:
+  each command gets what is left; once that is spent, only stopping and disabling sshd are still
+  tried, and what it skipped is listed. After the first `sudo -v` (interactive, since `sudo -n -v`
+  refuses verifypw=all rules), every root command uses `sudo -n`, so an expired cache fails at once
+  rather than stopping on SIGTTIN in the background. A rollback that could not do everything says it
+  is incomplete and what to check, not that SSH is as it was. A firewall rule that was not there
+  before is removed unless its query says it is absent, and asked about again at the end, for an add
+  that finished late; `--status` lists `warnings`, such as sshd requiring a limit that is not
+  running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be an account
+  name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers it, with a
+  mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,

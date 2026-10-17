@@ -49,7 +49,8 @@ else closed; `--no-firewall` turns SSH on anyway, with a warning. Without nftabl
 because there would be no limit on guessing, except with `--no-firewall`, which then warns that
 there is no rate limit at all. If any step fails partway, or it is stopped (Ctrl+C, closing the
 terminal, a shutdown), or a command it runs hangs, it puts everything back as it was before and says
-what it put back, and `--status` warns about anything that keeps SSH from working.
+what it put back; if it could not put everything back, it says so and what to check. `--status`
+warns about anything that keeps SSH from working.
 
 ```bash
 herald-os setup ssh --status    # whether SSH is on, how you sign in, the firewall, sessions
