@@ -1099,8 +1099,16 @@ def test_ssh_is_set_up_after_the_home_folder_and_before_hermes_which_can_wait_lo
 def test_a_reset_turns_ssh_off_and_forgets_the_install_s_keys():
     helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
     apply = helper.split("  apply)", 1)[1].split(";;", 1)[0]
-    assert "rm -f /etc/herald-os/ssh-keys" in apply and "herald-os setup ssh --off" in apply
+    assert "rm -f /etc/herald-os/ssh-keys" in apply and "herald-os setup ssh --off --end-sessions" in apply
     assert apply.index("herald-os setup ssh --off") < apply.index('rm -f "$STATE/firstboot-done"')
+    # The account is erased before sshd starts, so no one signs in to it over SSH meanwhile.
+    unit = (ROOT / "linux" / "image" / "herald-os-reset.service").read_text()
+    before = next(line for line in unit.splitlines() if line.startswith("Before="))
+    assert {"sshd.service", "sshd.socket", "herald-os-firstboot.service"} <= set(before[len("Before="):].split())
+
+
+def test_the_first_boot_never_turns_ssh_on_without_a_firewall():
+    assert "--no-firewall" not in function_in(FIRSTBOOT.read_text(), "ssh_keys")
 
 
 def firstboot_mutant(old: str, new: str) -> str:
@@ -1142,3 +1150,30 @@ def test_each_first_boot_check_is_caught_when_taken_out(tmp_path, name):
     (tmp_path / "mutant").mkdir()
     assert scenario(tmp_path / "real", None)
     assert not scenario(tmp_path / "mutant", firstboot_mutant(old, new))
+
+
+def run_reset_apply(tmp_path: Path, helper: str) -> str:
+    """reset-helper apply with its state folder in tmp_path and stand-ins that write down what they did."""
+    state, calls = tmp_path / "state", tmp_path / "calls"
+    state.mkdir()
+    (state / "reset-pending").write_text("hermes\n")
+    calls.write_text("")
+    bin_dir = tmp_path / "bin"
+    for tool in ("loginctl", "userdel", "flatpak", "herald-os"):
+        executable(bin_dir / tool, f'echo "{tool} $*" >>"$CALLS"')
+    executable(bin_dir / "id", '[ "$1" = -u ] && echo 1000; exit 0')
+    script = helper.replace("STATE=/var/lib/herald-os", f"STATE={shlex.quote(str(state))}")
+    script = script.replace("/etc/herald-os/ssh-keys", str(tmp_path / "ssh-keys")).replace("/etc/NetworkManager/system-connections/", str(tmp_path) + "/nm-")
+    result = subprocess.run(["bash", "-c", script, "reset-helper", "apply"], env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls)}, capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    return calls.read_text()
+
+
+def test_a_reset_ends_ssh_sessions_and_turns_ssh_off(tmp_path):
+    helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
+    calls = run_reset_apply(tmp_path, helper)
+    assert "herald-os setup ssh --off --end-sessions" in calls.splitlines()
+    (tmp_path / "mutant").mkdir()
+    mutant = helper.replace("herald-os setup ssh --off --end-sessions >/dev/null", "herald-os setup ssh --off >/dev/null", 1)
+    assert mutant != helper
+    assert "--end-sessions" not in run_reset_apply(tmp_path / "mutant", mutant)
