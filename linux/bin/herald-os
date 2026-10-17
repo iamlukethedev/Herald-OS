@@ -3120,6 +3120,8 @@ SSH_KEY_TYPES = (
 # The types as `ssh-keygen -lf` names them, and the shortest RSA key taken.
 SSH_KEYGEN_TYPES = ("ED25519", "ECDSA", "ED25519-SK", "ECDSA-SK", "RSA")
 RSA_MIN_BITS = 2048
+# What --user may name: a local account's name as useradd takes it.
+ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$")
 GITHUB_USER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 # A GitHub key page is a few lines: https all the way, few redirects, and nothing past 1 MiB.
 GITHUB_MAX_BYTES = 1 << 20
@@ -3866,6 +3868,72 @@ def addresses() -> list[str]:
     return found
 
 
+def ssh_snapshot() -> dict:
+    """What `on` may change, as it is before: the files, the units, the table and the firewall rule."""
+    before: dict = {
+        "files": {path: read_nofollow(path) for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT, *SSH_LIMIT_REQUIRED)},
+        "units": {unit: unit_state(unit) for unit in ("sshd.service", SSH_LIMIT_UNIT.name)},
+        "table": False,
+        "rules": {},
+    }
+    nft = nft_command()
+    if nft:
+        before["table"] = root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0
+    found = firewall_zone()
+    if found:
+        tool, zone = found
+        for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):
+            query = root_run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
+            before["rules"][(tool, zone, tuple(permanent))] = query.returncode == 0
+    return before
+
+
+def ssh_rollback(before: dict) -> list[str]:
+    """Put back what `on` changed since `before`; what it put back, for the message. Each step is tried
+    whatever the others do: a rollback that stops halfway is the state this is here to avoid."""
+    undone = []
+
+    def attempt(argv: list[str], what: str) -> None:
+        if root_run(argv).returncode == 0:
+            undone.append(what)
+        else:
+            warn(f"could not put back {what}: `{' '.join(argv)}` failed")
+
+    for unit in ("sshd.service", SSH_LIMIT_UNIT.name):
+        enabled, active = before["units"][unit]
+        now_enabled, now_active = unit_state(unit)
+        if active != "active" and now_active == "active":
+            attempt(["systemctl", "stop", unit], f"{unit} stopped")
+        if enabled != "enabled" and now_enabled == "enabled":
+            attempt(["systemctl", "disable", unit], f"{unit} disabled")
+        if active != "failed" and unit_state(unit)[1] == "failed":
+            attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
+    nft = nft_command()
+    if nft and not before["table"] and root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
+        attempt([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], f"the table inet {SSH_LIMIT_TABLE} removed")
+    for path, text in before["files"].items():
+        if read_nofollow(path) == text and (text is not None or not os.path.lexists(path)):
+            continue
+        if text is None:
+            attempt(["rm", "-f", str(path)], f"{path} removed")
+        else:
+            try:
+                install_file(text, path)
+                undone.append(f"{path} put back")
+            except SystemExit:
+                warn(f"could not put back {path}")
+    root_run(["systemctl", "daemon-reload"])
+    for (tool, zone, permanent), had in before["rules"].items():
+        query = root_run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
+        if not had and query.returncode == 0:
+            attempt([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"], f"the firewall rule in {zone}{' (saved)' if permanent or tool != 'firewall-cmd' else ''} removed")
+    return undone
+
+
+NO_LIMIT = (
+    "THERE IS NO RATE LIMIT: nft is not installed, so nothing slows down password or key guessing "
+    "against sshd, from any address. Install nftables (sudo dnf install nftables) and run this again."
+)
 NO_FIREWALL = (
     "firewalld is not running, so nothing stands between sshd and every network this computer joins. "
     "SSH turns on anyway because --no-firewall was given; `sudo systemctl enable --now firewalld` and "
@@ -3905,21 +3973,44 @@ def ssh_on(opts: dict) -> int:
         )
     if not firewall and not offline:
         warn(NO_FIREWALL)
+    if not nft:
+        warn(NO_LIMIT)
     for key, listing in keys:
         print(f"    key {listing}: {'adding' if key in added else 'there already'}")
-    write_authorized(account, updated if added else None)
-    ports = sshd_configure(account, opts["passwords"], sshd)
-    if nft:
-        ssh_limit_on(ports)
-        limit = f"at most {SSH_LIMIT_RATE.replace('/', ' a ')} new connections from each address"
-    else:
-        # A requirement left from an earlier `on` would keep sshd from starting at all.
-        ssh_limit_off()
-        limit = "not rate-limited (nft is not installed)"
-        warn("nft is not installed, so SSH is not rate-limited")
-    opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
-    root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
-    root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
+    # From here on, a step that fails takes back everything this run changed, keys included, so a
+    # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open firewall).
+    before = ssh_snapshot()
+    with as_account(account):
+        had_folder, had_keys_file = ssh_dir(account).is_dir(), keys_file.is_file()
+    try:
+        write_authorized(account, updated if added else None)
+        ports = sshd_configure(account, opts["passwords"], sshd)
+        if nft:
+            ssh_limit_on(ports)
+            limit = f"at most {SSH_LIMIT_RATE.replace('/', ' a ')} new connections from each address"
+        else:
+            # A requirement left from an earlier `on` would keep sshd from starting at all.
+            ssh_limit_off()
+            limit = "NO RATE LIMIT (nft is not installed)"
+        opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
+        root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
+        root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
+    except SystemExit:
+        undone = ssh_rollback(before)
+        if added:
+            try:
+                if had_keys_file:
+                    write_authorized(account, current)
+                else:
+                    with as_account(account):
+                        keys_file.unlink(missing_ok=True)
+                        if not had_folder:
+                            ssh_dir(account).rmdir()
+                undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
+            except (SystemExit, OSError):
+                warn(f"could not take the added keys back out of {keys_file}")
+        print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
+        raise
     count = len(authorized(updated))
     print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
     print(f"    keys: {count} in {keys_file}" + (f" ({len(added)} added)" if added else ""))
@@ -3936,6 +4027,8 @@ def ssh_on(opts: dict) -> int:
         warn("firewalld is not running yet: SSH's rule is saved for when it starts, and until then the rate limit is all that stands between sshd and the network")
     elif not firewall:
         warn(NO_FIREWALL)
+    if not nft:
+        warn(NO_LIMIT)
     return 0
 
 
@@ -3994,6 +4087,16 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
                 keys = len(authorized(keys_file.read_text())) if keys_file.is_file() and not keys_file.is_symlink() else 0
         except OSError:
             keys = None
+    rate_limit = limit_enabled == "enabled" and limit_active == "active"
+    required = all(file_state(path) == "present" for path in SSH_LIMIT_REQUIRED)
+    warnings = []
+    if required and limit_active != "active":
+        warnings.append(f"sshd requires the rate limit ({SSH_LIMIT_UNIT.name}), which is {limit_active}, so sshd cannot start "
+                        "until it loads: herald-os setup ssh loads it again, herald-os setup ssh --off removes SSH's settings")
+    if (active == "active" or socket_active == "active") and limit_active != "active":
+        warnings.append("sshd is running without the per-address rate limit")
+    if drop_in_state in ("tampered", "unknown"):
+        warnings.append(f"{SSHD_DROP_IN} is {'a link or not a regular file' if drop_in_state == 'tampered' else 'unreadable'}, which setup ssh never writes")
     return {
         "on": enabled == "enabled" or active == "active" or socket_enabled == "enabled" or socket_active == "active",
         "enabled": enabled == "enabled",
@@ -4002,8 +4105,9 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
         "dropIn": drop_in_state,
         "passwords": passwords,
         "firewall": firewall,
-        "rateLimit": limit_enabled == "enabled" and limit_active == "active",
-        "limitRequired": all(file_state(path) == "present" for path in SSH_LIMIT_REQUIRED),
+        "rateLimit": rate_limit,
+        "limitRequired": required,
+        "warnings": warnings,
         "sessions": len(ssh_sessions()),
         "user": account.pw_name if account else None,
         "keys": keys,
@@ -4012,7 +4116,7 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
 
 # --status --json always prints these keys and "error" (null, or why there is no state), so a reader
 # needs one schema; the state's keys are null when it could not be read.
-SSH_STATE_KEYS = ("on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "sessions", "user", "keys")
+SSH_STATE_KEYS = ("on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "warnings", "sessions", "user", "keys")
 
 
 def ssh_json(state: dict | None = None, error: str | None = None) -> str:
@@ -4047,6 +4151,8 @@ def ssh_status(opts: dict) -> int:
     print(f"    rate limit: {'at most ' + SSH_LIMIT_RATE.replace('/', ' a ') + ' new connections from each address' if state['rateLimit'] else 'none'}"
           + ("; sshd needs it to start" if state["limitRequired"] else ""))
     print(f"    sessions: {state['sessions']} open over SSH")
+    for warning in state["warnings"]:
+        print(f"    WARNING: {warning}")
     return 0
 
 
@@ -4054,6 +4160,7 @@ def ssh_args(args: list[str]) -> dict:
     opts: dict = {"keys": [], "github": [], "files": [], "user": None, "passwords": False, "off": False, "status": False, "json": False, "no_firewall": False, "offline_firewall": False, "end_sessions": False}
     values = {"--key": "keys", "--github": "github", "--keys-file": "files"}
     flags = {"--passwords": "passwords", "--off": "off", "--status": "status", "--json": "json", "--no-firewall": "no_firewall", "--offline-firewall": "offline_firewall", "--end-sessions": "end_sessions"}
+    seen: set[str] = set()
     at = 0
     while at < len(args):
         name, equals, value = args[at].partition("=")
@@ -4064,14 +4171,25 @@ def ssh_args(args: list[str]) -> dict:
                     die(f"{name} needs a value\n  {SSH_USAGE}", 2)
                 value = args[at]
             if name == "--user":
+                if "--user" in seen:
+                    die(f"setup ssh: --user given twice\n  {SSH_USAGE}", 2)
+                if not ACCOUNT_NAME.match(value):
+                    die(f"setup ssh: --user {value!r} is not an account name\n  {SSH_USAGE}", 2)
+                if value == "root":
+                    die("setup ssh: --user root: root never signs in over SSH", 2)
                 opts["user"] = value
             else:
                 opts[values[name]].append(value)
         elif args[at] in flags:
+            if args[at] in seen:
+                die(f"setup ssh: {args[at]} given twice\n  {SSH_USAGE}", 2)
             opts[flags[args[at]]] = True
         else:
             die(f"setup ssh: unknown argument {args[at]!r}\n  {SSH_USAGE}", 2)
+        seen.add(name if name in values or name == "--user" else args[at])
         at += 1
+    if opts["no_firewall"] and opts["offline_firewall"]:
+        die(f"setup ssh: --no-firewall and --offline-firewall exclude each other\n  {SSH_USAGE}", 2)
     gives = opts["keys"] or opts["github"] or opts["files"] or opts["passwords"] or opts["no_firewall"] or opts["offline_firewall"]
     if (
         (opts["off"] and (opts["status"] or gives))

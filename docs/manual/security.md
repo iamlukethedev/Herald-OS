@@ -45,7 +45,10 @@ three redirects, and nothing over 1 MiB. Then it:
 Without a key it refuses and changes nothing. To sign in with your account's password instead, add
 `--passwords` (root still cannot sign in). Running it again with the same key changes nothing. If the
 firewall (firewalld) is not running it refuses too, since SSH would then be open with nothing else
-closed; `--no-firewall` turns SSH on anyway, with a warning.
+closed; `--no-firewall` turns SSH on anyway, with a warning. Without nftables it refuses, because there
+would be no limit on guessing, except with `--no-firewall`, which then warns that there is no rate
+limit at all. If any step fails partway, it puts everything back as it was before and says what it
+put back, and `--status` warns about anything that keeps SSH from working.
 
 ```bash
 herald-os setup ssh --status    # whether SSH is on, how you can sign in, the firewall, open sessions

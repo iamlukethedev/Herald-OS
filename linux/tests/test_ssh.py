@@ -46,6 +46,9 @@ DROP_IN = (
     "PermitEmptyPasswords no\n"
 )
 RULE = 'rule service name="ssh" accept'
+# The whole command, so any change to a limit or a timeout shows.
+GITHUB_CURL_EXACT = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3",
+                     "--max-filesize", "1M", "--connect-timeout", "10", "--max-time", "20"]
 CURL_LIMITS = ["--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3", "--max-filesize", "1M"]
 # sshd's own defaults for what the drop-in sets.
 SSHD_DEFAULTS = {"port": "22", "permitrootlogin": "prohibit-password", "passwordauthentication": "yes", "kbdinteractiveauthentication": "yes", "permitemptypasswords": "no"}
@@ -149,6 +152,8 @@ class System:
         self.limit_fails = False
         # How often systemd restarted sshd because a unit it Requires= was restarted.
         self.sshd_bounced = 0
+        # `nft -f` refuses the file (a kernel without a needed nf_tables feature).
+        self.nft_fails = False
         self.calls: list[tuple[bool, list[str]]] = []
         self.units = {name: ["disabled", "inactive"] for name in ("sshd.service", "sshd.socket", "herald-os-ssh-limit.service")}
         self.table: str | None = None
@@ -245,6 +250,8 @@ class System:
             if argv[1:] == ["list", "table", "inet", "herald_os_ssh"]:
                 return (self.table or "", 0 if self.table else 1)
             if argv[1] == "-f":
+                if self.nft_fails:
+                    return "", 1
                 self.table = Path(argv[2]).read_text()
                 return "", 0
             if argv[1:] == ["delete", "table", "inet", "herald_os_ssh"]:
@@ -290,6 +297,22 @@ class System:
             bounced = [unit for unit in ("sshd.service", "sshd.socket") if self.units[unit][1] == "active" and limit in self.requires(unit)]
             self.sshd_bounced += len(bounced)
             return "", 0 if self.start(limit) else 1
+        if args[0] == "stop":
+            self.units[args[1]][1] = "inactive"
+            if args[1] == limit:
+                self.table = None
+                # Requires= passes a stop on.
+                for unit in ("sshd.service", "sshd.socket"):
+                    if limit in self.requires(unit):
+                        self.units[unit][1] = "inactive"
+            return "", 0
+        if args[0] == "reset-failed":
+            if self.units[args[1]][1] == "failed":
+                self.units[args[1]][1] = "inactive"
+            return "", 0
+        if args[0] == "disable" and len(args) == 2:
+            self.units[args[1]][0] = "disabled"
+            return "", 0
         if args[:2] == ["disable", "--now"]:
             self.units[args[2]] = ["disabled", "inactive"]
             if args[2] == limit:
@@ -938,7 +961,7 @@ def test_status_says_whether_ssh_is_on_and_how(machine, capsys):
     state = json.loads(capsys.readouterr().out)
     assert state == {
         "on": True, "enabled": True, "running": True, "socket": False, "dropIn": "present", "passwords": False,
-        "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "limitRequired": True, "sessions": 1,
+        "firewall": {"zone": "herald-os", "rule": True, "service": False}, "rateLimit": True, "limitRequired": True, "warnings": [], "sessions": 1,
         "user": "me", "keys": 1, "error": None,
     }
     before = len(machine.calls)
@@ -961,6 +984,8 @@ def test_status_says_when_the_firewall_needs_root_to_tell(machine, capsys):
 @pytest.mark.parametrize("args", [
     ["--off", "--key", "x"], ["--status", "--passwords"], ["--off", "--status"], ["--json"], ["--key"], ["--bogus"], ["on"],
     ["--end-sessions"], ["--key", "x", "--end-sessions"], ["--off", "--no-firewall"], ["--status", "--end-sessions"], ["--off", "--offline-firewall"],
+    ["--key", "x", "--no-firewall", "--offline-firewall"], ["--status", "--status"], ["--off", "--off"], ["--user", "a", "--user", "b", "--status"],
+    ["--status", "--user", ""], ["--status", "--user", "root"], ["--status", "--user", "-x"], ["--status", "--user", "a b"],
 ])
 def test_arguments_that_do_not_go_together_are_refused(machine, capsys, args):
     refused(machine, capsys, *args, code=2)
@@ -996,7 +1021,7 @@ def test_as_root_it_needs_to_be_told_whose_account_and_never_root(machine, monke
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
     monkeypatch.delenv("SUDO_USER", raising=False)
     assert "--user <name>" in refused(machine, capsys, "--key", public_key(), code=2)
-    assert "--user <name>" in refused(machine, capsys, "--user", "root", "--key", public_key(), code=2)
+    assert "root never signs in over SSH" in refused(machine, capsys, "--user", "root", "--key", public_key(), code=2)
     # Off and status need no account.
     assert machine.setup("--off", "--end-sessions") == 0
 
@@ -1392,6 +1417,58 @@ def a_rerun_does_not_bounce_sshd(machine: System, tmp_path: Path, capsys) -> boo
     return machine.sshd_bounced == 0 and machine.on() and machine.limited()
 
 
+def a_failed_limit_is_rolled_back(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.limit_fails = True
+    outcome(machine, "--key", public_key())
+    return not any(os.path.lexists(path) for path in machine.required) and not machine.limit_unit.exists() and not machine.drop_in.exists()
+
+
+def a_stranded_requirement_is_explained(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    machine.units["herald-os-ssh-limit.service"][1] = "failed"
+    capsys.readouterr()
+    outcome(machine, "--status", "--json")
+    return any("sshd requires the rate limit" in warning for warning in json.loads(capsys.readouterr().out)["warnings"])
+
+
+def no_limit_is_said_plainly(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.firewalld = False
+    machine.installed.discard("nft")
+    capsys.readouterr()
+    outcome(machine, "--key", public_key(), "--no-firewall")
+    return capsys.readouterr().err.count("THERE IS NO RATE LIMIT") == 2
+
+
+def the_two_firewall_flags_exclude_each_other(machine: System, tmp_path: Path, capsys) -> bool:
+    return outcome(machine, "--key", public_key(), "--no-firewall", "--offline-firewall") == "exit 2" and machine.calls == []
+
+
+def json_arguments_are_checked(machine: System, tmp_path: Path, capsys) -> bool:
+    # As root, where --user root used to come back as a status with no account and error null.
+    machine.is_root = True
+    os_module, euid = machine.module.os, machine.module.os.geteuid
+    os_module.geteuid = lambda: 0
+    capsys.readouterr()
+    try:
+        result = outcome(machine, "--status", "--json", "--user", "root")
+        return result == "exit 2" and json.loads(capsys.readouterr().out)["error"] is not None
+    except ValueError:
+        return False
+    finally:
+        os_module.geteuid = euid
+
+
+def the_github_fetch_is_exactly_this(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.github["https://github.com/octocat.keys"] = (public_key() + "\n", 0)
+    outcome(machine, "--github", "octocat")
+    return [argv for _, argv in machine.calls if argv[0] == "curl"] == [GITHUB_CURL_EXACT + ["https://github.com/octocat.keys"]]
+
+
+def match_is_found_in_any_case(machine: System, tmp_path: Path, capsys) -> bool:
+    return machine.module.match_weakening([("x", "MaTcH User alice\n  PassWordAuthentication YES\n")], passwords=False) == [
+        "x line 2: PasswordAuthentication YES under Match User alice"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1415,7 +1492,7 @@ MUTANTS = {
     "GitHub redirects unbounded": (github_fetch_is_https_only, '"--max-redirs", "3",', ""),
     "GitHub page size unbounded": (github_page_is_capped, "if len(result.stdout.encode()) > GITHUB_MAX_BYTES:", "if False:"),
     "one limit for every address": (rate_limited_per_address, "add @sources4 {{ ip saddr {over} }}", "{over}"),
-    "no rate limit": (rate_limited_per_address, "    if nft:\n        ssh_limit_on(ports)", "    if False:\n        ssh_limit_on(ports)"),
+    "no rate limit": (rate_limited_per_address, "        if nft:\n            ssh_limit_on(ports)", "        if False:\n            ssh_limit_on(ports)"),
     "firewall not opened": (firewall_opened, 'opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"', 'opened = "none"'),
     "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not offline and not opts["no_firewall"]:', "if False:"),
     "offline rule not saved": (offline_rule_is_saved, '    root_step(["firewall-offline-cmd", f"--zone={name}", f"--add-rich-rule={SSH_RICH_RULE}"], "Saving SSH\'s firewall rule")\n', ""),
@@ -1423,7 +1500,7 @@ MUTANTS = {
     "skipped GitHub lines not said": (skipped_github_lines_are_said, '            print(f"    {url} line {number}: skipping a key of type {ssh_key_type(line)}: {problem}")', "            pass"),
     "the whole key logged": (skipped_github_lines_are_said, '    return first if re.fullmatch(r"[A-Za-z0-9@._-]{1,48}", first) else "unknown"', "    return text"),
     "no warning without firewalld": (warns_without_firewalld, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    return\n    print("),
-    "off keeps the saved rule": (off_closes_everything, 'for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):', "for permanent in ([],):"),
+    "off keeps the saved rule": (off_closes_everything, '    for permanent in ([], ["--permanent"]) if tool == "firewall-cmd" else ([],):\n        root_step([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"]', '    for permanent in ([],):\n        root_step([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"]'),
     "off keeps the drop-in": (off_closes_everything, "    if os.path.lexists(SSHD_DROP_IN):\n", "    if False:\n"),
     "off only stops sshd": (off_closes_everything, '["systemctl", "disable", "--now", unit]', '["systemctl", "is-active", unit]'),
     "off keeps the rate limit": (off_closes_everything, "    ssh_limit_off()\n    firewall = firewall_close()", "    firewall = firewall_close()"),
@@ -1457,6 +1534,13 @@ MUTANTS = {
     "quotes not grouping": (quotes_group_words, """        elif char in "'\\"" and quote in ("", char):""", "        elif False:"),
     "# inside a word a comment": (comments_start_only_a_word, '        elif not quote and char == "#" and not started:', '        elif not quote and char == "#":'),
     "a re-run restarts the limit": (a_rerun_does_not_bounce_sshd, "    if running:\n        # Restarting", "    if False:\n        # Restarting"),
+    "a failed limit left in place": (a_failed_limit_is_rolled_back, "        undone = ssh_rollback(before)\n", "        undone = []\n"),
+    "a stranded requirement unexplained": (a_stranded_requirement_is_explained, "    if required and limit_active != \"active\":", "    if False:"),
+    "no rate limit said softly": (no_limit_is_said_plainly, "def warn(message: str) -> None:\n    print(", "def warn(message: str) -> None:\n    if \"NO RATE LIMIT\" in message:\n        return\n    print("),
+    "both firewall flags taken": (the_two_firewall_flags_exclude_each_other, '    if opts["no_firewall"] and opts["offline_firewall"]:', "    if False:"),
+    "--user root taken by --status": (json_arguments_are_checked, '                if value == "root":', "                if False:"),
+    "a longer GitHub timeout": (the_github_fetch_is_exactly_this, '"--connect-timeout", "10", "--max-time", "20",', '"--connect-timeout", "10", "--max-time", "200",'),
+    "match only in lower case": (match_is_found_in_any_case, "        settings.append((number, keyword.lower(),", "        settings.append((number, keyword,"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -1562,7 +1646,7 @@ def test_a_file_error_nothing_foresaw_is_said_plainly_with_a_non_zero_exit(machi
     assert f"setup ssh stopped: Permission denied ({machine.ssh})" in err and "Traceback" not in err
 
 
-SCHEMA = {"on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "sessions", "user", "keys", "error"}
+SCHEMA = {"on", "enabled", "running", "socket", "dropIn", "passwords", "firewall", "rateLimit", "limitRequired", "warnings", "sessions", "user", "keys", "error"}
 
 
 def json_error(machine: System, capsys, *args: str) -> tuple[dict, int]:
@@ -1587,6 +1671,11 @@ def test_status_json_for_an_account_that_does_not_exist_is_json_with_an_error(ma
     (["--json"], 2, "do not go together"),
     (["--status", "--json", "--bogus"], 2, "unknown argument"),
     (["--status", "--json", "--user"], 2, "--user needs a value"),
+    (["--status", "--json", "--user", "root"], 2, "root never signs in over SSH"),
+    (["--status", "--json", "--user", ""], 2, "--user '' is not an account name"),
+    (["--status", "--json", "--user=", "--status"], 2, "is not an account name"),
+    (["--status", "--status", "--json"], 2, "--status given twice"),
+    (["--status", "--json", "--json"], 2, "--json given twice"),
 ])
 def test_every_json_error_is_json_with_the_same_keys(machine, capsys, args, code, words):
     state, exit_code = json_error(machine, capsys, *args)
@@ -1958,3 +2047,121 @@ def test_restarting_the_limit_while_sshd_runs_would_bounce_it(machine):
     machine.units["sshd.socket"] = ["enabled", "active"]
     assert machine.systemctl(["restart", "herald-os-ssh-limit.service"], True) == ("", 0)
     assert machine.sshd_bounced == 2
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 4 QA: a failed `on` rolls back, no-nft says so plainly, arguments are checked, and the
+# mutants that survived (curl timeout, keyword case) are caught.
+def snapshot(machine: System) -> tuple:
+    files = (machine.drop_in, machine.limit_rules, machine.limit_unit, *machine.required, machine.keys_file)
+    return ({str(path): path.read_text() if path.is_file() else None for path in files}, machine.ssh.exists(),
+            {unit: list(state) for unit, state in machine.units.items()}, machine.table, {k: set(v) for k, v in machine.rules.items()})
+
+
+def test_a_limit_that_fails_to_load_takes_back_everything_this_run_did(machine, capsys):
+    before = snapshot(machine)
+    machine.limit_fails = True
+    err = refused(machine, capsys, "--key", public_key())
+    assert "Loading the SSH rate limit failed" in err and "SSH is as it was before this run; put back:" in err
+    assert snapshot(machine) == before
+    machine.setup("--status", "--json")
+    state = json.loads(capsys.readouterr().out)
+    assert state["limitRequired"] is False and state["enabled"] is False and state["warnings"] == []
+
+
+def test_a_limit_whose_table_does_not_appear_is_rolled_back_too(machine, capsys, monkeypatch):
+    before = snapshot(machine)
+    real = machine.systemctl
+    def no_table(args, root):
+        out = real(args, root)
+        if args[:1] == ["restart"]:
+            machine.table = None
+        return out
+    monkeypatch.setattr(machine, "systemctl", no_table)
+    assert "the rate limit did not load" in refused(machine, capsys, "--key", public_key())
+    assert snapshot(machine) == before
+
+
+def test_a_failed_rerun_keeps_what_was_working(machine, capsys):
+    one = public_key(seed=1)
+    machine.setup("--key", one)
+    before = snapshot(machine)
+    machine.nft_fails = True
+    err = refused(machine, capsys, "--key", public_key(seed=2))
+    assert "Reloading the SSH rate limit failed" in err
+    assert snapshot(machine) == before and machine.on() and machine.limited()
+    assert machine.keys_file.read_text() == f"{one}\n"
+
+
+def test_a_failed_firewall_step_rolls_back_the_limit_and_the_drop_in(machine, capsys, monkeypatch):
+    before = snapshot(machine)
+    real = machine.firewall
+    monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
+    assert "Opening SSH in the firewall failed" in refused(machine, capsys, "--key", public_key())
+    assert snapshot(machine) == before
+
+
+def test_status_explains_a_requirement_on_a_limit_that_is_not_running(machine, capsys):
+    machine.setup("--key", public_key())
+    machine.units["herald-os-ssh-limit.service"][1] = "failed"
+    machine.units["sshd.service"][1] = "inactive"
+    capsys.readouterr()
+    machine.setup("--status", "--json")
+    state = json.loads(capsys.readouterr().out)
+    assert state["limitRequired"] is True and state["rateLimit"] is False
+    assert state["warnings"] == ["sshd requires the rate limit (herald-os-ssh-limit.service), which is failed, so sshd cannot start "
+                                 "until it loads: herald-os setup ssh loads it again, herald-os setup ssh --off removes SSH's settings"]
+    machine.setup("--status")
+    assert "WARNING: sshd requires the rate limit" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("args", [[], ["--offline-firewall"]])
+def test_without_nft_the_default_and_offline_paths_refuse_and_leave_sshd_down(machine, capsys, args):
+    machine.installed.discard("nft")
+    if args:
+        machine.firewalld = False
+    assert "cannot be rate-limited per address" in refused(machine, capsys, "--key", public_key(), *args, code=127)
+    assert not machine.on() and machine.changes() == []
+
+
+def test_without_nft_no_firewall_only_with_firewalld_stopped_and_it_says_there_is_no_rate_limit(machine, capsys):
+    machine.installed.discard("nft")
+    # firewalld running: --no-firewall does not apply, and there is no limit to be had, so it refuses.
+    assert "cannot be rate-limited per address" in refused(machine, capsys, "--key", public_key(), "--no-firewall", code=127)
+    machine.firewalld = False
+    assert machine.setup("--key", public_key(), "--no-firewall") == 0
+    captured = capsys.readouterr()
+    assert captured.err.count("WARNING: THERE IS NO RATE LIMIT: nft is not installed") == 2
+    assert "NO RATE LIMIT (nft is not installed)" in captured.out and machine.on() and not machine.limited()
+    machine.setup("--status", "--json")
+    assert "sshd is running without the per-address rate limit" in json.loads(capsys.readouterr().out)["warnings"]
+
+
+def test_the_github_fetch_is_this_exact_command(machine):
+    assert cli.GITHUB_CURL == GITHUB_CURL_EXACT
+    machine.github["https://github.com/octocat.keys"] = (public_key() + "\n", 0)
+    machine.setup("--github", "octocat")
+    assert [argv for _, argv in machine.calls if argv[0] == "curl"] == [GITHUB_CURL_EXACT + ["https://github.com/octocat.keys"]]
+
+
+def test_keywords_are_found_in_any_case():
+    assert [keyword for _, keyword, _, _ in cli.sshd_settings("match all\nMaTcH User a\nMATCH=Group b\nInClUdE /x\n")] == ["match", "match", "match", "include"]
+    files = [("x", "mAtCh User alice\n  PERMITROOTLOGIN yes\nmatch Group ops\n  permitemptypasswords yes\nMATCH Address 10.0.0.0/8\n  iNcLuDe /etc/ssh/y.conf\n")]
+    assert cli.match_weakening(files, passwords=False) == [
+        "x line 2: PermitRootLogin yes under Match User alice",
+        "x line 4: PermitEmptyPasswords yes under Match Group ops",
+        "x line 6: Include /etc/ssh/y.conf under Match Address 10.0.0.0/8, which setup ssh does not check (move the Include above the first Match)",
+    ]
+
+
+
+@pytest.mark.parametrize("args, words", [
+    (["--status", "--json", "--user", "root"], "root never signs in over SSH"),
+    (["--status", "--json", "--user", ""], "is not an account name"),
+    (["--status", "--json", "--status"], "--status given twice"),
+])
+def test_status_json_as_root_checks_its_arguments_too(machine, monkeypatch, capsys, args, words):
+    as_root_without_account(machine, monkeypatch)
+    state, code = json_error(machine, capsys, *args)
+    assert code == 2 and words in state["error"]

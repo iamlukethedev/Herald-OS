@@ -404,8 +404,12 @@ switched from another bootc system is different: it gets a login screen and a lo
   with `lstat` and read with `O_NOFOLLOW`: a link in their place is reported as `"tampered"` and
   never followed, `on` refuses to write through it, and `--off` removes it, dangling or not.
   `~/.ssh` or `authorized_keys` owned by someone else, or that cannot be looked into, is refused
-  with what to run, and any file error ends in a plain message rather than a traceback.
-  `linux/tests/test_ssh.py` covers it, with a mutant of each safety check.
+  with what to run, and any file error ends in a plain message rather than a traceback. If any step
+  after the checks fails, `on` puts back what it changed (files, units, the table, the firewall
+  rule, the keys it added) and lists it; `--status` lists `warnings`, such as sshd requiring a limit
+  that is not running. `--no-firewall` and `--offline-firewall` exclude each other, `--user` must be
+  an account name and not root, and a flag given twice is refused. `linux/tests/test_ssh.py` covers
+  it, with a mutant of each safety check.
 - **Secure Boot:** works through Fedora's signed shim. The NVIDIA image's driver needs one more key
   ([The NVIDIA image](#the-nvidia-image)).
 - **Sign-in:** `herald-os setup fingerprint` (fprintd) and `herald-os setup fido2` (a security key,
