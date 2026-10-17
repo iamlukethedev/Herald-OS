@@ -162,6 +162,10 @@ class System:
         # It leaves a mark first, so a test can tell when the command is hanging.
         self.hanger.write_text("#!/bin/sh\n[ -z \"$HANG_MARK\" ] || : >\"$HANG_MARK\"\nexec sleep 30\n")
         self.hanger.chmod(0o755)
+        # Commands that take effect and then hang, as a systemctl can after it has enabled or started
+        # a unit; and, once one of them has, the queries that hang from then on.
+        self.hang_after: list[list[str]] = []
+        self.then_hang: list[list[str]] = []
         # The timeout every command was given (None when it had none).
         self.timeouts: list[tuple[list[str], float | None]] = []
         self.calls: list[tuple[bool, list[str]]] = []
@@ -212,6 +216,9 @@ class System:
         if argv[:3] == ["ssh-keygen", "-lf", "-"]:
             return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=input, capture_output=True, text=True, check=False)
         out, code = self.answer(argv, root or self.is_root)
+        if any(argv[:len(prefix)] == prefix for prefix in self.hang_after):
+            self.hang += self.then_hang
+            return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
         return subprocess.CompletedProcess(argv, code, out, "" if code == 0 else f"{argv[0]}: refused")
 
     def answer(self, argv: list[str], root: bool) -> tuple[str, int]:
@@ -1641,6 +1648,30 @@ def keys_never_written_are_not_taken_out(machine: System, tmp_path: Path, capsys
     return "could not take the added keys back out" not in capsys.readouterr().err
 
 
+def a_hung_start_leaves_sshd_closed(machine: System, tmp_path: Path, capsys) -> bool:
+    # The limit is running from an earlier `on`, and sshd was stopped and disabled by hand since: the
+    # rollback leaves the limit alone, so nothing but sshd's own stop can close it again.
+    outcome(machine, "--key", public_key())
+    machine.units["sshd.service"] = ["disabled", "inactive"]
+    return a_hung_step_leaves_sshd_closed(machine, ["systemctl", "reload-or-restart", "sshd.service"])
+
+
+def a_hung_enable_leaves_sshd_closed(machine: System, tmp_path: Path, capsys) -> bool:
+    return a_hung_step_leaves_sshd_closed(machine, ["systemctl", "enable", "sshd.service"])
+
+
+def a_hung_step_leaves_sshd_closed(machine: System, step: list[str]) -> bool:
+    module, saved = machine.module, machine.module.SSH_TIMEOUT
+    module.SSH_TIMEOUT = 1
+    machine.hang_after = [step]
+    machine.then_hang = [["systemctl", "is-enabled", "sshd.service"], ["systemctl", "is-active", "sshd.service"]]
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        module.SSH_TIMEOUT, machine.hang, machine.hang_after = saved, [], []
+    return machine.units["sshd.service"] == ["disabled", "inactive"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1724,6 +1755,8 @@ MUTANTS = {
     "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
     "keys never written taken out": (keys_never_written_are_not_taken_out, "                if wrote_keys:\n", "                if added:\n"),
+    "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
+    "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2654,3 +2687,69 @@ def test_the_github_fetch_gives_up_after_exactly_20_seconds():
     curl = cli.GITHUB_CURL
     assert curl.count("--max-time") == 1 and curl[curl.index("--max-time") + 1] == "20"
     assert curl.count("--connect-timeout") == 1 and curl[curl.index("--connect-timeout") + 1] == "10"
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 8: the rollback fails closed, whatever systemctl reports or fails to report.
+SSHD_QUERIES = [["systemctl", "is-enabled", "sshd.service"], ["systemctl", "is-active", "sshd.service"],
+                ["systemctl", "is-enabled", "sshd.socket"], ["systemctl", "is-active", "sshd.socket"]]
+
+
+@pytest.mark.parametrize("step", [["systemctl", "enable", "sshd.service"], ["systemctl", "reload-or-restart", "sshd.service"]])
+def test_a_systemctl_that_hangs_after_acting_leaves_sshd_stopped_and_disabled(machine, monkeypatch, capsys, step):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    before = snapshot(machine)
+    # The step takes effect, then hangs; from then on systemctl cannot say how sshd is either.
+    machine.hang_after = [step]
+    machine.then_hang = SSHD_QUERIES
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    machine.hang, machine.hang_after = [], []
+    changes = machine.changes()
+    assert ["systemctl", "stop", "sshd.service"] in changes and ["systemctl", "disable", "sshd.service"] in changes
+    assert machine.units["sshd.service"] == ["disabled", "inactive"] and machine.units["sshd.socket"] == ["disabled", "inactive"]
+    assert snapshot(machine) == before
+    assert "SSH is as it was before this run" in err
+
+
+@pytest.mark.parametrize("state", ["activating", "reloading", "failed", "deactivating", "something-new"])
+def test_sshd_left_in_any_state_but_inactive_is_stopped_again(machine, monkeypatch, capsys, state):
+    before = snapshot(machine)
+    real = machine.systemctl
+
+    def odd(args, root):
+        if args == ["reload-or-restart", "sshd.service"]:
+            machine.units["sshd.service"][1] = state
+            return "", 1
+        return real(args, root)
+    monkeypatch.setattr(machine, "systemctl", odd)
+    refused(machine, capsys, "--key", public_key())
+    assert ["systemctl", "stop", "sshd.service"] in machine.changes()
+    assert machine.units["sshd.service"][1] in ("inactive",) and machine.units["sshd.service"][0] == "disabled"
+    assert snapshot(machine)[0] == before[0]
+
+
+@pytest.mark.parametrize("state", ["enabled-runtime", "linked", "indirect", "alias", "unknown"])
+def test_sshd_left_enabled_in_any_way_is_disabled_again(machine, monkeypatch, capsys, state):
+    real = machine.systemctl
+
+    def odd(args, root):
+        if args == ["enable", "sshd.service"]:
+            machine.units["sshd.service"][0] = state
+            return "", 1
+        return real(args, root)
+    monkeypatch.setattr(machine, "systemctl", odd)
+    refused(machine, capsys, "--key", public_key())
+    assert ["systemctl", "disable", "sshd.service"] in machine.changes()
+    assert machine.units["sshd.service"][0] == "disabled"
+
+
+def test_a_unit_that_was_on_before_is_left_on(machine, monkeypatch, capsys):
+    machine.setup("--key", public_key())
+    machine.calls.clear()
+    real = machine.firewall
+    monkeypatch.setattr(machine, "firewall", lambda tool, args, root: ("", 11) if any(arg.startswith("--add-rich-rule") for arg in args) else real(tool, args, root))
+    machine.rules = {"runtime": set(), "permanent": set()}
+    refused(machine, capsys, "--key", public_key(seed=2))
+    assert ["systemctl", "stop", "sshd.service"] not in machine.changes() and ["systemctl", "disable", "sshd.service"] not in machine.changes()
+    assert machine.on()

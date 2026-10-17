@@ -3883,11 +3883,20 @@ def addresses() -> list[str]:
     return found
 
 
+# The units the rollback answers for, sshd's first: if time or anything else runs short, those are
+# the ones that must end up closed.
+SSH_ROLLBACK_UNITS = ("sshd.service", "sshd.socket", SSH_LIMIT_UNIT.name)
+# What systemctl prints for a unit that is plainly not running, and plainly will not start at boot.
+# Anything else (unknown after a timeout, activating, reloading, failed, ...) counts as open.
+SSH_CLOSED_ACTIVE = ("inactive",)
+SSH_CLOSED_ENABLED = ("disabled", "masked", "not-found")
+
+
 def ssh_snapshot() -> dict:
     """What `on` may change, as it is before: the files, the units, the table and the firewall rule."""
     before: dict = {
         "files": {path: read_nofollow(path) for path in (SSHD_DROP_IN, SSH_LIMIT_RULES, SSH_LIMIT_UNIT, *SSH_LIMIT_REQUIRED)},
-        "units": {unit: unit_state(unit) for unit in ("sshd.service", SSH_LIMIT_UNIT.name)},
+        "units": {unit: unit_state(unit) for unit in SSH_ROLLBACK_UNITS},
         "table": False,
         "rules": {},
     }
@@ -3929,12 +3938,14 @@ def ssh_rollback(before: dict) -> list[str]:
         else:
             warn(f"could not put back {what}: `{' '.join(argv)}` failed")
 
-    for unit in ("sshd.service", SSH_LIMIT_UNIT.name):
+    # Fail closed: a unit that was plainly closed before is stopped and disabled again unless it is
+    # plainly closed now. A state systemctl could not report in time is not plainly anything.
+    for unit in SSH_ROLLBACK_UNITS:
         enabled, active = before["units"][unit]
         now_enabled, now_active = state(unit)
-        if active != "active" and now_active == "active":
+        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
             attempt(["systemctl", "stop", unit], f"{unit} stopped")
-        if enabled != "enabled" and now_enabled == "enabled":
+        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
             attempt(["systemctl", "disable", unit], f"{unit} disabled")
         if active != "failed" and state(unit)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
