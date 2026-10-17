@@ -3967,42 +3967,77 @@ def ssh_snapshot() -> dict:
     return before
 
 
+# The whole rollback gets this long, since it runs with signals ignored. Each command's timeout is
+# what is left of it (at most SSH_TIMEOUT); once it is spent, only stopping and disabling sshd are
+# still tried, with SSH_ROLLBACK_LAST each, and whatever else is left is reported as skipped.
+SSH_ROLLBACK_BUDGET = 300
+SSH_ROLLBACK_LAST = 15
+# The units that must end up closed, whatever the time.
+SSH_ESSENTIAL_UNITS = ("sshd.service", "sshd.socket")
+
+
 def ssh_rollback(before: dict) -> list[str]:
     """Put back what `on` changed since `before`; what it put back, for the message. Each step is tried
     whatever the others do: a rollback that stops halfway is the state this is here to avoid."""
-    undone = []
+    undone: list[str] = []
+    skipped: list[str] = []
+    deadline = time.monotonic() + SSH_ROLLBACK_BUDGET
 
-    def run(argv: list[str]) -> subprocess.CompletedProcess:
-        # A command that hangs or cannot run is reported and passed over, so the steps after it still happen.
+    def limit(essential: bool) -> float | None:
+        """This command's timeout, or None when there is no time left for it."""
+        left, last = deadline - time.monotonic(), min(SSH_ROLLBACK_LAST, ssh_limit(None))
+        if left <= 0:
+            return last if essential else None
+        return max(min(ssh_limit(None), left), last if essential else 1)
+
+    def run(argv: list[str], essential: bool = False) -> subprocess.CompletedProcess:
+        # A command that hangs or cannot run is reported and passed over, so the steps after it still
+        # happen; one there is no time left for is skipped. Either reads as exit code 124: not done.
+        timeout = limit(essential)
+        if timeout is None:
+            skipped.append(" ".join(argv))
+            return subprocess.CompletedProcess(argv, 124, "", "")
         try:
-            return root_run(argv)
+            return root_run(argv, timeout)
         except (subprocess.TimeoutExpired, OSError) as exc:
-            why = f"did not finish within {SSH_TIMEOUT} s" if isinstance(exc, subprocess.TimeoutExpired) else f"failed ({exc})"
+            why = f"did not finish within {timeout:.0f} s" if isinstance(exc, subprocess.TimeoutExpired) else f"failed ({exc})"
             warn(f"`{' '.join(argv)}` {why} while putting things back")
-            return subprocess.CompletedProcess(argv, 1, "", "")
+            return subprocess.CompletedProcess(argv, 124, "", "")
 
-    def state(unit: str) -> tuple[str, str]:
+    def state(unit: str, essential: bool) -> tuple[str, str]:
+        timeout = limit(essential)
+        if timeout is None or deadline <= time.monotonic():
+            # No time to ask: unknown, which counts as open.
+            return "unknown", "unknown"
         try:
-            return unit_state(unit)
+            return unit_state(unit, timeout)
         except (subprocess.TimeoutExpired, OSError):
             return "unknown", "unknown"
 
-    def attempt(argv: list[str], what: str) -> None:
-        if run(argv).returncode == 0:
+    def attempt(argv: list[str], what: str, essential: bool = False) -> None:
+        result = run(argv, essential)
+        if result.returncode == 0:
             undone.append(what)
-        else:
+        elif not (result.returncode == 124 and " ".join(argv) in skipped):
             warn(f"could not put back {what}: `{' '.join(argv)}` failed")
 
+    # sudo may have forgotten the password by now; renew its time while it still remembers.
+    if os.geteuid() != 0:
+        try:
+            ssh_run(["sudo", "-n", "-v"], timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
     # Fail closed: a unit that was plainly closed before is stopped and disabled again unless it is
     # plainly closed now. A state systemctl could not report in time is not plainly anything.
     for unit in SSH_ROLLBACK_UNITS:
+        essential = unit in SSH_ESSENTIAL_UNITS
         enabled, active = before["units"][unit]
-        now_enabled, now_active = state(unit)
+        now_enabled, now_active = state(unit, essential)
         if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:
-            attempt(["systemctl", "stop", unit], f"{unit} stopped")
+            attempt(["systemctl", "stop", unit], f"{unit} stopped", essential)
         if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:
-            attempt(["systemctl", "disable", unit], f"{unit} disabled")
-        if active != "failed" and state(unit)[1] == "failed":
+            attempt(["systemctl", "disable", unit], f"{unit} disabled", essential)
+        if active != "failed" and state(unit, False)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
     nft = nft_command()
     if nft and not before["table"] and run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
@@ -4013,13 +4048,17 @@ def ssh_rollback(before: dict) -> list[str]:
             continue
         if text is None:
             attempt(["rm", "-f", str(path)], f"{path} removed")
-        else:
-            try:
-                install_file(text, path)
-                restored.add(path)
-                undone.append(f"{path} put back")
-            except (SystemExit, OSError, subprocess.TimeoutExpired):
-                warn(f"could not put back {path}")
+            continue
+        timeout = limit(False)
+        if timeout is None:
+            skipped.append(f"putting back {path}")
+            continue
+        try:
+            install_file(text, path, timeout)
+            restored.add(path)
+            undone.append(f"{path} put back")
+        except (SystemExit, OSError, subprocess.TimeoutExpired):
+            warn(f"could not put back {path}")
     run(["systemctl", "daemon-reload"])
     # A table that was there before is loaded again from the file just put back, in one transaction
     # as the in-place reload does, when that file changed or the table is gone.
@@ -4027,12 +4066,21 @@ def ssh_rollback(before: dict) -> list[str]:
         SSH_LIMIT_RULES in restored or run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode != 0
     ):
         attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")
-    for (tool, zone, permanent), had in before["rules"].items():
-        query = run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
-        if not had and query.returncode == 0:
-            attempt([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"], f"the firewall rule in {zone}{' (saved)' if permanent or tool != 'firewall-cmd' else ''} removed")
+    # A rule that was not there before goes unless the query plainly says it is absent (exit 1): one it
+    # could not ask about may be there. The rules are asked about again at the very end, so an add whose
+    # command was killed but finished late is taken out too.
+    for final in (False, True):
+        for (tool, zone, permanent), had in before["rules"].items():
+            if had:
+                continue
+            query = run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
+            if query.returncode == 1 or (final and query.returncode != 0):
+                continue
+            attempt([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"],
+                    f"the firewall rule in {zone}{' (saved)' if permanent or tool != 'firewall-cmd' else ''} removed{' (it came late)' if final else ''}")
+    if skipped:
+        warn(f"ran out of time ({SSH_ROLLBACK_BUDGET} s) putting things back; skipped: {'; '.join(skipped)}")
     return undone
-
 
 # Signals that stop `on` partway: like Ctrl+C, they go through the rollback, and the command then
 # exits as a process killed by them would (143 for TERM, 129 for HUP).

@@ -1692,6 +1692,41 @@ def keys_are_taken_out_when_restorecon_hangs(machine: System, tmp_path: Path, ca
     return not machine.keys_file.exists()
 
 
+def a_late_firewall_add_is_taken_out(machine: System, tmp_path: Path, capsys) -> bool:
+    late_firewall_add(machine)
+    outcome(machine, "--key", public_key())
+    machine.firewall = machine.real_firewall
+    return machine.rules == {"runtime": set(), "permanent": set()}
+
+
+def late_firewall_add(machine: System) -> None:
+    """firewall-cmd --permanent --add fails, and a runtime add left behind by a killed command lands
+    only while the rollback asks about the saved rule: after it has dealt with the runtime one."""
+    real = machine.real_firewall = machine.firewall
+    armed, landed = [], []
+
+    def firewall(tool, args, root):
+        if "--permanent" in args and any(arg.startswith("--add-rich-rule") for arg in args):
+            armed.append(True)
+            return "", 11
+        if armed and not landed and "--permanent" in args and any(arg.startswith("--query-rich-rule") for arg in args):
+            landed.append(True)
+            machine.rules["runtime"].add(RULE)
+        return real(tool, args, root)
+    machine.firewall = firewall
+
+
+def the_budget_keeps_sshd_closing(machine: System, tmp_path: Path, capsys) -> bool:
+    module, saved = machine.module, (machine.module.SSH_TIMEOUT, machine.module.SSH_ROLLBACK_BUDGET)
+    module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET = 1, 0
+    machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
+    try:
+        outcome(machine, "--key", public_key())
+    finally:
+        (module.SSH_TIMEOUT, module.SSH_ROLLBACK_BUDGET), machine.hang_after = saved, []
+    return machine.units["sshd.service"] == ["disabled", "inactive"]
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1778,6 +1813,8 @@ MUTANTS = {
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active in SSH_CLOSED_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
     "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled in SSH_CLOSED_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
     "keys marked written only after restorecon": (keys_are_taken_out_when_restorecon_hangs, "            if written is not None:\n                written.append(keys_file)\n", ""),
+    "a late firewall add left in place": (a_late_firewall_add_is_taken_out, "    for final in (False, True):\n", "    for final in (False,):\n"),
+    "sshd skipped once time runs out": (the_budget_keeps_sshd_closing, "            return last if essential else None\n", "            return None\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2840,6 +2877,28 @@ def test_ssh_run_passes_input_and_returns_output():
     assert (done.returncode, done.stdout, done.stderr) == (3, "hello\n", "err\n")
 
 
+def test_a_firewall_add_that_lands_late_is_still_taken_out(machine, capsys):
+    before = snapshot(machine)
+    late_firewall_add(machine)
+    err = refused(machine, capsys, "--key", public_key())
+    assert "the firewall rule in herald-os removed (it came late)" in err
+    machine.firewall = machine.real_firewall
+    assert snapshot(machine) == before
+
+
+def test_a_rule_whose_query_does_not_answer_is_removed_anyway(machine, monkeypatch, capsys):
+    real = machine.firewall
+    def firewall(tool, args, root):
+        if "--permanent" in args and any(arg.startswith("--add-rich-rule") for arg in args):
+            return "", 11
+        if any(arg.startswith("--query-rich-rule") for arg in args):
+            return "", 11
+        return real(tool, args, root)
+    monkeypatch.setattr(machine, "firewall", firewall)
+    refused(machine, capsys, "--key", public_key())
+    assert machine.rules["runtime"] == set()
+
+
 def test_sudo_is_asked_first_untimed_in_a_terminal_and_nothing_changes_when_it_refuses(machine, monkeypatch, capsys):
     machine.setup("--key", public_key())
     first = next(at for at, (_, argv) in enumerate(machine.calls) if not looks(argv) and argv != ["-v"])
@@ -2868,3 +2927,44 @@ def test_as_root_there_is_no_sudo(machine, monkeypatch, tmp_path):
     given.write_text(public_key() + "\n")
     machine.setup("--user", "me", "--keys-file", str(given))
     assert not any(argv in (["-v"], ["sudo", "-v"]) for _, argv in machine.calls)
+
+
+def test_the_rollback_keeps_to_its_time_budget_and_still_closes_sshd(machine, monkeypatch, capsys):
+    import time
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 2)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_LAST", 1)
+    # sshd starts and systemctl hangs; then every command hangs, save stopping and disabling sshd.
+    machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
+    machine.then_hang = [[]]
+    real_run = machine.run
+    def run(argv, **kwargs):
+        stripped = argv[2:] if argv[:2] == ["sudo", "-n"] else argv[1:] if argv[:1] == ["sudo"] else argv
+        if stripped in (["systemctl", "stop", "sshd.service"], ["systemctl", "disable", "sshd.service"]):
+            saved, machine.hang = machine.hang, []
+            try:
+                return real_run(argv, **kwargs)
+            finally:
+                machine.hang = saved
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(machine, "run", run)
+    started = time.monotonic()
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    elapsed = time.monotonic() - started
+    machine.hang = []
+    assert machine.units["sshd.service"] == ["disabled", "inactive"]
+    assert "ran out of time (2 s) putting things back; skipped:" in err
+    assert elapsed < 20
+
+
+def test_once_the_budget_is_gone_stopping_and_disabling_sshd_are_still_tried(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    monkeypatch.setattr(cli, "SSH_ROLLBACK_BUDGET", 0)
+    machine.hang_after = [["systemctl", "reload-or-restart", "sshd.service"]]
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    machine.hang_after = []
+    changes = machine.changes()
+    assert ["systemctl", "stop", "sshd.service"] in changes and ["systemctl", "disable", "sshd.service"] in changes
+    assert ["systemctl", "stop", "sshd.socket"] in changes and ["systemctl", "disable", "sshd.socket"] in changes
+    assert machine.units["sshd.service"] == ["disabled", "inactive"]
+    assert "skipped:" in err and "rm -f" in err
