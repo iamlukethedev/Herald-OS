@@ -4119,6 +4119,11 @@ SSH_SUDO_RENEW = 10
 SSH_ESSENTIAL_UNITS = ("sshd.service", "sshd.socket")
 
 
+def ssh_no_table(result: subprocess.CompletedProcess) -> bool:
+    """Whether nft plainly said the table is not there, rather than failing for another reason."""
+    return result.returncode not in (0, None) and "No such file or directory" in (result.stderr or "")
+
+
 def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
     """Put back what `on` changed since `before`: what it put back, and what it could not (a command
     that failed, hung or was refused by sudo, a step it ran out of time for), for the message. Each
@@ -4214,8 +4219,18 @@ def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
         else:
             keys_out(*given, undone, trouble)
     nft = nft_command()
-    if nft and not before["table"] and run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
-        attempt([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], f"the table inet {SSH_LIMIT_TABLE} removed")
+    # A table that was not there before goes unless nft plainly says it is not there now: a listing
+    # that failed otherwise (sudo refused, it timed out) says nothing either way.
+    if nft and not before["table"] and not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE])):
+        delete = [nft, "delete", "table", "inet", SSH_LIMIT_TABLE]
+        deleted = run(delete)
+        if deleted.returncode == 0:
+            undone.append(f"the table inet {SSH_LIMIT_TABLE} removed")
+        elif deleted.returncode is not None and not ssh_no_table(deleted):
+            refusal = (deleted.stderr or "").strip().splitlines()[-1:]
+            trouble(f"the table inet {SSH_LIMIT_TABLE} may still be loaded"
+                    + (f" ({refusal[0]})" if refusal else "")
+                    + f"; remove it with: {'' if os.geteuid() == 0 else 'sudo '}{shlex.join(delete)}")
     restored: set[Path] = set()
     for path, text in before["files"].items():
         if read_nofollow(path) == text and (text is not None or not os.path.lexists(path)):

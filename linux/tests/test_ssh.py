@@ -77,6 +77,8 @@ DROP_IN = (
     "PermitEmptyPasswords no\n"
 )
 RULE = 'rule service name="ssh" accept'
+# What nft says about a table that is not there (on stderr, exit 1).
+NFT_NO_TABLE = "Error: No such file or directory\nlist table inet herald_os_ssh\n                ^^^^^^^^^^^^^\n"
 # The whole command, so any change to a limit or a timeout shows.
 GITHUB_CURL_EXACT = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3",
                      "--max-filesize", "1M", "--connect-timeout", "10", "--max-time", "20"]
@@ -276,11 +278,11 @@ class System:
             return subprocess.CompletedProcess(argv, 0 if self.sudo_lets_in else 1, "", "")
         if argv[:3] == ["ssh-keygen", "-lf", "-"]:
             return keygen_listing(input)
-        out, code = self.answer(argv, root or self.is_root)
+        out, code, *err = self.answer(argv, root or self.is_root)
         if any(argv[:len(prefix)] == prefix for prefix in self.hang_after):
             self.hang += self.then_hang
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
-        return subprocess.CompletedProcess(argv, code, out, "" if code == 0 else f"{argv[0]}: refused")
+        return subprocess.CompletedProcess(argv, code, out, err[0] if err else "" if code == 0 else f"{argv[0]}: refused")
 
     def hang_stubbornly(self, argv: list[str], timeout: float | None, grace: float | None) -> subprocess.CompletedProcess:
         real = types.FunctionType(REAL_SSH_RUN.__code__, vars(self.module), "ssh_run", REAL_SSH_RUN.__defaults__)
@@ -337,16 +339,15 @@ class System:
             if not root:
                 return "", 1
             if argv[1:] == ["list", "table", "inet", "herald_os_ssh"]:
-                return (self.table or "", 0 if self.table else 1)
+                return (self.table, 0) if self.table else ("", 1, NFT_NO_TABLE)
             if argv[1] == "-f":
                 if self.nft_fails:
                     return "", 1
                 self.table = Path(argv[2]).read_text()
                 return "", 0
             if argv[1:] == ["delete", "table", "inet", "herald_os_ssh"]:
-                code = 0 if self.table else 1
-                self.table = None
-                return "", code
+                had, self.table = self.table, None
+                return ("", 0) if had else ("", 1, NFT_NO_TABLE)
             raise AssertionError(f"unexpected nft {argv}")
         if tool in ("firewall-cmd", "firewall-offline-cmd"):
             return self.firewall(tool, argv[1:], root)
@@ -2076,6 +2077,14 @@ def a_root_command_holding_the_pipes_is_not_waited_for(machine: System, tmp_path
     return a_root_command_left_running_is_ended(machine, tmp_path, capsys, quiet=False)
 
 
+def a_table_not_listed_is_reported(machine: System, tmp_path: Path, capsys) -> bool:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module.sys.stdin, "isatty", lambda: True)
+        expire_sudo_after_the_limit(machine)
+        outcome(machine, "--key", public_key())
+    return "remove it with: sudo /usr/sbin/nft delete table inet herald_os_ssh" in capsys.readouterr().err
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2178,6 +2187,7 @@ MUTANTS = {
     "a root command left running not noted": (a_root_command_left_running_is_ended, '        SSH_LEFT.append({"argv": list(process.args), "tree": tree})\n', "        pass\n"),
     "what is left never ended": (a_root_command_left_running_is_ended, "        if not pids:\n            break\n", "        break\n"),
     "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=grace)\n", "            process.communicate()\n"),
+    "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -3747,3 +3757,24 @@ def test_with_everything_hung_for_real_the_rollback_keeps_to_its_budget_wall_clo
     assert len(machine.killed) >= 4
     tried = [argv for _, argv in machine.calls if argv[:1] == ["systemctl"] and argv[1] in ("stop", "disable") and argv[2] in ("sshd.service", "sshd.socket")]
     assert len(tried) == 4
+
+
+
+def test_a_table_sudo_would_not_list_is_named_with_the_command_to_remove_it(machine, monkeypatch, capsys):
+    """sudo forgets the password after the limit's table is loaded: listing it fails like a missing
+    table would (exit 1), but that says nothing, so the table is reported, with what to run."""
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    expire_sudo_after_the_limit(machine)
+    err = refused(machine, capsys, "--key", public_key())
+    assert machine.table is not None
+    assert "the table inet herald_os_ssh may still be loaded (sudo: a password is required); remove it with: " \
+           "sudo /usr/sbin/nft delete table inet herald_os_ssh" in err
+    assert err.rstrip().splitlines()[-1].startswith("herald-os: the rollback is incomplete")
+
+
+def test_a_table_that_is_plainly_not_there_is_left_alone(machine, monkeypatch, capsys):
+    machine.limit_fails = True
+    before = snapshot(machine)
+    err = refused(machine, capsys, "--key", public_key())
+    assert snapshot(machine) == before and "SSH is as it was before this run" in err
+    assert ["/usr/sbin/nft", "delete", "table", "inet", "herald_os_ssh"] not in machine.changes()
