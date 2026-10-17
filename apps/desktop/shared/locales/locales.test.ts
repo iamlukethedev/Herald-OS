@@ -140,6 +140,12 @@ describe.each(Object.entries(TRANSLATIONS))('the %s catalog', (language, catalog
     expect(copied.map(([key]) => key)).toEqual([])
   })
 
+  it('keeps the command and shortcuts first-run setup names as they are', () => {
+    expect(catalog['firstRun.account.textSignedIn']).toContain('herald-os password')
+    expect(catalog['firstRun.done.text']).toContain('Super+Space')
+    expect(catalog['firstRun.done.text']).toContain('Super+M')
+  })
+
   it('allows only words some message in it really keeps', () => {
     for (const word of SAME_AS_ENGLISH[language as Exclude<Language, 'en'>]) {
       const kept = entries.some(([key, message]) => forms(message).some(text => text.includes(word) && forms(en[key]).some(english => english === text)))

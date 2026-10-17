@@ -573,6 +573,42 @@ export const en = {
   'settings.agents.toolSearch.failed': 'Could not change tool search',
   'settings.agents.toolSearch.bridgeError': 'Herald OS could not set its system tools up in Hermes: {error}. It tries again at its next start.',
 
+  // First-run setup on the Herald OS image: who the computer is for, their account, Wi-Fi and Hermes.
+  'firstRun.label': 'Set up Herald OS',
+  'firstRun.next': 'Next',
+  'firstRun.later': 'Later',
+  'firstRun.welcome.title': 'Welcome to Herald OS',
+  'firstRun.welcome.text': 'A computer you can talk to. A few questions and it is yours.',
+  'firstRun.welcome.forMe': 'It is for me',
+  'firstRun.welcome.forMeHint': 'Choose your name, a password and sign in to Hermes.',
+  'firstRun.welcome.forMeSignedInHint': 'Choose your name and sign in to Hermes.',
+  'firstRun.welcome.forSomeoneElse': 'For someone else',
+  'firstRun.welcome.forSomeoneElseHint': 'Get it online now; they finish setup when they first start it.',
+  'firstRun.account.title': 'Your name and password',
+  'firstRun.account.titleSignedIn': 'Your name',
+  'firstRun.account.text': 'Herald OS greets you by name. The password unlocks the screen and approves changes to the system.',
+  // herald-os password is the command that changes it, and stays as it is.
+  'firstRun.account.textSignedIn': 'Herald OS greets you by name. You signed in with your password, which also unlocks the screen and approves changes to the system; herald-os password changes it.',
+  'firstRun.account.name': 'Name',
+  'firstRun.account.password': 'Password (at least 8 characters)',
+  'firstRun.account.passwordAgain': 'The same password again',
+  'firstRun.account.mismatch': 'The passwords do not match.',
+  'firstRun.account.passwordNotSet': 'The password was not set.',
+  'firstRun.wifi.title': 'Get online',
+  'firstRun.wifi.text': 'Pick a network; you can also plug in a cable. Skip it to stay offline for now.',
+  'firstRun.hermes.title': 'Sign in to Hermes',
+  'firstRun.hermes.text': 'Hermes needs a model provider to think with. Signing in opens the provider page beside a short code; another provider can take an API key instead.',
+  // {provider} is a provider's name, such as “OpenRouter”.
+  'firstRun.hermes.thinksWith': 'Hermes thinks with {provider}.',
+  'firstRun.hermes.otherProvider': 'Use another provider',
+  'firstRun.done.title': 'You are all set',
+  // Super+Space and Super+M are keyboard shortcuts, and stay as they are.
+  'firstRun.done.text': 'Press Super+Space to ask Hermes about anything on screen, or Super+M for the Herald OS menu.',
+  'firstRun.done.start': 'Start using Herald OS',
+  'firstRun.handOver.title': 'Ready to hand over',
+  'firstRun.handOver.text': 'The next time it starts, it asks its new owner for a name, a password and their Hermes sign-in.',
+  'firstRun.handOver.done': 'Done',
+
   // When the voice Hermes speaks with fails and the computer's own voice stands in, or nothing can.
   // {voice} is a voice.name message that begins the sentence; {system} is voice.name.mac or
   // voice.name.system; {device} is “Mac” or “computer”, and a language may say “this computer” without it.
