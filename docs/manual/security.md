@@ -47,8 +47,9 @@ Without a key it refuses and changes nothing. To sign in with your account's pas
 firewall (firewalld) is not running it refuses too, since SSH would then be open with nothing else
 closed; `--no-firewall` turns SSH on anyway, with a warning. Without nftables it refuses, because there
 would be no limit on guessing, except with `--no-firewall`, which then warns that there is no rate
-limit at all. If any step fails partway, it puts everything back as it was before and says what it
-put back, and `--status` warns about anything that keeps SSH from working.
+limit at all. If any step fails partway, or it is stopped (Ctrl+C, closing the terminal, a shutdown), or a
+command it runs hangs, it puts everything back as it was before and says what it put back, and
+`--status` warns about anything that keeps SSH from working.
 
 ```bash
 herald-os setup ssh --status    # whether SSH is on, how you can sign in, the firewall, open sessions
