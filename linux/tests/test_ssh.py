@@ -159,7 +159,8 @@ class System:
         # place under the caller's own timeout, so TimeoutExpired comes from subprocess itself.
         self.hang: list[list[str]] = []
         self.hanger = tmp_path / "hang"
-        self.hanger.write_text("#!/bin/sh\nexec sleep 30\n")
+        # It leaves a mark first, so a test can tell when the command is hanging.
+        self.hanger.write_text("#!/bin/sh\n[ -z \"$HANG_MARK\" ] || : >\"$HANG_MARK\"\nexec sleep 30\n")
         self.hanger.chmod(0o755)
         # The timeout every command was given (None when it had none).
         self.timeouts: list[tuple[list[str], float | None]] = []
@@ -1492,7 +1493,7 @@ def interrupted_after_the_firewall(machine: System, tmp_path: Path, capsys) -> b
     machine.firewall = interrupt
     try:
         machine.setup("--key", public_key())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
     else:
         return False
@@ -1539,7 +1540,7 @@ def a_second_ctrl_c_does_not_cut_the_rollback_short(machine: System, tmp_path: P
     second_ctrl_c(machine, seen)
     try:
         machine.setup("--key", public_key())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
     return bool(seen) and machine.rules == {"runtime": set(), "permanent": set()} and not machine.limited()
 
@@ -1568,6 +1569,58 @@ def a_hang_in_the_rollback_is_passed_over(machine: System, tmp_path: Path, capsy
     return result == "exit 1" and not machine.drop_in.exists() and not machine.limited() and not any(os.path.lexists(path) for path in machine.required)
 
 
+def signal_partway(machine: System, signum: int, seen: list | None = None) -> None:
+    """The signal arrives while the limit unit is being started and, with `seen`, once more while the
+    rollback disables that unit again."""
+    real = machine.systemctl
+
+    def systemctl(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            os.kill(os.getpid(), signum)
+        if seen is not None and args == ["disable", "herald-os-ssh-limit.service"]:
+            seen.append(signal.getsignal(signum))
+            os.kill(os.getpid(), signum)
+        return real(args, root)
+    machine.systemctl = systemctl
+
+
+class Unhandled(Exception):
+    """A signal the CLI left to whatever handler was there before it."""
+
+
+def guarded(machine: System, signum: int) -> str:
+    """Run `on` with `signum` arriving partway, under a guard handler that the CLI must replace with
+    its own: a mutant that does not leaves the guard to raise Unhandled, rather than the signal's
+    default action ending the test run."""
+    def guard(number, frame):
+        raise Unhandled(number)
+    previous = signal.signal(signum, guard)
+    signal_partway(machine, signum)
+    try:
+        return str(outcome(machine, "--key", public_key()))
+    finally:
+        signal.signal(signum, previous)
+
+
+def sigterm_rolls_back(machine: System, tmp_path: Path, capsys) -> bool:
+    result = guarded(machine, signal.SIGTERM)
+    return result == "exit 143" and not machine.drop_in.exists() and not any(os.path.lexists(path) for path in machine.required) and not machine.ssh.exists()
+
+
+def sighup_rolls_back(machine: System, tmp_path: Path, capsys) -> bool:
+    result = guarded(machine, signal.SIGHUP)
+    return result == "exit 129" and not machine.drop_in.exists()
+
+
+def handlers_come_back(machine: System, tmp_path: Path, capsys) -> bool:
+    before = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    outcome(machine, "--key", public_key())
+    after = {signum: signal.getsignal(signum) for signum in before}
+    for signum, handler in before.items():
+        signal.signal(signum, handler)
+    return after == before
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1591,7 +1644,7 @@ MUTANTS = {
     "GitHub redirects unbounded": (github_fetch_is_https_only, '"--max-redirs", "3",', ""),
     "GitHub page size unbounded": (github_page_is_capped, "if len(result.stdout.encode()) > GITHUB_MAX_BYTES:", "if False:"),
     "one limit for every address": (rate_limited_per_address, "add @sources4 {{ ip saddr {over} }}", "{over}"),
-    "no rate limit": (rate_limited_per_address, "        if nft:\n            ssh_limit_on(ports)", "        if False:\n            ssh_limit_on(ports)"),
+    "no rate limit": (rate_limited_per_address, "            if nft:\n                ssh_limit_on(ports)", "            if False:\n                ssh_limit_on(ports)"),
     "firewall not opened": (firewall_opened, 'opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"', 'opened = "none"'),
     "no refusal without firewalld": (refuses_without_firewalld, 'if not firewall and not offline and not opts["no_firewall"]:', "if False:"),
     "offline rule not saved": (offline_rule_is_saved, '    root_step(["firewall-offline-cmd", f"--zone={name}", f"--add-rich-rule={SSH_RICH_RULE}"], "Saving SSH\'s firewall rule")\n', ""),
@@ -1640,12 +1693,16 @@ MUTANTS = {
     "--user root taken by --status": (json_arguments_are_checked, '                if value == "root":', "                if False:"),
     "a longer GitHub timeout": (the_github_fetch_is_exactly_this, '"--connect-timeout", "10", "--max-time", "20",', '"--connect-timeout", "10", "--max-time", "200",'),
     "match only in lower case": (match_is_found_in_any_case, "        settings.append((number, keyword.lower(),", "        settings.append((number, keyword,"),
-    "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "    except BaseException:\n        # Whatever stopped it", "    except SystemExit:\n        # Whatever stopped it"),
+    "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "        except BaseException:\n            # Whatever stopped it", "        except SystemExit:\n            # Whatever stopped it"),
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
-    "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)", "            interrupt = None"),
+    "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})", "            ignored = {}"),
     "commands without a timeout": (every_command_has_a_timeout, "check=False, timeout=SSH_TIMEOUT, **kwargs)", "check=False, **kwargs)"),
     "a hang stops the rollback": (a_hang_in_the_rollback_is_passed_over, "        except (subprocess.TimeoutExpired, OSError) as exc:\n            why =", "        except ZeroDivisionError as exc:\n            why ="),
+    "SIGTERM not handled": (sigterm_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGHUP,)"),
+    "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
+    "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
+    "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2461,3 +2518,90 @@ def test_a_command_that_hangs_during_the_rollback_is_passed_over(machine, monkey
     machine.hang = []
     # Only daemon-reload's own effect is missing; every file, unit, table and rule is as it was.
     assert snapshot(machine) == before
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 7: SIGTERM and SIGHUP go through the rollback and exit 143 and 129.
+@pytest.mark.parametrize("signum, code", [(signal.SIGTERM, 143), (signal.SIGHUP, 129)])
+def test_a_real_signal_partway_puts_everything_back_and_exits_with_its_code(machine, capsys, signum, code):
+    before = snapshot(machine)
+    handlers = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    seen: list = []
+    signal_partway(machine, signum, seen)
+    err = refused(machine, capsys, "--key", public_key(), code=code)
+    assert f"stopped by {signal.Signals(signum).name}; putting back what this run changed" in err
+    assert "SSH is as it was before this run; put back:" in err and "Traceback" not in err
+    assert snapshot(machine) == before
+    # The same signal sent again during the rollback was ignored, and every handler is back.
+    assert seen and all(state is signal.SIG_IGN for state in seen)
+    assert {s: signal.getsignal(s) for s in handlers} == handlers
+
+
+def test_signals_are_handled_only_while_on_changes_things(machine, capsys):
+    handlers = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    seen = {}
+    real = machine.systemctl
+
+    def look(args, root):
+        if args == ["restart", "herald-os-ssh-limit.service"]:
+            seen.update({s: signal.getsignal(s) for s in handlers})
+        return real(args, root)
+    machine.systemctl = look
+    machine.setup("--key", public_key())
+    assert all(seen[s] is cli.ssh_stopped for s in handlers)
+    assert {s: signal.getsignal(s) for s in handlers} == handlers
+
+
+DRIVER = """
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, {tests!r})
+import pytest
+import test_ssh
+
+machine = test_ssh.System(test_ssh.cli, Path({tmp!r}), pytest.MonkeyPatch())
+machine.hang = [["systemctl", "restart", "herald-os-ssh-limit.service"]]
+os.environ["HANG_MARK"] = {mark!r}
+
+def state():
+    files, ssh, units, table, rules = test_ssh.snapshot(machine)
+    return {{"files": files, "ssh": ssh, "units": units, "table": table, "rules": {{k: sorted(v) for k, v in rules.items()}}}}
+
+before = state()
+code = 0
+try:
+    machine.setup("--key", test_ssh.public_key())
+except SystemExit as stopped:
+    code = stopped.code
+print(json.dumps({{"code": code, "same": state() == before}}))
+sys.exit(code)
+"""
+
+
+@pytest.mark.parametrize("signum, code", [(signal.SIGTERM, 143), (signal.SIGHUP, 129)])
+def test_setup_ssh_killed_while_a_command_hangs_puts_everything_back(tmp_path, signum, code):
+    """A separate process runs `on`; while it waits on a command that hangs for real, it gets the signal."""
+    import sys
+    import time
+    mark, work = tmp_path / "hanging", tmp_path / "machine"
+    work.mkdir()
+    script = tmp_path / "driver.py"
+    script.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark)))
+    child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(200):
+            if mark.exists() or child.poll() is not None:
+                break
+            time.sleep(0.1)
+        assert mark.exists(), child.communicate(timeout=10)
+        child.send_signal(signum)
+        out, err = child.communicate(timeout=30)
+    finally:
+        if child.poll() is None:
+            child.kill()
+    assert child.returncode == code, err
+    result = json.loads(out.strip().splitlines()[-1])
+    assert result == {"code": code, "same": True}, err
+    assert f"stopped by {signal.Signals(signum).name}" in err and "SSH is as it was before this run" in err
+    assert "Traceback" not in err

@@ -3968,6 +3968,28 @@ def ssh_rollback(before: dict) -> list[str]:
     return undone
 
 
+# Signals that stop `on` partway: like Ctrl+C, they go through the rollback, and the command then
+# exits as a process killed by them would (143 for TERM, 129 for HUP).
+SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
+
+
+def ssh_stopped(signum: int, frame) -> None:
+    print(f"herald-os: stopped by {signal.Signals(signum).name}; putting back what this run changed", file=sys.stderr)
+    raise SystemExit(128 + signum)
+
+
+def ssh_signals(handlers: dict) -> dict:
+    """Set these handlers and return the ones they replace. Outside the main thread, where signal()
+    cannot be used, it sets nothing and returns nothing."""
+    previous: dict = {}
+    for signum, handler in handlers.items():
+        try:
+            previous[signum] = signal.signal(signum, handler)
+        except ValueError:
+            break
+    return previous
+
+
 NO_LIMIT = (
     "THERE IS NO RATE LIMIT: nft is not installed, so nothing slows down password or key guessing "
     "against sshd, from any address. Install nftables (sudo dnf install nftables) and run this again."
@@ -4016,50 +4038,51 @@ def ssh_on(opts: dict) -> int:
     for key, listing in keys:
         print(f"    key {listing}: {'adding' if key in added else 'there already'}")
     # From here on, a step that fails takes back everything this run changed, keys included, so a
-    # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open firewall).
-    before = ssh_snapshot()
-    with as_account(account):
-        had_folder, had_keys_file = ssh_dir(account).is_dir(), keys_file.is_file()
+    # failed `on` leaves SSH as it found it (no requirement on a limit that never loaded, no half-open
+    # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
+    stops = ssh_signals({signum: ssh_stopped for signum in SSH_STOPS})
     try:
-        write_authorized(account, updated if added else None)
-        ports = sshd_configure(account, opts["passwords"], sshd)
-        if nft:
-            ssh_limit_on(ports)
-            limit = f"at most {SSH_LIMIT_RATE.replace('/', ' a ')} new connections from each address"
-        else:
-            # A requirement left from an earlier `on` would keep sshd from starting at all.
-            ssh_limit_off()
-            limit = "NO RATE LIMIT (nft is not installed)"
-        opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
-        root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
-        root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
-    except BaseException:
-        # Whatever stopped it (a refusal, Ctrl+C, a file error, a command that timed out), what this run
-        # changed goes back before the exception goes on as it was. A second Ctrl+C must not cut that
-        # short, so SIGINT is ignored until it is done (signal() works only in the main thread).
+        before = ssh_snapshot()
+        with as_account(account):
+            had_folder, had_keys_file = ssh_dir(account).is_dir(), keys_file.is_file()
         try:
-            interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        except ValueError:
-            interrupt = None
-        try:
-            undone = ssh_rollback(before)
-            if added:
-                try:
-                    if had_keys_file:
-                        write_authorized(account, current)
-                    else:
-                        with as_account(account):
-                            keys_file.unlink(missing_ok=True)
-                            if not had_folder:
-                                ssh_dir(account).rmdir()
-                    undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
-                except (SystemExit, OSError):
-                    warn(f"could not take the added keys back out of {keys_file}")
-            print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
-        finally:
-            if interrupt is not None:
-                signal.signal(signal.SIGINT, interrupt)
-        raise
+            write_authorized(account, updated if added else None)
+            ports = sshd_configure(account, opts["passwords"], sshd)
+            if nft:
+                ssh_limit_on(ports)
+                limit = f"at most {SSH_LIMIT_RATE.replace('/', ' a ')} new connections from each address"
+            else:
+                # A requirement left from an earlier `on` would keep sshd from starting at all.
+                ssh_limit_off()
+                limit = "NO RATE LIMIT (nft is not installed)"
+            opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
+            root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
+            root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
+        except BaseException:
+            # Whatever stopped it (a refusal, a signal, a file error, a command that timed out), what this
+            # run changed goes back before the exception goes on as it was. Another signal must not cut
+            # that short, so INT, TERM and HUP are ignored until it is done.
+            ignored = ssh_signals({signum: signal.SIG_IGN for signum in (signal.SIGINT, *SSH_STOPS)})
+            try:
+                undone = ssh_rollback(before)
+                if added:
+                    try:
+                        if had_keys_file:
+                            write_authorized(account, current)
+                        else:
+                            with as_account(account):
+                                keys_file.unlink(missing_ok=True)
+                                if not had_folder:
+                                    ssh_dir(account).rmdir()
+                        undone.append(f"the {len(added)} key(s) added to {keys_file} taken out")
+                    except (SystemExit, OSError, subprocess.TimeoutExpired):
+                        warn(f"could not take the added keys back out of {keys_file}")
+                print(f"herald-os: SSH is as it was before this run; put back: {'; '.join(undone) or 'nothing had changed yet'}.", file=sys.stderr)
+            finally:
+                ssh_signals(ignored)
+            raise
+    finally:
+        ssh_signals(stops)
     count = len(authorized(updated))
     print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
     print(f"    keys: {count} in {keys_file}" + (f" ({len(added)} added)" if added else ""))
