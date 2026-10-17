@@ -1469,6 +1469,26 @@ def match_is_found_in_any_case(machine: System, tmp_path: Path, capsys) -> bool:
         "x line 2: PasswordAuthentication YES under Match User alice"]
 
 
+def interrupted_after_the_firewall(machine: System, tmp_path: Path, capsys) -> bool:
+    """Ctrl+C right after the runtime rule went in, while the saved one is being added."""
+    real = machine.firewall
+    def interrupt(tool, args, root):
+        out = real(tool, args, root)
+        if "--permanent" in args and any(arg.startswith("--add-rich-rule") for arg in args):
+            raise KeyboardInterrupt
+        return out
+    machine.firewall = interrupt
+    try:
+        machine.setup("--key", public_key())
+    except KeyboardInterrupt:
+        pass
+    else:
+        return False
+    finally:
+        machine.firewall = real
+    return machine.rules == {"runtime": set(), "permanent": set()} and not machine.limited() and not machine.drop_in.exists()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1541,6 +1561,7 @@ MUTANTS = {
     "--user root taken by --status": (json_arguments_are_checked, '                if value == "root":', "                if False:"),
     "a longer GitHub timeout": (the_github_fetch_is_exactly_this, '"--connect-timeout", "10", "--max-time", "20",', '"--connect-timeout", "10", "--max-time", "200",'),
     "match only in lower case": (match_is_found_in_any_case, "        settings.append((number, keyword.lower(),", "        settings.append((number, keyword,"),
+    "Ctrl+C skips the rollback": (interrupted_after_the_firewall, "    except BaseException:\n        # Whatever stopped it", "    except SystemExit:\n        # Whatever stopped it"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2165,3 +2186,48 @@ def test_status_json_as_root_checks_its_arguments_too(machine, monkeypatch, caps
     as_root_without_account(machine, monkeypatch)
     state, code = json_error(machine, capsys, *args)
     assert code == 2 and words in state["error"]
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 5: anything that stops `on` rolls back; a table that was there is loaded again; ~ is refused.
+def test_ctrl_c_partway_puts_everything_back_and_goes_on_as_ctrl_c(machine, monkeypatch, capsys):
+    before = snapshot(machine)
+    real = machine.firewall
+    def interrupt(tool, args, root):
+        out = real(tool, args, root)
+        if "--permanent" in args and any(arg.startswith("--add-rich-rule") for arg in args):
+            raise KeyboardInterrupt
+        return out
+    monkeypatch.setattr(machine, "firewall", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        machine.setup("--key", public_key())
+    assert snapshot(machine) == before
+    err = capsys.readouterr().err
+    assert "SSH is as it was before this run; put back:" in err and "the firewall rule in herald-os removed" in err
+
+
+def test_a_file_error_partway_puts_everything_back_and_is_said_plainly(machine, monkeypatch, capsys):
+    before = snapshot(machine)
+    real = cli.tempfile.mkstemp
+    def refuse(*args, **kwargs):
+        if kwargs.get("suffix") == ".service":
+            raise PermissionError(13, "Permission denied", "/tmp")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(cli.tempfile, "mkstemp", refuse)
+    err = refused(machine, capsys, "--key", public_key())
+    assert "SSH is as it was before this run; put back:" in err and "setup ssh stopped: Permission denied (/tmp)" in err
+    assert "Traceback" not in err and snapshot(machine) == before
+
+
+def test_a_command_that_times_out_partway_puts_everything_back_and_goes_on(machine, monkeypatch):
+    before = snapshot(machine)
+    real = machine.systemctl
+    def slow(args, root):
+        if args == ["reload-or-restart", "sshd.service"]:
+            raise subprocess.TimeoutExpired(["systemctl", *args], 60)
+        return real(args, root)
+    monkeypatch.setattr(machine, "systemctl", slow)
+    with pytest.raises(subprocess.TimeoutExpired):
+        machine.setup("--key", public_key())
+    assert snapshot(machine) == before

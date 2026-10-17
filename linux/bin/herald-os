@@ -3920,7 +3920,7 @@ def ssh_rollback(before: dict) -> list[str]:
             try:
                 install_file(text, path)
                 undone.append(f"{path} put back")
-            except SystemExit:
+            except (SystemExit, OSError):
                 warn(f"could not put back {path}")
     root_run(["systemctl", "daemon-reload"])
     for (tool, zone, permanent), had in before["rules"].items():
@@ -3995,7 +3995,9 @@ def ssh_on(opts: dict) -> int:
         opened = firewall_open() if firewall else firewall_save() if offline else "none running (--no-firewall)"
         root_step(["systemctl", "enable", "sshd.service"], "Enabling sshd")
         root_step(["systemctl", "reload-or-restart", "sshd.service"], "Starting sshd")
-    except SystemExit:
+    except BaseException:
+        # Whatever stopped it (a refusal, Ctrl+C, a file error, a command that timed out), what this run
+        # changed goes back before the exception goes on as it was.
         undone = ssh_rollback(before)
         if added:
             try:
