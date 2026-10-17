@@ -40,14 +40,15 @@ machine to leave them waiting for their owners.
 
 ## The account and SSH
 
-The first `%pre` section, right after the commands at the top, has three settings, all empty to start
-with. It runs before the one that picks the disk, so nothing is erased when they are not usable:
+The first `%pre` section, right after the commands at the top, has three settings, all empty to
+start with. It runs before the one that picks the disk, so nothing is erased when they are not
+usable:
 
 - `ACCOUNT=""`: the name of the account the first start makes (lowercase letters, digits, `-` and
   `_`, starting with a letter or `_`). Empty, it is `hermes`, as without a kickstart. Names that
   belong to the system are refused: `root`, the accounts and groups Fedora's packages use (`bin`,
-  `nobody`, `sshd`, `wheel`, `video`, any `systemd-…`, and so on), and any name the installer knows as
-  an account or group below 1000.
+  `nobody`, `sshd`, `wheel`, `video`, any `systemd-…`, and so on), and any name the installer
+  knows as an account or group below 1000.
 - `SSH_KEYS=""`: public keys that may sign in to that account over SSH, one a line between the
   quotes, as `~/.ssh/id_ed25519.pub` has them.
 - `GITHUB_KEYS=""`: GitHub accounts, separated by spaces, whose public keys may sign in
@@ -60,8 +61,8 @@ With any key, the first start turns SSH on for those keys only, with `herald-os 
 [Security](security.md#ssh)): no passwords, never root, and at most four new connections a minute
 from any one address. With none, SSH stays off. Keys in `SSH_KEYS` must be Ed25519, ECDSA, security
 keys, or RSA of 2048 bits or more. The log lists each key's fingerprint when the installer has
-`ssh-keygen`, and the first start's journal always does. A name or key that is not usable, or a GitHub
-account that cannot be read or has no keys, stops the install before it erases anything, and
+`ssh-keygen`, and the first start's journal always does. A name or key that is not usable, or a
+GitHub account that cannot be read or has no keys, stops the install before it erases anything, and
 `/tmp/herald-os-account.log` says why.
 
 The account still has no password until someone sets one in the first-start setup, as without a
