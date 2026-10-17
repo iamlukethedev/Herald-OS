@@ -1314,6 +1314,14 @@ def deep_includes_are_refused(machine: System, tmp_path: Path, capsys) -> bool:
     return outcome(machine, "--key", public_key()) == "exit 1" and not machine.on()
 
 
+def off_reloads_systemd(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    machine.calls.clear()
+    outcome(machine, "--off")
+    changes = machine.changes()
+    return ["systemctl", "daemon-reload"] in changes and changes.index(["systemctl", "daemon-reload"]) < changes.index(["systemctl", "disable", "--now", "herald-os-ssh-limit.service"])
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1359,9 +1367,10 @@ MUTANTS = {
     "someone else's .ssh taken": (someone_else_s_ssh_is_refused, "            if info.st_uid != account.pw_uid:", "            if False:"),
     "a traceback for a file error": (file_errors_are_said_plainly, "    except OSError as exc:\n        # Anything", "    except ZeroDivisionError as exc:\n        # Anything"),
     "sshd not tied to the limit": (sshd_waits_for_the_limit_at_boot, "    for path in SSH_LIMIT_REQUIRED:\n        install_file(ssh_limit_requirement(), path)\n", ""),
-    "the socket not tied to the limit": (the_socket_waits_for_the_limit_at_boot, '    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"),\n', ""),
+    "the socket not tied to the limit": (the_socket_waits_for_the_limit_at_boot, '    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-limit.conf"),\n', ""),
     "the requirement only wants the limit": (sshd_waits_for_the_limit_at_boot, '        f"Requires={SSH_LIMIT_UNIT.name}\\n"', '        f"Wants={SSH_LIMIT_UNIT.name}\\n"'),
     "the requirement not ordered after the limit": (the_requirement_orders_and_requires, '        f"After={SSH_LIMIT_UNIT.name}\\n"\n', ""),
+    "off does not reload systemd": (off_reloads_systemd, "    if required:\n        root_run([\"systemctl\", \"daemon-reload\"])\n", ""),
     "off keeps the requirement": (off_removes_the_requirement, "    for path in required:\n        root_step([\"rm\", \"-f\", str(path)], f\"Removing {path}\")\n", ""),
     "an Include under Match let through": (include_under_match_is_refused, '            elif match is not None and keyword.lower() == "include":', "            elif False:"),
     "an unreadable file skipped": (unreadable_files_are_refused, '        return [], [f"cannot read {path}: {(result.stderr or \'\').strip() or \'exit \' + str(result.returncode)}"]', "        return [], []"),
@@ -1597,8 +1606,8 @@ def test_sshd_and_its_socket_require_the_limit_and_start_after_it(machine, capsy
     machine.setup("--key", public_key())
     assert [path.read_text() for path in machine.required] == [cli.ssh_limit_requirement()] * 2
     assert [path.parent.name for path in machine.required] == ["sshd.service.d", "sshd.socket.d"]
-    assert REQUIRED_PATHS == (Path("/etc/systemd/system/sshd.service.d/10-herald-os-ssh-limit.conf"),
-                              Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"))
+    assert REQUIRED_PATHS == (Path("/etc/systemd/system/sshd.service.d/10-herald-os-limit.conf"),
+                              Path("/etc/systemd/system/sshd.socket.d/10-herald-os-limit.conf"))
     assert machine.sshd_needs_the_limit()
     # Written before systemd reloads and before the limit starts.
     changes = machine.changes()
@@ -1643,7 +1652,7 @@ def test_off_removes_the_requirement_before_stopping_the_limit(machine, tmp_path
     assert not any(os.path.lexists(path) for path in machine.required)
     changes = machine.changes()
     removed = max(changes.index(["rm", "-f", str(path)]) for path in machine.required)
-    assert removed < changes.index(["systemctl", "disable", "--now", "herald-os-ssh-limit.service"])
+    assert removed < changes.index(["systemctl", "daemon-reload"]) < changes.index(["systemctl", "disable", "--now", "herald-os-ssh-limit.service"])
     machine.required[0].symlink_to(tmp_path / "gone")
     machine.setup("--off")
     assert not os.path.lexists(machine.required[0])

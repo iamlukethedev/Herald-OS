@@ -3104,10 +3104,12 @@ SSH_LIMIT_TABLE = "herald_os_ssh"
 SSH_LIMIT_RULES = Path("/etc/herald-os/ssh-limit.nft")
 SSH_LIMIT_UNIT = Path("/etc/systemd/system/herald-os-ssh-limit.service")
 # sshd.service and sshd.socket require the limit and start after it, so when it fails (at boot or
-# later) systemd leaves sshd stopped, and stopping it stops sshd too.
+# later) systemd leaves sshd stopped, and stopping it stops sshd too. The socket gets one whether or not
+# it is enabled now: enabling it later (or a distribution that activates sshd by socket) must not
+# bring sshd up without the limit.
 SSH_LIMIT_REQUIRED = (
-    Path("/etc/systemd/system/sshd.service.d/10-herald-os-ssh-limit.conf"),
-    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-ssh-limit.conf"),
+    Path("/etc/systemd/system/sshd.service.d/10-herald-os-limit.conf"),
+    Path("/etc/systemd/system/sshd.socket.d/10-herald-os-limit.conf"),
 )
 SSH_LIMIT_RATE = "4/minute"
 # What sshd accepts today; DSA keys are gone from OpenSSH 9.8.

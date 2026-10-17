@@ -382,7 +382,7 @@ switched from another bootc system is different: it gets a login screen and a lo
   past 4 a minute from one IPv4 address or IPv6 /64, with dynamic sets that forget an address after 5
   minutes. `/etc/herald-os/ssh-limit.nft` holds it and `herald-os-ssh-limit.service` (in
   `/etc/systemd/system`) loads it at boot. Drop-ins in `sshd.service.d` and `sshd.socket.d`
-  (`10-herald-os-ssh-limit.conf`, `Requires=` and `After=` the limit's unit) keep sshd and its socket
+  (`10-herald-os-limit.conf`: `[Unit]`, `Requires=` and `After=` `herald-os-ssh-limit.service`) keep sshd and its socket
   stopped when the limit fails, at boot or later; `--off` removes them first. The firewalld zone gets `rule service name="ssh" accept`
   (runtime and permanent), and `restorecon` runs on `~/.ssh` and the files it writes. Files in the
   home folder are written as the account, also when the first boot runs it as root. `--off` disables
