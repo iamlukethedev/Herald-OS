@@ -155,6 +155,14 @@ class System:
         self.sshd_bounced = 0
         # `nft -f` refuses the file (a kernel without a needed nf_tables feature).
         self.nft_fails = False
+        # Commands (argv prefixes, without sudo) that hang: a real script that sleeps runs in their
+        # place under the caller's own timeout, so TimeoutExpired comes from subprocess itself.
+        self.hang: list[list[str]] = []
+        self.hanger = tmp_path / "hang"
+        self.hanger.write_text("#!/bin/sh\nexec sleep 30\n")
+        self.hanger.chmod(0o755)
+        # The timeout every command was given (None when it had none).
+        self.timeouts: list[tuple[list[str], float | None]] = []
         self.calls: list[tuple[bool, list[str]]] = []
         self.units = {name: ["disabled", "inactive"] for name in ("sshd.service", "sshd.socket", "herald-os-ssh-limit.service")}
         self.table: str | None = None
@@ -197,6 +205,9 @@ class System:
             if argv[:1] == ["-n"]:
                 argv = argv[1:]
         self.calls.append((root, argv))
+        self.timeouts.append((argv, timeout))
+        if any(argv[:len(prefix)] == prefix for prefix in self.hang):
+            return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
         if argv[:3] == ["ssh-keygen", "-lf", "-"]:
             return REAL_RUN([SSH_KEYGEN, "-lf", "-"], input=input, capture_output=True, text=True, check=False)
         out, code = self.answer(argv, root or self.is_root)
@@ -1533,6 +1544,30 @@ def a_second_ctrl_c_does_not_cut_the_rollback_short(machine: System, tmp_path: P
     return bool(seen) and machine.rules == {"runtime": set(), "permanent": set()} and not machine.limited()
 
 
+def every_command_has_a_timeout(machine: System, tmp_path: Path, capsys) -> bool:
+    outcome(machine, "--key", public_key())
+    outcome(machine, "--status")
+    return bool(machine.timeouts) and all(timeout is not None for _, timeout in machine.timeouts)
+
+
+def a_hang_in_the_rollback_is_passed_over(machine: System, tmp_path: Path, capsys) -> bool:
+    module, saved = machine.module, machine.module.SSH_TIMEOUT
+    module.SSH_TIMEOUT = 1
+    real = machine.firewall
+
+    def refuse_then_hang(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            machine.hang = [["systemctl", "daemon-reload"]]
+            return "", 11
+        return real(tool, args, root)
+    machine.firewall = refuse_then_hang
+    try:
+        result = outcome(machine, "--key", public_key())
+    finally:
+        module.SSH_TIMEOUT, machine.firewall, machine.hang = saved, real, []
+    return result == "exit 1" and not machine.drop_in.exists() and not machine.limited() and not any(os.path.lexists(path) for path in machine.required)
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -1609,6 +1644,8 @@ MUTANTS = {
     "the live table left as the failed run made it": (a_live_table_follows_the_restored_file, '        attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")', "        pass"),
     "an Include starting with ~ followed": (a_tilde_include_is_refused, '            if pattern.startswith("~"):', "            if False:"),
     "a second Ctrl+C cuts the rollback short": (a_second_ctrl_c_does_not_cut_the_rollback_short, "            interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)", "            interrupt = None"),
+    "commands without a timeout": (every_command_has_a_timeout, "check=False, timeout=SSH_TIMEOUT, **kwargs)", "check=False, **kwargs)"),
+    "a hang stops the rollback": (a_hang_in_the_rollback_is_passed_over, "        except (subprocess.TimeoutExpired, OSError) as exc:\n            why =", "        except ZeroDivisionError as exc:\n            why ="),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -2267,7 +2304,7 @@ def test_a_file_error_partway_puts_everything_back_and_is_said_plainly(machine, 
     assert "Traceback" not in err and snapshot(machine) == before
 
 
-def test_a_command_that_times_out_partway_puts_everything_back_and_goes_on(machine, monkeypatch):
+def test_a_command_that_times_out_partway_puts_everything_back_and_says_so(machine, monkeypatch, capsys):
     before = snapshot(machine)
     real = machine.systemctl
     def slow(args, root):
@@ -2275,8 +2312,8 @@ def test_a_command_that_times_out_partway_puts_everything_back_and_goes_on(machi
             raise subprocess.TimeoutExpired(["systemctl", *args], 60)
         return real(args, root)
     monkeypatch.setattr(machine, "systemctl", slow)
-    with pytest.raises(subprocess.TimeoutExpired):
-        machine.setup("--key", public_key())
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    assert "`systemctl reload-or-restart sshd.service` did not finish within 60 s" in err and "Traceback" not in err
     assert snapshot(machine) == before
 
 
@@ -2348,3 +2385,79 @@ def test_a_rollback_outside_the_main_thread_still_runs(machine, capsys):
     thread.start()
     thread.join()
     assert done == [1] and snapshot(machine) == before
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Round 7: every command has a timeout, and one that hangs for real triggers the whole rollback.
+def test_every_command_setup_ssh_runs_has_a_timeout(machine, capsys):
+    machine.github["https://github.com/octocat.keys"] = (public_key(comment="") + "\n", 0)
+    machine.setup("--github", "octocat")
+    machine.setup("--key", public_key(seed=2))
+    machine.setup("--status")
+    machine.setup("--status", "--json")
+    machine.sessions = {"7": "sshd"}
+    machine.setup("--off", "--end-sessions")
+    untimed = [argv for argv, timeout in machine.timeouts if timeout is None]
+    assert machine.timeouts and untimed == []
+    assert all(0 < timeout <= cli.SSH_TIMEOUT for _, timeout in machine.timeouts)
+    tools = {Path(argv[0]).name for argv, _ in machine.timeouts}
+    assert {"nft", "firewall-cmd", "sshd", "systemctl", "curl", "ssh-keygen", "loginctl", "cat", "env", "install"} <= tools
+
+
+HANGS = {
+    "systemctl restart of the limit": ["systemctl", "restart", "herald-os-ssh-limit.service"],
+    "nft listing the table": ["/usr/sbin/nft", "list", "table"],
+    "firewall-cmd adding the rule": ["firewall-cmd", "--permanent"],
+    "sshd -t": ["/usr/sbin/sshd", "-t"],
+    "sshd -T for root": ["/usr/sbin/sshd", "-T", "-C", "user=root,host=x,addr=203.0.113.1"],
+    "systemctl starting sshd": ["systemctl", "reload-or-restart", "sshd.service"],
+    "cat of an included file": ["cat", "--"],
+}
+
+
+@pytest.mark.parametrize("name", HANGS)
+def test_a_command_that_hangs_is_stopped_and_everything_is_put_back(machine, monkeypatch, capsys, name):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    before = snapshot(machine)
+    machine.hang = [HANGS[name]]
+    err = refused(machine, capsys, "--key", public_key(), code=124)
+    assert "did not finish within 1 s" in err and "Traceback" not in err
+    assert snapshot(machine) == before and not machine.on()
+
+
+def test_a_rerun_whose_nft_reload_hangs_keeps_what_was_working(machine, monkeypatch, capsys):
+    machine.setup("--key", public_key())
+    before = snapshot(machine)
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    machine.hang = [["/usr/sbin/nft", "-f"]]
+    refused(machine, capsys, "--key", public_key(seed=2), code=124)
+    machine.hang = []
+    assert snapshot(machine) == before and machine.on() and machine.limited()
+
+
+def test_a_github_fetch_that_hangs_is_stopped_and_nothing_changes(machine, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    machine.hang = [["curl"]]
+    assert "curl timed out after 1s" in refused(machine, capsys, "--github", "octocat", code=124)
+    assert [argv for _, argv in machine.calls if argv[0] == "curl"] == [GITHUB_CURL_EXACT + ["https://github.com/octocat.keys"]]
+    assert machine.changes() == []
+
+
+def test_a_command_that_hangs_during_the_rollback_is_passed_over(machine, monkeypatch, capsys):
+    before = snapshot(machine)
+    monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
+    real = machine.firewall
+
+    def refuse_then_hang(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            # From here on (the rollback), daemon-reload hangs; it is reported and the steps after it run.
+            machine.hang = [["systemctl", "daemon-reload"]]
+            return "", 11
+        return real(tool, args, root)
+    monkeypatch.setattr(machine, "firewall", refuse_then_hang)
+    err = refused(machine, capsys, "--key", public_key())
+    assert "`systemctl daemon-reload` did not finish within 1 s while putting things back" in err
+    machine.hang = []
+    # Only daemon-reload's own effect is missing; every file, unit, table and rule is as it was.
+    assert snapshot(machine) == before

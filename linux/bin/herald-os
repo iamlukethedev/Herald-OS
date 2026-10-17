@@ -3146,8 +3146,17 @@ def as_root(argv: list[str]) -> list[str]:
     return ["sudo", *([] if sys.stdin.isatty() else ["-n"]), *argv]
 
 
+# Every command `setup ssh` runs gets this long, so a hung nft, systemctl, firewall-cmd or sshd
+# raises TimeoutExpired (killing it) and `on` rolls back, rather than waiting forever.
+SSH_TIMEOUT = 120
+
+
+def ssh_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=SSH_TIMEOUT, **kwargs)
+
+
 def root_run(argv: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(as_root(argv), capture_output=True, text=True, check=False)
+    return ssh_run(as_root(argv))
 
 
 def root_step(argv: list[str], what: str) -> None:
@@ -3211,7 +3220,7 @@ def key_listing(key: str) -> tuple[str, str | None]:
     """`ssh-keygen -lf` for one key (bits, fingerprint, comment, type), and why it is not taken, if so."""
     if not shutil.which("ssh-keygen"):
         die("ssh-keygen is not installed (sudo dnf install openssh, or pacman -S openssh). Nothing was changed.", 127)
-    result = subprocess.run(["ssh-keygen", "-lf", "-"], input=key + "\n", capture_output=True, text=True, check=False)
+    result = ssh_run(["ssh-keygen", "-lf", "-"], input=key + "\n")
     listing = result.stdout.strip() if result.returncode == 0 else ""
     return listing, key_weakness(listing)
 
@@ -3547,7 +3556,7 @@ def github_keys(user: str) -> list[str]:
     if not GITHUB_USER.match(user):
         die(f"--github {user}: not a GitHub user name. Nothing was changed.", 2)
     url = f"https://github.com/{user}.keys"
-    result = sh([*GITHUB_CURL, url], timeout=30)
+    result = sh([*GITHUB_CURL, url], timeout=SSH_TIMEOUT)
     if result.returncode != 0:
         die(f"could not read {url} (curl exit {result.returncode}). Nothing was changed.", 1)
     if len(result.stdout.encode()) > GITHUB_MAX_BYTES:
@@ -3677,19 +3686,19 @@ def install_file(text: str, dest: Path) -> None:
 
 
 def unit_loaded(unit: str) -> bool:
-    result = subprocess.run(["systemctl", "show", "-p", "LoadState", "--value", unit], capture_output=True, text=True, check=False)
+    result = ssh_run(["systemctl", "show", "-p", "LoadState", "--value", unit])
     return result.returncode == 0 and result.stdout.strip() == "loaded"
 
 
 def unit_state(unit: str) -> tuple[str, str]:
     """(is-enabled, is-active) as systemctl prints them; neither needs root."""
-    enabled = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, check=False).stdout.strip()
-    active = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, check=False).stdout.strip()
+    enabled = ssh_run(["systemctl", "is-enabled", unit]).stdout.strip()
+    active = ssh_run(["systemctl", "is-active", unit]).stdout.strip()
     return enabled or "unknown", active or "unknown"
 
 
 def firewalld_running() -> bool:
-    return bool(shutil.which("firewall-cmd")) and subprocess.run(["systemctl", "is-active", "--quiet", "firewalld"], check=False).returncode == 0
+    return bool(shutil.which("firewall-cmd")) and ssh_run(["systemctl", "is-active", "--quiet", "firewalld"]).returncode == 0
 
 
 def firewall_zone() -> tuple[str, str] | None:
@@ -3836,13 +3845,13 @@ def firewall_close() -> str:
 
 def ssh_sessions() -> list[str]:
     """The logind sessions sshd opened, the caller's own last; no root needed to list them."""
-    listed = subprocess.run(["loginctl", "list-sessions", "--no-legend"], capture_output=True, text=True, check=False)
+    listed = ssh_run(["loginctl", "list-sessions", "--no-legend"])
     found = []
     for line in listed.stdout.splitlines() if listed.returncode == 0 else []:
         fields = line.split()
         if not fields:
             continue
-        service = subprocess.run(["loginctl", "show-session", fields[0], "-p", "Service", "--value"], capture_output=True, text=True, check=False)
+        service = ssh_run(["loginctl", "show-session", fields[0], "-p", "Service", "--value"])
         if service.returncode == 0 and service.stdout.strip() == "sshd":
             found.append(fields[0])
     mine = os.environ.get("XDG_SESSION_ID")
@@ -3858,14 +3867,14 @@ def end_sessions(sessions: list[str]) -> None:
 def host_fingerprints() -> list[str]:
     lines = []
     for public in sorted(SSH_HOST_KEYS.glob("ssh_host_*_key.pub")):
-        result = subprocess.run(["ssh-keygen", "-lf", str(public)], capture_output=True, text=True, check=False)
+        result = ssh_run(["ssh-keygen", "-lf", str(public)])
         if result.returncode == 0 and result.stdout.strip():
             lines.append(result.stdout.strip())
     return lines
 
 
 def addresses() -> list[str]:
-    result = subprocess.run(["ip", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, check=False)
+    result = ssh_run(["ip", "-o", "addr", "show", "scope", "global"])
     found = []
     for line in result.stdout.splitlines() if result.returncode == 0 else []:
         fields = line.split()
@@ -3899,23 +3908,38 @@ def ssh_rollback(before: dict) -> list[str]:
     whatever the others do: a rollback that stops halfway is the state this is here to avoid."""
     undone = []
 
+    def run(argv: list[str]) -> subprocess.CompletedProcess:
+        # A command that hangs or cannot run is reported and passed over, so the steps after it still happen.
+        try:
+            return root_run(argv)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            why = f"did not finish within {SSH_TIMEOUT} s" if isinstance(exc, subprocess.TimeoutExpired) else f"failed ({exc})"
+            warn(f"`{' '.join(argv)}` {why} while putting things back")
+            return subprocess.CompletedProcess(argv, 1, "", "")
+
+    def state(unit: str) -> tuple[str, str]:
+        try:
+            return unit_state(unit)
+        except (subprocess.TimeoutExpired, OSError):
+            return "unknown", "unknown"
+
     def attempt(argv: list[str], what: str) -> None:
-        if root_run(argv).returncode == 0:
+        if run(argv).returncode == 0:
             undone.append(what)
         else:
             warn(f"could not put back {what}: `{' '.join(argv)}` failed")
 
     for unit in ("sshd.service", SSH_LIMIT_UNIT.name):
         enabled, active = before["units"][unit]
-        now_enabled, now_active = unit_state(unit)
+        now_enabled, now_active = state(unit)
         if active != "active" and now_active == "active":
             attempt(["systemctl", "stop", unit], f"{unit} stopped")
         if enabled != "enabled" and now_enabled == "enabled":
             attempt(["systemctl", "disable", unit], f"{unit} disabled")
-        if active != "failed" and unit_state(unit)[1] == "failed":
+        if active != "failed" and state(unit)[1] == "failed":
             attempt(["systemctl", "reset-failed", unit], f"{unit}'s failure cleared")
     nft = nft_command()
-    if nft and not before["table"] and root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
+    if nft and not before["table"] and run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0:
         attempt([nft, "delete", "table", "inet", SSH_LIMIT_TABLE], f"the table inet {SSH_LIMIT_TABLE} removed")
     restored: set[Path] = set()
     for path, text in before["files"].items():
@@ -3928,17 +3952,17 @@ def ssh_rollback(before: dict) -> list[str]:
                 install_file(text, path)
                 restored.add(path)
                 undone.append(f"{path} put back")
-            except (SystemExit, OSError):
+            except (SystemExit, OSError, subprocess.TimeoutExpired):
                 warn(f"could not put back {path}")
-    root_run(["systemctl", "daemon-reload"])
+    run(["systemctl", "daemon-reload"])
     # A table that was there before is loaded again from the file just put back, in one transaction
     # as the in-place reload does, when that file changed or the table is gone.
     if nft and before["table"] and before["files"][SSH_LIMIT_RULES] is not None and (
-        SSH_LIMIT_RULES in restored or root_run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode != 0
+        SSH_LIMIT_RULES in restored or run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode != 0
     ):
         attempt([nft, "-f", str(SSH_LIMIT_RULES)], f"the table inet {SSH_LIMIT_TABLE} loaded again from {SSH_LIMIT_RULES}")
     for (tool, zone, permanent), had in before["rules"].items():
-        query = root_run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
+        query = run([tool, *permanent, f"--zone={zone}", f"--query-rich-rule={SSH_RICH_RULE}"])
         if not had and query.returncode == 0:
             attempt([tool, *permanent, f"--zone={zone}", f"--remove-rich-rule={SSH_RICH_RULE}"], f"the firewall rule in {zone}{' (saved)' if permanent or tool != 'firewall-cmd' else ''} removed")
     return undone
@@ -4097,12 +4121,12 @@ def ssh_state(account: pwd.struct_passwd | None) -> dict:
         passwords = any(line.split()[:2] == ["PasswordAuthentication", "yes"] for line in drop_in.splitlines())
     firewall: dict | None = None
     if firewalld_running():
-        zone = subprocess.run(["firewall-cmd", "--get-default-zone"], capture_output=True, text=True, check=False)
+        zone = ssh_run(["firewall-cmd", "--get-default-zone"])
         name = zone.stdout.strip() if zone.returncode == 0 else ""
         firewall = {"zone": name or None, "rule": None, "service": None}
         if name:
             for key, query in (("rule", f"--query-rich-rule={SSH_RICH_RULE}"), ("service", "--query-service=ssh")):
-                code = subprocess.run(["firewall-cmd", f"--zone={name}", query], capture_output=True, text=True, check=False).returncode
+                code = ssh_run(["firewall-cmd", f"--zone={name}", query]).returncode
                 firewall[key] = {0: True, 1: False}.get(code)
     keys = None
     if account:
@@ -4251,6 +4275,10 @@ def setup_ssh_run(args: list[str]) -> int:
         if opts["off"]:
             return ssh_off(opts)
         return ssh_on(opts)
+    except subprocess.TimeoutExpired as exc:
+        command = " ".join(exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
+        die(f"setup ssh stopped: `{command}` did not finish within {exc.timeout:.0f} s and was stopped. "
+            "Find out why it hangs and run this again; herald-os setup ssh --status shows what is in place.", 124)
     except OSError as exc:
         # Anything the checks above did not foresee (a file that cannot be read or written) ends here,
         # said plainly, rather than as a traceback.
