@@ -209,6 +209,11 @@ export class NotificationDaemon {
     log('notifications', `serving ${BUS_NAME} at ${OBJECT_PATH}`)
   }
 
+  /** Whether this process owns the bus name, so a notification sent to the session bus would come back here. */
+  serving(): boolean {
+    return this.iface !== null
+  }
+
   stop(): void {
     if (this.handlingActions) {
       ipcMain.removeHandler(IPC.notificationsAction)

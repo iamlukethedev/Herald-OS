@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, Notification, protocol, shell } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain, protocol, shell } from 'electron'
 import os from 'node:os'
 import path from 'node:path'
 import { type EnvInfo, type HeraldOSPrefs, IPC, type PrefsPatch, type RestRequest, type ShellCommand, type WindowState } from '../shared/ipc.ts'
@@ -36,6 +36,7 @@ import { registerWebIpc } from './ipc/web.ts'
 import { systemLanguages } from './i18n.ts'
 import { log, logTail } from './log.ts'
 import { migrateLegacyData } from './migrate.ts'
+import { nativeNotifier } from './native-notification.ts'
 import { registerNotificationHistoryIpc } from './notifications-history.ts'
 import { registerPetIpc } from './pet/ipc.ts'
 import { PetWindow } from './pet/window.ts'
@@ -172,6 +173,7 @@ const osControl = panels
 backend.setControl(osControlPath, osControlToken())
 // Serves org.freedesktop.Notifications so other apps' notifications reach the shell.
 const notifications = panels ? new NotificationDaemon(panels) : null
+const notifyNative = nativeNotifier({ shellServes: () => notifications?.serving() ?? false })
 /** Deliver a ShellCommand to the Hermes window; panels mode queues it until that window has loaded. */
 const toHermesWindow = (command: ShellCommand) => (panels ? panels.relay('main', command) : mainWindow?.webContents.send(IPC.shellCommand, command))
 const crashes = new CrashWatcher(
@@ -205,14 +207,7 @@ function registerCoreIpc(): void {
   ipcMain.handle(IPC.backendRest, (_event, request: RestRequest) => backend.rest(request))
   ipcMain.handle(IPC.backendLogTail, (_event, lines: number) => [...logTail(lines), ...backend.getState().logTail])
 
-  ipcMain.handle(IPC.notifyNative, (_event, title: string, body: string) => {
-    if (Notification.isSupported()) {
-      const notification = new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 400), silent: true })
-      // macOS only shows notifications from code-signed apps; unsigned builds fail here.
-      notification.on('failed', (_event, error) => log('notify', `native notification failed: ${error}`))
-      notification.show()
-    }
-  })
+  ipcMain.handle(IPC.notifyNative, (_event, title: string, body: string) => notifyNative(title, body))
 
   ipcMain.handle(IPC.windowGetState, () => (mainWindow ? windowState(mainWindow) : { fullscreen: false, focused: false }))
   ipcMain.handle(IPC.windowToggleFullscreen, () => {
