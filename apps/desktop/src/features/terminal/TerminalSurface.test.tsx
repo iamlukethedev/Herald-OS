@@ -336,6 +336,20 @@ describe('the Terminal keys', () => {
     expect($notifications.get().map(n => n.title)).toEqual(['Could not copy the selection'])
   })
 
+  it('says nothing when the clipboard fails after the tab closed', async () => {
+    let reject!: (error: Error) => void
+    bridge.readClipboard.mockImplementation(() => new Promise((_done, fail) => (reject = fail)))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    act(() => root.unmount())
+    reject(new Error('no clipboard'))
+    await new Promise(done => setTimeout(done, 0))
+    root = createRoot(container)
+
+    expect($notifications.get()).toEqual([])
+  })
+
   it('drops a paste that arrives after the tab closed', async () => {
     let resolve!: (clipboard: { text: string }) => void
     bridge.readClipboard.mockImplementation(() => new Promise<{ text: string }>(done => (resolve = done)))
@@ -411,6 +425,24 @@ describe('a spoken or Hermes "paste" into the Terminal', () => {
     expect(result).toMatchObject({ ok: true, summary: 'Pasted into the terminal' })
     expect(fresh.paste).toHaveBeenCalledExactlyOnceWith('echo fresh')
     expect(old.paste).not.toHaveBeenCalled()
+  })
+
+  it('pastes nothing, and does not say it pasted, when the Terminal is unmounted while the clipboard is read', async () => {
+    let resolve!: (clipboard: { text: string }) => void
+    bridge.readClipboard.mockImplementation(() => new Promise<{ text: string }>(done => (resolve = done)))
+    const terminal = xterm.terminal
+    const pending = runCommand('edit.paste', {}, { source: 'voice' })
+    await settle()
+    act(() => root.unmount())
+    resolve({ text: 'echo too late\r' })
+    const result = await pending
+    root = createRoot(container)
+
+    expect(bridge.readClipboard).toHaveBeenCalledOnce()
+    expect(terminal.paste).not.toHaveBeenCalled()
+    expect(bridge.write).not.toHaveBeenCalled()
+    expect(result.ok).toBe(false)
+    expect(result.summary).not.toMatch(/^Pasted/)
   })
 
   it('does not take a spoken paste into a Terminal that cannot have the keyboard, such as a hidden tab', async () => {
