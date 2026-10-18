@@ -594,8 +594,8 @@ export const ptBR: Translation = {
   'firstRun.wifi.text': 'Escolha uma rede; você também pode ligar um cabo. Se pular esta etapa, você fica sem internet por enquanto.',
   'firstRun.hermes.title': 'Entre na sua conta no Hermes',
   'firstRun.hermes.text':
-    'O Hermes precisa de um provedor de modelos para pensar. Quando você entra na sua conta, a página do provedor abre ao lado de um código curto; outro provedor pode usar uma chave de API no lugar da conta.',
-  'firstRun.hermes.thinksWith': 'O Hermes pensa com {provider}.',
+    'O Hermes precisa de um provedor de modelos para pensar. Quando você entra na sua conta, a página do provedor abre ao lado de um código curto; com outro provedor, você pode usar uma chave de API.',
+  'firstRun.hermes.thinksWith': 'O Hermes usa {provider} para pensar.',
   'firstRun.hermes.otherProvider': 'Usar outro provedor',
   'firstRun.done.title': 'Tudo pronto',
   'firstRun.done.text': 'Pressione Super+Space para perguntar ao Hermes sobre qualquer coisa na tela, ou Super+M para abrir o menu do Herald OS.',
