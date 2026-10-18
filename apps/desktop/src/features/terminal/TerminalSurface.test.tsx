@@ -364,6 +364,35 @@ describe('a spoken or Hermes "paste" into the Terminal', () => {
     xterm.terminal.textarea?.focus()
   })
 
+  it('forgets a Terminal that was unmounted, and pastes into the one mounted in its place', async () => {
+    const old = xterm.terminal
+    const oldInput = old.textarea!
+    act(() => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<TerminalSurface />))
+    await settle()
+    const fresh = xterm.terminal
+
+    expect(fresh).not.toBe(old)
+
+    // The old input back on the page and focused: nothing of the old Terminal may answer for it.
+    document.body.append(oldInput)
+    oldInput.focus()
+    await runCommand('edit.paste', {}, { source: 'voice' })
+    oldInput.remove()
+
+    expect(bridge.readClipboard).not.toHaveBeenCalled()
+    expect(bridge.editPerform).toHaveBeenCalledExactlyOnceWith({ kind: 'paste' })
+
+    bridge.readClipboard.mockResolvedValue({ text: 'echo fresh' })
+    fresh.textarea!.focus()
+    const result = await runCommand('edit.paste', {}, { source: 'voice' })
+
+    expect(result).toMatchObject({ ok: true, summary: 'Pasted into the terminal' })
+    expect(fresh.paste).toHaveBeenCalledExactlyOnceWith('echo fresh')
+    expect(old.paste).not.toHaveBeenCalled()
+  })
+
   it('pastes through main and the filter, and says it did', async () => {
     bridge.readClipboard.mockResolvedValue({ text: '\x1b[201~echo pwned\r' })
     const result = await runCommand('edit.paste', {}, { source: 'voice' })
