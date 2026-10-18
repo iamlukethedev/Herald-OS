@@ -4305,9 +4305,9 @@ SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 
 
 # The signal that stopped `on`: the first whose handler runs, which decides the exit code. Two signals
-# sent close together that are both pending at once are delivered, and their Python handlers run, in
-# signal-number order (the higher first), so that one wins; the order they were really sent in cannot
-# be recovered and is not relied on. A signal that arrives after another has been handled is ignored.
+# pending at once have their Python handlers run in signal-number order, lowest first (HUP 1, INT 2,
+# TERM 15), so the lower-numbered one wins; the order they were really sent in cannot be recovered and
+# is not relied on. A signal that arrives after another has been handled is ignored.
 SSH_STOP: dict = {"by": None}
 
 

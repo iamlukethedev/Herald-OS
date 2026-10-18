@@ -422,7 +422,9 @@ switched from another bootc system is different: it gets a login screen and a lo
   table, which it loads again with `nft -f` when one was there, the firewall rule, the keys it
   added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129 for SIGHUP and 124 for a timeout,
   with no traceback; INT, TERM and HUP are ignored while it puts things back (several in quick
-  succession give clean output and the first one's code), and the earlier handlers come back after.
+  succession give clean output; the one handled first sets the code, which for signals pending
+  together is the lowest-numbered, so HUP beats INT beats TERM), and the earlier handlers come back
+  after.
   The rollback fails closed, socket first: a unit counts as running before only if `is-active` said
   exactly active, reloading or activating, and as enabled only if `is-enabled` said exactly enabled,
   enabled-runtime, indirect, generated or alias; anything else counts as closed, and is stopped or
