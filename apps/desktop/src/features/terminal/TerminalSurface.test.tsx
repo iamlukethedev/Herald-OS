@@ -150,6 +150,21 @@ function nativeCopy(): { event: ClipboardEvent; copied: string } {
   return { event, copied: clipboardData.getData('text/plain') }
 }
 
+/** A drag event on xterm's input carrying `data`; happy-dom's DragEvent does not take a dataTransfer. */
+function drag(type: 'dragover' | 'drop', data: Record<string, string>): Event {
+  const dataTransfer = new DataTransfer()
+
+  for (const [format, value] of Object.entries(data)) {
+    dataTransfer.setData(format, value)
+  }
+
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+  xterm.terminal.textarea?.dispatchEvent(event)
+
+  return event
+}
+
 const menu = () => container.querySelector<HTMLElement>('[role="menu"][aria-label]')
 const item = (label: string) => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.startsWith(label))
 
@@ -322,6 +337,45 @@ describe('a copy event (Cmd+C, Edit > Copy)', () => {
 
     expect(event.defaultPrevented).toBe(true)
     expect(bridge.writeClipboard).not.toHaveBeenCalled()
+  })
+})
+
+describe('a drop on the Terminal', () => {
+  it('pastes dropped text, filtered, and leaves nothing in xterm’s input', async () => {
+    // What Chromium would have put in the hidden input, had the drop not been taken.
+    xterm.terminal.textarea!.value = '\x1b[201~echo pwned\r'
+    const event = drag('drop', { 'text/plain': '\x1b[201~echo pwned\r' })
+    await settle()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(shell()).toBe('\x1b[200~echo pwned\r\x1b[201~')
+    expect(xterm.terminal.textarea!.value).toBe('')
+    expect(xterm.terminal.focus).toHaveBeenCalled()
+  })
+
+  it('holds dropped text to the paste limit', async () => {
+    drag('drop', { 'text/plain': 'a'.repeat(1024 * 1024 + 1) })
+    await settle()
+
+    expect(bridge.write).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => n.title)).toEqual(['Too much to paste'])
+  })
+
+  it('refuses a drop with no text, sending nothing', async () => {
+    const event = drag('drop', { 'text/uri-list': 'file:///etc/passwd' })
+    await settle()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('offers to take text while it is dragged over, and nothing else', () => {
+    const text = drag('dragover', { 'text/plain': 'echo hello' }) as DragEvent
+    const other = drag('dragover', { 'text/uri-list': 'file:///etc/passwd' }) as DragEvent
+
+    expect(text.defaultPrevented).toBe(true)
+    expect(text.dataTransfer?.dropEffect).toBe('copy')
+    expect(other.dataTransfer?.dropEffect).toBe('none')
   })
 })
 

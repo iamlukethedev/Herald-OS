@@ -338,6 +338,32 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       void copyText(terminal.getSelection())
     }
     el.addEventListener('copy', onCopy, true)
+    // xterm takes no drops, and dropped text would sit unread and unfiltered in its hidden input.
+    // Dropped text pastes like any paste, filtered and capped; anything else dropped is refused.
+    const onDragOver = (event: DragEvent) => {
+      event.preventDefault()
+
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = event.dataTransfer.types.includes('text/plain') ? 'copy' : 'none'
+      }
+    }
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (terminal.textarea) {
+        terminal.textarea.value = ''
+      }
+
+      const text = event.dataTransfer?.getData('text/plain') ?? ''
+
+      if (text) {
+        pasteText(terminal, text)
+        terminal.focus()
+      }
+    }
+    el.addEventListener('dragover', onDragOver, true)
+    el.addEventListener('drop', onDrop, true)
     const offData = window.heraldOS.terminal.onData((tid, data) => {
       if (tid === id) {
         terminal.write(data)
@@ -357,6 +383,8 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       el.removeEventListener('contextmenu', onContextMenu)
       el.removeEventListener('paste', onPaste, true)
       el.removeEventListener('copy', onCopy, true)
+      el.removeEventListener('dragover', onDragOver, true)
+      el.removeEventListener('drop', onDrop, true)
       observer.disconnect()
       offData()
       onInput.dispose()
