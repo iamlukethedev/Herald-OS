@@ -284,6 +284,78 @@ describe("first-run setup's Hermes step", () => {
   })
 })
 
+describe("first-run setup's account step for a new account", () => {
+  /** The account step with a name and a matching password filled in, as someone setting it up for themselves. */
+  async function filledIn(language: Language): Promise<HTMLElement> {
+    given('mine')
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+
+    return host
+  }
+
+  const error = (host: HTMLElement) => host.querySelector('.text-danger')?.textContent
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says the name was not saved in %s when that fails first, and never tries the password', async language => {
+    const host = await filledIn(language)
+    bridge.setup.password.mockClear()
+    bridge.setup.name.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+    await click(button(host, t('firstRun.next')))
+
+    expect(error(host)).toBe(t('firstRun.account.nameNotSaved'))
+    expect(error(host)).not.toBe(t('firstRun.account.passwordNotSet'))
+    expect(bridge.setup.password).not.toHaveBeenCalled()
+    expect(heading(host)).toBe(t('firstRun.account.title'))
+  })
+
+  it.each(['__proto__', 'toString', 'constructor', 'hasOwnProperty', 'valueOf'])('says the password was not set for the unknown code %s, never an inherited key', async code => {
+    const host = await filledIn('pt-BR')
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: code as SetupResult['reason'] })
+    await click(button(host, t('firstRun.next')))
+
+    expect(error(host)).toBe(t('firstRun.account.passwordNotSet'))
+  })
+
+  it.each(['__proto__', 'toString'])("shows pwquality's reason %s as text in the refusal", async detail => {
+    const host = await filledIn('en')
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused', detail })
+    await click(button(host, t('firstRun.next')))
+
+    expect(error(host)).toBe(`That password was refused: ${detail}.`)
+  })
+
+  it.each([
+    ['en', 'That password was refused: The password is shorter than 8 characters.'],
+    ['pt-BR', 'Essa senha foi recusada: The password is shorter than 8 characters.'],
+    ['zh-CN', '这个密码被拒绝了：The password is shorter than 8 characters。']
+  ] as const)("ends the refusal in %s with one full stop, whether or not pwquality's reason has its own", async (language, expected) => {
+    const host = await filledIn(language)
+
+    for (const detail of ['The password is shorter than 8 characters.', 'The password is shorter than 8 characters']) {
+      bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused', detail })
+      await click(button(host, t('firstRun.next')))
+      expect(error(host), detail).toBe(expected)
+    }
+  })
+
+  it.each([
+    ['tooShort', 'Use at least 8 characters.'],
+    ['noTerminal', 'The password cannot be set here; run herald-os password in a terminal.'],
+    ['timeout', 'Setting the password took too long. Try again.'],
+    ['failed', 'The password was not set.']
+  ] as const)('says %s in its own words', async (reason, expected) => {
+    const host = await filledIn('en')
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason })
+    await click(button(host, t('firstRun.next')))
+
+    expect(error(host)).toBe(expected)
+  })
+})
+
 describe('first-run setup', () => {
   it.each(['mine', 'signed in', 'someone else'] as const)('reads as before in English, the %s way through', async path => {
     given(path)
