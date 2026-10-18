@@ -460,9 +460,14 @@ export interface SetupState {
   signedIn: boolean
 }
 
+/** Why the password was not set; the renderer says it in the person's language. */
+export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' | 'failed'
+
 export interface SetupResult {
   ok: boolean
-  error?: string
+  reason?: PasswordFailure
+  /** pwquality's own reason for a refusal, in English (passwd runs under LANG=C). */
+  detail?: string
 }
 
 /** A macOS permission Herald OS needs to type into another app (it pastes through System Events). */

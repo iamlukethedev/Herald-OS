@@ -5,8 +5,10 @@ import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { GlassButton, GlassCard, LinkAction } from '../../components/ui/glass.tsx'
 import { Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
+import type { PasswordFailure, SetupResult } from '../../../shared/ipc.ts'
+import type { TextKey } from '../../../shared/i18n.ts'
 import { $hermesAuth, refreshHermesAuth, requestHermesLogin } from '../../store/hermes-auth.ts'
-import { useT } from '../../store/i18n.ts'
+import { t, useT } from '../../store/i18n.ts'
 import { $providerFocus, providerName } from '../../store/model-provider.ts'
 import { ModelProviderRow } from '../settings/sections/ProviderRow.tsx'
 import { StatusPanel } from '../status/StatusPanel.tsx'
@@ -153,13 +155,31 @@ function Welcome({ onChoose, signedIn }: { onChoose: (someoneElse: boolean) => v
   )
 }
 
+const PASSWORD_FAILURES: Record<Exclude<PasswordFailure, 'refused'>, TextKey> = {
+  tooShort: 'firstRun.account.tooShort',
+  timeout: 'firstRun.account.timeout',
+  noTerminal: 'firstRun.account.noTerminal',
+  failed: 'firstRun.account.passwordNotSet'
+}
+
+/** Why the password was not set, in the person's language; pwquality's reason is the only text taken from the system. */
+function passwordError({ reason, detail }: SetupResult): string {
+  if (reason === 'refused') {
+    const why = detail?.trim()
+
+    return why ? t('firstRun.account.refused', { reason: why.replace(/\.$/, '') }) : t('firstRun.account.refusedNoReason')
+  }
+
+  return t(reason && Object.hasOwn(PASSWORD_FAILURES, reason) ? PASSWORD_FAILURES[reason] : 'firstRun.account.passwordNotSet')
+}
+
 /** The name, and the password unless the account signed in at a login screen with one of its own. */
 function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }) {
   const t = useT()
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<SetupResult | null>(null)
   const [busy, setBusy] = useState(false)
   const mismatch = again.length > 0 && password !== again
 
@@ -174,7 +194,7 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
       if (result.ok) {
         onDone()
       } else {
-        setError(result.error ?? t('firstRun.account.passwordNotSet'))
+        setError(result)
       }
     } finally {
       setBusy(false)
@@ -210,7 +230,7 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
           </label>
         </>
       )}
-      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : error}</p>}
+      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : error && passwordError(error)}</p>}
       <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!name.trim() || (!signedIn && (password.length < 8 || password !== again))} />
     </form>
   )

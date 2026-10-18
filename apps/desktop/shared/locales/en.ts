@@ -594,6 +594,13 @@ export const en = {
   'firstRun.account.passwordAgain': 'The same password again',
   'firstRun.account.mismatch': 'The passwords do not match.',
   'firstRun.account.passwordNotSet': 'The password was not set.',
+  'firstRun.account.tooShort': 'Use at least 8 characters.',
+  // {reason} is pwquality's reason, in English as the system gives it, such as “The password is shorter than 8 characters”.
+  'firstRun.account.refused': 'That password was refused: {reason}.',
+  'firstRun.account.refusedNoReason': 'That password was refused; try a longer one, or one less like a word.',
+  'firstRun.account.timeout': 'Setting the password took too long. Try again.',
+  // herald-os password is the command that changes it, and stays as it is.
+  'firstRun.account.noTerminal': 'The password cannot be set here; run herald-os password in a terminal.',
   'firstRun.wifi.title': 'Get online',
   'firstRun.wifi.text': 'Pick a network; you can also plug in a cable. Skip it to stay offline for now.',
   'firstRun.hermes.title': 'Sign in to Hermes',

@@ -53,12 +53,16 @@ export function passwdReply(screen: string, password: string, current: string): 
   return null
 }
 
-/** `passwd` for this account, answered through a terminal; the reason when it refuses (too short, too simple). */
+/**
+ * `passwd` for this account, answered through a terminal; why it failed as a reason code, with
+ * pwquality's reason when it refused (too short, too simple). passwd's own last line goes only to
+ * the log: it is English and may be anything.
+ */
 export function changePassword(password: string, current = ''): Promise<SetupResult> {
   const pty = loadPty()
 
   if (!pty) {
-    return Promise.resolve({ ok: false, error: 'The terminal library is missing, so the password cannot be set here; run `passwd` in a terminal.' })
+    return Promise.resolve({ ok: false, reason: 'noTerminal' })
   }
 
   return new Promise(resolve => {
@@ -67,7 +71,7 @@ export function changePassword(password: string, current = ''): Promise<SetupRes
     let refusal = ''
     const timer = setTimeout(() => {
       child.kill()
-      resolve({ ok: false, error: 'passwd did not finish' })
+      resolve({ ok: false, reason: 'timeout' })
     }, 30_000)
 
     child.onData(data => {
@@ -97,7 +101,7 @@ export function changePassword(password: string, current = ''): Promise<SetupRes
       } else {
         const last = screen.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
         log('setup', `passwd exited ${exitCode}: ${refusal || last}`)
-        resolve({ ok: false, error: refusal ? `That password was refused: ${refusal}.` : last || 'passwd refused the change' })
+        resolve(refusal ? { ok: false, reason: 'refused', detail: refusal } : { ok: false, reason: 'failed' })
       }
     })
   })
@@ -116,7 +120,7 @@ export function registerSetupIpc(): void {
     const value = String(password ?? '')
 
     if (value.length < 8 || /[\r\n]/.test(value)) {
-      return { ok: false, error: 'Use at least 8 characters.' } satisfies SetupResult
+      return { ok: false, reason: 'tooShort' } satisfies SetupResult
     }
 
     return changePassword(value)

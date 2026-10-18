@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Language, TextKey } from '../../../shared/i18n.ts'
+import type { SetupResult } from '../../../shared/ipc.ts'
 import { en } from '../../../shared/locales/en.ts'
 import { $prefs } from '../../store/backend.ts'
 import { $connection, $connectionEpoch } from '../../store/gateway.ts'
@@ -18,7 +19,7 @@ const bridge = vi.hoisted(() => {
   const setup = {
     state: vi.fn(async () => ({ needed: true, signedIn: true })),
     name: vi.fn(async () => undefined),
-    password: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
+    password: vi.fn(async (): Promise<SetupResult> => ({ ok: true })),
     finish: vi.fn(async () => undefined)
   }
   const rest = vi.fn(async (_request: { path: string }): Promise<unknown> => null)
@@ -156,10 +157,26 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
     at('passwords differ', 'firstRun.account.title')
     expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.account.mismatch'))
     await type(again, 'correct horse')
-    bridge.setup.password.mockResolvedValueOnce({ ok: false })
+    const says = (expected: string) => expect(host.querySelector('.text-danger')?.textContent).toBe(expected)
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused' })
+    await click(button(host, t('firstRun.next')))
+    at('password refused', 'firstRun.account.title')
+    says(t('firstRun.account.refusedNoReason'))
+    // pwquality's reason is English whatever the language, so this step is not compared with English.
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused', detail: 'The password fails the dictionary check - it is based on a dictionary word' })
+    await click(button(host, t('firstRun.next')))
+    says(t('firstRun.account.refused', { reason: 'The password fails the dictionary check - it is based on a dictionary word' }))
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'timeout' })
+    await click(button(host, t('firstRun.next')))
+    at('password timed out', 'firstRun.account.title')
+    says(t('firstRun.account.timeout'))
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'failed' })
     await click(button(host, t('firstRun.next')))
     at('password not set', 'firstRun.account.title')
-    expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.account.passwordNotSet'))
+    says(t('firstRun.account.passwordNotSet'))
+    bridge.setup.password.mockResolvedValueOnce({ ok: false })
+    await click(button(host, t('firstRun.next')))
+    says(t('firstRun.account.passwordNotSet'))
   } else {
     at('account', 'firstRun.account.titleSignedIn')
     await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
