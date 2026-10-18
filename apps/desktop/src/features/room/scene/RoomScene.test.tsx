@@ -132,6 +132,19 @@ describe('RoomScene', () => {
     expect(buttons('Allow once')).toHaveLength(0)
   })
 
+  // The popover's key is belt and braces: an open card belongs to one request, so it never carries over to the next.
+  it("closes the open card when the pet's approval changes, rather than showing the next request in it", () => {
+    render({ agents: [agent('s:1', { phase: 'waiting', area: 'bench', approval })] })
+    act(() => host.querySelector<HTMLButtonElement>('[data-room-sign="s:1"]')!.click())
+    expect(host.textContent).toContain('Delete the old drafts')
+
+    render({ agents: [agent('s:1', { phase: 'waiting', area: 'bench', approval: { ...approval, requestId: 'req-2', rpcId: 'rpc-2', params: { ...approval.params, description: 'Empty the Trash' } } })] })
+
+    expect(buttons('Allow once')).toHaveLength(0)
+    expect(host.textContent).not.toContain('Empty the Trash')
+    expect(onAnswer).not.toHaveBeenCalled()
+  })
+
   it('closes the card on Escape without answering', () => {
     render({ agents: [agent('s:1', { phase: 'waiting', area: 'bench', approval })] })
     act(() => host.querySelector<HTMLButtonElement>('[data-room-sign="s:1"]')!.click())
