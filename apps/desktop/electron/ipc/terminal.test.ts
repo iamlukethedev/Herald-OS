@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../shared/ipc.ts'
 
@@ -12,9 +13,12 @@ vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => ({ isFocused: () => electron.focused }) }
 }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
-vi.mock('../paths.ts', async original => ({ ...(await original<typeof import('../paths.ts')>()), isShellPage: (url: string) => url === 'file:///herald/index.html' }))
+// The real isShellPage, judging the renderer a checkout loads with no dev server named.
+delete process.env.HERALD_OS_DEV_SERVER
+delete process.env.HERMES_OS_DEV_SERVER
 
 const { ensureSpawnHelperExecutable, registerTerminalIpc, spawnHelperPaths } = await import('./terminal.ts')
+const { rendererIndex } = await import('../paths.ts')
 
 describe('spawnHelperPaths', () => {
   it('looks outside app.asar, where a packaged app runs the helper from', () => {
@@ -54,7 +58,8 @@ describe('ensureSpawnHelperExecutable', () => {
 })
 
 describe('the Terminal clipboard', () => {
-  const shell = { senderFrame: { url: 'file:///herald/index.html' } }
+  const page = pathToFileURL(rendererIndex()).href
+  const shell = { senderFrame: { url: `${page}?surface=terminal` } }
   const handler = (channel: string) => electron.handle.mock.calls.find(([name]) => name === channel)?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>
 
   beforeEach(() => {
@@ -90,6 +95,9 @@ describe('the Terminal clipboard', () => {
 
   it.each([
     ['another page', { senderFrame: { url: 'https://example.com/' } }],
+    ['about:blank', { senderFrame: { url: 'about:blank' } }],
+    ['another local file', { senderFrame: { url: 'file:///tmp/index.html' } }],
+    ['the renderer path on another host', { senderFrame: { url: page.replace('file:///', 'file://evil.example/') } }],
     ['a frame that is gone', { senderFrame: null }]
   ])('refuses %s', async (_label, event) => {
     await expect(handler(IPC.terminalClipboardRead)(event)).rejects.toThrow()
