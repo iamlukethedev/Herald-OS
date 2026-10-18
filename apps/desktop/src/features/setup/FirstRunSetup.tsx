@@ -179,7 +179,8 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
-  const [error, setError] = useState<SetupResult | null>(null)
+  // 'name': saving the name failed, so the password was never tried.
+  const [error, setError] = useState<SetupResult | 'name' | null>(null)
   const [busy, setBusy] = useState(false)
   const mismatch = again.length > 0 && password !== again
 
@@ -188,7 +189,17 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
     setError(null)
 
     try {
-      await window.heraldOS.setup.name(name)
+      const named = await window.heraldOS.setup.name(name).then(
+        () => true,
+        () => false
+      )
+
+      if (!named) {
+        setError('name')
+
+        return
+      }
+
       const result = signedIn ? { ok: true } : await window.heraldOS.setup.password(password)
 
       if (result.ok) {
@@ -232,7 +243,7 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
           </label>
         </>
       )}
-      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : signedIn ? t('firstRun.account.nameNotSaved') : error && passwordError(error)}</p>}
+      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : error === 'name' ? t('firstRun.account.nameNotSaved') : error && passwordError(error)}</p>}
       <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!name.trim() || (!signedIn && (password.length < 8 || password !== again))} />
     </form>
   )

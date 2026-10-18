@@ -181,6 +181,12 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
     await click(button(host, t('firstRun.next')))
     at('password call failed', 'firstRun.account.title')
     says(t('firstRun.account.passwordNotSet'))
+    const tries = bridge.setup.password.mock.calls.length
+    bridge.setup.name.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+    await click(button(host, t('firstRun.next')))
+    at('name call failed', 'firstRun.account.title')
+    says(t('firstRun.account.nameNotSaved'))
+    expect(bridge.setup.password.mock.calls.length, 'the password is not tried once the name failed').toBe(tries)
   } else {
     at('account', 'firstRun.account.titleSignedIn')
     await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
