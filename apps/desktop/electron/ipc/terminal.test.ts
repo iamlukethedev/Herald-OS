@@ -4,9 +4,13 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../shared/ipc.ts'
 
-const electron = vi.hoisted(() => ({ handle: vi.fn(), readText: vi.fn(), writeText: vi.fn() }))
+const electron = vi.hoisted(() => ({ handle: vi.fn(), readText: vi.fn(), writeText: vi.fn(), focused: true }))
 
-vi.mock('electron', () => ({ ipcMain: { handle: electron.handle, on: vi.fn() }, clipboard: { readText: electron.readText, writeText: electron.writeText } }))
+vi.mock('electron', () => ({
+  ipcMain: { handle: electron.handle, on: vi.fn() },
+  clipboard: { readText: electron.readText, writeText: electron.writeText },
+  BrowserWindow: { fromWebContents: () => ({ isFocused: () => electron.focused }) }
+}))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('../paths.ts', async original => ({ ...(await original<typeof import('../paths.ts')>()), isShellPage: (url: string) => url === 'file:///herald/index.html' }))
 
@@ -57,7 +61,12 @@ describe('the Terminal clipboard', () => {
     electron.handle.mockReset()
     electron.readText.mockReset().mockResolvedValue('echo hello')
     electron.writeText.mockReset().mockResolvedValue(undefined)
+    electron.focused = true
     registerTerminalIpc(() => null)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('reads and writes the system clipboard for the shell', async () => {
@@ -100,6 +109,28 @@ describe('the Terminal clipboard', () => {
     await expect(handler(IPC.terminalClipboardWrite)(shell, 'a'.repeat(1024 * 1024 + 1))).rejects.toThrow()
 
     expect(electron.writeText).not.toHaveBeenCalled()
+  })
+
+  it('reads only for the focused window', async () => {
+    electron.focused = false
+
+    await expect(handler(IPC.terminalClipboardRead)(shell)).rejects.toThrow()
+    expect(electron.readText).not.toHaveBeenCalled()
+  })
+
+  it('reads at most five times a second', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const read = handler(IPC.terminalClipboardRead)
+
+    for (let i = 0; i < 5; i++) {
+      await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
+    }
+
+    await expect(read(shell)).rejects.toThrow('Too many')
+    expect(electron.readText).toHaveBeenCalledTimes(5)
+
+    vi.advanceTimersByTime(1000)
+    await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
   })
 
   it('copies only text', async () => {

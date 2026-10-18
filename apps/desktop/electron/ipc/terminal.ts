@@ -1,4 +1,4 @@
-import { type BrowserWindow, clipboard, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { BrowserWindow, clipboard, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -79,6 +79,8 @@ export function loadPty(): PtyModule | null {
 
   return ptyModule
 }
+
+const CLIPBOARD_READS_PER_SECOND = 5
 
 /** Real PTYs for the Terminal surface. One id per tab; output is pushed to the owning window. */
 export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void {
@@ -188,8 +190,23 @@ export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void
     }
   }
 
+  // A person pastes into the window in front, and no faster than they can press keys.
+  const reads: number[] = []
   ipcMain.handle(IPC.terminalClipboardRead, async (event): Promise<TerminalClipboardRead> => {
     fromShell(event)
+
+    if (!BrowserWindow.fromWebContents(event.sender)?.isFocused()) {
+      throw new Error('Only the focused window may read the clipboard')
+    }
+
+    const now = Date.now()
+    reads.splice(0, reads.length, ...reads.filter(at => now - at < 1000))
+
+    if (reads.length >= CLIPBOARD_READS_PER_SECOND) {
+      throw new Error('Too many clipboard reads')
+    }
+
+    reads.push(now)
     const text = await clipboard.readText()
 
     return overClipboardLimit(text) ? { tooLarge: true } : { text }
