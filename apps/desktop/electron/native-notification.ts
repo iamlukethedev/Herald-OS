@@ -1,5 +1,9 @@
 import * as dbus from 'dbus-next'
 import { Notification } from 'electron'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type { ShellMode } from '../shared/ipc.ts'
 import { log } from './log.ts'
 import { nodeSocketAddress, onBusClosed } from './shell/notification-daemon.ts'
 
@@ -18,8 +22,10 @@ export interface NativeNotifierOptions {
   platform?: NodeJS.Platform
   /** Herald's own notification server owns the bus name (panels mode), so Herald already shows the alert. */
   shellServes: () => boolean
+  /** Linux: the .desktop id the notices name (`desktopEntryFor`), for the server's icon and grouping. */
+  desktopEntry?: string | null
   /** Linux: hand the notice to the session's notification server. */
-  sendDesktop?: (notice: NativeNotice) => Promise<void>
+  sendDesktop?: (notice: NativeNotice, entry: string | null) => Promise<void>
   /** macOS and Windows, where Electron's notifications do not wait on the main thread. */
   showElectron?: (notice: NativeNotice) => void
 }
@@ -31,7 +37,7 @@ export interface NativeNotifierOptions {
  * out. Linux notices therefore go out as one asynchronous D-Bus call, or not at all when Herald's
  * own server would receive them.
  */
-export function nativeNotifier({ platform = process.platform, shellServes, sendDesktop = notice => desktopNotifyClient().notify(notice), showElectron = showElectronNotification }: NativeNotifierOptions): (title: string, body: string) => Promise<void> {
+export function nativeNotifier({ platform = process.platform, shellServes, desktopEntry = null, sendDesktop = (notice, entry) => desktopNotifyClient().notify(notice, entry), showElectron = showElectronNotification }: NativeNotifierOptions): (title: string, body: string) => Promise<void> {
   return async (title, body) => {
     const notice = { title: String(title).slice(0, 120), body: String(body).slice(0, 400) }
 
@@ -46,7 +52,7 @@ export function nativeNotifier({ platform = process.platform, shellServes, sendD
     }
 
     try {
-      await sendDesktop(notice)
+      await sendDesktop(notice, desktopEntry)
     } catch (error) {
       log('notify', `native notification failed: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -64,11 +70,25 @@ function showElectronNotification(notice: NativeNotice): void {
   notification.show()
 }
 
-/** The app's .desktop id as Electron's libnotify path names it: CHROME_DESKTOP, which Electron sets at startup, without `.desktop`. */
-export function desktopEntry(env: NodeJS.ProcessEnv = process.env): string | null {
-  const id = (env.CHROME_DESKTOP ?? '').trim().replace(/\.desktop$/, '')
+/** Where .desktop files are looked up, most personal first (XDG Base Directory spec). */
+export function applicationDirs(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string[] {
+  const dataHome = env.XDG_DATA_HOME?.trim() || path.join(home, '.local', 'share')
+  const dataDirs = (env.XDG_DATA_DIRS?.trim() || '/usr/local/share:/usr/share').split(':').filter(Boolean)
 
-  return id || null
+  return [dataHome, ...dataDirs].map(dir => path.join(dir, 'applications'))
+}
+
+/**
+ * The .desktop id of the running Herald: the session's `herald-os` in panels mode; in app mode
+ * (`herald-os-app` inside Hyprland or Omarchy) `herald-os-app`, which `herald-os omarchy install`
+ * writes, or else the `herald-os` entry the tarball and the packages install for the same launcher.
+ * The first id with an installed entry wins, as the server needs one for the icon; with none, the
+ * mode's own id. Read once at startup, from a few local paths.
+ */
+export function desktopEntryFor(mode: ShellMode, dirs: readonly string[] = applicationDirs(), exists: (file: string) => boolean = fs.existsSync): string {
+  const ids = mode === 'panels' ? ['herald-os'] : ['herald-os-app', 'herald-os']
+
+  return ids.find(id => dirs.some(dir => exists(path.join(dir, `${id}.desktop`)))) ?? ids[0]
 }
 
 /**
@@ -76,7 +96,7 @@ export function desktopEntry(env: NodeJS.ProcessEnv = process.env): string | nul
  * `desktop-entry` and `sender-pid` hints are the ones Electron's libnotify path sent, which GNOME
  * and KDE use for the icon and grouping; a server that is not running is not started for it.
  */
-export function notifyMessage({ title, body }: NativeNotice, { entry = desktopEntry(), pid = process.pid }: { entry?: string | null; pid?: number } = {}): dbus.Message {
+export function notifyMessage({ title, body }: NativeNotice, { entry = null, pid = process.pid }: { entry?: string | null; pid?: number } = {}): dbus.Message {
   const hints: Record<string, dbus.Variant> = { 'suppress-sound': new dbus.Variant('b', true), 'sender-pid': new dbus.Variant('x', pid) }
 
   if (entry) {
@@ -104,12 +124,12 @@ export class DesktopNotifyClient {
   ) {}
 
   /** Resolves once the server answered; rejects on an error or after `timeoutMs`, and the next notice reconnects. */
-  async notify(notice: NativeNotice): Promise<void> {
+  async notify(notice: NativeNotice, entry: string | null = null): Promise<void> {
     const bus = this.open()
     let timer: ReturnType<typeof setTimeout> | undefined
 
     try {
-      await Promise.race([bus.call(notifyMessage(notice)), new Promise<never>((_resolve, reject) => (timer = setTimeout(() => reject(new Error(`no answer in ${this.timeoutMs} ms`)), this.timeoutMs)))])
+      await Promise.race([bus.call(notifyMessage(notice, { entry })), new Promise<never>((_resolve, reject) => (timer = setTimeout(() => reject(new Error(`no answer in ${this.timeoutMs} ms`)), this.timeoutMs)))])
     } catch (error) {
       this.close(bus)
       throw error

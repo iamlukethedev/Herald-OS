@@ -36,7 +36,7 @@ import { registerWebIpc } from './ipc/web.ts'
 import { systemLanguages } from './i18n.ts'
 import { log, logTail } from './log.ts'
 import { migrateLegacyData } from './migrate.ts'
-import { nativeNotifier } from './native-notification.ts'
+import { desktopEntryFor, nativeNotifier } from './native-notification.ts'
 import { registerNotificationHistoryIpc } from './notifications-history.ts'
 import { registerPetIpc } from './pet/ipc.ts'
 import { PetWindow } from './pet/window.ts'
@@ -173,7 +173,7 @@ const osControl = panels
 backend.setControl(osControlPath, osControlToken())
 // Serves org.freedesktop.Notifications so other apps' notifications reach the shell.
 const notifications = panels ? new NotificationDaemon(panels) : null
-const notifyNative = nativeNotifier({ shellServes: () => notifications?.serving() ?? false })
+const notifyNative = nativeNotifier({ shellServes: () => notifications?.serving() ?? false, desktopEntry: process.platform === 'linux' ? desktopEntryFor(mode) : null })
 /** Deliver a ShellCommand to the Hermes window; panels mode queues it until that window has loaded. */
 const toHermesWindow = (command: ShellCommand) => (panels ? panels.relay('main', command) : mainWindow?.webContents.send(IPC.shellCommand, command))
 const crashes = new CrashWatcher(

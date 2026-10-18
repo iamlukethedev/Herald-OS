@@ -26,7 +26,7 @@ vi.mock('./log.ts', () => ({ log: vi.fn() }))
 
 const dbus = await import('dbus-next')
 const wire = (await import('dbus-next/lib/message.js' as string)) as { marshall: (message: unknown) => [Buffer, number[]] }
-const { desktopEntry, DesktopNotifyClient, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
+const { applicationDirs, desktopEntryFor, DesktopNotifyClient, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
 
 beforeEach(() => {
   electron.constructed = 0
@@ -45,7 +45,15 @@ describe('nativeNotifier on Linux', () => {
     await notify('Approval needed', 'Hermes is asking for permission')
 
     expect(electron.constructed).toBe(0)
-    expect(sendDesktop).toHaveBeenCalledWith({ title: 'Approval needed', body: 'Hermes is asking for permission' })
+    expect(sendDesktop).toHaveBeenCalledWith({ title: 'Approval needed', body: 'Hermes is asking for permission' }, null)
+  })
+
+  it("names the running mode's desktop entry in each notice", async () => {
+    const sendDesktop = vi.fn(async () => undefined)
+
+    await nativeNotifier({ platform: 'linux', shellServes: () => false, desktopEntry: 'herald-os-app', sendDesktop })('Approval needed', 'body')
+
+    expect(sendDesktop).toHaveBeenCalledWith({ title: 'Approval needed', body: 'body' }, 'herald-os-app')
   })
 
   it('sends nothing when Herald serves the notification bus itself, which would answer only once main is free', async () => {
@@ -86,7 +94,7 @@ describe('nativeNotifier on Linux', () => {
 
     await nativeNotifier({ platform: 'linux', shellServes: () => false, sendDesktop })('t'.repeat(200), 'b'.repeat(600))
 
-    expect(sendDesktop).toHaveBeenCalledWith({ title: 't'.repeat(120), body: 'b'.repeat(400) })
+    expect(sendDesktop).toHaveBeenCalledWith({ title: 't'.repeat(120), body: 'b'.repeat(400) }, null)
   })
 })
 
@@ -138,12 +146,32 @@ describe('notifyMessage', () => {
   })
 })
 
-describe('desktopEntry', () => {
-  it('is CHROME_DESKTOP without .desktop, as Electron derives it', () => {
-    expect(desktopEntry({ CHROME_DESKTOP: 'herald-os.desktop' })).toBe('herald-os')
-    expect(desktopEntry({ CHROME_DESKTOP: 'Herald OS.desktop' })).toBe('Herald OS')
-    expect(desktopEntry({})).toBeNull()
-    expect(desktopEntry({ CHROME_DESKTOP: ' ' })).toBeNull()
+describe('desktopEntryFor', () => {
+  const dirs = ['/home/me/.local/share/applications', '/usr/share/applications']
+  const installed = (...files: string[]) => (file: string) => files.includes(file)
+
+  it('is herald-os-app in app mode, where herald-os omarchy install writes that entry', () => {
+    expect(desktopEntryFor('desktop', dirs, installed('/home/me/.local/share/applications/herald-os-app.desktop', '/usr/share/applications/herald-os.desktop'))).toBe('herald-os-app')
+  })
+
+  it('is herald-os in app mode when only the tarball or package entry is installed', () => {
+    expect(desktopEntryFor('desktop', dirs, installed('/usr/share/applications/herald-os.desktop'))).toBe('herald-os')
+  })
+
+  it("is the mode's own id when no entry is installed", () => {
+    expect(desktopEntryFor('desktop', dirs, installed())).toBe('herald-os-app')
+    expect(desktopEntryFor('panels', dirs, installed())).toBe('herald-os')
+  })
+
+  it('is herald-os in the panels session, whatever app entries exist', () => {
+    expect(desktopEntryFor('panels', dirs, installed('/home/me/.local/share/applications/herald-os-app.desktop'))).toBe('herald-os')
+  })
+})
+
+describe('applicationDirs', () => {
+  it('follows the XDG data directories, the personal one first', () => {
+    expect(applicationDirs({}, '/home/me')).toEqual(['/home/me/.local/share/applications', '/usr/local/share/applications', '/usr/share/applications'])
+    expect(applicationDirs({ XDG_DATA_HOME: '/data', XDG_DATA_DIRS: '/a:/b' }, '/home/me')).toEqual(['/data/applications', '/a/applications', '/b/applications'])
   })
 })
 
@@ -209,7 +237,7 @@ describe('the main process and preload', () => {
   it("serve notifications.native through nativeNotifier, which knows when Herald's own daemon serves the bus", () => {
     const main = fs.readFileSync(path.join(root, 'main.ts'), 'utf8')
 
-    expect(main).toMatch(/const notifyNative = nativeNotifier\(\{ shellServes: \(\) => notifications\?\.serving\(\) \?\? false \}\)/)
+    expect(main).toMatch(/const notifyNative = nativeNotifier\(\{ shellServes: \(\) => notifications\?\.serving\(\) \?\? false, desktopEntry: process\.platform === 'linux' \? desktopEntryFor\(mode\) : null \}\)/)
     expect(main).toMatch(/ipcMain\.handle\(IPC\.notifyNative, \(_event, title: string, body: string\) => notifyNative\(title, body\)\)/)
   })
 
@@ -273,6 +301,16 @@ describe('DesktopNotifyClient', () => {
     await client.notify({ title: 'c', body: 'd' })
     expect(connect).toHaveBeenCalledTimes(2)
     expect(fresh.call).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the desktop entry it is given', async () => {
+    const bus = fakeBus(async () => null)
+    const client = new DesktopNotifyClient(() => bus as never)
+
+    await client.notify({ title: 'a', body: 'b' }, 'herald-os-app')
+
+    const [message] = bus.call.mock.calls[0] as unknown as [{ body: Array<Record<string, { value: unknown }>> }]
+    expect(message.body[6]['desktop-entry'].value).toBe('herald-os-app')
   })
 
   it('gives up on a server that does not answer, and connects again next time', async () => {
