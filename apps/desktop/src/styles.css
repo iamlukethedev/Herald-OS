@@ -309,9 +309,9 @@ textarea {
 /* A field that is a glass-input, or a text field inside a glass-input wrapper, is marked by the
    :focus-within border and halo, so it hides the global outline, which no outline-none utility can
    override because it is unlayered. The outline turns transparent rather than off so forced-colors
-   mode, which drops box-shadow, still draws it. Buttons and toggles keep the outline that marks
-   keyboard focus on every other button, and inside a wrapper the ring would not show which of them
-   has focus. */
+   mode, which drops box-shadow, still draws it. Toggles such as checkboxes and radios keep the
+   global outline, and so do buttons and toggles inside a wrapper, since the wrapper ring would not
+   show which of them has focus. */
 .glass-input:is(
     input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
     textarea,
@@ -323,6 +323,17 @@ textarea {
     textarea
   ):focus-visible {
   outline: 2px solid transparent;
+}
+
+/* A button that is a glass-input shows its focus on its own border, so it hides the global outline
+   the same way. The soft halo is too faint to mark keyboard focus by itself, so on :focus-visible
+   it becomes a solid 2px accent ring outside the border, which sits on the panel and keeps at least
+   3:1 against it and against the resting card with every accent. */
+.glass-input:is(button, [role='button'], input[type='button'], input[type='submit'], input[type='reset'], input[type='image']):focus-visible {
+  outline: 2px solid transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 2px var(--color-accent-strong);
 }
 
 .hairline {

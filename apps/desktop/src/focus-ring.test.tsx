@@ -128,6 +128,11 @@ function losesOutline(element: Element): boolean {
   return outlineRemovers().some(selector => element.matches(selector.replace(/:focus(?:-visible)?(?![-\w])/g, '')))
 }
 
+/** The unlayered glass-input rules that draw a solid accent ring in place of the soft halo. */
+function solidRingRules(): Rule[] {
+  return sheet.filter(rule => !rule.layered && rule.selector.includes('.glass-input') && /box-shadow:[^;]*0 0 0 2px var\(--color-accent-strong\)/.test(rule.body))
+}
+
 function mount(html: string): HTMLElement {
   const host = document.createElement('div')
   host.innerHTML = html
@@ -175,6 +180,69 @@ describe('outline check', () => {
 
     expect(probe?.body).toContain(printed)
     expect(removesOutline(probe!.body)).toBe(true)
+  })
+})
+
+describe('glass button ring contrast', () => {
+  const styles = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8')
+
+  /** A token's value from the first top-level block that starts with `head`. */
+  const token = (head: string, name: string): string => {
+    const start = styles.indexOf(`${head} {`)
+    const body = styles.slice(start, styles.indexOf('\n}', start))
+
+    return body.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1].trim() ?? ''
+  }
+
+  const rgba = (colour: string): number[] => {
+    const hex = colour.match(/^#([0-9a-f]{6})$/i)?.[1]
+
+    if (hex) {
+      return [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)).concat(1)
+    }
+
+    const [r, g, b, a = 1] = (colour.match(/rgba?\(([^)]*)\)/)?.[1] ?? '').split(',').map(Number)
+    return [r, g, b, a]
+  }
+
+  const over = (top: number[], [r, g, b]: number[]): number[] => [r + (top[0] - r) * top[3], g + (top[1] - g) * top[3], b + (top[2] - b) * top[3], 1]
+
+  const luminance = (colour: number[]): number => {
+    const [r, g, b] = colour.slice(0, 3).map(v => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+
+  const contrast = (a: number[], b: number[]): number => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (high + 0.05) / (low + 0.05)
+  }
+
+  const elevated = rgba(token('@theme', '--color-bg-elevated'))
+  const fill = rgba(token('.glass-input', 'background').match(/rgba\([^)]*\)/)?.[0] ?? '')
+  const accents = {
+    'ocean blue': token('@theme', '--color-accent-strong'),
+    ice: token(":root[data-accent='ice']", '--color-accent-strong'),
+    violet: token(":root[data-accent='violet']", '--color-accent-strong'),
+    'graphite gold': token(":root[data-theme='graphite']", '--color-accent-strong')
+  }
+  const backdrops = { 'the ocean background': token('@theme', '--color-bg'), 'the graphite background': token(":root[data-theme='graphite']", '--color-bg'), 'a white wallpaper': '#ffffff' }
+  const cases = Object.entries(accents).flatMap(([accent, colour]) => Object.entries(backdrops).map(([backdrop, behind]) => [accent, backdrop, colour, behind]))
+
+  it('reads every accent and fill from styles.css', () => {
+    for (const colour of [...Object.values(accents), ...Object.values(backdrops)]) {
+      expect(colour).toMatch(/^#[0-9a-f]{6}$/i)
+    }
+
+    expect(elevated[3]).toBeGreaterThan(0)
+    expect(fill[3]).toBeGreaterThan(0)
+  })
+
+  it.each(cases)('keeps the %s ring at 3:1 or more on a panel over %s', (_, __, colour, behind) => {
+    const ring = rgba(colour)
+    const panel = over(elevated, rgba(behind))
+
+    expect(contrast(ring, panel)).toBeGreaterThanOrEqual(3)
+    expect(contrast(ring, over(fill, panel))).toBeGreaterThanOrEqual(3)
   })
 })
 
@@ -271,20 +339,54 @@ describe('glass-input wrapper', () => {
   })
 
   it.each([
-    ['a button', '<button type="button" class="glass-input">Pick</button>'],
     ['a checkbox', '<input type="checkbox" class="glass-input">'],
     ['a radio', '<input type="radio" class="glass-input">'],
     ['a slider', '<input type="range" class="glass-input">'],
     ['a colour well', '<input type="color" class="glass-input">'],
-    ['a file input', '<input type="file" class="glass-input">'],
-    ['a button input', '<input type="button" class="glass-input" value="Go">'],
-    ['a submit input', '<input type="submit" class="glass-input" value="Go">'],
-    ['a reset input', '<input type="reset" class="glass-input" value="Reset">'],
-    ['an image input', '<input type="image" class="glass-input" alt="Go">']
+    ['a file input', '<input type="file" class="glass-input">']
   ])('keeps the outline on %s that is itself the glass-input', (_, html) => {
     const host = mount(html)
 
     expect(losesOutline(host.firstElementChild!)).toBe(false)
+  })
+
+  it.each([
+    ['a button', '<button type="button" class="glass-input">Pick</button>'],
+    ['a role=button element', '<div role="button" tabindex="0" class="glass-input">Pick</div>'],
+    ['a button input', '<input type="button" class="glass-input" value="Go">'],
+    ['a submit input', '<input type="submit" class="glass-input" value="Go">'],
+    ['a reset input', '<input type="reset" class="glass-input" value="Reset">'],
+    ['an image input', '<input type="image" class="glass-input" alt="Go">']
+  ])('takes the outline off %s that is itself the glass-input and draws one solid ring instead', (_, html) => {
+    const host = mount(html)
+    const button = host.firstElementChild!
+
+    expect(losesOutline(button)).toBe(true)
+    expect(solidRingRules().some(rule => selectors(rule.selector).some(selector => button.matches(selector.replace(/:focus-visible$/, ''))))).toBe(true)
+  })
+
+  it('draws the solid ring on keyboard focus only, so a click keeps the soft halo', () => {
+    const rings = solidRingRules()
+
+    expect(rings).not.toHaveLength(0)
+
+    for (const rule of rings) {
+      for (const selector of selectors(rule.selector)) {
+        expect(selector).toMatch(/:focus-visible$/)
+      }
+    }
+  })
+
+  it.each([
+    ['a button', '<button type="button">Go</button>'],
+    ['a role=button element', '<div role="button" tabindex="0">Go</div>'],
+    ['a button inside a glass-input wrapper', '<label class="glass-input"><button type="button">Go</button></label>'],
+    ['a link', '<a href="#x">Open</a>']
+  ])('keeps the global outline on %s without the glass-input class', (_, html) => {
+    const host = mount(html)
+    const control = host.querySelector('button, a, [role="button"]')!
+
+    expect(losesOutline(control)).toBe(false)
   })
 
   it.each([
