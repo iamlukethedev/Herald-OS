@@ -49,4 +49,5 @@ describe("the approval card in the pet's hands", () => {
     act(() => root.render(<></>))
     expect(document.activeElement).toBe(field)
   })
+
 })

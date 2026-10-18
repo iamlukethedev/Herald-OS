@@ -11,38 +11,57 @@ function clip(text: unknown): string {
   return flat.length > DETAIL_MAX ? `${flat.slice(0, DETAIL_MAX - 1).trimEnd()}…` : flat
 }
 
-/** What a screen reader says when a request arrives: what it asks, how many more wait, and the keys that go to it. */
-export function announcementOf(entry: PendingRequest, more: number, keys: string = requestShortcut().label): string {
-  const parts: string[] = []
+/** What a request asks, in a few words: the approval's description, the question, the secret's name. */
+function detailOf(entry: PendingRequest): string {
+  switch (entry.kind) {
+    case 'approval':
+      return clip(entry.request.params.description) || clip(entry.request.params.tool_name) || clip(entry.request.params.command)
+    case 'clarify':
+      return clip(entry.request.params.question) || clip(entry.request.params.questions?.[0]?.question)
+    case 'sudo':
+      return ''
+    case 'secret':
+      return clip(entry.request.params.prompt) || clip(entry.request.params.env_var)
+  }
+}
+
+const CARD_LABEL = { approval: 'requests.card.approval', clarify: 'requests.card.clarify', sudo: 'requests.card.sudo', secret: 'requests.card.secret' } as const
+
+function sentenceOf(entry: PendingRequest): string {
+  const detail = detailOf(entry)
 
   switch (entry.kind) {
-    case 'approval': {
-      const params = entry.request.params
-      const detail = clip(params.description) || clip(params.tool_name) || clip(params.command)
-      parts.push(detail ? t('requests.announce.approval', { detail }) : t('requests.announce.approvalPlain'))
-      break
-    }
-    case 'clarify': {
-      const params = entry.request.params
-      const detail = clip(params.question) || clip(params.questions?.[0]?.question)
-      parts.push(detail ? t('requests.announce.clarify', { detail }) : t('requests.announce.clarifyPlain'))
-      break
-    }
+    case 'approval':
+      return detail ? t('requests.announce.approval', { detail }) : t('requests.announce.approvalPlain')
+    case 'clarify':
+      return detail ? t('requests.announce.clarify', { detail }) : t('requests.announce.clarifyPlain')
     case 'sudo':
-      parts.push(t('requests.announce.sudo'))
-      break
-    case 'secret': {
-      const detail = clip(entry.request.params.prompt) || clip(entry.request.params.env_var)
-      parts.push(detail ? t('requests.announce.secret', { detail }) : t('requests.announce.secretPlain'))
-      break
+      return t('requests.announce.sudo')
+    case 'secret':
+      return detail ? t('requests.announce.secret', { detail }) : t('requests.announce.secretPlain')
+  }
+}
+
+/**
+ * What a screen reader says when `entry` arrives among `pending` (every request waiting, oldest
+ * first): what it asks, then where the request shortcut goes. The shortcut reaches the oldest
+ * request's card, as the cards show the oldest first: when that is `entry`, the others waiting are
+ * counted; when it is not, everything waiting is counted and the card the keys reach is named.
+ */
+export function announcementOf(entry: PendingRequest, pending: readonly PendingRequest[], keys: string = requestShortcut().label): string {
+  const first = pending[0] ?? entry
+  const parts = [sentenceOf(entry)]
+
+  if (first.request.id === entry.request.id) {
+    if (pending.length > 1) {
+      parts.push(t('requests.announce.more', { count: pending.length - 1 }))
     }
-  }
 
-  if (more > 0) {
-    parts.push(t('requests.announce.more', { count: more }))
+    parts.push(t('requests.announce.jump', { keys }))
+  } else {
+    const named = (detailOf(first) || t(CARD_LABEL[first.kind])).replace(/[.?!。？！…]+$/u, '')
+    parts.push(t('requests.announce.waiting', { count: pending.length }), t('requests.announce.jumpFirst', { keys, first: named }))
   }
-
-  parts.push(t('requests.announce.jump', { keys }))
 
   // Chinese runs its sentences together; the others leave a space.
   return parts.join($language.get() === 'zh-CN' ? '' : ' ')

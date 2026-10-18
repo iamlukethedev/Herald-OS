@@ -9,7 +9,7 @@ export const requestCommands: readonly OsCommand[] = [
   {
     id: 'requests.focus',
     title: 'Go to the waiting request',
-    description: 'Move the keyboard focus to the card of the approval, question or password Hermes is waiting on (Cmd+Option+A on macOS, Super+Shift+A on Herald OS Linux). Only the person can do this, never Hermes.',
+    description: 'Move the keyboard focus to the card of the oldest approval, question or password Hermes is waiting on (Cmd+Option+A on macOS, Super+Shift+A on Herald OS Linux). Only the person can do this, never Hermes.',
     tier: 'read',
     args: [],
     phrases: ['go to the waiting request', 'go to the approval', 'show the approval', 'go to the question'],
@@ -28,7 +28,7 @@ export const requestCommands: readonly OsCommand[] = [
         openSurface('main')
       }
 
-      return focusRequestCard() ? ok('Went to the waiting request', { spoken: 'Here it is.' }) : fail('The waiting request is not on screen in this window.')
+      return focusRequestCard($pendingRequests.get().map(entry => entry.request.id)) ? ok('Went to the waiting request', { spoken: 'Here it is.' }) : fail('The waiting request is not on screen in this window.')
     }
   }
 ]

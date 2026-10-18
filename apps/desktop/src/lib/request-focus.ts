@@ -35,11 +35,13 @@ export function takeRequestFocus(card: HTMLElement, { take = true }: { take?: bo
 }
 
 /**
- * Move the focus to the card of the waiting request (the first element marked `data-request-card`),
- * the card itself and not an answer; false when none is shown.
+ * Move the focus to the card of the first of `ids` that has one on screen (each card carries its
+ * request's id in `data-request-card`), the card itself and not an answer; with no `ids`, the first
+ * card. False when none is shown.
  */
-export function focusRequestCard(root: ParentNode = document): boolean {
-  const card = root.querySelector<HTMLElement>('[data-request-card]')
+export function focusRequestCard(ids?: readonly string[], root: ParentNode = document): boolean {
+  const cards = [...root.querySelectorAll<HTMLElement>('[data-request-card]')]
+  const card = ids ? ids.map(id => cards.find(element => element.getAttribute('data-request-card') === id)).find(Boolean) : cards[0]
 
   if (!card) {
     return false

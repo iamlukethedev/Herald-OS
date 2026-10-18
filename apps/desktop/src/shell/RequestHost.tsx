@@ -57,7 +57,7 @@ function useArrivalAnnouncement(pending: readonly PendingRequest[]): { text: str
     const fresh = freshArrivals(pending, announced)
 
     if (fresh.length > 0) {
-      const text = announcementOf(fresh[0], fresh.length - 1)
+      const text = announcementOf(fresh[0], pending)
       setAnnouncement(previous => ({ text, serial: (previous?.serial ?? 0) + 1 }))
     }
   }, [pending])
@@ -80,7 +80,7 @@ function RequestFrame({ entry }: { entry: PendingRequest }) {
       role="group"
       aria-label={t(FRAME_LABEL[entry.kind])}
       aria-keyshortcuts={requestShortcut().aria}
-      data-request-card=""
+      data-request-card={entry.request.id}
       tabIndex={-1}
       className="float pointer-events-auto rounded-2xl p-4 outline-none animate-rise"
     >

@@ -160,6 +160,8 @@ export const zhCN: Translation = {
   'requests.announce.secretPlain': 'Hermes 需要一项机密信息。',
   'requests.announce.more': { other: '还有 {count} 个请求在等待。' },
   'requests.announce.jump': '按 {keys} 前往该请求。',
+  'requests.announce.waiting': { other: '共有 {count} 个请求在等待。' },
+  'requests.announce.jumpFirst': '按 {keys} 前往第一个：{first}。',
 
   'overview.ready': 'Hermes 已就绪',
   'overview.connecting': '正在连接 Hermes',

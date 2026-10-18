@@ -166,6 +166,8 @@ export const ptBR: Translation = {
   'requests.announce.secretPlain': 'O Hermes precisa de uma informação secreta.',
   'requests.announce.more': { one: 'Mais {count} pedido aguardando.', other: 'Mais {count} pedidos aguardando.' },
   'requests.announce.jump': 'Pressione {keys} para ir até o pedido.',
+  'requests.announce.waiting': { one: '{count} pedido aguardando.', other: '{count} pedidos aguardando.' },
+  'requests.announce.jumpFirst': 'Pressione {keys} para ir ao primeiro: {first}.',
 
   'overview.ready': 'O Hermes está pronto',
   'overview.connecting': 'Conectando ao Hermes',

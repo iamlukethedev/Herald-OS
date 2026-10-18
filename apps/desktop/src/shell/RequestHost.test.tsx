@@ -6,6 +6,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestCommands } from '../commands/requests.ts'
+import { PetApprovalCard } from '../features/pet/PetView.tsx'
 import { $petHeldApproval } from '../features/pet/transport.ts'
 import { $pendingRequests, type PendingRequest } from '../store/requests.ts'
 import { ApprovalCard, RequestHost } from './RequestHost.tsx'
@@ -74,6 +75,7 @@ function press(key: 'Enter' | ' '): void {
 const card = () => host.querySelector<HTMLElement>('[data-request-card]')
 const spoken = () => host.querySelector('[role="status"]')
 const choices = () => [...host.querySelectorAll('button')]
+const focusRequest = () => requestCommands.find(command => command.id === 'requests.focus')!
 
 describe('RequestHost focus', () => {
   it('leaves the focus in the field being typed in when an approval arrives, so Enter and Space do not answer it', () => {
@@ -312,5 +314,50 @@ describe('the request shortcut', () => {
       expect(shortcut, file).toBeLessThan(source.indexOf("event.shiftKey && key === 'a'"))
       expect(source, file).toContain("runCommand('requests.focus', {}, { source: 'shortcut' })")
     }
+  })
+})
+
+function asking(id: string, description: string): { entry: PendingRequest; respond: ReturnType<typeof vi.fn> } {
+  const respond = vi.fn()
+  const entry = { kind: 'approval', request: { id, method: 'approval', params: { description, choices: ['once', 'session', 'always', 'deny'] }, respond, fail: vi.fn() }, receivedAt: 0 } as unknown as PendingRequest
+
+  return { entry, respond }
+}
+
+describe('a request arriving while another waits', () => {
+  it('counts everything waiting and names the card the shortcut reaches, the oldest', async () => {
+    field.focus()
+    arrive(asking('r1', 'Delete the Old folder').entry)
+
+    arrive(asking('r2', 'Move Budget.xlsx').entry)
+
+    expect(spoken()?.textContent).toBe('Hermes is asking for permission: Move Budget.xlsx. 2 requests are waiting. Press Cmd+Option+A to go to the first one: Delete the Old folder.')
+
+    expect((await focusRequest().run({}, { source: 'shortcut' })).ok).toBe(true)
+    expect(document.activeElement).toBe(card())
+    expect(card()?.getAttribute('data-request-card')).toBe('r1')
+  })
+
+  it('counts every other request waiting when the arrival is the first', () => {
+    act(() => $pendingRequests.set([asking('r1', 'Delete the Old folder').entry, asking('r2', 'Move Budget.xlsx').entry, asking('r3', 'Rename Notes').entry]))
+
+    expect(spoken()?.textContent).toBe('Hermes is asking for permission: Delete the Old folder. 2 more are waiting. Press Cmd+Option+A to go to it.')
+  })
+
+  it("reaches the pet's card when the pet holds the oldest, though the request host shows the next one first on the page", async () => {
+    const petHost = document.createElement('div')
+    document.body.append(petHost)
+    const petRoot = createRoot(petHost)
+    act(() => $petHeldApproval.set('r1'))
+    act(() => $pendingRequests.set([asking('r1', 'Delete the Old folder').entry, asking('r2', 'Move Budget.xlsx').entry]))
+    act(() => petRoot.render(<PetApprovalCard approval={{ id: 'r1', params: { description: 'Delete the Old folder' }, voice: false }} waiting={1} />))
+    field.focus()
+
+    expect(card()?.getAttribute('data-request-card')).toBe('r2')
+    expect((await focusRequest().run({}, { source: 'shortcut' })).ok).toBe(true)
+    expect((document.activeElement as HTMLElement).getAttribute('data-request-card')).toBe('r1')
+
+    act(() => petRoot.unmount())
+    petHost.remove()
   })
 })

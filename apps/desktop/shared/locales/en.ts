@@ -159,6 +159,8 @@ export const en = {
   'requests.announce.secretPlain': 'Hermes needs a secret.',
   'requests.announce.more': { one: '{count} more is waiting.', other: '{count} more are waiting.' },
   'requests.announce.jump': 'Press {keys} to go to it.',
+  'requests.announce.waiting': { one: '{count} request is waiting.', other: '{count} requests are waiting.' },
+  'requests.announce.jumpFirst': 'Press {keys} to go to the first one: {first}.',
 
   'overview.ready': 'Hermes is ready',
   'overview.connecting': 'Connecting to Hermes',
