@@ -83,7 +83,31 @@ function selectors(list: string): string[] {
   return [...out, current.trim()].filter(Boolean)
 }
 
-const removesOutline = (body: string): boolean => /(?:^|;|\s)outline(?:-style)?:\s*(?:none|0)\b/.test(body)
+const ZERO = /^0(?:\.0+)?(?:px|em|rem)?$/
+const TRANSPARENT = /^(?:transparent|#0000|#00000000|rgba?\([^)]*[,/]\s*0(?:\.0+)?%?\s*\))$/
+
+/** Whether a rule body leaves no visible outline: no style, zero width or a transparent colour. */
+function removesOutline(body: string): boolean {
+  return body.split(';').some(declaration => {
+    const [property, ...rest] = declaration.split(':')
+    const name = property.trim()
+    const value = rest.join(':').trim()
+    const parts = value.match(/\S+\([^)]*\)|\S+/g) ?? []
+
+    switch (name) {
+      case 'outline':
+        return parts.some(part => part === 'none' || part === 'hidden' || ZERO.test(part) || TRANSPARENT.test(part))
+      case 'outline-style':
+        return value === 'none' || value === 'hidden'
+      case 'outline-width':
+        return ZERO.test(value)
+      case 'outline-color':
+        return TRANSPARENT.test(value)
+      default:
+        return false
+    }
+  })
+}
 
 let sheet: Rule[] = []
 
@@ -110,6 +134,28 @@ function mount(html: string): HTMLElement {
   document.body.replaceChildren(host)
   return host
 }
+
+describe('outline check', () => {
+  it.each([
+    'outline: none',
+    'outline: 0',
+    'outline: 0px',
+    'outline-style: none',
+    'outline-width: 0',
+    'outline-width: 0px',
+    'outline-color: transparent',
+    'outline-color: #0000',
+    'outline: 2px solid transparent',
+    'outline: 2px solid #0000',
+    'outline: 1px solid rgba(0, 0, 0, 0)'
+  ])('counts %j as no visible ring', (body) => {
+    expect(removesOutline(body)).toBe(true)
+  })
+
+  it.each(['outline: 1.5px solid var(--color-accent-strong)', 'outline: auto', 'outline-offset: 0', 'outline-color: #2f7dff'])('counts %j as a visible ring', (body) => {
+    expect(removesOutline(body)).toBe(false)
+  })
+})
 
 describe('global focus ring', () => {
   it('is unlayered, so the outline-none utilities on buttons and links across the app cannot remove it', () => {
@@ -166,6 +212,10 @@ describe('glass-input wrapper', () => {
     ['a slider', '<input type="range">'],
     ['a colour well', '<input type="color">'],
     ['a submit input', '<input type="submit" value="Go">'],
+    ['a file input', '<input type="file">'],
+    ['a button input', '<input type="button" value="Go">'],
+    ['a reset input', '<input type="reset" value="Reset">'],
+    ['an image input', '<input type="image" alt="Go">'],
     ['a focusable div', '<div tabindex="0">Row</div>']
   ])('keeps the outline on %s inside a wrapper', (_, html) => {
     const host = mount(`<label class="glass-input">${html}</label>`)
