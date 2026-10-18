@@ -41,10 +41,10 @@ REQUIRED_PATHS = cli.SSH_LIMIT_REQUIRED
 SSH_KEYGEN = shutil.which("ssh-keygen")
 needs_ssh_keygen = pytest.mark.skipif(not SSH_KEYGEN, reason="ssh-keygen is not installed")
 # Running a command in a session of its own (setsid, from util-linux) and seeing what of it is left
-# (/proc, which the CLI reads too) are Linux's; macOS has neither.
-LINUX_PROCESSES = os.uname().sysname == "Linux" and bool(shutil.which("setsid")) and os.path.isdir("/proc/self")
-needs_linux_processes = pytest.mark.skipif(
-    not LINUX_PROCESSES, reason="needs Linux with setsid and /proc: a command in a session of its own, and what of it is left")
+# (/proc/<pid>/stat, which the CLI reads too) are Linux's; macOS has neither.
+needs_linux_procs = pytest.mark.skipif(
+    not shutil.which("setsid") or not os.path.exists("/proc/self/stat"),
+    reason="needs setsid and /proc: a command in a session of its own, and seeing what of it is left")
 # What `ssh-keygen -lf` names each type, for the listing the stand-in makes without it.
 KEYGEN_NAMES = {"ssh-ed25519": "ED25519", "ssh-rsa": "RSA", "ssh-dss": "DSA", "sk-ssh-ed25519@openssh.com": "ED25519-SK",
                 "sk-ecdsa-sha2-nistp256@openssh.com": "ECDSA-SK", "ecdsa-sha2-nistp256": "ECDSA",
@@ -2292,7 +2292,7 @@ MUTANTS = {
 LINUX_ONLY_MUTANTS = {"a root command left running not noted", "what is left never ended", "waiting on the pipes of what is left"}
 
 
-@pytest.mark.parametrize("name", [pytest.param(name, marks=needs_linux_processes) if name in LINUX_ONLY_MUTANTS else name
+@pytest.mark.parametrize("name", [pytest.param(name, marks=needs_linux_procs) if name in LINUX_ONLY_MUTANTS else name
                                   for name in MUTANTS])
 def test_each_safety_check_is_caught_when_taken_out(name, tmp_path, monkeypatch, capsys):
     scenario, old, new = MUTANTS[name]
@@ -3777,7 +3777,7 @@ def test_a_static_unit_is_not_disabled_or_listed_as_disabled(machine, monkeypatc
 
 # ---------------------------------------------------------------------------------------------
 # Round 10: a root command left running after its timeout is ended before the last look at the rules.
-@needs_linux_processes
+@needs_linux_procs
 @pytest.mark.parametrize("delay, quiet", [(1.5, False), (4, False), (4, True)])
 def test_a_firewall_add_left_running_as_root_is_ended_and_its_rule_does_not_outlive_the_run(machine, monkeypatch, capsys, tmp_path, delay, quiet):
     """The add outlives its timeout and the group kill (as a root command under sudo would), and adds
@@ -3803,7 +3803,7 @@ def test_a_firewall_add_left_running_as_root_is_ended_and_its_rule_does_not_outl
             os.kill(pid, signal.SIGKILL)
 
 
-@needs_linux_processes
+@needs_linux_procs
 def test_a_root_command_that_cannot_be_ended_makes_the_rollback_incomplete_with_the_commands_to_close(machine, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "SSH_TIMEOUT", 1)
     monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
@@ -3821,7 +3821,7 @@ def test_a_root_command_that_cannot_be_ended_makes_the_rollback_incomplete_with_
             os.kill(pid, signal.SIGKILL)
 
 
-@needs_linux_processes
+@needs_linux_procs
 def test_a_killed_command_s_whole_tree_is_noted_when_part_of_it_outlives_the_group(tmp_path, quick, monkeypatch):
     monkeypatch.setattr(cli, "SSH_LEFT", [])
     # Root's `kill` without sudo: the command is this account's own.
