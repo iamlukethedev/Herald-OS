@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -219,8 +220,11 @@ describe('the main process and preload', () => {
   })
 })
 
+/** A bus as dbus-next builds it: errors on the bus, a clean close on its connection ('end') and socket ('close'). */
 function fakeBus(call: () => Promise<unknown>) {
-  return { call: vi.fn(call), on: vi.fn(), disconnect: vi.fn() }
+  const connection = Object.assign(new EventEmitter(), { stream: new EventEmitter() })
+
+  return { call: vi.fn(call), on: vi.fn(), disconnect: vi.fn(), _connection: connection }
 }
 
 describe('DesktopNotifyClient', () => {
@@ -248,6 +252,24 @@ describe('DesktopNotifyClient', () => {
     onError(new Error('connection closed'))
 
     expect(broken.disconnect).toHaveBeenCalledTimes(1)
+    await client.notify({ title: 'c', body: 'd' })
+    expect(connect).toHaveBeenCalledTimes(2)
+    expect(fresh.call).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['end', (bus: ReturnType<typeof fakeBus>) => bus._connection.emit('end')],
+    ['close', (bus: ReturnType<typeof fakeBus>) => bus._connection.stream.emit('close')]
+  ])("drops a connection the bus closes cleanly ('%s'), and connects again next time", async (_event, closeIt) => {
+    const closed = fakeBus(async () => null)
+    const fresh = fakeBus(async () => null)
+    const connect = vi.fn().mockReturnValueOnce(closed).mockReturnValueOnce(fresh)
+    const client = new DesktopNotifyClient(connect)
+    await client.notify({ title: 'a', body: 'b' })
+
+    closeIt(closed)
+
+    expect(closed.disconnect).toHaveBeenCalledTimes(1)
     await client.notify({ title: 'c', body: 'd' })
     expect(connect).toHaveBeenCalledTimes(2)
     expect(fresh.call).toHaveBeenCalledTimes(1)

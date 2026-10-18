@@ -1,7 +1,7 @@
 import * as dbus from 'dbus-next'
 import { Notification } from 'electron'
 import { log } from './log.ts'
-import { nodeSocketAddress } from './shell/notification-daemon.ts'
+import { nodeSocketAddress, onBusClosed } from './shell/notification-daemon.ts'
 
 const BUS_NAME = 'org.freedesktop.Notifications'
 const OBJECT_PATH = '/org/freedesktop/Notifications'
@@ -121,9 +121,12 @@ export class DesktopNotifyClient {
   private open(): dbus.MessageBus {
     if (!this.bus) {
       const bus = this.connect()
-      // An 'error' event nobody listens to would throw in the main process.
-      bus.on('error', error => {
-        log('notify', `session bus error: ${error instanceof Error ? error.message : String(error)}`)
+      // An 'error' event nobody listens to would throw in the main process; a clean close ends it too.
+      onBusClosed(bus, reason => {
+        if (this.bus === bus) {
+          log('notify', `session bus gone: ${reason}`)
+        }
+
         this.close(bus)
       })
       this.bus = bus

@@ -24,6 +24,18 @@ export function nodeSocketAddress(address: string | undefined): string | undefin
   return abstract ? `unix:socket=\u0000${abstract}` : raw
 }
 
+/**
+ * Call `listener` once `bus` is gone. dbus-next passes a connection's errors on to the bus, but not a
+ * clean close: the connection emits 'end' when the bus daemon ends the stream, and its socket 'close'.
+ */
+export function onBusClosed(bus: dbus.MessageBus, listener: (reason: string) => void): void {
+  const connection = (bus as unknown as { _connection?: NodeJS.EventEmitter & { stream?: NodeJS.EventEmitter } })._connection
+
+  bus.on('error', error => listener(error instanceof Error ? error.message : String(error)))
+  connection?.on('end', () => listener('the session bus closed the connection'))
+  connection?.stream?.on('close', () => listener('the connection to the session bus closed'))
+}
+
 const BUS_NAME = 'org.freedesktop.Notifications'
 const OBJECT_PATH = '/org/freedesktop/Notifications'
 const CONNECT_TIMEOUT_MS = 5000
@@ -176,9 +188,12 @@ export class NotificationDaemon {
     this.bus = bus
     // A connection failure surfaces here rather than through the pending name request.
     const firstError = new Promise<never>((_resolve, reject) => bus.once('error', reject))
-    // A dropped connection no longer owns the name: stop claiming to serve it.
-    bus.on('error', error => {
-      log('notifications', `bus error: ${error instanceof Error ? error.message : String(error)}`)
+    // A dropped or closed connection no longer owns the name: stop claiming to serve it.
+    onBusClosed(bus, reason => {
+      if (this.bus === bus) {
+        log('notifications', `bus gone: ${reason}`)
+      }
+
       this.dropBus(bus)
     })
 

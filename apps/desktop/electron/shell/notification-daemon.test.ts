@@ -30,10 +30,12 @@ describe('nodeSocketAddress', () => {
   })
 })
 
+/** A bus as dbus-next builds it: errors on the bus, a clean close on its connection ('end') and socket ('close'). */
 class FakeBus extends EventEmitter {
   export = vi.fn()
   disconnect = vi.fn()
-  constructor(readonly reply: number) {
+  _connection = Object.assign(new EventEmitter(), { stream: new EventEmitter() })
+  constructor(readonly reply: number | Promise<number>) {
     super()
   }
   requestName = vi.fn(async () => this.reply)
@@ -76,6 +78,35 @@ describe('NotificationDaemon.serving', () => {
 
     expect(daemon.serving()).toBe(false)
     expect(bus.disconnect).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['end', (bus: FakeBus) => bus._connection.emit('end')],
+    ['close', (bus: FakeBus) => bus._connection.stream.emit('close')]
+  ])("stops serving at once when the bus closes cleanly ('%s')", async (_event, closeIt) => {
+    const bus = new FakeBus(dbus.RequestNameReply.PRIMARY_OWNER)
+    buses.next = bus
+    const daemon = new NotificationDaemon(shell)
+    await daemon.start()
+
+    closeIt(bus)
+
+    expect(daemon.serving()).toBe(false)
+    expect(bus.disconnect).toHaveBeenCalled()
+  })
+
+  it('does not serve from a bus that dropped while it was still asking for the name', async () => {
+    let grant: (reply: number) => void = () => undefined
+    const bus = new FakeBus(new Promise<number>(resolve => (grant = resolve)))
+    buses.next = bus
+    const daemon = new NotificationDaemon(shell)
+    const starting = daemon.start()
+
+    bus._connection.emit('end')
+    grant(dbus.RequestNameReply.PRIMARY_OWNER)
+    await starting
+
+    expect(daemon.serving()).toBe(false)
   })
 
   it('serves again from a new bus after a drop, and an old bus erroring later leaves it alone', async () => {
