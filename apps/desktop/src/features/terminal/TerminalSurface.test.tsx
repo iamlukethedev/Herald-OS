@@ -401,13 +401,16 @@ describe('a drop on the Terminal', () => {
   it('pastes dropped text, filtered, and leaves nothing in xterm’s input', async () => {
     // What Chromium would have put in the hidden input, had the drop not been taken.
     xterm.terminal.textarea!.value = '\x1b[201~echo pwned\r'
+    // Mounting focused the terminal; only the drop may focus it now.
+    xterm.terminal.textarea!.blur()
+    xterm.terminal.focus.mockClear()
     const event = drag('drop', { 'text/plain': '\x1b[201~echo pwned\r' })
     await settle()
 
     expect(event.defaultPrevented).toBe(true)
     expect(shell()).toBe('\x1b[200~echo pwned\r\x1b[201~')
     expect(xterm.terminal.textarea!.value).toBe('')
-    expect(xterm.terminal.focus).toHaveBeenCalled()
+    expect(xterm.terminal.focus).toHaveBeenCalledOnce()
   })
 
   it('holds dropped text to the paste limit', async () => {
