@@ -1,4 +1,9 @@
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import { createRequire } from 'node:module'
+import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const buses = vi.hoisted(() => ({ next: null as unknown }))
@@ -12,7 +17,7 @@ vi.mock('dbus-next', async importOriginal => {
 })
 
 const dbus = await import('dbus-next')
-const { NotificationDaemon, nodeSocketAddress } = await import('./notification-daemon.ts')
+const { NotificationDaemon, nodeSocketAddress, onBusClosed } = await import('./notification-daemon.ts')
 
 describe('nodeSocketAddress', () => {
   it('keeps dbus-next on Node sockets for path addresses', () => {
@@ -123,5 +128,34 @@ describe('NotificationDaemon.serving', () => {
 
     expect(daemon.serving()).toBe(true)
     expect(second.disconnect).not.toHaveBeenCalled()
+  })
+})
+
+describe("onBusClosed against dbus-next's own bus", () => {
+  it('is written for dbus-next 0.10.2, whose private _connection it reads', () => {
+    const version = (createRequire(import.meta.url)('dbus-next/package.json') as { version: string }).version
+
+    expect(version, 'onBusClosed reads dbus-next internals: check lib/bus.js and lib/connection.js, then update this').toBe('0.10.2')
+  })
+
+  it("hears a real bus connection that the other end closes, through 'end' and 'close'", async () => {
+    const actual = await vi.importActual<typeof import('dbus-next')>('dbus-next')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herald-bus-'))
+    const socket = path.join(dir, 'bus')
+    const server = net.createServer(connection => connection.end())
+    await new Promise<void>(resolve => server.listen(socket, resolve))
+    const reasons: string[] = []
+
+    try {
+      const bus = actual.sessionBus({ busAddress: `unix:socket=${socket}` })
+      onBusClosed(bus, reason => reasons.push(reason))
+      await vi.waitFor(() => expect(reasons).toContain('the connection to the session bus closed'), { timeout: 2000 })
+
+      expect(reasons).toContain('the session bus closed the connection')
+      bus.disconnect()
+    } finally {
+      server.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -27,6 +27,9 @@ export function nodeSocketAddress(address: string | undefined): string | undefin
 /**
  * Call `listener` once `bus` is gone. dbus-next passes a connection's errors on to the bus, but not a
  * clean close: the connection emits 'end' when the bus daemon ends the stream, and its socket 'close'.
+ * `_connection` is private to dbus-next (lib/bus.js in 0.10.2, the version package-lock.json pins);
+ * notification-daemon.test.ts checks it against a real dbus-next bus, so an upgrade that moves it
+ * fails there rather than leaving a closed bus unnoticed.
  */
 export function onBusClosed(bus: dbus.MessageBus, listener: (reason: string) => void): void {
   const connection = (bus as unknown as { _connection?: NodeJS.EventEmitter & { stream?: NodeJS.EventEmitter } })._connection
