@@ -2138,6 +2138,21 @@ def the_budget_is_five_minutes(machine: System, tmp_path: Path, capsys) -> bool:
     return "ran out of time (300 s) putting things back; skipped:" in capsys.readouterr().err
 
 
+def a_reused_group_or_session_id_is_not_the_tree_s(machine: System, tmp_path: Path, capsys) -> bool:
+    """A killed command's group (500) and session (600) empty, and the next scan sees that; later a new
+    process leads a group and a session that reuse both ids. It is not the tree's, so not killed."""
+    tree = {"pids": {500: 1}, "groups": {500}, "sessions": {600}}
+    scans = iter([
+        {500: (1, 500, 600, 1, "S"), 501: (500, 500, 600, 2, "S")},  # still there
+        {},                                                            # gone: both ids free
+        {700: (1, 500, 700, 9, "S"), 701: (1, 701, 600, 9, "S")},      # 500 and 600 reused
+    ])
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "ssh_processes", lambda: next(scans))
+        first, second, third = (machine.module.ssh_alive(tree) for _ in range(3))
+    return first == [500, 501] and second == [] and third == [] and tree["groups"] == tree["sessions"] == set()
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2243,6 +2258,7 @@ MUTANTS = {
     "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
     "a file put back with each command's full time": (a_file_put_back_splits_its_time, "slot(ssh_limit(None), parts=2)", "slot(ssh_limit(None))"),
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
+    "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -3850,3 +3866,17 @@ def test_only_the_mutants_that_need_a_session_of_their_own_are_skipped_off_linux
     needing = {name for name, (scenario, _, _) in MUTANTS.items()
                if scenario in (a_root_command_left_running_is_ended, a_root_command_holding_the_pipes_is_not_waited_for)}
     assert needing == LINUX_ONLY_MUTANTS
+
+
+
+def test_a_group_or_session_id_reused_after_the_tree_s_ended_is_left_alone(machine, capsys, tmp_path):
+    assert a_reused_group_or_session_id_is_not_the_tree_s(machine, tmp_path, capsys)
+
+
+def test_a_group_carried_only_by_a_zombie_is_still_the_tree_s(monkeypatch):
+    tree = {"pids": {}, "groups": {500}, "sessions": set()}
+    scans = iter([{500: (1, 500, 1, 1, "Z")}, {800: (1, 500, 800, 9, "S")}])
+    monkeypatch.setattr(cli, "ssh_processes", lambda: next(scans))
+    # The zombie leader still holds 500, so the id cannot have been given to anyone else yet.
+    assert cli.ssh_alive(tree) == [] and tree["groups"] == {500}
+    assert cli.ssh_alive(tree) == [800]

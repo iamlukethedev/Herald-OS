@@ -3226,8 +3226,13 @@ def ssh_tree(pid: int) -> dict:
 
 def ssh_alive(tree: dict) -> list[int]:
     """What of a tree still runs: its own processes, and any other in its groups or sessions (what it
-    started after it was looked at). A zombie has ended. Raises OSError when /proc cannot be listed."""
-    return sorted(pid for pid, (_, group, session, start, state) in ssh_processes().items()
+    started after it was looked at). A zombie has ended. Raises OSError when /proc cannot be listed.
+    A group or session no process carries any more (a zombie still does) is dropped from the tree for
+    good: its id is free, and a new leader given it later is not the tree's."""
+    processes = ssh_processes()
+    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
+    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}
+    return sorted(pid for pid, (_, group, session, start, state) in processes.items()
                   if pid > 1 and pid != os.getpid() and state not in ("Z", "X")
                   and (tree["pids"].get(pid) == start or group in tree["groups"] or session in tree["sessions"]))
 
