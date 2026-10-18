@@ -51,9 +51,11 @@ Hermes asks, how many requests are waiting, and which card the keys go to.
 Your keys, the command bar and voice can move the keyboard to a card; Hermes's own tools and
 plugins cannot. On Herald OS Linux the key works through `herald-os os requests.focus`, so any
 program running as you can call that too, including a command Hermes runs in a terminal (Hermes's
-approval settings decide whether it may), at most once a second. A program running as you can also
-type keys into any window, with `wtype` for example, so the card guards against stray keys, not
-against such a program.
+approval settings decide whether it may), at most once a second. It brings the Hermes window
+forward when that window does not have the keyboard, once per request and again for the same
+request after 15 seconds, so a program calling it in a loop can bring Hermes up every 15 seconds. A
+program running as you can also type keys into any window, with `wtype` for example, so the card
+guards against stray keys, not against such a program.
 
 ## Voice
 
