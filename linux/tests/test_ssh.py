@@ -2270,7 +2270,7 @@ MUTANTS = {
     "a hang stops the rollback": (a_hang_in_the_rollback_is_passed_over, "        except (subprocess.TimeoutExpired, OSError) as exc:\n            why =", "        except ZeroDivisionError as exc:\n            why ="),
     "SIGTERM not handled": (sigterm_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGHUP,)"),
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
-    "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + first)", "    raise SystemExit(1)"),
+    "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
     "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
     "keys never written taken out": (keys_never_written_are_not_taken_out, "keys_out if wrote_keys else None", "keys_out if added else None"),
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),

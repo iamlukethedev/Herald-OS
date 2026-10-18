@@ -4313,10 +4313,11 @@ def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
 SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 
 
-# The first signal that stops `on`, and the read end of the pipe Python's own C handler writes each
-# signal's number to the moment it arrives (signal.set_wakeup_fd), so the first can be told even when
-# several arrive before any Python handler runs (Python then runs them by number, not by arrival).
-SSH_STOP: dict = {"by": None, "arrivals": None}
+# The signal that stopped `on`: the first whose handler runs, which decides the exit code. Two signals
+# sent close together that are both pending at once are delivered, and their Python handlers run, in
+# signal-number order (the higher first), so that one wins; the order they were really sent in cannot
+# be recovered and is not relied on. A signal that arrives after another has been handled is ignored.
+SSH_STOP: dict = {"by": None}
 
 
 def ssh_ignored(signum: int, frame) -> None:
@@ -4326,23 +4327,17 @@ def ssh_ignored(signum: int, frame) -> None:
 
 
 def ssh_stopped(signum: int, frame) -> None:
+    # The first handler to run records the code, before anything else, and switches INT, TERM and HUP
+    # to do nothing from this moment, so a second signal cannot land between here and the rollback,
+    # which goes on ignoring them until it is done.
     if SSH_STOP["by"] is not None:
         return
-    first = signum
-    if SSH_STOP["arrivals"] is not None:
-        try:
-            arrived = os.read(SSH_STOP["arrivals"], 64)
-        except OSError:
-            arrived = b""
-        first = next((number for number in arrived if number in (signal.SIGINT, *SSH_STOPS)), signum)
-    SSH_STOP["by"] = first
-    # INT, TERM and HUP do nothing from this moment, before anything is raised, so no second signal can
-    # land between here and the rollback, which goes on ignoring them until it is done.
+    SSH_STOP["by"] = signum
     ssh_signals({each: ssh_ignored for each in (signal.SIGINT, *SSH_STOPS)})
-    if first == signal.SIGINT:
+    if signum == signal.SIGINT:
         raise KeyboardInterrupt
-    print(f"herald-os: stopped by {signal.Signals(first).name}; putting back what this run changed", file=sys.stderr)
-    raise SystemExit(128 + first)
+    print(f"herald-os: stopped by {signal.Signals(signum).name}; putting back what this run changed", file=sys.stderr)
+    raise SystemExit(128 + signum)
 
 
 def ssh_signals(handlers: dict) -> dict:
@@ -4355,32 +4350,6 @@ def ssh_signals(handlers: dict) -> dict:
         except (ValueError, OSError):
             break
     return previous
-
-
-def ssh_watch_arrivals() -> tuple | None:
-    """Have Python's C handler write each signal's number to a pipe as it arrives; what to give back
-    to ssh_unwatch_arrivals(). Nothing outside the main thread."""
-    read, write = os.pipe()
-    os.set_blocking(read, False)
-    os.set_blocking(write, False)
-    try:
-        previous = signal.set_wakeup_fd(write, warn_on_full_buffer=False)
-    except ValueError:
-        os.close(read)
-        os.close(write)
-        return None
-    SSH_STOP.update(by=None, arrivals=read)
-    return previous, read, write
-
-
-def ssh_unwatch_arrivals(watch: tuple | None) -> None:
-    SSH_STOP.update(by=None, arrivals=None)
-    if watch is None:
-        return
-    previous, read, write = watch
-    signal.set_wakeup_fd(previous)
-    os.close(read)
-    os.close(write)
 
 
 NO_LIMIT = (
@@ -4433,7 +4402,7 @@ def ssh_on(opts: dict) -> int:
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
     ssh_sudo()
     SSH_LEFT.clear()
-    watch = ssh_watch_arrivals()
+    SSH_STOP["by"] = None
     stops = ssh_signals({signum: ssh_stopped for signum in (signal.SIGINT, *SSH_STOPS)})
     try:
         before = ssh_snapshot()
@@ -4492,7 +4461,7 @@ def ssh_on(opts: dict) -> int:
             raise
     finally:
         ssh_signals(stops)
-        ssh_unwatch_arrivals(watch)
+        SSH_STOP["by"] = None
     count = len(authorized(updated))
     print(f"SSH is on for {account.pw_name}: {'keys or the password' if opts['passwords'] else 'keys only, no passwords'}, never root.")
     print(f"    keys: {count} in {keys_file}" + (f" ({len(added)} added)" if added else ""))
