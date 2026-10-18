@@ -4087,10 +4087,27 @@ def test_ssh_reap_leaves_a_process_that_reused_a_freed_id_alone(machine, monkeyp
 
 def test_a_child_the_command_left_in_its_group_is_matched(monkeypatch):
     # A child the command started or orphaned shares the group (or session), so it is the tree's and
-    # gets ended, even though it is not one of the tracked pids.
+    # gets ended, even though it is not one of the tracked pids. Its start time (8) is later than the
+    # tree's own (1): a process that started after the tree was recorded is still the command's.
     tree = {"pids": {500: 1}, "groups": {500}, "sessions": set()}
     monkeypatch.setattr(cli, "ssh_processes", lambda: {500: (1, 500, 500, 1, "S"), 600: (500, 500, 500, 8, "S")})
     assert cli.ssh_alive(tree) == [500, 600]
+
+
+def test_ssh_reap_ends_a_later_started_process_in_the_recorded_session(monkeypatch):
+    # A process that started after the tree was recorded (start 50), sharing only its session, is the
+    # command's doing and is reaped: it is signalled, not left behind.
+    sent = []
+    monkeypatch.setattr(cli, "ssh_run",
+                        lambda argv, timeout=None, grace=None, input=None: sent.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    seq = [{900: (1, 900, 600, 50, "S")}]
+    monkeypatch.setattr(cli, "ssh_processes", lambda: seq.pop(0) if seq else {})
+    cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": {"pids": {}, "groups": set(), "sessions": {600}}}]
+    try:
+        assert cli.ssh_reap(5) == []
+        assert any("kill" in argv for argv in sent) and any("900" in argv for argv in sent)
+    finally:
+        cli.SSH_LEFT.clear()
 
 
 @needs_linux_procs
