@@ -22,10 +22,16 @@ export function heraldOsDataDir(): string {
   return path.join(hermesHome(), 'herald-os')
 }
 
-export const isDev = process.env.HERALD_OS_BUILD_MODE === 'development' || Boolean(osEnv('DEV_SERVER'))
+export const isDev = process.env.HERALD_OS_BUILD_MODE === 'development' || Boolean(devServerUrl())
 
-export function devServerUrl(): string | undefined {
-  return osEnv('DEV_SERVER')
+/** Whether this is an installed build: electron-builder always packs the app into app.asar. */
+export function isPackaged(moduleFile = fileURLToPath(import.meta.url)): boolean {
+  return moduleFile.split(/[\\/]/).includes('app.asar')
+}
+
+/** The dev server to load the shell from. An installed build never does, whatever its environment says. */
+export function devServerUrl(env: NodeJS.ProcessEnv = process.env, packaged = isPackaged()): string | undefined {
+  return packaged ? undefined : osEnv('DEV_SERVER', env)
 }
 
 /** The built renderer page. Every electron/ module is bundled into dist/electron/main.mjs. */
@@ -46,7 +52,8 @@ export function isShellPage(url: string, index = rendererIndex(), dev: string | 
       return target.origin === new URL(dev).origin
     }
 
-    return target.protocol === 'file:' && target.pathname === pathToFileURL(index).pathname
+    // A file URL with a host (file://server/...) names a file on another machine, whatever its path.
+    return target.protocol === 'file:' && target.host === '' && target.pathname === pathToFileURL(index).pathname
   } catch {
     return false
   }
