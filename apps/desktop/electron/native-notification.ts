@@ -3,7 +3,6 @@ import { Notification } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ShellMode } from '../shared/ipc.ts'
 import { log } from './log.ts'
 import { nodeSocketAddress, onBusClosed } from './shell/notification-daemon.ts'
 
@@ -78,15 +77,23 @@ export function applicationDirs(env: NodeJS.ProcessEnv = process.env, home = os.
   return [dataHome, ...dataDirs].map(dir => path.join(dir, 'applications'))
 }
 
+/** How Herald runs: its own niri session, an app inside Omarchy's Hyprland, or an app anywhere else (GNOME, KDE). */
+export type HeraldLaunch = 'session' | 'omarchy' | 'app'
+
+/** Which launch this is, as `herald-os` tells Omarchy app mode: Omarchy and Hyprland both present. */
+export function heraldLaunch(panels: boolean, omarchy: boolean, compositor: string | null): HeraldLaunch {
+  return panels ? 'session' : omarchy && compositor === 'hyprland' ? 'omarchy' : 'app'
+}
+
 /**
- * The .desktop id of the running Herald: the session's `herald-os` in panels mode; in app mode
- * (`herald-os-app` inside Hyprland or Omarchy) `herald-os-app`, which `herald-os omarchy install`
- * writes, or else the `herald-os` entry the tarball and the packages install for the same launcher.
- * The first id with an installed entry wins, as the server needs one for the icon; with none, the
- * mode's own id. Read once at startup, from a few local paths.
+ * The .desktop id of the running Herald, by the launch first: `herald-os` for the session and for
+ * an app outside Omarchy (the entry the tarball and the packages install), `herald-os-app` inside
+ * Omarchy (the entry `herald-os omarchy install` writes). When the launch's own entry is missing, the
+ * other installed one stands in, as the server needs one for the icon; with neither, the launch's own
+ * id. Read once at startup, from a few local paths.
  */
-export function desktopEntryFor(mode: ShellMode, dirs: readonly string[] = applicationDirs(), exists: (file: string) => boolean = fs.existsSync): string {
-  const ids = mode === 'panels' ? ['herald-os'] : ['herald-os-app', 'herald-os']
+export function desktopEntryFor(launch: HeraldLaunch, dirs: readonly string[] = applicationDirs(), exists: (file: string) => boolean = fs.existsSync): string {
+  const ids = launch === 'session' ? ['herald-os'] : launch === 'omarchy' ? ['herald-os-app', 'herald-os'] : ['herald-os', 'herald-os-app']
 
   return ids.find(id => dirs.some(dir => exists(path.join(dir, `${id}.desktop`)))) ?? ids[0]
 }

@@ -26,7 +26,7 @@ vi.mock('./log.ts', () => ({ log: vi.fn() }))
 
 const dbus = await import('dbus-next')
 const wire = (await import('dbus-next/lib/message.js' as string)) as { marshall: (message: unknown) => [Buffer, number[]] }
-const { applicationDirs, desktopEntryFor, DesktopNotifyClient, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
+const { applicationDirs, desktopEntryFor, DesktopNotifyClient, heraldLaunch, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
 
 beforeEach(() => {
   electron.constructed = 0
@@ -146,25 +146,41 @@ describe('notifyMessage', () => {
   })
 })
 
+describe('heraldLaunch', () => {
+  it('is the session in panels mode, Omarchy inside Omarchy and Hyprland, an app anywhere else', () => {
+    expect(heraldLaunch(true, true, 'niri')).toBe('session')
+    expect(heraldLaunch(false, true, 'hyprland')).toBe('omarchy')
+    expect(heraldLaunch(false, true, null)).toBe('app')
+    expect(heraldLaunch(false, false, 'hyprland')).toBe('app')
+  })
+})
+
 describe('desktopEntryFor', () => {
   const dirs = ['/home/me/.local/share/applications', '/usr/share/applications']
   const installed = (...files: string[]) => (file: string) => files.includes(file)
+  const both = installed('/home/me/.local/share/applications/herald-os-app.desktop', '/usr/share/applications/herald-os.desktop')
 
-  it('is herald-os-app in app mode, where herald-os omarchy install writes that entry', () => {
-    expect(desktopEntryFor('desktop', dirs, installed('/home/me/.local/share/applications/herald-os-app.desktop', '/usr/share/applications/herald-os.desktop'))).toBe('herald-os-app')
+  it('is herald-os-app inside Omarchy, where herald-os omarchy install writes that entry', () => {
+    expect(desktopEntryFor('omarchy', dirs, both)).toBe('herald-os-app')
   })
 
-  it('is herald-os in app mode when only the tarball or package entry is installed', () => {
-    expect(desktopEntryFor('desktop', dirs, installed('/usr/share/applications/herald-os.desktop'))).toBe('herald-os')
+  it('is herald-os for an app outside Omarchy, even with the Omarchy entry installed too (GNOME on a machine that also runs Omarchy)', () => {
+    expect(desktopEntryFor('app', dirs, both)).toBe('herald-os')
   })
 
-  it("is the mode's own id when no entry is installed", () => {
-    expect(desktopEntryFor('desktop', dirs, installed())).toBe('herald-os-app')
-    expect(desktopEntryFor('panels', dirs, installed())).toBe('herald-os')
+  it('is herald-os in the session, whatever app entries exist', () => {
+    expect(desktopEntryFor('session', dirs, both)).toBe('herald-os')
   })
 
-  it('is herald-os in the panels session, whatever app entries exist', () => {
-    expect(desktopEntryFor('panels', dirs, installed('/home/me/.local/share/applications/herald-os-app.desktop'))).toBe('herald-os')
+  it("lets the other installed entry stand in when the launch's own is missing", () => {
+    expect(desktopEntryFor('omarchy', dirs, installed('/usr/share/applications/herald-os.desktop'))).toBe('herald-os')
+    expect(desktopEntryFor('app', dirs, installed('/home/me/.local/share/applications/herald-os-app.desktop'))).toBe('herald-os-app')
+  })
+
+  it("is the launch's own id when no entry is installed", () => {
+    expect(desktopEntryFor('omarchy', dirs, installed())).toBe('herald-os-app')
+    expect(desktopEntryFor('app', dirs, installed())).toBe('herald-os')
+    expect(desktopEntryFor('session', dirs, installed())).toBe('herald-os')
   })
 })
 
@@ -237,7 +253,7 @@ describe('the main process and preload', () => {
   it("serve notifications.native through nativeNotifier, which knows when Herald's own daemon serves the bus", () => {
     const main = fs.readFileSync(path.join(root, 'main.ts'), 'utf8')
 
-    expect(main).toMatch(/const notifyNative = nativeNotifier\(\{ shellServes: \(\) => notifications\?\.serving\(\) \?\? false, desktopEntry: process\.platform === 'linux' \? desktopEntryFor\(mode\) : null \}\)/)
+    expect(main).toMatch(/const notifyNative = nativeNotifier\(\{ shellServes: \(\) => notifications\?\.serving\(\) \?\? false, desktopEntry: process\.platform === 'linux' \? desktopEntryFor\(heraldLaunch\(Boolean\(panels\), isOmarchy\(\), detectCompositor\(\)\)\) : null \}\)/)
     expect(main).toMatch(/ipcMain\.handle\(IPC\.notifyNative, \(_event, title: string, body: string\) => notifyNative\(title, body\)\)/)
   })
 
