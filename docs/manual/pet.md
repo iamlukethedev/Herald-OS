@@ -58,17 +58,19 @@ a still frame for each state.
 
 When Hermes needs a yes or no, the pet walks to the bottom-right corner of the screen and holds up
 Herald's own approval card, with the same choices it offers anywhere else (Allow once, Deny and the
-rest). Answer it there; when more approvals are waiting, the card says how many (on a Mac they
-wait with the pet rather than in a second card beside it). Each one is a new card, so answering
-one from the keyboard never leaves the keyboard on the next one's answers.
+rest). Answer it there; when more approvals are waiting, the card says how many (in desktop mode
+they wait with the pet rather than in a second card beside it). Each one is a new card, so
+answering one from the keyboard never leaves the keyboard on the next one's answers.
 
 The card in the pet's hands never takes the keyboard, so a key pressed in another window cannot
 answer it, and nothing is ever answered for you; `Cmd+Option+A` (`Super+Shift+A` on Herald OS
 Linux) moves the keyboard to it. In a voice conversation, saying "yes" or "no" still answers it, as
-the card says. On a Mac the usual card shows while the pet walks over, then the pet holds it alone;
-on Herald OS Linux the Hermes window shows it too, so it cannot get lost behind other windows. While
-the pet is away or hidden, approvals appear in the usual place. Questions, passwords and secrets that
-Hermes asks for are never handed to the pet: they appear where they always do.
+the card says. Desktop mode is Herald as one window: on a Mac, and as an app inside Hyprland or
+Omarchy ([app mode](omarchy.md)). There the usual card shows while the pet walks over, then the pet
+holds it alone; in the Herald OS session the Hermes window shows it too, so it cannot get lost
+behind other windows. While the pet is away or hidden, every approval it held appears in the usual
+place again. Questions, passwords and secrets that Hermes asks for are never handed to the pet: they
+appear where they always do.
 
 ## The chat bubble
 
