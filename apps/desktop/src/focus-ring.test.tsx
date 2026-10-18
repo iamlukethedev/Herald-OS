@@ -209,7 +209,10 @@ describe('glass-input wrapper', () => {
     expect(hiders).not.toHaveLength(0)
 
     for (const rule of hiders) {
-      expect(rule.body).toMatch(/outline:\s*2px solid (?:transparent|#0000)\b/)
+      const [width, style, colour] = rule.body.match(/(?:^|;)\s*outline:\s*([^;]+)/)?.[1].match(/\S+\([^)]*\)|\S+/g) ?? []
+
+      expect([width, style]).toEqual(['2px', 'solid'])
+      expect(colour).toMatch(TRANSPARENT)
     }
   })
 
