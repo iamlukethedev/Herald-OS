@@ -17,16 +17,17 @@ import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
 /**
  * One host for every server->client question. Cards stack bottom-right; the oldest is on top so
  * the agent thread that has waited longest unblocks first. Gestures never grant approval. An
- * approval the desktop pet is holding up stays with the pet. No card ever focuses one of its own
- * answers, so a key pressed for something else cannot answer it. Since a card does not take the focus
- * from someone typing, a polite live region says what each request asks as it arrives, and the
- * request shortcut (`requestShortcut`) moves the focus to the card.
+ * approval the desktop pet is holding up stays with the pet, and so do the approvals queued behind
+ * it, which its card counts. No card ever focuses one of its own answers, so a key pressed for
+ * something else cannot answer it. Since a card does not take the focus from someone typing, a
+ * polite live region says what each request asks as it arrives, and the request shortcut
+ * (`requestShortcut`) moves the focus to the card.
  */
 export function RequestHost() {
   const all = useStore($pendingRequests)
   const held = useStore($petHeldApproval)
   const announcement = useArrivalAnnouncement(all)
-  const [current, ...rest] = all.filter(entry => entry.request.id !== held)
+  const [current, ...rest] = all.filter(entry => entry.request.id !== held && !(held !== null && entry.kind === 'approval'))
 
   return (
     <>

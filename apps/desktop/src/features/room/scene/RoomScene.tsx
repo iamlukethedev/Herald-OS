@@ -398,6 +398,7 @@ export function RoomScene({
               >
                 {raised?.id === agent.id && raised.approval && sign && (
                   <ApprovalPopover
+                    key={raised.approval.requestId}
                     approval={raised.approval}
                     placement={sign.placement}
                     pet={layout.pet}

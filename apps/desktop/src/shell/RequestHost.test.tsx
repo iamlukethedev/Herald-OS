@@ -352,17 +352,29 @@ describe('a request arriving while another waits', () => {
     const petHost = document.createElement('div')
     document.body.append(petHost)
     const petRoot = createRoot(petHost)
+    const question = { kind: 'clarify', request: { id: 'c2', method: 'clarify', params: { question: 'Which folder?' }, respond: vi.fn(), fail: vi.fn() }, receivedAt: 0 } as unknown as PendingRequest
+
+    try {
+      act(() => $petHeldApproval.set('r1'))
+      act(() => $pendingRequests.set([asking('r1', 'Delete the Old folder').entry, question]))
+      act(() => petRoot.render(<PetApprovalCard approval={{ id: 'r1', params: { description: 'Delete the Old folder' }, voice: false }} waiting={0} />))
+      field.focus()
+
+      expect(card()?.getAttribute('data-request-card')).toBe('c2')
+      expect((await focusRequest().run({}, { source: 'shortcut' })).ok).toBe(true)
+      expect((document.activeElement as HTMLElement).getAttribute('data-request-card')).toBe('r1')
+    } finally {
+      act(() => petRoot.unmount())
+      petHost.remove()
+    }
+  })
+
+  it('leaves the approvals queued behind the one the pet holds to the pet', () => {
     act(() => $petHeldApproval.set('r1'))
+
     act(() => $pendingRequests.set([asking('r1', 'Delete the Old folder').entry, asking('r2', 'Move Budget.xlsx').entry]))
-    act(() => petRoot.render(<PetApprovalCard approval={{ id: 'r1', params: { description: 'Delete the Old folder' }, voice: false }} waiting={1} />))
-    field.focus()
 
-    expect(card()?.getAttribute('data-request-card')).toBe('r2')
-    expect((await focusRequest().run({}, { source: 'shortcut' })).ok).toBe(true)
-    expect((document.activeElement as HTMLElement).getAttribute('data-request-card')).toBe('r1')
-
-    act(() => petRoot.unmount())
-    petHost.remove()
+    expect(card()).toBeNull()
   })
 })
 

@@ -58,7 +58,9 @@ a still frame for each state.
 
 When Hermes needs a yes or no, the pet walks to the bottom-right corner of the screen and holds up
 Herald's own approval card, with the same choices it offers anywhere else (Allow once, Deny and the
-rest). Answer it there; when more approvals are waiting, the card says how many.
+rest). Answer it there; when more approvals are waiting, the card says how many (on a Mac they
+wait with the pet rather than in a second card beside it). Each one is a new card, so answering
+one from the keyboard never leaves the keyboard on the next one's answers.
 
 The card in the pet's hands never takes the keyboard, so a key pressed in another window cannot
 answer it, and nothing is ever answered for you; `Cmd+Option+A` (`Super+Shift+A` on Herald OS

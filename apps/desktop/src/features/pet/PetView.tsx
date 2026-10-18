@@ -103,7 +103,8 @@ export interface PetViewProps {
 
 /**
  * The approval in the pet's hands. It never takes the focus as it appears; the request shortcut can
- * move the focus to it, and when it goes the focus returns to where it came from.
+ * move the focus to it, and when it goes the focus returns to where it came from. Keyed by the
+ * approval, so the next one is a new card and never inherits the focus on this one's answers.
  */
 export function PetApprovalCard({ approval, waiting }: { approval: NonNullable<PetSnapshot['approval']>; waiting: number }) {
   const t = useT()
@@ -114,7 +115,7 @@ export function PetApprovalCard({ approval, waiting }: { approval: NonNullable<P
   return (
     <div ref={card} role="group" aria-label={t('requests.card.approval')} aria-keyshortcuts={requestShortcut().aria} data-request-card={approval.id} tabIndex={-1} className="float pointer-events-auto w-[360px] rounded-2xl p-4 outline-none animate-rise">
       <ApprovalCard id={approval.id} params={approval.params} voiceHint={approval.voice} onChoice={choice => petAct({ type: 'answer', id: approval.id, choice })} />
-      {waiting > 0 && <div className="mt-2 text-right text-[11px] text-fg-3">{waiting} more waiting</div>}
+      {waiting > 0 && <div className="mt-2 text-right text-[11px] text-fg-3">{waiting} more {waiting === 1 ? 'approval' : 'approvals'} waiting</div>}
     </div>
   )
 }
@@ -136,7 +137,7 @@ export function PetView({ sheet, scale, snapshot, ui, extras, layout, pose, pose
 
   const extrasNode =
     extras === 'card' && approval ? (
-      <PetApprovalCard approval={approval} waiting={snapshot.approvalsWaiting} />
+      <PetApprovalCard key={approval.id} approval={approval} waiting={snapshot.approvalsWaiting} />
     ) : extras === 'drop' && ui.drop ? (
       <DropPanel drop={ui.drop} onPick={(suggestion, text) => pick(ui.drop!, suggestion, text)} onClose={() => ui.setDrop(null)} />
     ) : extras === 'bubble' ? (
