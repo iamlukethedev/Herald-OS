@@ -84,7 +84,7 @@ function selectors(list: string): string[] {
 }
 
 const ZERO = /^0(?:\.0+)?(?:px|em|rem)?$/
-const TRANSPARENT = /^(?:transparent|#0000|#00000000|rgba?\([^)]*[,/]\s*0(?:\.0+)?%?\s*\))$/
+const TRANSPARENT = /^(?:transparent|#[0-9a-f]{3}0|#[0-9a-f]{6}00|rgba?\([^)]*[,/]\s*0(?:\.0+)?%?\s*\))$/i
 
 /** Whether a rule body leaves no visible outline: no style, zero width or a transparent colour. */
 function removesOutline(body: string): boolean {
@@ -147,13 +147,34 @@ describe('outline check', () => {
     'outline-color: #0000',
     'outline: 2px solid transparent',
     'outline: 2px solid #0000',
-    'outline: 1px solid rgba(0, 0, 0, 0)'
+    'outline: 1px solid rgba(0, 0, 0, 0)',
+    'outline-color: #fff0',
+    'outline-color: #FFF0',
+    'outline: 2px solid #2f7dff00',
+    'outline: 2px solid #2F7DFF00'
   ])('counts %j as no visible ring', (body) => {
     expect(removesOutline(body)).toBe(true)
   })
 
-  it.each(['outline: 1.5px solid var(--color-accent-strong)', 'outline: auto', 'outline-offset: 0', 'outline-color: #2f7dff'])('counts %j as a visible ring', (body) => {
-    expect(removesOutline(body)).toBe(false)
+  it.each(['outline: 1.5px solid var(--color-accent-strong)', 'outline: auto', 'outline-offset: 0', 'outline-color: #2f7dff', 'outline-color: #fff', 'outline-color: #fff8', 'outline: 2px solid #2f7dff80'])(
+    'counts %j as a visible ring',
+    (body) => {
+      expect(removesOutline(body)).toBe(false)
+    }
+  )
+
+  it.each([
+    ['outline: 2px solid transparent', '#0000'],
+    ['outline: 2px solid rgba(255, 255, 255, 0)', '#fff0'],
+    ['outline: 2px solid rgb(47 125 255 / 0)', '#2f7dff00'],
+    ['outline-color: rgba(255, 255, 255, 0)', '#fff0'],
+    ['outline-color: rgb(47 125 255 / 0)', '#2f7dff00']
+  ])('counts %j as no visible ring after the build prints it as %s', async (declaration, printed) => {
+    const compiler = await compile(`.probe { ${declaration}; }`, { base: SRC, onDependency: () => {} })
+    const probe = rules(optimize(compiler.build([])).code).find(rule => rule.selector === '.probe')
+
+    expect(probe?.body).toContain(printed)
+    expect(removesOutline(probe!.body)).toBe(true)
   })
 })
 
