@@ -182,6 +182,16 @@ describe('glass-input wrapper', () => {
     expect(ring?.body).toMatch(/box-shadow:[^;]*0 0 0 3px/)
   })
 
+  it('hides the outline with a transparent colour, so forced-colors mode still draws a ring', () => {
+    const hiders = sheet.filter(rule => !rule.layered && rule.selector.includes('.glass-input') && removesOutline(rule.body))
+
+    expect(hiders).not.toHaveLength(0)
+
+    for (const rule of hiders) {
+      expect(rule.body).toMatch(/outline:\s*2px solid (?:transparent|#0000)\b/)
+    }
+  })
+
   it('takes the outline off the SearchField input, so it shows one ring, not two', () => {
     const host = mount(renderToStaticMarkup(<SearchField value="" onChange={() => {}} placeholder="Search your memory…" trailing={<button type="button" aria-label="Clear">×</button>} />))
     const input = host.querySelector('input')

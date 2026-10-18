@@ -307,15 +307,16 @@ textarea {
 }
 
 /* A text field inside a glass-input wrapper is marked by the wrapper's :focus-within ring, so it
-   drops the global outline, which no outline-none utility can override because it is unlayered.
-   Buttons and toggles inside a wrapper keep their own outline, since the wrapper ring would not
-   show which of them has focus. */
+   hides the global outline, which no outline-none utility can override because it is unlayered.
+   The outline turns transparent rather than off so forced-colors mode, which drops box-shadow,
+   still draws it. Buttons and toggles inside a wrapper keep their own outline, since the wrapper
+   ring would not show which of them has focus. */
 .glass-input
   :is(
     input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
     textarea
   ):focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
 }
 
 .hairline {
