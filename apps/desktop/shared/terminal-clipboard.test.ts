@@ -5,29 +5,46 @@ const CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/
 
 describe('sanitizePaste', () => {
   it('keeps text, tabs and line breaks as they are', () => {
-    expect(sanitizePaste('ls -la\tdocs\r\necho "héllo 世界 🙂"\n')).toBe('ls -la\tdocs\r\necho "héllo 世界 🙂"\n')
-  })
+    const text = 'ls -la\tdocs\r\necho "héllo 世界 🙂"\nprintf "a\\tb"\r\n\tindented\n'
 
-  it('cannot end a bracketed paste early', () => {
-    const pasted = sanitizePaste('echo safe\x1b[201~rm -rf ~\r')
-
-    expect(pasted).toBe('echo safe[201~rm -rf ~\r')
-    expect(pasted).not.toContain('\x1b[201~')
-  })
-
-  it('cannot start one either', () => {
-    expect(sanitizePaste('\x1b[200~text')).toBe('[200~text')
+    expect(sanitizePaste(text)).toBe(text)
   })
 
   it.each([
+    ['at the start', '\x1b[201~echo pwned\r', 'echo pwned\r'],
+    ['in the middle', 'echo safe\x1b[201~echo pwned\r', 'echo safe' + 'echo pwned\r'],
+    ['at the end', 'echo safe\x1b[201~', 'echo safe'],
+    ['opening a paste', '\x1b[200~echo pwned\x1b[201~\r', 'echo pwned\r'],
+    ['twice', 'a\x1b[201~b\x1b[200~c\x1b[201~', 'abc']
+  ])('takes out a bracketed-paste marker %s, leaving nothing of it', (_label, text, expected) => {
+    expect(sanitizePaste(text)).toBe(expected)
+    expect(sanitizePaste(text)).not.toMatch(/20[01]~/)
+  })
+
+  it.each([
+    ['at the start', '\x9b201~echo pwned\r', 'echo pwned\r'],
+    ['in the middle', 'echo safe\x9b200~x\x9b201~echo pwned\r', 'echo safexecho pwned\r']
+  ])('takes out the 8-bit CSI marker %s', (_label, text, expected) => {
+    expect(sanitizePaste(text)).toBe(expected)
+  })
+
+  it.each([
+    ['a bare ESC', 'a\x1bb\x1b', 'ab'],
+    ['ESC left after a marker', '\x1b\x1b[201~x', 'x'],
     ['another escape sequence', 'a\x1b]0;title\x07b\x1b[2Jc', 'a]0;titleb[2Jc'],
-    ['the C1 control sequence introducer', 'a\x9b201~b', 'a201~b'],
+    ['the C1 control sequence introducer', 'a\x9b2Jb', 'a2Jb'],
     ['every C1 control', `a${String.fromCharCode(...Array.from({ length: 32 }, (_, i) => 0x80 + i))}b`, 'ab'],
     ['DEL', 'a\x7fb', 'ab'],
-    ['NUL and the other C0 controls', 'a\x00\x03\x04\x08\x0b\x0c\x0e\x1a\x1fb', 'ab']
+    ['NUL, ^C, ^D, ^Z and the other C0 controls', 'a\x00\x03\x04\x08\x0b\x0c\x0e\x1a\x1fb', 'ab']
   ])('drops %s', (_label, text, expected) => {
     expect(sanitizePaste(text)).toBe(expected)
     expect(sanitizePaste(text)).not.toMatch(CONTROLS)
+  })
+
+  it('cannot be fooled by a marker split across two pastes', () => {
+    const joined = sanitizePaste('echo safe\x1b') + sanitizePaste('[201~echo pwned\r')
+
+    expect(joined).not.toMatch(CONTROLS)
   })
 
   it('keeps the letters just past the C1 range', () => {
