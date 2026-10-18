@@ -77,7 +77,7 @@ const bridge = vi.hoisted(() => {
 })
 
 const { $prefs, $prefsLoaded, $windowState, migrateLegacyNotifyFlags } = await import('./backend.ts')
-const { $notifications, $toasts, bindNotificationEvents, notify, setNotifySwitch } = await import('./notifications.ts')
+const { $notifications, $toasts, bindNotificationEvents, dismissToast, notify, setNotifySwitch } = await import('./notifications.ts')
 const { $pendingRequests, bindServerRequests } = await import('./requests.ts')
 const { $activeChatId, $chats, bindChatEvents } = await import('./chat.ts')
 
@@ -354,5 +354,46 @@ describe('saving the switches', () => {
 
     expect(storage.map.get(LEGACY_NOTIFY_KEYS.toolCompletions)).toBe('false')
     expect($prefs.get().notify).toEqual(NOTIFY_DEFAULTS)
+  })
+})
+
+describe('a toast raised again', () => {
+  const shown = () => $toasts.get().map(t => t.title)
+
+  it('stays its full six seconds from the second raise, not from the first', () => {
+    notify({ title: 'Too fast', key: 'terminal.clipboard' })
+    vi.advanceTimersByTime(5000)
+    notify({ title: 'Too fast', key: 'terminal.clipboard' })
+
+    vi.advanceTimersByTime(1500)
+    expect(shown()).toEqual(['Too fast'])
+    vi.advanceTimersByTime(4400)
+    expect(shown()).toEqual(['Too fast'])
+    vi.advanceTimersByTime(100)
+    expect(shown()).toEqual([])
+  })
+
+  it('is not cut short by the removal of one dismissed before', () => {
+    const first = notify({ title: 'Too fast', key: 'terminal.clipboard' })
+    vi.advanceTimersByTime(1000)
+    dismissToast(first.id)
+    vi.advanceTimersByTime(2000)
+    notify({ title: 'Too fast', key: 'terminal.clipboard' })
+
+    vi.advanceTimersByTime(3500)
+    expect(shown()).toEqual(['Too fast'])
+    vi.advanceTimersByTime(2500)
+    expect(shown()).toEqual([])
+  })
+
+  it('leaves other toasts to their own six seconds', () => {
+    notify({ title: 'First' })
+    vi.advanceTimersByTime(3000)
+    notify({ title: 'Second' })
+    vi.advanceTimersByTime(3000)
+
+    expect(shown()).toEqual(['Second'])
+    vi.advanceTimersByTime(3000)
+    expect(shown()).toEqual([])
   })
 })

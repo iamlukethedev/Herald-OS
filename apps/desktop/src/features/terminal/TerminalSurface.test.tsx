@@ -113,7 +113,7 @@ vi.mock('../../store/terminal.ts', async () => {
 vi.mock('../../shell/surfaces/shell-utils.ts', () => ({ useShellCommands() {} }))
 
 const { $env, $prefs } = await import('../../store/backend.ts')
-const { $notifications } = await import('../../store/notifications.ts')
+const { $notifications, $toasts } = await import('../../store/notifications.ts')
 const { TerminalSurface } = await import('./TerminalSurface.tsx')
 const { editCommands } = await import('../../commands/edit.ts')
 const { defineCommands, resetCommands, runCommand } = await import('../../store/os-commands.ts')
@@ -217,6 +217,7 @@ beforeEach(async () => {
   bridge.readClipboard.mockReset().mockResolvedValue({ text: 'echo pasted' })
   bridge.writeClipboard.mockReset().mockResolvedValue(undefined)
   $notifications.set([])
+  $toasts.set([])
   $prefs.set({ ...PREFS, language: 'en' })
   $env.set({ hermesHome: '/h/.hermes', homeDir: '/h', version: '0.0.0', isDev: false, platform: 'linux' } as never)
   Object.assign(window, {
@@ -588,6 +589,33 @@ describe('a drop on the Terminal', () => {
 
     expect(raised).toEqual(['That can’t be dropped here', 'That can’t be dropped here'])
     expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('shows the notice its full six seconds when a drop raises it again after five', () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    try {
+      const shown = () => $toasts.get().map(toast => toast.title)
+      const wait = (ms: number) => {
+        now += ms
+        vi.advanceTimersByTime(ms)
+      }
+
+      dragAndDrop({ Files: '' })
+      wait(5000)
+      dragAndDrop({ Files: '' })
+
+      wait(1500)
+      expect(shown()).toEqual(['That can’t be dropped here'])
+      wait(4400)
+      expect(shown()).toEqual(['That can’t be dropped here'])
+      wait(100)
+      expect(shown()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('pastes a picture dragged from a browser as its address, bracketed, with no notice', async () => {
