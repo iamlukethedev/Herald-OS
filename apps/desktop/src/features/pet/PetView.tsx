@@ -116,7 +116,7 @@ export function PetView({ sheet, scale, snapshot, ui, extras, layout, pose, pose
   const extrasNode =
     extras === 'card' && approval ? (
       <div className="float pointer-events-auto w-[360px] rounded-2xl p-4 animate-rise">
-        <ApprovalCard id={approval.id} params={approval.params} voiceHint={approval.voice} autoFocus={false} onChoice={choice => petAct({ type: 'answer', id: approval.id, choice })} />
+        <ApprovalCard id={approval.id} params={approval.params} voiceHint={approval.voice} onChoice={choice => petAct({ type: 'answer', id: approval.id, choice })} />
         {snapshot.approvalsWaiting > 0 && <div className="mt-2 text-right text-[11px] text-fg-3">{snapshot.approvalsWaiting} more waiting</div>}
       </div>
     ) : extras === 'drop' && ui.drop ? (

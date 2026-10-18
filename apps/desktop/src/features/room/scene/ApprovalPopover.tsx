@@ -39,7 +39,7 @@ export function ApprovalPopover({ approval, placement, pet, still, popoverRef, o
 
   return (
     <div ref={popoverRef} role="group" aria-label="Hermes is asking for permission" onMouseDown={keepFocus} className={cn('float pointer-events-auto absolute rounded-2xl p-4', !still && 'animate-rise')} style={style}>
-      <ApprovalCard id={approval.requestId} params={{ ...approval.params, session_id: approval.sessionId }} autoFocus={false} voiceHint={false} onChoice={onChoice} />
+      <ApprovalCard id={approval.requestId} params={{ ...approval.params, session_id: approval.sessionId }} voiceHint={false} onChoice={onChoice} />
     </div>
   )
 }

@@ -1,11 +1,12 @@
 import { useStore } from '@nanostores/react'
 import type { ApprovalChoice, ApprovalRequestParams, ClarifyRequestParams } from '@herald-os/client'
 import { IconKey, IconLock, IconMicrophone, IconQuestionMark, IconShieldCheck } from '@tabler/icons-react'
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '../components/ui/button.tsx'
 import { Badge } from '../components/ui/primitives.tsx'
 import { type ApprovalShape, approvalFacts } from '../lib/approval-choices.ts'
 import { deviceNoun } from '../lib/platform-labels.ts'
+import { takeRequestFocus } from '../lib/request-focus.ts'
 import { $petHeldApproval } from '../features/pet/transport.ts'
 import { $pendingRequests, type PendingRequest, resolveRequest } from '../store/requests.ts'
 import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
@@ -13,7 +14,8 @@ import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
 /**
  * One host for every server->client question. Cards stack bottom-right; the oldest is on top so
  * the agent thread that has waited longest unblocks first. Gestures never grant approval. An
- * approval the desktop pet is holding up stays with the pet.
+ * approval the desktop pet is holding up stays with the pet. No card ever focuses one of its own
+ * answers, so a key pressed for something else cannot answer it.
  */
 export function RequestHost() {
   const held = useStore($petHeldApproval)
@@ -28,9 +30,22 @@ export function RequestHost() {
   return (
     <div className="pointer-events-none absolute right-5 bottom-[92px] z-(--z-request) flex w-[420px] flex-col items-stretch gap-2">
       {rest.length > 0 && <div className="pointer-events-auto self-end text-[11px] text-fg-3">{rest.length} more waiting</div>}
-      <div className="float pointer-events-auto rounded-2xl p-4 animate-rise">
-        <RequestCard entry={current} />
-      </div>
+      <RequestFrame key={current.request.id} entry={current} />
+    </div>
+  )
+}
+
+const FRAME_LABEL: Record<PendingRequest['kind'], string> = { approval: 'Hermes is asking for permission', clarify: 'Hermes has a question', sudo: 'Administrator password', secret: 'Hermes needs a secret' }
+
+/** One request's card: it takes the focus only from nothing being typed in, and gives it back when it goes. */
+function RequestFrame({ entry }: { entry: PendingRequest }) {
+  const frame = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => (frame.current ? takeRequestFocus(frame.current) : undefined), [])
+
+  return (
+    <div ref={frame} role="group" aria-label={FRAME_LABEL[entry.kind]} tabIndex={-1} className="float pointer-events-auto rounded-2xl p-4 outline-none animate-rise">
+      <RequestCard entry={entry} />
     </div>
   )
 }
@@ -55,9 +70,9 @@ export type ApprovalCardParams = ApprovalShape & Pick<Partial<ApprovalRequestPar
 /**
  * The approval card, here and in the pet's hands. `onChoice` routes the answer (the pet's goes to the
  * window that holds the request); `voiceHint` says whether a spoken answer counts when this window
- * cannot tell; the pet's card never takes the focus, so a key pressed elsewhere cannot answer it.
+ * cannot tell. No answer is ever focused for the person, so a key pressed elsewhere cannot answer it.
  */
-export function ApprovalCard({ id, params, onChoice, voiceHint, autoFocus = true }: { id: string; params: ApprovalCardParams; onChoice?: (choice: ApprovalChoice) => void; voiceHint?: boolean; autoFocus?: boolean }) {
+export function ApprovalCard({ id, params, onChoice, voiceHint }: { id: string; params: ApprovalCardParams; onChoice?: (choice: ApprovalChoice) => void; voiceHint?: boolean }) {
   const voiceActive = useStore($voiceActive)
   const voiceSession = useStore($voiceSessionId)
   // A running conversation on this card's session takes a spoken "yes" (allow once) or "no".
@@ -93,7 +108,6 @@ export function ApprovalCard({ id, params, onChoice, voiceHint, autoFocus = true
             key={choice}
             variant={choice === 'deny' ? 'danger' : choice === 'once' ? 'primary' : 'secondary'}
             size="sm"
-            autoFocus={autoFocus && choice === 'once'}
             onClick={() => (onChoice ? onChoice(choice) : resolveRequest(id, { choice }))}
           >
             {CHOICE_LABEL[choice]}
@@ -194,7 +208,6 @@ function ValueCard({ id, icon, title, description, secret }: { id: string; icon:
       </div>
       <input
         type={secret ? 'password' : 'text'}
-        autoFocus
         value={value}
         onChange={event => setValue(event.target.value)}
         onKeyDown={event => {
