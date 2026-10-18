@@ -126,11 +126,16 @@ async function settle() {
 /** Everything the shell has been sent. */
 const shell = () => bridge.write.mock.calls.map(([, data]) => data as string).join('')
 
-/** A paste event on xterm's input, as Cmd+V, Shift+Insert and Edit > Paste make. */
-function nativePaste(text: string): ClipboardEvent {
+/** A paste event on xterm's input, as Cmd+V, Shift+Insert and Edit > Paste make: it has the keyboard, unless `focus` is false. */
+function nativePaste(text: string, { focus = true } = {}): ClipboardEvent {
   const clipboardData = new DataTransfer()
   clipboardData.setData('text/plain', text)
   const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData })
+
+  if (focus) {
+    xterm.terminal.textarea?.focus()
+  }
+
   xterm.terminal.textarea?.dispatchEvent(event)
 
   return event
@@ -368,6 +373,29 @@ describe('what a paste sends the shell', () => {
       expect(shell()).toBe(`\x1b[200~${expected}\x1b[201~`)
     })
   }
+
+  it('pastes nothing from a paste event while the window is in the background', async () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const event = nativePaste('echo hello\r')
+    await settle()
+    focus.mockRestore()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('pastes nothing from a paste event aimed at a terminal without the keyboard', async () => {
+    const elsewhere = document.createElement('input')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    const event = nativePaste('echo hello\r', { focus: false })
+    await settle()
+    elsewhere.remove()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
 
   it('takes a paste event from xterm, which never sees it', async () => {
     const event = nativePaste('\x1b[201~echo pwned\r')

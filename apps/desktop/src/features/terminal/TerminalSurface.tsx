@@ -322,7 +322,12 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
     const onPaste = (event: ClipboardEvent) => {
       event.preventDefault()
       event.stopPropagation()
-      pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '')
+
+      // A person pastes into the terminal they are typing in: a window in the background, or a
+      // paste event aimed at a terminal without the keyboard, pastes nothing.
+      if (document.hasFocus() && el.contains(document.activeElement)) {
+        pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '')
+      }
     }
     el.addEventListener('paste', onPaste, true)
     // Cmd+C, Edit > Copy and a spoken "copy" arrive as a copy event, which xterm would answer with
