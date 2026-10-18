@@ -550,7 +550,8 @@ describe('a drop on the Terminal', () => {
   it.each([
     ['a file', { Files: '' }],
     ['a picture', { Files: '', 'image/png': '' }],
-    ['a link with no text', { 'text/uri-list': 'file:///etc/passwd' }]
+    ['a file:// link with no text', { 'text/uri-list': 'file:///etc/passwd' }],
+    ['a link from an app that sends only text/x-moz-url', { 'text/x-moz-url': 'https://example.com/\nExample' }]
   ])('accepts %s while it is dragged over, then refuses it on the drop, pasting nothing and saying so', async (_label, data) => {
     const { over, drop } = dragAndDrop(data)
     await settle()
@@ -561,7 +562,7 @@ describe('a drop on the Terminal', () => {
     expect(bridge.write).not.toHaveBeenCalled()
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
     expect($notifications.get().map(n => [n.title, n.body])).toEqual([
-      ['Only text can be dropped here', 'Only the text in a drop is pasted, so a dragged link pastes as its address. Files and pictures can’t be dropped.']
+      ['That can’t be dropped here', 'Only text is pasted. A link or picture dragged from a browser pastes as its address; files can’t be dropped.']
     ])
   })
 
@@ -576,7 +577,7 @@ describe('a drop on the Terminal', () => {
     const second = dragAndDrop({ Files: '', 'image/png': '' })
     await settle()
 
-    expect(raised).toEqual(['Only text can be dropped here'])
+    expect(raised).toEqual(['That can’t be dropped here'])
     expect(first.drop?.defaultPrevented).toBe(true)
     expect(second.drop?.defaultPrevented).toBe(true)
 
@@ -585,8 +586,18 @@ describe('a drop on the Terminal', () => {
     await settle()
     stop()
 
-    expect(raised).toEqual(['Only text can be dropped here', 'Only text can be dropped here'])
+    expect(raised).toEqual(['That can’t be dropped here', 'That can’t be dropped here'])
     expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('pastes a picture dragged from a browser as its address, bracketed, with no notice', async () => {
+    const url = 'https://example.com/images/cat.png'
+    const { drop } = dragAndDrop({ 'text/uri-list': url, 'text/html': `<img src="${url}">`, 'text/plain': url })
+    await settle()
+
+    expect(drop?.defaultPrevented).toBe(true)
+    expect(shell()).toBe(`\x1b[200~${url}\x1b[201~`)
+    expect($notifications.get()).toEqual([])
   })
 
   it('pastes a link dragged from a browser as its address, bracketed, with no notice', async () => {
@@ -601,8 +612,8 @@ describe('a drop on the Terminal', () => {
   })
 
   it.each([
-    ['pt-BR', 'Só dá para soltar texto aqui', 'O Terminal cola só o texto, então um link arrastado entra como endereço. Não dá para soltar arquivos nem imagens.'],
-    ['zh-CN', '这里只能拖入文本', '终端只粘贴拖入内容中的文本，因此拖入的链接会粘贴为其地址。不能拖入文件或图片。']
+    ['pt-BR', 'Não dá para soltar isso aqui', 'O Terminal cola só texto. Um link ou uma imagem arrastados do navegador entram como endereço; já arquivos não podem ser soltos aqui.'],
+    ['zh-CN', '无法拖入此内容', '终端只粘贴文本。从浏览器拖入的链接或图片会粘贴成链接地址；文件无法拖入。']
   ] as const)('says the same in %s', async (language, title, body) => {
     act(() => $prefs.set({ ...PREFS, language }))
     dragAndDrop({ Files: '' })
