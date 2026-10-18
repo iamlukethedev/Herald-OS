@@ -4226,9 +4226,11 @@ def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
     nft = nft_command()
     # A table that was not there before goes unless nft plainly says it is not there now: a listing
     # that failed otherwise (sudo refused, it timed out) says nothing either way.
-    if nft and not before["table"] and not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE])):
+    # In the C locale, so that "No such file or directory" is nft's words whatever the language.
+    in_c = ["env", "LC_ALL=C"]
+    if nft and not before["table"] and not ssh_no_table(run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE])):
         delete = [nft, "delete", "table", "inet", SSH_LIMIT_TABLE]
-        deleted = run(delete)
+        deleted = run([*in_c, *delete])
         if deleted.returncode == 0:
             undone.append(f"the table inet {SSH_LIMIT_TABLE} removed")
         elif deleted.returncode is not None and not ssh_no_table(deleted):

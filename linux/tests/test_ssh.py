@@ -84,6 +84,8 @@ DROP_IN = (
 RULE = 'rule service name="ssh" accept'
 # What nft says about a table that is not there (on stderr, exit 1).
 NFT_NO_TABLE = "Error: No such file or directory\nlist table inet herald_os_ssh\n                ^^^^^^^^^^^^^\n"
+# The same in German, as nft (strerror) says it in that locale.
+NFT_NO_TABLE_DE = "Error: Datei oder Verzeichnis nicht gefunden\nlist table inet herald_os_ssh\n                ^^^^^^^^^^^^^\n"
 # The whole command, so any change to a limit or a timeout shows.
 GITHUB_CURL_EXACT = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "3",
                      "--max-filesize", "1M", "--connect-timeout", "10", "--max-time", "20"]
@@ -131,6 +133,8 @@ def bare(key: str) -> str:
 
 def looks(argv: list[str]) -> bool:
     """Whether a command only reads the machine's state."""
+    if argv[:2] == ["env", "LC_ALL=C"] and Path(argv[2]).name == "nft":
+        argv = argv[2:]
     tool = Path(argv[0]).name
     if tool == "systemctl":
         return argv[1] in ("show", "is-enabled", "is-active")
@@ -206,6 +210,9 @@ class System:
         self.stubborn_hanger.write_text("#!/bin/sh\ntrap '' TERM\nexec sleep 30\n")
         self.stubborn_hanger.chmod(0o755)
         self.killed: list[list[str]] = []
+        # The machine's language, which nft's errors follow unless it runs with LC_ALL=C.
+        self.language = "en"
+        self.nft_c = False
         # Commands that take effect and then hang, as a systemctl can after it has enabled or started
         # a unit; and, once one of them has, the queries that hang from then on.
         self.hang_after: list[list[str]] = []
@@ -289,6 +296,9 @@ class System:
             return REAL_RUN([str(self.hanger), *argv], capture_output=True, text=True, timeout=timeout)
         return subprocess.CompletedProcess(argv, code, out, err[0] if err else "" if code == 0 else f"{argv[0]}: refused")
 
+    def nft_no_table(self) -> str:
+        return NFT_NO_TABLE if self.nft_c or self.language == "en" else NFT_NO_TABLE_DE
+
     def hang_stubbornly(self, argv: list[str], timeout: float | None, grace: float | None) -> subprocess.CompletedProcess:
         real = types.FunctionType(REAL_SSH_RUN.__code__, vars(self.module), "ssh_run", REAL_SSH_RUN.__defaults__)
         try:
@@ -315,6 +325,12 @@ class System:
                 return "", 1
             path = Path(argv[2])
             return (path.read_text(), 0) if path.is_file() and path not in self.unreadable else ("", 1)
+        if tool == "env" and argv[1] == "LC_ALL=C" and Path(argv[2]).name == "nft":
+            saved, self.nft_c = self.nft_c, True
+            try:
+                return self.answer(argv[2:], root)
+            finally:
+                self.nft_c = saved
         if tool == "env" and argv[1:4] == ["LC_ALL=C", "sh", "-c"]:
             # The root-side Include listing, run for real (the paths are in tmp_path); sshd_config.d
             # is root's alone, as on Fedora.
@@ -344,7 +360,7 @@ class System:
             if not root:
                 return "", 1
             if argv[1:] == ["list", "table", "inet", "herald_os_ssh"]:
-                return (self.table, 0) if self.table else ("", 1, NFT_NO_TABLE)
+                return (self.table, 0) if self.table else ("", 1, self.nft_no_table())
             if argv[1] == "-f":
                 if self.nft_fails:
                     return "", 1
@@ -352,7 +368,7 @@ class System:
                 return "", 0
             if argv[1:] == ["delete", "table", "inet", "herald_os_ssh"]:
                 had, self.table = self.table, None
-                return ("", 0) if had else ("", 1, NFT_NO_TABLE)
+                return ("", 0) if had else ("", 1, self.nft_no_table())
             raise AssertionError(f"unexpected nft {argv}")
         if tool in ("firewall-cmd", "firewall-offline-cmd"):
             return self.firewall(tool, argv[1:], root)
@@ -2153,6 +2169,13 @@ def a_reused_group_or_session_id_is_not_the_tree_s(machine: System, tmp_path: Pa
     return first == [500, 501] and second == [] and third == [] and tree["groups"] == tree["sessions"] == set()
 
 
+def a_missing_table_in_german_is_still_missing(machine: System, tmp_path: Path, capsys) -> bool:
+    machine.language = "de"
+    machine.limit_fails = True
+    outcome(machine, "--key", public_key())
+    return "SSH is as it was before this run" in capsys.readouterr().err
+
+
 MUTANTS = {
     "no refusal without keys": (refuses_without_keys, 'if not authorized(updated) and not opts["passwords"]:', "if False:"),
     "root logins allowed": (keys_only_never_root, '"PermitRootLogin no\\n"', '"PermitRootLogin yes\\n"'),
@@ -2255,7 +2278,8 @@ MUTANTS = {
     "a root command left running not noted": (a_root_command_left_running_is_ended, '        SSH_LEFT.append({"argv": list(process.args), "tree": tree})\n', "        pass\n"),
     "what is left never ended": (a_root_command_left_running_is_ended, "        if not pids:\n            break\n", "        break\n"),
     "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=grace)\n", "            process.communicate()\n"),
-    "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
+    "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
+    "nft asked in the machine's language": (a_missing_table_in_german_is_still_missing, '    in_c = ["env", "LC_ALL=C"]\n', "    in_c = []\n"),
     "a file put back with each command's full time": (a_file_put_back_splits_its_time, "slot(ssh_limit(None), parts=2)", "slot(ssh_limit(None))"),
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
@@ -3857,7 +3881,19 @@ def test_a_table_that_is_plainly_not_there_is_left_alone(machine, monkeypatch, c
     before = snapshot(machine)
     err = refused(machine, capsys, "--key", public_key())
     assert snapshot(machine) == before and "SSH is as it was before this run" in err
-    assert ["/usr/sbin/nft", "delete", "table", "inet", "herald_os_ssh"] not in machine.changes()
+    assert not [argv for argv in machine.changes() if argv[-4:] == ["delete", "table", "inet", "herald_os_ssh"]]
+
+
+def test_a_table_nft_says_is_not_there_in_another_language_is_still_left_alone(machine, capsys):
+    """In German, nft's "No such file or directory" is "Datei oder Verzeichnis nicht gefunden"; the
+    rollback asks in the C locale, so a table that is plainly not there is still read as not there."""
+    machine.language = "de"
+    machine.limit_fails = True
+    before = snapshot(machine)
+    err = refused(machine, capsys, "--key", public_key())
+    assert snapshot(machine) == before and "SSH is as it was before this run" in err
+    assert ["env", "LC_ALL=C", "/usr/sbin/nft", "list", "table", "inet", "herald_os_ssh"] in [argv for _, argv in machine.calls]
+    assert not [argv for argv in machine.changes() if argv[-4:] == ["delete", "table", "inet", "herald_os_ssh"]]
 
 
 
