@@ -3240,20 +3240,21 @@ def ssh_alive(tree: dict) -> list[int]:
     it empty, so the id is never dropped. ssh_kill checks the id at its own end (right after the group is
     signalled, which drops any id the kill has emptied), then it is checked at the start-of-rollback reap
     and the final reap. The start-of-rollback reap bounds the common case: the gap from the record to it
-    is at most about fourteen seconds (the ten-second sudo renewal, two kill graces of about two seconds,
-    and a fraction more), and about zero as root (no sudo renewal). A record the first reap could not end
-    keeps the window open to the final reap, up to the rest of the rollback budget, so minutes. (The
-    tenth-of-a-second polling is only within a single reap, waiting for a kill to take; it is not this
-    window.) For the gap to bite, the whole id must empty and a pid wrap onto its leader within it; the
-    cost would be ending one stray process, never leaving SSH open, so the simple drop is kept over a
-    start-time guard, which wrongly skipped the command's own orphans. Reach is bounded too, but narrowly:
-    a recorded process is always found, by pid and start time, even if it moves to a new group or session,
-    and a later process is found through the command's group and session, so moving group alone does not
-    escape -- the session still catches it. What escapes is only leaving the session (setsid) by something
-    forked after the record: a process the command forks after the record that then calls setsid, or
-    children forked after a recorded process has moved to a new session. Those are in no id the tree
-    holds, are not found, reaped or warned about; catching them needs a cgroup or a transient systemd
-    scope, a follow-up."""
+    is at most about fourteen seconds (the ten-second sudo renewal plus its two kill graces and the
+    spare), and about zero as root (no sudo renewal). A record the first reap could not end keeps the
+    window open to the final reap, up to the rest of the rollback budget, so minutes. (The tenth-of-a-
+    second polling is only within a single reap, waiting for a kill to take; it is not this window.) For
+    the gap to bite, the whole id must empty and a pid wrap onto its leader within it; the cost would be
+    ending one stray process, never leaving SSH open, so the simple drop is kept over a start-time guard,
+    which wrongly skipped the command's own orphans. Reach is bounded too. A recorded process is always
+    found, by pid and start time, even if it moves group or session. Moving group alone does not escape
+    when the command has its own session (sudo with use_pty, the default since sudo 1.9.14): the session
+    is recorded and still catches it. As root, or with !use_pty, the command shares this process's
+    session, which ssh_tree drops as ours, so a process the record does not hold escapes by changing
+    group (setpgid) as well as by setsid: for example one forked after the record that then regroups, or
+    one orphaned before the record (never held) that then regroups. Those are in no id the tree holds,
+    are not found, reaped or warned about; catching them needs a cgroup or a transient systemd scope, a
+    follow-up."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
     tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}
