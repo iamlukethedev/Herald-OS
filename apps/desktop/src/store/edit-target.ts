@@ -13,6 +13,25 @@ import { $focusedWindowId, $windows, focusWindow } from './windows.ts'
 let lastEditable: HTMLElement | null = null
 let bound = false
 
+/** A field's own paste: resolves with why nothing was pasted, or null when it was. */
+export type OwnPaste = () => Promise<string | null>
+
+const ownPastes = new WeakMap<Element, OwnPaste>()
+
+/**
+ * Let a field paste by itself rather than take the browser's paste: the Terminal reads the
+ * clipboard through main, filters it and may refuse, which a paste event cannot report back.
+ */
+export function setOwnPaste(element: Element, paste: OwnPaste): () => void {
+  ownPastes.set(element, paste)
+
+  return () => {
+    if (ownPastes.get(element) === paste) {
+      ownPastes.delete(element)
+    }
+  }
+}
+
 export function isEditable(element: Element | null): element is HTMLElement {
   if (!element || !(element instanceof HTMLElement)) {
     return false
@@ -169,6 +188,18 @@ export async function performEdit(action: EditAction, options: { needsField?: bo
   }
 
   const target = describeTarget()
+  const own = action.kind === 'paste' && element ? ownPastes.get(element) : undefined
+
+  if (own) {
+    const problem = await own()
+
+    if (problem) {
+      throw new Error(problem)
+    }
+
+    return { target }
+  }
+
   await window.heraldOS.edit.perform(action)
 
   return { target }

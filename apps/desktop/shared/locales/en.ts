@@ -94,6 +94,7 @@ export const en = {
   'terminal.copyTooLarge': 'Too much to copy',
   'terminal.copyTooLargeBody': 'The selection is more than {size}, more than the Terminal copies at once.',
   'terminal.pasteUnfocusedBody': 'The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.',
+  'terminal.pasteNothing': 'The clipboard has no text to paste.',
   'terminal.pasteTooFast': 'Pasting too fast',
   'terminal.pasteTooFastBody': 'The Terminal pastes a few times a second at most. Wait a moment, then paste again.',
 

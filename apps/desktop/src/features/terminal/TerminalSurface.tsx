@@ -14,6 +14,7 @@ import { logFailure } from '../../lib/report.ts'
 import { useShellCommands } from '../../shell/surfaces/shell-utils.ts'
 import { $env, $prefs } from '../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../store/catalog.ts'
+import { setOwnPaste } from '../../store/edit-target.ts'
 import { t } from '../../store/i18n.ts'
 import { notify } from '../../store/notifications.ts'
 import { $terminalRequest } from '../../store/terminal.ts'
@@ -49,6 +50,9 @@ const THEME = {
   brightCyan: '#84e6ea',
   brightWhite: '#f4f6f8'
 }
+
+/** The clipboard limit as the notices name it. */
+const LIMIT = `${TERMINAL_CLIPBOARD_LIMIT / (1024 * 1024)} MiB`
 
 const KEYS = {
   copy: { hint: 'Ctrl+Shift+C', aria: 'Control+Shift+C' },
@@ -324,9 +328,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
 
       // A person pastes into the terminal they are typing in: a window in the background, or a
       // paste event aimed at a terminal without the keyboard, pastes nothing.
-      if (document.hasFocus() && el.contains(document.activeElement)) {
-        pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '')
-      }
+      sayPasteOutcome(document.hasFocus() && el.contains(document.activeElement) ? pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '') : 'unfocused')
     }
     el.addEventListener('paste', onPaste, true)
     // Cmd+C, Edit > Copy and a spoken "copy" arrive as a copy event, which xterm would answer with
@@ -357,12 +359,14 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       const text = event.dataTransfer?.getData('text/plain') ?? ''
 
       if (text) {
-        pasteText(terminal, text)
+        sayPasteOutcome(pasteText(terminal, text))
         terminal.focus()
       }
     }
     el.addEventListener('dragover', onDragOver, true)
     el.addEventListener('drop', onDrop, true)
+    // A spoken or Hermes "paste" takes the same read through main, and hears back why it was refused.
+    const offOwnPaste = terminal.textarea ? setOwnPaste(terminal.textarea, async () => pasteProblem(await readAndPaste(terminal, live))) : () => {}
     const offData = window.heraldOS.terminal.onData((tid, data) => {
       if (tid === id) {
         terminal.write(data)
@@ -384,6 +388,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       el.removeEventListener('copy', onCopy, true)
       el.removeEventListener('dragover', onDragOver, true)
       el.removeEventListener('drop', onDrop, true)
+      offOwnPaste()
       observer.disconnect()
       offData()
       onInput.dispose()
@@ -473,74 +478,113 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void> {
+/** What became of a paste: it went in, there was no text to paste, or why it did not. */
+type PasteOutcome = 'pasted' | 'nothing' | 'unfocused' | 'rate-limited' | 'too-large' | 'failed' | 'closed'
+
+/** The clipboard, read through main, pasted into `terminal`; says nothing itself. */
+async function readAndPaste(terminal: Terminal, live: () => boolean): Promise<PasteOutcome> {
   let clipboard: TerminalClipboardRead
 
   try {
     clipboard = await window.heraldOS.terminal.readClipboard()
   } catch (error) {
-    if (live()) {
-      clipboardFailed('terminal.pasteFailed', error)
-    }
+    logFailure('terminal.clipboard')(error)
 
-    return
+    return live() ? 'failed' : 'closed'
   }
 
   if (!live()) {
-    return
+    return 'closed'
   }
 
-  if ('refused' in clipboard) {
-    pasteRefused(clipboard.refused)
-  } else if ('tooLarge' in clipboard) {
-    tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
-  } else {
-    pasteText(terminal, clipboard.text)
-  }
+  return 'refused' in clipboard ? clipboard.refused : 'tooLarge' in clipboard ? 'too-large' : pasteText(terminal, clipboard.text)
+}
+
+async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void> {
+  sayPasteOutcome(await readAndPaste(terminal, live))
 }
 
 /**
  * Every paste ends here, filtered as one string, then goes through xterm's paste, which brackets
  * it for a program that asked for bracketed paste.
  */
-function pasteText(terminal: Terminal, text: string): void {
+function pasteText(terminal: Terminal, text: string): PasteOutcome {
   if (overClipboardLimit(text)) {
+    return 'too-large'
+  }
+
+  const clean = sanitizePaste(text)
+
+  if (!clean) {
+    return 'nothing'
+  }
+
+  terminal.paste(clean)
+
+  return 'pasted'
+}
+
+/** Why a paste did not go in, in words, or null when it did. */
+function pasteProblem(outcome: PasteOutcome): string | null {
+  switch (outcome) {
+    case 'pasted':
+      return null
+    case 'nothing':
+      return t('terminal.pasteNothing')
+    case 'unfocused':
+      return t('terminal.pasteUnfocusedBody')
+    case 'rate-limited':
+      return t('terminal.pasteTooFastBody')
+    case 'too-large':
+      return t('terminal.pasteTooLargeBody', { size: LIMIT })
+    case 'failed':
+    case 'closed':
+      return t('terminal.clipboardUnavailable')
+  }
+}
+
+/** Keys held down, or pastes refused over and over, hear about it once in this long, not every time. */
+const QUIET_MS = 5000
+const saidAt = new Map<PasteOutcome, number>()
+
+/** A notice for a paste that did not go in. Each kind of refusal is said once in QUIET_MS at most. */
+function sayPasteOutcome(outcome: PasteOutcome): void {
+  if (outcome === 'pasted' || outcome === 'nothing' || outcome === 'closed') {
+    return
+  }
+
+  if (outcome === 'too-large') {
     tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
 
     return
   }
 
-  const clean = sanitizePaste(text)
+  if (outcome === 'failed') {
+    notify({ title: t('terminal.pasteFailed'), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
 
-  if (clean) {
-    terminal.paste(clean)
+    return
   }
-}
 
-function clipboardFailed(title: 'terminal.copyFailed' | 'terminal.pasteFailed', error: unknown): void {
-  logFailure('terminal.clipboard')(error)
-  notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
-}
+  const now = Date.now()
 
-/** Keys held down or pressed over and over hear about it once in this long, not once a press. */
-const RATE_LIMIT_QUIET_MS = 5000
-let rateLimitedAt = -Infinity
+  if (now - (saidAt.get(outcome) ?? -Infinity) < QUIET_MS) {
+    return
+  }
 
-function pasteRefused(reason: 'unfocused' | 'rate-limited'): void {
-  if (reason === 'rate-limited') {
-    const now = Date.now()
+  saidAt.set(outcome, now)
 
-    if (now - rateLimitedAt < RATE_LIMIT_QUIET_MS) {
-      return
-    }
-
-    rateLimitedAt = now
+  if (outcome === 'rate-limited') {
     notify({ title: t('terminal.pasteTooFast'), body: t('terminal.pasteTooFastBody'), level: 'info', key: 'terminal.clipboard' })
   } else {
     notify({ title: t('terminal.pasteFailed'), body: t('terminal.pasteUnfocusedBody'), level: 'warn', key: 'terminal.clipboard' })
   }
 }
 
+function clipboardFailed(title: 'terminal.copyFailed', error: unknown): void {
+  logFailure('terminal.clipboard')(error)
+  notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
+}
+
 function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody'): void {
-  notify({ title: t(title), body: t(body, { size: `${TERMINAL_CLIPBOARD_LIMIT / (1024 * 1024)} MiB` }), level: 'warn', key: 'terminal.clipboard' })
+  notify({ title: t(title), body: t(body, { size: LIMIT }), level: 'warn', key: 'terminal.clipboard' })
 }

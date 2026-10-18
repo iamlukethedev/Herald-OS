@@ -34,6 +34,7 @@ const xterm = vi.hoisted(() => {
     open(parent: HTMLElement) {
       this.element = document.createElement('div')
       this.textarea = document.createElement('textarea')
+      this.textarea.className = 'xterm-helper-textarea'
       this.element.append(this.textarea)
       parent.append(this.element)
       const onPaste = (event: ClipboardEvent) => {
@@ -92,7 +93,7 @@ const xterm = vi.hoisted(() => {
   return { terminal: null as unknown as FakeTerminal, FakeTerminal }
 })
 
-const bridge = vi.hoisted(() => ({ write: vi.fn(), readClipboard: vi.fn(), writeClipboard: vi.fn() }))
+const bridge = vi.hoisted(() => ({ write: vi.fn(), readClipboard: vi.fn(), writeClipboard: vi.fn(), editPerform: vi.fn() }))
 
 vi.mock('@xterm/xterm', () => ({ Terminal: xterm.FakeTerminal }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
@@ -112,6 +113,8 @@ vi.mock('../../shell/surfaces/shell-utils.ts', () => ({ useShellCommands() {} })
 const { $env, $prefs } = await import('../../store/backend.ts')
 const { $notifications } = await import('../../store/notifications.ts')
 const { TerminalSurface } = await import('./TerminalSurface.tsx')
+const { editCommands } = await import('../../commands/edit.ts')
+const { defineCommands, resetCommands, runCommand } = await import('../../store/os-commands.ts')
 const PREFS = $prefs.get()
 
 let root: Root
@@ -177,10 +180,18 @@ async function rightClick() {
   return event
 }
 
+// Each test runs a minute after the last, so a notice one test raised is not held back as a repeat in the next.
+const realNow = Date.now.bind(Date)
+let testsRun = 0
+let clock: ReturnType<typeof vi.spyOn>
+
 beforeEach(async () => {
+  const offset = (testsRun += 1) * 60_000
+  clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 0))
   bridge.write.mockReset()
+  bridge.editPerform.mockReset().mockResolvedValue(undefined)
   bridge.readClipboard.mockReset().mockResolvedValue({ text: 'echo pasted' })
   bridge.writeClipboard.mockReset().mockResolvedValue(undefined)
   $notifications.set([])
@@ -194,8 +205,11 @@ beforeEach(async () => {
         onData: () => () => {},
         onExit: () => () => {},
         resize: () => {},
-        ...bridge
-      }
+        write: bridge.write,
+        readClipboard: bridge.readClipboard,
+        writeClipboard: bridge.writeClipboard
+      },
+      edit: { perform: bridge.editPerform }
     }
   })
   container = document.createElement('div')
@@ -209,6 +223,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  clock.mockRestore()
 })
 
 describe('the Terminal keys', () => {
@@ -340,6 +355,48 @@ describe('a copy event (Cmd+C, Edit > Copy)', () => {
   })
 })
 
+describe('a spoken or Hermes "paste" into the Terminal', () => {
+  beforeEach(() => {
+    resetCommands()
+    defineCommands(editCommands)
+    xterm.terminal.textarea?.focus()
+  })
+
+  it('pastes through main and the filter, and says it did', async () => {
+    bridge.readClipboard.mockResolvedValue({ text: '\x1b[201~echo pwned\r' })
+    const result = await runCommand('edit.paste', {}, { source: 'voice' })
+    await settle()
+
+    expect(result).toMatchObject({ ok: true, summary: 'Pasted into the terminal' })
+    expect(shell()).toBe('\x1b[200~echo pwned\r\x1b[201~')
+    expect(bridge.editPerform).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['its window is in the background', { refused: 'unfocused' }, 'The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.'],
+    ['pastes come too fast', { refused: 'rate-limited' }, 'The Terminal pastes a few times a second at most. Wait a moment, then paste again.'],
+    ['the clipboard holds too much', { tooLarge: true }, 'The clipboard holds more than 1 MiB of text, more than the Terminal pastes at once.'],
+    ['the clipboard holds no text', { text: '\x1b\x7f' }, 'The clipboard has no text to paste.']
+  ])('does not claim a paste when %s', async (_label, clipboard, reason) => {
+    bridge.readClipboard.mockResolvedValue(clipboard)
+    const result = await runCommand('edit.paste', {}, { source: 'voice' })
+
+    expect(result).toMatchObject({ ok: false, error: reason })
+    expect(result.summary).not.toMatch(/^Pasted/)
+    expect(bridge.write).not.toHaveBeenCalled()
+    expect(bridge.editPerform).not.toHaveBeenCalled()
+  })
+
+  it('does not claim a paste when the clipboard cannot be read', async () => {
+    bridge.readClipboard.mockRejectedValue(new Error('no clipboard'))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await runCommand('edit.paste', {}, { source: 'voice' })
+
+    expect(result).toMatchObject({ ok: false, error: 'Herald OS could not reach the system clipboard. Try again in a moment.' })
+  })
+})
+
 describe('a drop on the Terminal', () => {
   it('pastes dropped text, filtered, and leaves nothing in xterm’s input', async () => {
     // What Chromium would have put in the hidden input, had the drop not been taken.
@@ -451,6 +508,30 @@ describe('what a paste sends the shell', () => {
     expect(bridge.write).not.toHaveBeenCalled()
   })
 
+  it('says why a paste event into a window in the background pasted nothing, once in five seconds', async () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.body ?? ''))
+
+    nativePaste('echo hello\r')
+    now += 1000
+    nativePaste('echo hello\r')
+    await settle()
+
+    expect(raised).toEqual(['The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.'])
+
+    now += 5000
+    nativePaste('echo hello\r')
+    await settle()
+    stop()
+    focus.mockRestore()
+
+    expect(raised).toHaveLength(2)
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
   it('takes a paste event from xterm, which never sees it', async () => {
     const event = nativePaste('\x1b[201~echo pwned\r')
     await settle()
@@ -489,7 +570,7 @@ describe('what a paste sends the shell', () => {
 
   it('says once, not once a press, that pastes are coming too fast', async () => {
     let now = 50_000_000
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    clock.mockImplementation(() => now)
     bridge.readClipboard.mockResolvedValue({ refused: 'rate-limited' })
     const raised: string[] = []
     const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
@@ -507,7 +588,6 @@ describe('what a paste sends the shell', () => {
     xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
     await settle()
     stop()
-    clock.mockRestore()
 
     expect(raised).toEqual(['Pasting too fast', 'Pasting too fast'])
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
