@@ -92,7 +92,7 @@ export const zhCN: Translation = {
   'terminal.pasteTooLargeBody': '剪贴板中的文本超过 {size}，超出了终端一次能粘贴的上限。',
   'terminal.dropTooLargeBody': '拖入的文本超过 {size}，超出了终端一次能粘贴的上限。',
   'terminal.dropNotText': '这里只能拖入文本',
-  'terminal.dropNotTextBody': '终端会粘贴拖到其中的文本，文件、链接和图片不会被粘贴。',
+  'terminal.dropNotTextBody': '终端只粘贴拖入内容中的文本，因此拖入的链接会粘贴为其地址。不能拖入文件或图片。',
   'terminal.copyTooLarge': '内容过多，无法复制',
   'terminal.copyTooLargeBody': '所选内容超过 {size}，超出了终端一次能复制的上限。',
   'terminal.pasteUnfocused': '终端不在最前面',

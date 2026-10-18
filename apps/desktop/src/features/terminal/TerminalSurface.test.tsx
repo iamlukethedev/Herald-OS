@@ -529,8 +529,30 @@ describe('a drop on the Terminal', () => {
     expect(bridge.write).not.toHaveBeenCalled()
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
     expect($notifications.get().map(n => [n.title, n.body])).toEqual([
-      ['Only text can be dropped here', 'The Terminal pastes text dropped on it. Files, links and pictures are left out.']
+      ['Only text can be dropped here', 'Only the text in a drop is pasted, so a dragged link pastes as its address. Files and pictures can’t be dropped.']
     ])
+  })
+
+  it('pastes a link dragged from a browser as its address, bracketed, with no notice', async () => {
+    const url = 'https://example.com/docs?page=2'
+    const { over, drop } = dragAndDrop({ 'text/uri-list': url, 'text/plain': url })
+    await settle()
+
+    expect(over.dataTransfer?.dropEffect).toBe('copy')
+    expect(drop?.defaultPrevented).toBe(true)
+    expect(shell()).toBe(`\x1b[200~${url}\x1b[201~`)
+    expect($notifications.get()).toEqual([])
+  })
+
+  it.each([
+    ['pt-BR', 'Só dá para soltar texto aqui', 'O Terminal cola só o texto, então um link arrastado entra como endereço. Não dá para soltar arquivos nem imagens.'],
+    ['zh-CN', '这里只能拖入文本', '终端只粘贴拖入内容中的文本，因此拖入的链接会粘贴为其地址。不能拖入文件或图片。']
+  ] as const)('says the same in %s', async (language, title, body) => {
+    act(() => $prefs.set({ ...PREFS, language }))
+    dragAndDrop({ Files: '' })
+    await settle()
+
+    expect($notifications.get().map(n => [n.title, n.body])).toEqual([[title, body]])
   })
 
   it('does not accept a drag that carries nothing', async () => {

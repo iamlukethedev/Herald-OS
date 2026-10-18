@@ -98,7 +98,7 @@ export const ptBR: Translation = {
   'terminal.pasteTooLargeBody': 'A área de transferência tem mais de {size} de texto, mais do que o Terminal cola de uma vez.',
   'terminal.dropTooLargeBody': 'O texto arrastado tem mais de {size}, mais do que o Terminal cola de uma vez.',
   'terminal.dropNotText': 'Só dá para soltar texto aqui',
-  'terminal.dropNotTextBody': 'O Terminal cola o texto arrastado para ele. Arquivos, links e imagens ficam de fora.',
+  'terminal.dropNotTextBody': 'O Terminal cola só o texto, então um link arrastado entra como endereço. Não dá para soltar arquivos nem imagens.',
   'terminal.copyTooLarge': 'Seleção grande demais para copiar',
   'terminal.copyTooLargeBody': 'A seleção tem mais de {size}, mais do que o Terminal copia de uma vez.',
   'terminal.pasteUnfocused': 'O Terminal não está em primeiro plano',

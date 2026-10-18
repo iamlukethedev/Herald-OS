@@ -75,9 +75,9 @@ add `Shift`. Right-click (or press `Shift+F10` or the keyboard's menu key) for C
 is there once some text is selected. A paste reaches the program as a paste, so an editor or a
 shell that tells pasted text from typing still does. Escape sequences and other control characters
 are taken out of what you paste, so text copied from a web page cannot end the paste early and run
-a command of its own. Text dragged onto the Terminal pastes the same way; a file, a picture or a
-link with no text is not pasted, and a notice says only text can be dropped. The Terminal pastes
-or copies up to 1 MiB at a time.
+a command of its own. Text dragged onto the Terminal pastes the same way. Only the text in a drop
+is pasted, so a link dragged from a browser pastes as its address; files and pictures can't be
+dropped, and a notice says so. The Terminal pastes or copies up to 1 MiB at a time.
 
 | Action | macOS | Herald OS Linux |
 | --- | --- | --- |

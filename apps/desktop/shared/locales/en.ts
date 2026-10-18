@@ -93,7 +93,7 @@ export const en = {
   'terminal.pasteTooLargeBody': 'The clipboard holds more than {size} of text, more than the Terminal pastes at once.',
   'terminal.dropTooLargeBody': 'The dropped text is more than {size}, more than the Terminal pastes at once.',
   'terminal.dropNotText': 'Only text can be dropped here',
-  'terminal.dropNotTextBody': 'The Terminal pastes text dropped on it. Files, links and pictures are left out.',
+  'terminal.dropNotTextBody': 'Only the text in a drop is pasted, so a dragged link pastes as its address. Files and pictures can’t be dropped.',
   'terminal.copyTooLarge': 'Too much to copy',
   'terminal.copyTooLargeBody': 'The selection is more than {size}, more than the Terminal copies at once.',
   'terminal.pasteUnfocused': 'The Terminal is not in front',
