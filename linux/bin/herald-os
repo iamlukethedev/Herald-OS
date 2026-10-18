@@ -3205,9 +3205,21 @@ def ssh_processes() -> dict[int, tuple[int, int, int, int, str]]:
     return found
 
 
+def ssh_boot_ticks() -> int:
+    """Clock ticks since boot now, the unit of a process's start time (field 22 of /proc/<pid>/stat),
+    so a process that started before this can be told from one that started after."""
+    with open("/proc/uptime") as handle:
+        return int(float(handle.read().split()[0]) * os.sysconf("SC_CLK_TCK"))
+
+
 def ssh_tree(pid: int) -> dict:
     """A command and every process under it (with its start time, so a reused pid is not taken for
-    it), and their groups and sessions, but for this process's own."""
+    it), and their groups and sessions, but for this process's own. `since` is when this was read: a
+    process older than that is not the command's, whatever group or session id it carries."""
+    try:
+        since = ssh_boot_ticks()
+    except (OSError, ValueError):
+        since = 0
     processes = ssh_processes()
     children: dict[int, list[int]] = {}
     for each, (parent, *_) in processes.items():
@@ -3220,21 +3232,25 @@ def ssh_tree(pid: int) -> dict:
             members[each] = processes[each][3]
             todo += children.get(each, [])
     own = {os.getpgrp(), os.getsid(0)}
-    return {"pids": members, "groups": {processes[each][1] for each in members} - own,
+    return {"pids": members, "since": since, "groups": {processes[each][1] for each in members} - own,
             "sessions": {processes[each][2] for each in members} - own}
 
 
 def ssh_alive(tree: dict) -> list[int]:
     """What of a tree still runs: its own processes, and any other in its groups or sessions (what it
     started after it was looked at). A zombie has ended. Raises OSError when /proc cannot be listed.
-    A group or session no process carries any more (a zombie still does) is dropped from the tree for
-    good: its id is free, and a new leader given it later is not the tree's."""
+    Two guards against a freed id matching an unrelated process: a group or session no process carries
+    any more (a zombie still does) is dropped from the tree for good, and a match by group or session
+    counts only for a process no older than the tree, so a leader given a freed id later is not the
+    tree's even if the drop did not catch the id while it was empty."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
     tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}
+    since = tree.get("since", 0)
     return sorted(pid for pid, (_, group, session, start, state) in processes.items()
                   if pid > 1 and pid != os.getpid() and state not in ("Z", "X")
-                  and (tree["pids"].get(pid) == start or group in tree["groups"] or session in tree["sessions"]))
+                  and (tree["pids"].get(pid) == start
+                       or (start >= since and (group in tree["groups"] or session in tree["sessions"]))))
 
 
 def ssh_kill(process: subprocess.Popen, grace: float) -> None:
