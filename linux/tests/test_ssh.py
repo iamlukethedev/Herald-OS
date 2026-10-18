@@ -2181,6 +2181,26 @@ def a_process_older_than_the_tree_is_not_the_tree_s(machine: System, tmp_path: P
     return alive == []
 
 
+def a_table_that_was_never_loaded_is_not_claimed_loaded(machine: System, tmp_path: Path, capsys) -> bool:
+    """sudo's cache runs out at the very first install, before any table is loaded, and from then on
+    every root command (the rollback's table listing included) fails. The rollback must not read that
+    failed listing as a table that may still be loaded."""
+    real = machine.run
+
+    def run(argv, **kwargs):
+        bare = argv[2:] if argv[:2] == ["sudo", "-n"] else argv[1:] if argv[:1] == ["sudo"] else argv
+        if bare[:1] == ["install"]:
+            machine.sudo_cached = False
+            return subprocess.CompletedProcess(bare, 1, "", "sudo: a password is required\n")
+        return real(argv, **kwargs)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module.sys.stdin, "isatty", lambda: True)
+        patch.setattr(machine, "run", run)
+        outcome(machine, "--key", public_key())
+    err = capsys.readouterr().err
+    return machine.table is None and "may still be loaded" not in err and "delete table" not in err
+
+
 def a_missing_table_in_german_is_still_missing(machine: System, tmp_path: Path, capsys) -> bool:
     machine.language = "de"
     machine.limit_fails = True
@@ -2292,6 +2312,7 @@ MUTANTS = {
     "waiting on the pipes of what is left": (a_root_command_holding_the_pipes_is_not_waited_for, "            process.wait(timeout=grace)\n", "            process.communicate()\n"),
     "a failed listing read as no table": (a_table_not_listed_is_reported, 'not ssh_no_table(run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE]))', 'run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE]).returncode == 0'),
     "nft asked in the machine's language": (a_missing_table_in_german_is_still_missing, '    in_c = ["env", "LC_ALL=C"]\n', "    in_c = []\n"),
+    "a table never loaded still chased": (a_table_that_was_never_loaded_is_not_claimed_loaded, " and SSH_LOADED and ", " and "),
     "a file put back with each command's full time": (a_file_put_back_splits_its_time, "slot(ssh_limit(None), parts=2)", "slot(ssh_limit(None))"),
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
@@ -3895,6 +3916,10 @@ def test_a_table_that_is_plainly_not_there_is_left_alone(machine, monkeypatch, c
     err = refused(machine, capsys, "--key", public_key())
     assert snapshot(machine) == before and "SSH is as it was before this run" in err
     assert not [argv for argv in machine.changes() if argv[-4:] == ["delete", "table", "inet", "herald_os_ssh"]]
+
+
+def test_sudo_expiring_before_any_table_is_loaded_does_not_claim_one_may_be_loaded(machine, capsys):
+    assert a_table_that_was_never_loaded_is_not_claimed_loaded(machine, Path("/nonexistent"), capsys)
 
 
 def test_a_table_nft_says_is_not_there_in_another_language_is_still_left_alone(machine, capsys):

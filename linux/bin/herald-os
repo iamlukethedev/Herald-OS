@@ -3185,6 +3185,8 @@ def ssh_run(argv: list[str], timeout: float | None = None, input: str | None = N
 # own when sudo uses a pty, which neither the group's SIGKILL nor this account can reach. Each is the
 # command and its process tree as it was when it was killed; ssh_reap ends them as root.
 SSH_LEFT: list[dict] = []
+# Whether this run reached loading the rate-limit table, so the rollback knows a table may be live.
+SSH_LOADED: list[bool] = []
 
 
 def ssh_processes() -> dict[int, tuple[int, int, int, int, str]]:
@@ -3985,6 +3987,8 @@ def ssh_limit_on(ports: list[str]) -> None:
     running = unit_state(SSH_LIMIT_UNIT.name)[1] == "active"
     root_step(["systemctl", "daemon-reload"], "Reloading systemd")
     root_step(["systemctl", "enable", SSH_LIMIT_UNIT.name], "Enabling the SSH rate limit")
+    # From here a table may be live, so the rollback must deal with it even if the load is cut short.
+    SSH_LOADED.append(True)
     if running:
         # Restarting the unit would restart sshd too (it Requires= it). nft -f swaps the table in one
         # transaction instead, so there is never a moment without it; the counts start over.
@@ -4242,9 +4246,11 @@ def ssh_rollback(before: dict, keys_out=None) -> tuple[list[str], list[str]]:
     nft = nft_command()
     # A table that was not there before goes unless nft plainly says it is not there now: a listing
     # that failed otherwise (sudo refused, it timed out) says nothing either way.
-    # In the C locale, so that "No such file or directory" is nft's words whatever the language.
+    # A table that was not there before this run is dealt with only when this run reached loading one;
+    # otherwise there is nothing of its to remove, and a listing sudo refuses would read as a false
+    # "may still be loaded". In the C locale, so "No such file or directory" is nft's words in any language.
     in_c = ["env", "LC_ALL=C"]
-    if nft and not before["table"] and not ssh_no_table(run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE])):
+    if nft and not before["table"] and SSH_LOADED and not ssh_no_table(run([*in_c, nft, "list", "table", "inet", SSH_LIMIT_TABLE])):
         delete = [nft, "delete", "table", "inet", SSH_LIMIT_TABLE]
         deleted = run([*in_c, *delete])
         if deleted.returncode == 0:
@@ -4402,6 +4408,7 @@ def ssh_on(opts: dict) -> int:
     # firewall). SIGTERM and SIGHUP stop it the same way as Ctrl+C, through the rollback.
     ssh_sudo()
     SSH_LEFT.clear()
+    SSH_LOADED.clear()
     SSH_STOP["by"] = None
     stops = ssh_signals({signum: ssh_stopped for signum in (signal.SIGINT, *SSH_STOPS)})
     try:
