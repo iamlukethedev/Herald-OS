@@ -44,8 +44,8 @@ const SIGNED_OUT_AUTH = $hermesAuth.get()
 // command that stay as they are (en.ts says which).
 const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password', 'API']
 
-// Portuguese words spelled as English ones are ("o menu", "for ligado").
-const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['for', 'menu'], 'zh-CN': [] }
+// Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal").
+const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['for', 'menu', 'terminal', 'Use'], 'zh-CN': [] }
 
 let root: Root | null = null
 let container: HTMLElement | null = null
@@ -163,9 +163,18 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
     at('password refused', 'firstRun.account.title')
     says(t('firstRun.account.refusedNoReason'))
     // pwquality's reason is English whatever the language, so this step is not compared with English.
-    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused', detail: 'The password fails the dictionary check - it is based on a dictionary word' })
+    // Its own full stop goes, so the message's is the only one.
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused', detail: 'The password fails the dictionary check - it is based on a dictionary word.' })
     await click(button(host, t('firstRun.next')))
     says(t('firstRun.account.refused', { reason: 'The password fails the dictionary check - it is based on a dictionary word' }))
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'tooShort' })
+    await click(button(host, t('firstRun.next')))
+    at('password too short', 'firstRun.account.title')
+    says(t('firstRun.account.tooShort'))
+    bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'noTerminal' })
+    await click(button(host, t('firstRun.next')))
+    at('no terminal for passwd', 'firstRun.account.title')
+    says(t('firstRun.account.noTerminal'))
     bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'timeout' })
     await click(button(host, t('firstRun.next')))
     at('password timed out', 'firstRun.account.title')
