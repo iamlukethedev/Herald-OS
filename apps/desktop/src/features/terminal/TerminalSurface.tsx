@@ -576,7 +576,7 @@ function sayPasteOutcome(outcome: PasteOutcome): void {
   if (outcome === 'rate-limited') {
     notify({ title: t('terminal.pasteTooFast'), body: t('terminal.pasteTooFastBody'), level: 'info', key: 'terminal.clipboard' })
   } else {
-    notify({ title: t('terminal.pasteFailed'), body: t('terminal.pasteUnfocusedBody'), level: 'warn', key: 'terminal.clipboard' })
+    notify({ title: t('terminal.pasteUnfocused'), body: t('terminal.pasteUnfocusedBody'), level: 'warn', key: 'terminal.clipboard' })
   }
 }
 

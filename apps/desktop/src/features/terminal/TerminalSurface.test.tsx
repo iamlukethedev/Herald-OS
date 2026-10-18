@@ -519,6 +519,7 @@ describe('what a paste sends the shell', () => {
     const stop = $notifications.listen(list => raised.push(list[0]?.body ?? ''))
 
     nativePaste('echo hello\r')
+    expect($notifications.get()[0]?.title).toBe('The Terminal is not in front')
     now += 1000
     nativePaste('echo hello\r')
     await settle()
@@ -567,7 +568,7 @@ describe('what a paste sends the shell', () => {
 
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
     expect($notifications.get().map(n => [n.title, n.body])).toEqual([
-      ['Could not paste into the Terminal', 'The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.']
+      ['The Terminal is not in front', 'The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.']
     ])
   })
 

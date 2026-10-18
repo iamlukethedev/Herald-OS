@@ -98,6 +98,7 @@ export const ptBR: Translation = {
   'terminal.pasteTooLargeBody': 'A área de transferência tem mais de {size} de texto, mais do que o Terminal cola de uma vez.',
   'terminal.copyTooLarge': 'Seleção grande demais para copiar',
   'terminal.copyTooLargeBody': 'A seleção tem mais de {size}, mais do que o Terminal copia de uma vez.',
+  'terminal.pasteUnfocused': 'O Terminal não está em primeiro plano',
   'terminal.pasteUnfocusedBody': 'O Terminal só cola quando a janela dele está em primeiro plano. Clique no Terminal e cole de novo.',
   'terminal.pasteNothing': 'Não há texto na área de transferência para colar.',
   'terminal.pasteTooFast': 'Colando rápido demais',
