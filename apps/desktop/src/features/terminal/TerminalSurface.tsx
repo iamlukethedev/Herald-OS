@@ -362,6 +362,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
         sayPasteOutcome(pasteText(terminal, text), 'drop')
         terminal.focus()
       } else {
+        // A fallback: Chromium does not usually fire drop after dragover offered dropEffect 'none'.
         notify({ title: t('terminal.dropNotText'), body: t('terminal.dropNotTextBody'), level: 'info', key: 'terminal.clipboard' })
       }
     }
