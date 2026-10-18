@@ -82,6 +82,15 @@ export function loadPty(): PtyModule | null {
 
 const CLIPBOARD_READS_PER_SECOND = 5
 
+/**
+ * Whether a page has the keyboard. Under Ozone on Wayland a window's focus comes from the
+ * compositor's activation and can be reported wrongly, while a page's focus is Chromium's own
+ * input focus, so either one saying focused is enough.
+ */
+export function focused(contents: WebContents): boolean {
+  return Boolean(BrowserWindow.fromWebContents(contents)?.isFocused()) || contents.isFocused()
+}
+
 /** Real PTYs for the Terminal surface. One id per tab; output is pushed to the owning window. */
 export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void {
   const sessions = new Map<string, PtyLike>()
@@ -190,23 +199,31 @@ export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void
     }
   }
 
-  // A person pastes into the window in front, and no faster than they can press keys.
-  const reads: number[] = []
+  // A person pastes into the window in front of them, and no faster than they press keys: each
+  // window has its own recent reads, forgotten when the window goes.
+  const reads = new Map<number, number[]>()
   ipcMain.handle(IPC.terminalClipboardRead, async (event): Promise<TerminalClipboardRead> => {
     fromShell(event)
 
-    if (!BrowserWindow.fromWebContents(event.sender)?.isFocused()) {
-      throw new Error('Only the focused window may read the clipboard')
+    if (!focused(event.sender)) {
+      return { refused: 'unfocused' }
     }
 
     const now = Date.now()
-    reads.splice(0, reads.length, ...reads.filter(at => now - at < 1000))
+    const recent = (reads.get(event.sender.id) ?? []).filter(at => now - at < 1000)
 
-    if (reads.length >= CLIPBOARD_READS_PER_SECOND) {
-      throw new Error('Too many clipboard reads')
+    if (!reads.has(event.sender.id)) {
+      const id = event.sender.id
+      event.sender.once('destroyed', () => reads.delete(id))
     }
 
-    reads.push(now)
+    if (recent.length >= CLIPBOARD_READS_PER_SECOND) {
+      reads.set(event.sender.id, recent)
+
+      return { refused: 'rate-limited' }
+    }
+
+    reads.set(event.sender.id, [...recent, now])
     const text = await clipboard.readText()
 
     return overClipboardLimit(text) ? { tooLarge: true } : { text }

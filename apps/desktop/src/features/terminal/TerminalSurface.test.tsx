@@ -351,6 +351,43 @@ describe('what a paste sends the shell', () => {
     expect(shell()).toBe('\x1b[200~echo safe\x1b[201~\x1b[200~[201~echo pwned\r\x1b[201~')
   })
 
+  it('says the window has to be in front when main refuses a background window', async () => {
+    bridge.readClipboard.mockResolvedValue({ refused: 'unfocused' })
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    await settle()
+
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => [n.title, n.body])).toEqual([
+      ['Could not paste into the Terminal', 'The Terminal pastes only while its window is in front. Click in the Terminal, then paste again.']
+    ])
+  })
+
+  it('says once, not once a press, that pastes are coming too fast', async () => {
+    let now = 50_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    bridge.readClipboard.mockResolvedValue({ refused: 'rate-limited' })
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+
+    for (let i = 0; i < 4; i++) {
+      xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+      await settle()
+      now += 500
+    }
+
+    expect(raised).toEqual(['Pasting too fast'])
+    expect($notifications.get().map(n => n.body)).toEqual(['The Terminal pastes a few times a second at most. Wait a moment, then paste again.'])
+
+    now += 5000
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    await settle()
+    stop()
+    clock.mockRestore()
+
+    expect(raised).toEqual(['Pasting too fast', 'Pasting too fast'])
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
+  })
+
   it('says so, and pastes nothing, when the clipboard holds more than the Terminal pastes at once', async () => {
     bridge.readClipboard.mockResolvedValue({ tooLarge: true })
     xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })

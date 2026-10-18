@@ -5,12 +5,12 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../shared/ipc.ts'
 
-const electron = vi.hoisted(() => ({ handle: vi.fn(), readText: vi.fn(), writeText: vi.fn(), focused: true }))
+const electron = vi.hoisted(() => ({ handle: vi.fn(), readText: vi.fn(), writeText: vi.fn(), windowFocused: true }))
 
 vi.mock('electron', () => ({
   ipcMain: { handle: electron.handle, on: vi.fn() },
   clipboard: { readText: electron.readText, writeText: electron.writeText },
-  BrowserWindow: { fromWebContents: () => ({ isFocused: () => electron.focused }) }
+  BrowserWindow: { fromWebContents: () => ({ isFocused: () => electron.windowFocused }) }
 }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 // The real isShellPage, judging the renderer a checkout loads with no dev server named.
@@ -59,14 +59,25 @@ describe('ensureSpawnHelperExecutable', () => {
 
 describe('the Terminal clipboard', () => {
   const page = pathToFileURL(rendererIndex()).href
-  const shell = { senderFrame: { url: `${page}?surface=terminal` } }
+  /** A shell window's page: its own id, whether it has the keyboard, and what runs when it goes. */
+  const openWindow = (id: number) => {
+    const gone: (() => void)[] = []
+
+    return {
+      senderFrame: { url: `${page}?surface=terminal` },
+      sender: { id, focused: false, isFocused() { return this.focused }, once: (_name: string, listener: () => void) => gone.push(listener) },
+      destroy: () => gone.forEach(listener => listener())
+    }
+  }
+  let shell = openWindow(1)
   const handler = (channel: string) => electron.handle.mock.calls.find(([name]) => name === channel)?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>
 
   beforeEach(() => {
     electron.handle.mockReset()
     electron.readText.mockReset().mockResolvedValue('echo hello')
     electron.writeText.mockReset().mockResolvedValue(undefined)
-    electron.focused = true
+    electron.windowFocused = true
+    shell = openWindow(1)
     registerTerminalIpc(() => null)
   })
 
@@ -119,14 +130,21 @@ describe('the Terminal clipboard', () => {
     expect(electron.writeText).not.toHaveBeenCalled()
   })
 
-  it('reads only for the focused window', async () => {
-    electron.focused = false
+  it('says a window in the background was refused, without reading', async () => {
+    electron.windowFocused = false
 
-    await expect(handler(IPC.terminalClipboardRead)(shell)).rejects.toThrow()
+    await expect(handler(IPC.terminalClipboardRead)(shell)).resolves.toEqual({ refused: 'unfocused' })
     expect(electron.readText).not.toHaveBeenCalled()
   })
 
-  it('reads at most five times a second', async () => {
+  it('reads for a page with the keyboard even when its window says it is not focused, as on Wayland', async () => {
+    electron.windowFocused = false
+    shell.sender.focused = true
+
+    await expect(handler(IPC.terminalClipboardRead)(shell)).resolves.toEqual({ text: 'echo hello' })
+  })
+
+  it('reads at most five times a second, and says so after that', async () => {
     vi.useFakeTimers({ now: 1_000_000 })
     const read = handler(IPC.terminalClipboardRead)
 
@@ -134,10 +152,26 @@ describe('the Terminal clipboard', () => {
       await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
     }
 
-    await expect(read(shell)).rejects.toThrow('Too many')
+    await expect(read(shell)).resolves.toEqual({ refused: 'rate-limited' })
     expect(electron.readText).toHaveBeenCalledTimes(5)
 
     vi.advanceTimersByTime(1000)
+    await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
+  })
+
+  it('counts each window on its own, and forgets a window that is gone', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const read = handler(IPC.terminalClipboardRead)
+    const other = openWindow(2)
+
+    for (let i = 0; i < 5; i++) {
+      await read(shell)
+    }
+
+    await expect(read(other)).resolves.toEqual({ text: 'echo hello' })
+    await expect(read(shell)).resolves.toEqual({ refused: 'rate-limited' })
+
+    shell.destroy()
     await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
   })
 

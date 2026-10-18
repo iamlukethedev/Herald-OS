@@ -449,7 +449,9 @@ async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void>
     return
   }
 
-  if ('tooLarge' in clipboard) {
+  if ('refused' in clipboard) {
+    pasteRefused(clipboard.refused)
+  } else if ('tooLarge' in clipboard) {
     tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
   } else {
     pasteText(terminal, clipboard.text)
@@ -477,6 +479,25 @@ function pasteText(terminal: Terminal, text: string): void {
 function clipboardFailed(title: 'terminal.copyFailed' | 'terminal.pasteFailed', error: unknown): void {
   logFailure('terminal.clipboard')(error)
   notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
+}
+
+/** Keys held down or pressed over and over hear about it once in this long, not once a press. */
+const RATE_LIMIT_QUIET_MS = 5000
+let rateLimitedAt = -Infinity
+
+function pasteRefused(reason: 'unfocused' | 'rate-limited'): void {
+  if (reason === 'rate-limited') {
+    const now = Date.now()
+
+    if (now - rateLimitedAt < RATE_LIMIT_QUIET_MS) {
+      return
+    }
+
+    rateLimitedAt = now
+    notify({ title: t('terminal.pasteTooFast'), body: t('terminal.pasteTooFastBody'), level: 'info', key: 'terminal.clipboard' })
+  } else {
+    notify({ title: t('terminal.pasteFailed'), body: t('terminal.pasteUnfocusedBody'), level: 'warn', key: 'terminal.clipboard' })
+  }
 }
 
 function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody'): void {

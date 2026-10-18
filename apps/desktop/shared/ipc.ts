@@ -490,8 +490,11 @@ export interface TerminalHandle {
   shell: string
 }
 
-/** The clipboard's text for the Terminal, or that there is more than it pastes at once. */
-export type TerminalClipboardRead = { text: string } | { tooLarge: true }
+/**
+ * The clipboard's text for the Terminal; or that there is more than it pastes at once; or why main
+ * would not read it: the window is not in front, or it asked too often.
+ */
+export type TerminalClipboardRead = { text: string } | { tooLarge: true } | { refused: 'unfocused' | 'rate-limited' }
 
 export interface SpaceDef {
   id: string
