@@ -88,6 +88,13 @@ export const ptBR: Translation = {
   'switch.nightLight': 'Luz noturna',
   'switch.screensaver': 'Protetor de tela',
 
+  'terminal.menu': 'Copiar e colar',
+  'terminal.copy': 'Copiar',
+  'terminal.paste': 'Colar',
+  'terminal.copyFailed': 'Não foi possível copiar a seleção',
+  'terminal.pasteFailed': 'Não foi possível colar no Terminal',
+  'terminal.clipboardUnavailable': 'O Herald OS não conseguiu acessar a área de transferência do sistema. Tente de novo daqui a pouco.',
+
   'time.justNow': 'agora mesmo',
   'time.minutesAgo': 'há {count} min',
   'time.hoursAgo': 'há {count} h',

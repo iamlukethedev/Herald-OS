@@ -82,6 +82,13 @@ export const zhCN: Translation = {
   'switch.nightLight': '夜灯',
   'switch.screensaver': '屏幕保护程序',
 
+  'terminal.menu': '复制和粘贴',
+  'terminal.copy': '复制',
+  'terminal.paste': '粘贴',
+  'terminal.copyFailed': '无法复制所选内容',
+  'terminal.pasteFailed': '无法粘贴到终端',
+  'terminal.clipboardUnavailable': 'Herald OS 无法访问系统剪贴板，请稍后再试。',
+
   'time.justNow': '刚刚',
   'time.minutesAgo': '{count} 分钟前',
   'time.hoursAgo': '{count} 小时前',

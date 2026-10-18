@@ -81,6 +81,14 @@ export const en = {
   'switch.nightLight': 'Night light',
   'switch.screensaver': 'Screensaver',
 
+  // The menu a right-click opens in the Terminal; the shortcuts shown beside its items stay as they are.
+  'terminal.menu': 'Copy and paste',
+  'terminal.copy': 'Copy',
+  'terminal.paste': 'Paste',
+  'terminal.copyFailed': 'Could not copy the selection',
+  'terminal.pasteFailed': 'Could not paste into the Terminal',
+  'terminal.clipboardUnavailable': 'Herald OS could not reach the system clipboard. Try again in a moment.',
+
   'time.justNow': 'just now',
   'time.minutesAgo': '{count}m ago',
   'time.hoursAgo': '{count}h ago',
