@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { devServerUrl, isPackaged, isShellPage, rendererIndex } from './paths.ts'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { devServerUrl, isDev, isShellPage, rendererIndex, setPackaged } from './paths.ts'
 
 const index = '/Applications/Herald OS.app/Contents/Resources/app.asar/dist/renderer/index.html'
 const page = pathToFileURL(index).href
@@ -39,6 +39,7 @@ describe('isShellPage as main calls it', () => {
   beforeEach(() => {
     delete process.env.HERALD_OS_DEV_SERVER
     delete process.env.HERMES_OS_DEV_SERVER
+    setPackaged(false)
   })
 
   afterEach(() => {
@@ -57,6 +58,15 @@ describe('isShellPage as main calls it', () => {
     process.env.HERALD_OS_DEV_SERVER = 'http://127.0.0.1:5180'
 
     expect(isShellPage('http://127.0.0.1:5180/')).toBe(true)
+    expect(isDev()).toBe(true)
+  })
+
+  it('trusts none in an installed build, as main reports it', () => {
+    process.env.HERALD_OS_DEV_SERVER = 'http://127.0.0.1:5180'
+    setPackaged(true)
+
+    expect(isShellPage('http://127.0.0.1:5180/')).toBe(false)
+    expect(isShellPage(shell)).toBe(true)
   })
 })
 
@@ -73,15 +83,11 @@ describe('devServerUrl', () => {
   })
 })
 
-describe('isPackaged', () => {
-  it('knows an installed build by its app.asar', () => {
-    expect(isPackaged('/Applications/Herald OS.app/Contents/Resources/app.asar/dist/electron/main.mjs')).toBe(true)
-    expect(isPackaged('/usr/share/herald-os/app/resources/app.asar/dist/electron/main.mjs')).toBe(true)
-    expect(isPackaged('C:\\Program Files\\Herald OS\\resources\\app.asar\\dist\\electron\\main.mjs')).toBe(true)
-  })
+describe('before main says whether it is installed', () => {
+  it('trusts no dev server', async () => {
+    vi.resetModules()
+    const fresh = await import('./paths.ts')
 
-  it('and a checkout by its absence', () => {
-    expect(isPackaged('/Users/sam/Herald-OS/apps/desktop/dist/electron/main.mjs')).toBe(false)
-    expect(isPackaged()).toBe(false)
+    expect(fresh.devServerUrl({ HERALD_OS_DEV_SERVER: 'http://127.0.0.1:5180' })).toBeUndefined()
   })
 })

@@ -22,16 +22,24 @@ export function heraldOsDataDir(): string {
   return path.join(hermesHome(), 'herald-os')
 }
 
-export const isDev = process.env.HERALD_OS_BUILD_MODE === 'development' || Boolean(devServerUrl())
+let packaged: boolean | undefined
 
-/** Whether this is an installed build: electron-builder always packs the app into app.asar. */
-export function isPackaged(moduleFile = fileURLToPath(import.meta.url)): boolean {
-  return moduleFile.split(/[\\/]/).includes('app.asar')
+/**
+ * Main passes `app.isPackaged` as it starts, before any window opens; this module stays free of
+ * Electron so the rest of main and its tests can load it alone. Until then nothing is trusted to
+ * be a checkout.
+ */
+export function setPackaged(value: boolean): void {
+  packaged = value
+}
+
+export function isDev(): boolean {
+  return process.env.HERALD_OS_BUILD_MODE === 'development' || Boolean(devServerUrl())
 }
 
 /** The dev server to load the shell from. An installed build never does, whatever its environment says. */
-export function devServerUrl(env: NodeJS.ProcessEnv = process.env, packaged = isPackaged()): string | undefined {
-  return packaged ? undefined : osEnv('DEV_SERVER', env)
+export function devServerUrl(env: NodeJS.ProcessEnv = process.env, installed = packaged ?? true): string | undefined {
+  return installed ? undefined : osEnv('DEV_SERVER', env)
 }
 
 /** The built renderer page. Every electron/ module is bundled into dist/electron/main.mjs. */

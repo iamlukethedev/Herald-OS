@@ -43,7 +43,7 @@ import { ActivityHub } from './room/activity.ts'
 import { registerRoomIpc } from './room/ipc.ts'
 import { RoomLog } from './room/log.ts'
 import { SwitchService } from './switches.ts'
-import { hermesHome, heraldOsDataDir, isDev } from './paths.ts'
+import { hermesHome, heraldOsDataDir, isDev, setPackaged } from './paths.ts'
 import { readPrefs, writePrefs } from './prefs.ts'
 import { handleAdoptLegacyNotify, sendPrefsToOthers } from './prefs-ipc.ts'
 import { forwardRendererConsole } from './renderer-console.ts'
@@ -63,6 +63,7 @@ import { registerServiceIpc } from './shell/services.ts'
 import { WallpaperService } from './shell/wallpaper.ts'
 import { appIconPath, createMainWindow } from './window.ts'
 
+setPackaged(app.isPackaged)
 app.setName('Herald OS')
 // Chromium turns WebGL off where it does not accelerate the graphics (virtual machines, drivers it
 // blocklists), and Herald Canvas draws with WebGL: there it falls back to SwiftShader, Chromium's
@@ -268,7 +269,7 @@ function registerCoreIpc(): void {
 
   ipcMain.handle(
     IPC.envInfo,
-    (): EnvInfo => ({ platform: process.platform, hermesHome: hermesHome(), homeDir: os.homedir(), version: app.getVersion(), isDev, shellMode: mode, languages: systemLanguages() })
+    (): EnvInfo => ({ platform: process.platform, hermesHome: hermesHome(), homeDir: os.homedir(), version: app.getVersion(), isDev: isDev(), shellMode: mode, languages: systemLanguages() })
   )
 
   registerFsIpc(() => mainWindow)
@@ -352,9 +353,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  log('main', `Herald OS ${app.getVersion()} starting (dev=${isDev}, mode=${mode}, HERMES_HOME=${hermesHome()})`)
+  log('main', `Herald OS ${app.getVersion()} starting (dev=${isDev()}, mode=${mode}, HERMES_HOME=${hermesHome()})`)
   // A packaged app carries its icon in the bundle; `electron .` would show Electron's.
-  const icon = isDev ? appIconPath() : undefined
+  const icon = isDev() ? appIconPath() : undefined
 
   if (icon && process.platform === 'darwin') {
     app.dock?.setIcon(icon)
