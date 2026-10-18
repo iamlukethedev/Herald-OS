@@ -176,7 +176,11 @@ export class NotificationDaemon {
     this.bus = bus
     // A connection failure surfaces here rather than through the pending name request.
     const firstError = new Promise<never>((_resolve, reject) => bus.once('error', reject))
-    bus.on('error', error => log('notifications', `bus error: ${error instanceof Error ? error.message : String(error)}`))
+    // A dropped connection no longer owns the name: stop claiming to serve it.
+    bus.on('error', error => {
+      log('notifications', `bus error: ${error instanceof Error ? error.message : String(error)}`)
+      this.dropBus(bus)
+    })
 
     const iface = new NotificationsInterface({
       notify: (...args) => this.notify(...args),
@@ -193,14 +197,18 @@ export class NotificationDaemon {
 
       if (reply !== dbus.RequestNameReply.PRIMARY_OWNER && reply !== dbus.RequestNameReply.ALREADY_OWNER) {
         log('notifications', `${BUS_NAME} is owned by another notification daemon (reply ${reply}); not serving`)
-        this.teardown()
+        this.dropBus(bus)
 
         return
       }
     } catch (error) {
       log('notifications', `could not claim ${BUS_NAME}: ${(error as Error).message}`)
-      this.teardown()
+      this.dropBus(bus)
 
+      return
+    }
+
+    if (this.bus !== bus) {
       return
     }
 
@@ -227,6 +235,13 @@ export class NotificationDaemon {
     this.expiry.clear()
     this.active.clear()
     this.teardown()
+  }
+
+  /** Tear down `bus` only while it is still this daemon's, never one a later start opened. */
+  private dropBus(bus: dbus.MessageBus): void {
+    if (this.bus === bus) {
+      this.teardown()
+    }
   }
 
   private teardown(): void {
