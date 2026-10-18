@@ -4110,41 +4110,80 @@ def test_ssh_reap_ends_a_later_started_process_in_the_recorded_session(monkeypat
         cli.SSH_LEFT.clear()
 
 
+# The orphan the command leaves writes its own pid to a file, so the test finds it by that marker, not
+# by `ppid == 1`: where a subreaper (a container init, or `systemd --user` under a desktop terminal)
+# adopts orphans, the parent is the subreaper, not init. The driver makes itself a child subreaper
+# (PR_SET_CHILD_SUBREAPER), so the orphan reparents to it, reproducing that environment.
+ORPHAN_DRIVER = """
+import ctypes, json, os, subprocess, sys, time
+sys.path.insert(0, {tests!r})
+import test_ssh
+cli = test_ssh.cli
+marker = sys.argv[1]
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+PR_SET_CHILD_SUBREAPER = 36
+assert libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
+# The command is its own session leader (start_new_session). A subshell backgrounds the orphan, which
+# writes its pid to the marker, then exits, so the orphan is reparented (to this subreaper), keeping
+# the command's session and group.
+script = "( sh -c 'echo $$ > %s; exec sleep 300' & ) ; exec sleep 300" % marker
+command = subprocess.Popen(["sh", "-c", script], start_new_session=True)
+leader = command.pid
+orphan = None
+for _ in range(200):
+    try:
+        text = open(marker).read().strip()
+    except OSError:
+        text = ""
+    procs = cli.ssh_processes()
+    if text:
+        candidate = int(text.split()[0])
+        if candidate in procs and procs[candidate][2] == leader and candidate != leader and procs[candidate][4] not in ("Z", "X"):
+            orphan = candidate
+            break
+    time.sleep(0.05)
+tree = cli.ssh_tree(leader)
+procs = cli.ssh_processes()
+orphan_ppid = procs.get(orphan, (None,))[0]
+in_pids = orphan in tree["pids"]
+os.kill(leader, 9)
+for _ in range(100):
+    if leader not in cli.ssh_processes():
+        break
+    time.sleep(0.05)
+found = orphan in cli.ssh_alive(tree)
+print(json.dumps({{"orphan": orphan, "orphan_ppid": orphan_ppid, "leader": leader, "in_pids": in_pids, "found": found}}))
+sys.stdout.flush()
+for pid in (orphan, leader):
+    try:
+        os.kill(pid, 9)
+    except (ProcessLookupError, TypeError, OSError):
+        pass
+try:
+    os.killpg(leader, 9)
+except (ProcessLookupError, OSError):
+    pass
+"""
+
+
 @needs_linux_procs
 def test_an_orphan_the_command_left_in_its_session_is_found_so_it_is_reaped(tmp_path):
-    """A command and a process it orphaned share a session and group; the orphan's parent is now init,
-    so it is not in the tree's pids. After the command is killed the orphan is still there, and
-    ssh_alive must find it by its group and session so ssh_reap ends it. (The repro the reviewer gave.)
-    `start_new_session` makes the command its own session leader, so proc.pid is that leader."""
-    import time
-    proc = subprocess.Popen(["sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"], start_new_session=True)
-    leader = proc.pid
-    try:
-        orphan = None
-        for _ in range(100):
-            procs = cli.ssh_processes()
-            # The orphan: in the command's own session, reparented to init (ppid 1), not the command.
-            here = [pid for pid, (ppid, _, session, _, state) in procs.items()
-                    if session == leader and pid != leader and ppid == 1 and state not in ("Z", "X")]
-            if here:
-                orphan = here[0]
-                break
-            time.sleep(0.05)
-        assert orphan is not None, "the orphan in the command's session never appeared"
-        tree = cli.ssh_tree(leader)
-        assert orphan not in tree["pids"], "the orphan should not be one of the tree's own pids"
-        os.kill(leader, signal.SIGKILL)
-        for _ in range(100):
-            if leader not in cli.ssh_processes():
-                break
-            time.sleep(0.05)
-        assert orphan in cli.ssh_alive(tree), f"the orphan {orphan} was not found"
-    finally:
-        try:
-            os.killpg(leader, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait(timeout=5)
+    """A command and a process it orphaned share a session and group; the orphan's parent is no longer
+    the command (it is whatever adopts orphans here), so it is not in the tree's pids. After the command
+    is killed the orphan is still there, and ssh_alive must find it by its group and session so ssh_reap
+    ends it. The orphan is found by a marker file it writes, and reparents to a subreaper, not init, so
+    the test holds where a subreaper adopts orphans (the case `ppid == 1` would miss)."""
+    import sys
+    marker = tmp_path / "orphan.pid"
+    driver = tmp_path / "orphan_driver.py"
+    driver.write_text(ORPHAN_DRIVER.format(tests=str(Path(__file__).parent)))
+    done = subprocess.run([sys.executable, str(driver), str(marker)], capture_output=True, text=True, timeout=120)
+    result = json.loads(done.stdout.strip().splitlines()[-1])
+    assert result["orphan"] is not None, done.stderr
+    # The orphan reparented to the subreaper (the driver), not init: the subreaper case, not ppid 1.
+    assert result["orphan_ppid"] not in (1, None, result["leader"]), result
+    assert not result["in_pids"], result
+    assert result["found"], (result, done.stderr)
 
 
 def test_ssh_alive_skips_pid_1_and_this_process(monkeypatch):
