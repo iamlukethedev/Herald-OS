@@ -234,11 +234,30 @@ describe('glass-input wrapper', () => {
   })
 
   it.each([
-    ['input', '<input class="glass-input">'],
-    ['textarea', '<textarea class="glass-input"></textarea>'],
-    ['select', '<select class="glass-input"><option>One</option></select>'],
-    ['button', '<button type="button" class="glass-input">Pick</button>']
-  ])('keeps the outline on a %s that is itself the glass-input', (_, html) => {
+    ['an input', '<input class="glass-input outline-none">'],
+    ['a search input', '<input type="search" class="glass-input">'],
+    ['a password input', '<input type="password" class="glass-input">'],
+    ['a number input', '<input type="number" class="glass-input">'],
+    ['a textarea', '<textarea class="glass-input outline-none"></textarea>'],
+    ['a select', '<select class="glass-input outline-none"><option>One</option></select>']
+  ])('takes the outline off %s that is itself the glass-input, so its border and halo are the one ring', (_, html) => {
+    const host = mount(html)
+
+    expect(losesOutline(host.firstElementChild!)).toBe(true)
+  })
+
+  it.each([
+    ['a button', '<button type="button" class="glass-input">Pick</button>'],
+    ['a checkbox', '<input type="checkbox" class="glass-input">'],
+    ['a radio', '<input type="radio" class="glass-input">'],
+    ['a slider', '<input type="range" class="glass-input">'],
+    ['a colour well', '<input type="color" class="glass-input">'],
+    ['a file input', '<input type="file" class="glass-input">'],
+    ['a button input', '<input type="button" class="glass-input" value="Go">'],
+    ['a submit input', '<input type="submit" class="glass-input" value="Go">'],
+    ['a reset input', '<input type="reset" class="glass-input" value="Reset">'],
+    ['an image input', '<input type="image" class="glass-input" alt="Go">']
+  ])('keeps the outline on %s that is itself the glass-input', (_, html) => {
     const host = mount(html)
 
     expect(losesOutline(host.firstElementChild!)).toBe(false)
