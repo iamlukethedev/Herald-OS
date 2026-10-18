@@ -4155,6 +4155,95 @@ def test_ssh_alive_skips_pid_1_and_this_process(monkeypatch):
     assert cli.ssh_alive(tree) == [500]
 
 
+# Run inside a session of its own (setsid), so that removing the own-group/session exclusion and then
+# reaping cannot reach the test runner's own shell and terminal: the blast is caged in this session.
+OWN_EXCLUSION_DRIVER = """
+import json, os, subprocess, sys, time
+sys.path.insert(0, {tests!r})
+import test_ssh
+cli = test_ssh.cli
+mode = sys.argv[1]
+# Reap as if root, so ssh_reap's kill runs directly on our own children (no sudo in the test box).
+cli.os.geteuid = lambda: 0
+
+
+def tree_without_own(pid):
+    procs = cli.ssh_processes()
+    children = {{}}
+    for each, (parent, *_) in procs.items():
+        children.setdefault(parent, []).append(each)
+    members, todo = {{}}, [pid]
+    while todo:
+        each = todo.pop()
+        if each in procs and each not in members:
+            members[each] = procs[each][3]
+            todo += children.get(each, [])
+    return {{"pids": members, "groups": {{procs[m][1] for m in members}},
+            "sessions": {{procs[m][2] for m in members}}}}
+
+# A bystander in our own group and session (we are the session leader under setsid).
+bystander = subprocess.Popen(["sleep", "300"])
+# A command in a new group but our session, as ssh_run runs one; it leaves an orphan in that new group.
+command = subprocess.Popen(["sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"], process_group=0)
+cmd_group = os.getpgid(command.pid)
+orphan = None
+for _ in range(200):
+    procs = cli.ssh_processes()
+    here = [pid for pid, (parent, grp, sess, start, state) in procs.items()
+            if grp == cmd_group and pid != command.pid and parent != command.pid and state not in ("Z", "X")]
+    if here:
+        orphan = here[0]
+        break
+    time.sleep(0.05)
+tree = cli.ssh_tree(command.pid) if mode == "keep" else tree_without_own(command.pid)
+# Kill only the command leader, so the orphan (same group) is left for the reap to find.
+os.kill(command.pid, 9)
+for _ in range(100):
+    if command.pid not in cli.ssh_processes():
+        break
+    time.sleep(0.05)
+cli.SSH_LEFT[:] = [{{"argv": ["firewall-cmd", "--add"], "tree": tree}}]
+cli.ssh_reap(10)
+procs = cli.ssh_processes()
+orphan_gone = orphan is None or orphan not in procs or procs[orphan][4] in ("Z", "X")
+bystander_alive = bystander.poll() is None and bystander.pid in procs and procs[bystander.pid][4] not in ("Z", "X")
+print(json.dumps({{"orphan": orphan, "orphan_gone": orphan_gone, "bystander_alive": bystander_alive}}))
+sys.stdout.flush()
+# Clean up by pid, never by the bystander's group: it shares ours, and killpg would take this driver.
+for pid in (bystander.pid, command.pid, orphan):
+    try:
+        os.kill(pid, 9)
+    except (ProcessLookupError, TypeError, OSError):
+        pass
+try:
+    os.killpg(cmd_group, 9)
+except (ProcessLookupError, OSError):
+    pass
+for p in (bystander, command):
+    try:
+        p.wait(timeout=5)
+    except Exception:
+        pass
+"""
+
+
+@needs_linux_procs
+@pytest.mark.parametrize("mode, bystander_alive", [("keep", True), ("remove", False)])
+def test_the_reap_spares_our_own_group_and_session_unless_the_exclusion_is_removed(tmp_path, mode, bystander_alive):
+    """ssh_tree drops this process's own group and session, so the root reap never kills the user's
+    shell or terminal. A bystander in our group and session survives the reap with the exclusion in
+    place ('keep'); with it removed ('remove') the reap reaches it through our session. The orphan the
+    command left is reaped either way. Run under setsid so 'remove' cannot escape this session."""
+    import sys
+    driver = tmp_path / "own_exclusion.py"
+    driver.write_text(OWN_EXCLUSION_DRIVER.format(tests=str(Path(__file__).parent)))
+    done = subprocess.run(["setsid", sys.executable, str(driver), mode], capture_output=True, text=True, timeout=120)
+    result = json.loads(done.stdout.strip().splitlines()[-1])
+    assert result["orphan"] is not None, done.stderr
+    assert result["orphan_gone"], done.stderr
+    assert result["bystander_alive"] is bystander_alive, done.stderr
+
+
 def test_a_group_carried_only_by_a_zombie_is_still_the_tree_s(monkeypatch):
     tree = {"pids": {}, "groups": {500}, "sessions": set()}
     scans = iter([{500: (1, 500, 1, 1, "Z")}, {800: (1, 500, 800, 9, "S")}])
