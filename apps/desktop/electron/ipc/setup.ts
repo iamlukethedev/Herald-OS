@@ -53,6 +53,13 @@ export function passwdReply(screen: string, password: string, current: string): 
   return null
 }
 
+const DETAIL_MAX = 200
+
+/** pwquality's reason as the renderer may show it: no control characters (a terminal's escapes), and short. */
+export function refusalDetail(line: string): string {
+  return line.replace(/\p{Cc}/gu, '').trim().slice(0, DETAIL_MAX).trim()
+}
+
 /**
  * `passwd` for this account, answered through a terminal; why it failed as a reason code, with
  * pwquality's reason when it refused (too short, too simple). passwd's own last line goes only to
@@ -68,21 +75,31 @@ export function changePassword(password: string, current = ''): Promise<SetupRes
   return new Promise(resolve => {
     const child = pty.spawn('passwd', [], { name: 'xterm', cols: 100, rows: 24, cwd: os.homedir(), env: { ...process.env, LANG: 'C', LC_ALL: 'C' } })
     let screen = ''
-    let refusal = ''
+    // pwquality's reason once it refused; blank when the reason was nothing but control characters.
+    let refusal: string | null = null
     const timer = setTimeout(() => {
       child.kill()
       resolve({ ok: false, reason: 'timeout' })
     }, 30_000)
 
     child.onData(data => {
-      screen += data
-      const bad = /BAD PASSWORD: ([^\r\n]+)/.exec(screen)
+      if (refusal !== null) {
+        return
+      }
 
-      if (bad?.[1]) {
+      screen += data
+      const bad = /BAD PASSWORD: ([^\r\n]+)\r?\n/.exec(screen)
+
+      if (bad) {
         // pwquality refused it and would ask again; stop and say why.
-        refusal = bad[1].trim()
+        refusal = refusalDetail(bad[1])
         child.kill()
 
+        return
+      }
+
+      // The rest of the refusal is still to come; "BAD PASSWORD: " alone would pass for a prompt.
+      if (/BAD PASSWORD:[^\n]*$/.test(screen)) {
         return
       }
 
@@ -101,7 +118,7 @@ export function changePassword(password: string, current = ''): Promise<SetupRes
       } else {
         const last = screen.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
         log('setup', `passwd exited ${exitCode}: ${refusal || last}`)
-        resolve(refusal ? { ok: false, reason: 'refused', detail: refusal } : { ok: false, reason: 'failed' })
+        resolve(refusal === null ? { ok: false, reason: 'failed' } : { ok: false, reason: 'refused', ...(refusal && { detail: refusal }) })
       }
     })
   })

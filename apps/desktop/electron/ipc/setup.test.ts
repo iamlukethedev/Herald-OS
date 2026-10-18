@@ -9,10 +9,11 @@ vi.mock('./terminal.ts', () => ({ loadPty: () => host.pty }))
 
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
-const { changePassword, passwdReply, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changePassword, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
-/** A terminal running `passwd` that prints `lines` once the password is typed, then exits with `exitCode`. */
+/** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
+  let typed = false
   let onData: (data: string) => void = () => undefined
   let onExit: (event: { exitCode: number }) => void = () => undefined
   const child = {
@@ -24,6 +25,11 @@ function fakePasswd(lines: string[], exitCode: number | null) {
       onExit = listener
     },
     write: vi.fn(() => {
+      if (typed) {
+        return
+      }
+
+      typed = true
       queueMicrotask(() => {
         for (const line of lines) {
           onData(line)
@@ -89,6 +95,27 @@ describe('changePassword', () => {
     expect(child.kill).toHaveBeenCalled()
   })
 
+  it('waits for the whole refusal when it comes in pieces', async () => {
+    fakePasswd(['\r\nBAD PASSWORD: ', 'The password is shorter', ' than 8 characters', '\r', '\nNew password: '], 1)
+
+    await expect(changePassword('short1')).resolves.toEqual({ ok: false, reason: 'refused', detail: 'The password is shorter than 8 characters' })
+  })
+
+  it("strips control characters from pwquality's reason and keeps it short", async () => {
+    fakePasswd(['\r\nBAD PASSWORD: The password\u0007 is \u001b[1mtoo\u0000 simple\u007f\r\n'], null)
+    await expect(changePassword('aaaaaaaa')).resolves.toEqual({ ok: false, reason: 'refused', detail: 'The password is [1mtoo simple' })
+
+    fakePasswd([`\r\nBAD PASSWORD: ${'x'.repeat(500)}\r\n`], null)
+    const long = await changePassword('aaaaaaaa')
+    expect(long.detail).toBe('x'.repeat(200))
+  })
+
+  it('says it was refused, without a reason, when the reason was only control characters', async () => {
+    fakePasswd(['\r\nBAD PASSWORD: \u001b\u0007\r\n'], null)
+
+    await expect(changePassword('aaaaaaaa')).resolves.toEqual({ ok: false, reason: 'refused' })
+  })
+
   it("never passes on passwd's own last line", async () => {
     fakePasswd(['\r\npasswd: Authentication token manipulation error\r\npasswd: password unchanged\r\n'], 10)
 
@@ -120,5 +147,13 @@ describe('the setup password handler', () => {
     expect(await handler?.({}, 'short')).toEqual({ ok: false, reason: 'tooShort' })
     expect(await handler?.({}, 'long enough\nreally')).toEqual({ ok: false, reason: 'tooShort' })
     expect((host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn).not.toHaveBeenCalled()
+  })
+})
+
+describe('refusalDetail', () => {
+  it('drops every control character and cuts the reason to 200 characters', () => {
+    expect(refusalDetail('\u0000a\tb\u001fc\u0085d ')).toBe('abcd')
+    expect(refusalDetail(`${'y'.repeat(199)}  ${'z'.repeat(10)}`)).toBe('y'.repeat(199))
+    expect(refusalDetail('é'.repeat(300))).toHaveLength(200)
   })
 })

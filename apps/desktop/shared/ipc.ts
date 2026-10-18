@@ -466,7 +466,7 @@ export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' 
 export interface SetupResult {
   ok: boolean
   reason?: PasswordFailure
-  /** pwquality's own reason for a refusal, in English (passwd runs under LANG=C). */
+  /** pwquality's own reason for a refusal, in English (passwd runs under LANG=C), without control characters and at most 200 characters. */
   detail?: string
 }
 
