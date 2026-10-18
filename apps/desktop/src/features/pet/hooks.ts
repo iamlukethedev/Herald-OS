@@ -139,6 +139,11 @@ export function extrasOf(snapshot: PetSnapshot, ui: PetUi, arrived: boolean): Pe
   return ui.drop ? 'drop' : ui.bubble ? 'bubble' : ui.say ? 'say' : null
 }
 
+/** The approval the pet holds up: only once its card is drawn, so the request host keeps it on screen while the pet walks over. */
+export function heldApprovalOf(snapshot: PetSnapshot, extras: PetExtras): string | null {
+  return extras === 'card' ? (snapshot.approval?.id ?? null) : null
+}
+
 /** The pose for what the pet does now; worried moods look up at the person at an idle pace. */
 export function petPose(snapshot: PetSnapshot, walking: -1 | 0 | 1, activitySince: number, state: { dragging: boolean; dropping: boolean }): { pose: PetPose; rest: boolean } {
   if (state.dragging) {

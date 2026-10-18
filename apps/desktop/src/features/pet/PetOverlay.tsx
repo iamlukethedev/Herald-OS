@@ -6,7 +6,7 @@ import { isEditable } from '../../store/edit-target.ts'
 import { $windows, desktopArea } from '../../store/windows.ts'
 import { $petPrefs, setPetPrefs } from './actions.ts'
 import { petHiddenWhy } from './hide.ts'
-import { extrasOf, petPose, useDocumentVisible, usePetUi, useReducedMotion, useSince, useWakeAfter } from './hooks.ts'
+import { extrasOf, heldApprovalOf, petPose, useDocumentVisible, usePetUi, useReducedMotion, useSince, useWakeAfter } from './hooks.ts'
 import { $petInfo, $petSheet } from './info.ts'
 import { PetView } from './PetView.tsx'
 import { avoid, clampPoint, cursorRect, overlaps, type Point, type Size, spotFromPoint, walkTo } from './placement.ts'
@@ -163,7 +163,7 @@ function DesktopPet({ sheet, scale, snapshot, prefs }: { sheet: LoadedSheet; sca
     }
   }, [prefs.spot, localSpot])
 
-  const approvalId = snapshot.approval?.id ?? null
+  const approvalId = heldApprovalOf(snapshot, extras)
 
   useEffect(() => {
     $petHeldApproval.set(approvalId)
