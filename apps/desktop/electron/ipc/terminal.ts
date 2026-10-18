@@ -1,4 +1,4 @@
-import { type BrowserWindow, ipcMain, type WebContents } from 'electron'
+import { type BrowserWindow, clipboard, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -6,6 +6,7 @@ import path from 'node:path'
 import { IPC, type TerminalCreateOptions, type TerminalHandle } from '../../shared/ipc.ts'
 import { terminalBin } from '../catalog/catalog.ts'
 import { log } from '../log.ts'
+import { isShellPage } from '../paths.ts'
 import { loadCatalog } from './catalog.ts'
 import { normalizeUserPath } from './fs.ts'
 
@@ -176,5 +177,30 @@ export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void
   })
   ipcMain.handle(IPC.terminalDispose, (_event, id: string) => {
     kill(id)
+  })
+
+  // The shell's session grants no clipboard permission to pages, so Copy and Paste in the Terminal
+  // go through main; only the shell's own pages may ask.
+  const fromShell = (event: IpcMainInvokeEvent) => {
+    if (!event.senderFrame || !isShellPage(event.senderFrame.url)) {
+      throw new Error('Only Herald OS itself may use the clipboard')
+    }
+  }
+
+  ipcMain.handle(IPC.terminalClipboardRead, async (event): Promise<string> => {
+    fromShell(event)
+
+    return clipboard.readText()
+  })
+  ipcMain.handle(IPC.terminalClipboardWrite, async (event, text: unknown): Promise<void> => {
+    fromShell(event)
+
+    if (typeof text !== 'string') {
+      throw new Error('Only text can be copied from the Terminal')
+    }
+
+    if (text) {
+      await clipboard.writeText(text)
+    }
   })
 }

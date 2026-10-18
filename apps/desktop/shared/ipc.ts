@@ -975,6 +975,8 @@ export const IPC = {
   terminalWrite: 'herald-os:terminal:write',
   terminalResize: 'herald-os:terminal:resize',
   terminalDispose: 'herald-os:terminal:dispose',
+  terminalClipboardRead: 'herald-os:terminal:clipboard-read',
+  terminalClipboardWrite: 'herald-os:terminal:clipboard-write',
   terminalData: 'herald-os:terminal:data',
   terminalExit: 'herald-os:terminal:exit',
 
