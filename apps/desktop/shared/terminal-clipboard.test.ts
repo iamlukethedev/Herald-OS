@@ -41,6 +41,11 @@ describe('sanitizePaste', () => {
     expect(sanitizePaste(text)).not.toMatch(CONTROLS)
   })
 
+  it('leaves a nested marker as plain text, with no ESC left to act on', () => {
+    expect(sanitizePaste('echo safe\x1b[20\x1b[201~1~echo pwned\r')).toBe('echo safe[201~echo pwned\r')
+    expect(sanitizePaste('\x9b20\x9b201~1~x')).toBe('201~x')
+  })
+
   it('cannot be fooled by a marker split across two pastes', () => {
     const joined = sanitizePaste('echo safe\x1b') + sanitizePaste('[201~echo pwned\r')
 

@@ -13,11 +13,13 @@ export function overClipboardLimit(text: string, limit = TERMINAL_CLIPBOARD_LIMI
 }
 
 /**
- * Pasted text without the control characters a terminal acts on. The bracketed-paste markers
- * (ESC[200~ and ESC[201~, or with the 8-bit CSI) go whole, so none can end a paste early and run
- * what follows, nor leave part of itself behind; then ESC, the other C0 controls but tab, line
- * feed and carriage return, DEL and the C1 controls. Takes one paste whole: a marker split across
- * two pastes is harmless, since each half loses its ESC or CSI on its own.
+ * Pasted text without the control characters a terminal acts on, so none can end a bracketed
+ * paste early and run what follows. The bracketed-paste markers (ESC[200~ and ESC[201~, or with
+ * the 8-bit CSI) go whole, in one pass, so a plain marker leaves nothing behind; then ESC, the
+ * other C0 controls but tab, line feed and carriage return, DEL and the C1 controls go. A marker
+ * nested in another, such as ESC[20ESC[201~1~, closes up into a new one when the inner goes, and
+ * that loses only its ESC: "[201~" stays as harmless text. Takes one paste whole: a marker split
+ * across two pastes is harmless too, since each half loses its ESC or CSI on its own.
  */
 export function sanitizePaste(text: string): string {
   return text.replace(/(?:\x1b\[|\x9b)20[01]~/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
