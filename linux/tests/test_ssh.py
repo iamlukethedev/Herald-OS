@@ -4113,41 +4113,46 @@ def test_ssh_reap_ends_a_later_started_process_in_the_recorded_session(monkeypat
 @needs_linux_procs
 def test_an_orphan_the_command_left_in_its_session_is_found_so_it_is_reaped(tmp_path):
     """A command and a process it orphaned share a session and group; the orphan's parent is now init,
-    so it is not in the tree's pids. After the group is killed the orphan is still there, and ssh_alive
-    must find it by its group and session so ssh_reap ends it. (The repro the reviewer gave.)"""
+    so it is not in the tree's pids. After the command is killed the orphan is still there, and
+    ssh_alive must find it by its group and session so ssh_reap ends it. (The repro the reviewer gave.)
+    `start_new_session` makes the command its own session leader, so proc.pid is that leader."""
     import time
-    before = {session for _, _, session, _, _ in cli.ssh_processes().values()}
-    proc = subprocess.Popen(["setsid", "sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"])
-    leader = members = None
+    proc = subprocess.Popen(["sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"], start_new_session=True)
+    leader = proc.pid
     try:
+        orphan = None
         for _ in range(100):
             procs = cli.ssh_processes()
-            by_session: dict = {}
-            for pid, (_, _, session, _, state) in procs.items():
-                if state not in ("Z", "X"):
-                    by_session.setdefault(session, []).append(pid)
-            fresh = [s for s in by_session if s not in before and s in procs and len(by_session[s]) >= 2]
-            if fresh:
-                leader, members = fresh[0], by_session[fresh[0]]
+            # The orphan: in the command's own session, reparented to init (ppid 1), not the command.
+            here = [pid for pid, (ppid, _, session, _, state) in procs.items()
+                    if session == leader and pid != leader and ppid == 1 and state not in ("Z", "X")]
+            if here:
+                orphan = here[0]
                 break
             time.sleep(0.05)
-        assert leader is not None, "the session with the orphan never appeared"
+        assert orphan is not None, "the orphan in the command's session never appeared"
         tree = cli.ssh_tree(leader)
-        orphans = [pid for pid in members if pid != leader and pid not in tree["pids"]]
-        assert orphans, "the orphan should not be one of the tree's own pids"
+        assert orphan not in tree["pids"], "the orphan should not be one of the tree's own pids"
         os.kill(leader, signal.SIGKILL)
         for _ in range(100):
             if leader not in cli.ssh_processes():
                 break
             time.sleep(0.05)
-        alive = cli.ssh_alive(tree)
-        assert set(orphans) & set(alive), f"the orphan {orphans} was not found in {alive}"
+        assert orphan in cli.ssh_alive(tree), f"the orphan {orphan} was not found"
     finally:
         try:
             os.killpg(leader, signal.SIGKILL)
-        except (ProcessLookupError, TypeError):
+        except ProcessLookupError:
             pass
         proc.wait(timeout=5)
+
+
+def test_ssh_alive_skips_pid_1_and_this_process(monkeypatch):
+    # The reap must never touch init or herald-os itself, even when they share a tree's group or session.
+    tree = {"pids": {}, "groups": {7}, "sessions": {9}}
+    monkeypatch.setattr(cli, "ssh_processes",
+                        lambda: {1: (0, 7, 9, 1, "S"), os.getpid(): (1, 7, 9, 2, "S"), 500: (1, 7, 9, 3, "S")})
+    assert cli.ssh_alive(tree) == [500]
 
 
 def test_a_group_carried_only_by_a_zombie_is_still_the_tree_s(monkeypatch):
