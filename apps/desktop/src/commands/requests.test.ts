@@ -75,8 +75,10 @@ describe('the rate limit', () => {
     expect(run('cli').ok).toBe(false)
     expect(run('shortcut').ok).toBe(false)
 
-    later(REQUEST_FOCUS_EVERY_MS)
+    later(REQUEST_FOCUS_EVERY_MS - 1)
+    expect(run('shortcut').ok).toBe(false)
 
+    later(1)
     expect(run('shortcut').ok).toBe(true)
   })
 

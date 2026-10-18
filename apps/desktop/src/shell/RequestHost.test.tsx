@@ -390,4 +390,17 @@ describe('the order of the answers', () => {
     expect(choices().map(button => button.textContent)).toEqual(['Deny', 'Allow once', 'Allow this session', 'Always allow'])
     expect(tabStops(host)[0].textContent).toBe('Deny')
   })
+
+  it('keeps Allow once the one primary answer while Deny stays first in the tab order', () => {
+    act(() => root.render(<ApprovalCard id="r1" params={{ choices: ['once', 'session', 'always', 'deny'] }} onChoice={() => undefined} />))
+
+    const [first, ...after] = tabStops(host)
+    const allowOnce = after.find(button => button.textContent === 'Allow once')!
+
+    expect(first.textContent).toBe('Deny')
+    expect(first.classList).toContain('text-danger')
+    expect(first.classList).not.toContain('bg-accent')
+    expect(allowOnce.classList).toContain('bg-accent')
+    expect(choices().filter(button => button.classList.contains('bg-accent'))).toEqual([allowOnce])
+  })
 })
