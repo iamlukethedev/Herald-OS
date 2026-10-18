@@ -418,15 +418,20 @@ describe('a drop on the Terminal', () => {
     await settle()
 
     expect(bridge.write).not.toHaveBeenCalled()
-    expect($notifications.get().map(n => n.title)).toEqual(['Too much to paste'])
+    expect($notifications.get().map(n => [n.title, n.body])).toEqual([
+      ['Too much to paste', 'The dropped text is more than 1 MiB, more than the Terminal pastes at once.']
+    ])
   })
 
-  it('refuses a drop with no text, sending nothing', async () => {
+  it('refuses a drop with no text, sending nothing, and says so', async () => {
     const event = drag('drop', { 'text/uri-list': 'file:///etc/passwd' })
     await settle()
 
     expect(event.defaultPrevented).toBe(true)
     expect(bridge.write).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => [n.title, n.body])).toEqual([
+      ['Only text can be dropped here', 'The Terminal pastes text dropped on it. Files, links and pictures are left out.']
+    ])
   })
 
   it('offers to take text while it is dragged over, and nothing else', () => {

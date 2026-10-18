@@ -359,8 +359,10 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       const text = event.dataTransfer?.getData('text/plain') ?? ''
 
       if (text) {
-        sayPasteOutcome(pasteText(terminal, text))
+        sayPasteOutcome(pasteText(terminal, text), 'drop')
         terminal.focus()
+      } else {
+        notify({ title: t('terminal.dropNotText'), body: t('terminal.dropNotTextBody'), level: 'info', key: 'terminal.clipboard' })
       }
     }
     el.addEventListener('dragover', onDragOver, true)
@@ -547,14 +549,17 @@ function pasteProblem(outcome: PasteOutcome): string | null {
 const QUIET_MS = 5000
 const saidAt = new Map<PasteOutcome, number>()
 
-/** A notice for a paste that did not go in. Each kind of refusal is said once in QUIET_MS at most. */
-function sayPasteOutcome(outcome: PasteOutcome): void {
+/**
+ * A notice for a paste that did not go in, from the clipboard or from a drop. Each kind of
+ * refusal is said once in QUIET_MS at most.
+ */
+function sayPasteOutcome(outcome: PasteOutcome, from: 'clipboard' | 'drop' = 'clipboard'): void {
   if (outcome === 'pasted' || outcome === 'nothing' || outcome === 'closed') {
     return
   }
 
   if (outcome === 'too-large') {
-    tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
+    tooLarge('terminal.pasteTooLarge', from === 'drop' ? 'terminal.dropTooLargeBody' : 'terminal.pasteTooLargeBody')
 
     return
   }
@@ -585,6 +590,6 @@ function clipboardFailed(title: 'terminal.copyFailed', error: unknown): void {
   notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
 }
 
-function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody'): void {
+function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody' | 'terminal.dropTooLargeBody'): void {
   notify({ title: t(title), body: t(body, { size: LIMIT }), level: 'warn', key: 'terminal.clipboard' })
 }
