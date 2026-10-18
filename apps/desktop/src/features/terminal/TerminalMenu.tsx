@@ -11,16 +11,16 @@ export interface TerminalMenuProps {
   x: number
   y: number
   canCopy: boolean
-  /** The keys beside each item, such as "Ctrl+Shift+C". */
-  hints: { copy: string; paste: string }
+  /** Each item's keys: `hint` shown beside it, such as "Ctrl+Shift+C", and `aria` for aria-keyshortcuts. */
+  keys: Record<'copy' | 'paste', { hint: string; aria: string }>
   onCopy: () => void
   onPaste: () => void
-  /** `refocus`: give the keyboard back to the terminal, as Escape does; a click elsewhere keeps its own target. */
+  /** `refocus`: give the keyboard back to the terminal, as Escape does; a click elsewhere gives it to what was clicked. */
   onClose: (refocus: boolean) => void
 }
 
 /** The Terminal's right-click menu: Copy (when text is selected) and Paste. */
-export function TerminalMenu({ x, y, canCopy, hints, onCopy, onPaste, onClose }: TerminalMenuProps) {
+export function TerminalMenu({ x, y, canCopy, keys, onCopy, onPaste, onClose }: TerminalMenuProps) {
   const t = useT()
   const ref = useRef<HTMLDivElement>(null)
   const [place, setPlace] = useState({ left: x, top: y })
@@ -53,7 +53,8 @@ export function TerminalMenu({ x, y, canCopy, hints, onCopy, onPaste, onClose }:
         onClose(true)
       }
     }
-    const onLeave = () => onClose(false)
+    // The menu had the keyboard, so the terminal gets it back for when the window is in front again.
+    const onLeave = () => onClose(true)
     window.addEventListener('mousedown', onDown, true)
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('blur', onLeave)
@@ -81,10 +82,11 @@ export function TerminalMenu({ x, y, canCopy, hints, onCopy, onPaste, onClose }:
     }
   }
 
-  const row = (label: string, hint: string, icon: React.ReactNode, onSelect: () => void, disabled = false) => (
+  const row = (label: string, shortcut: { hint: string; aria: string }, icon: React.ReactNode, onSelect: () => void, disabled = false) => (
     <button
       type="button"
       role="menuitem"
+      aria-keyshortcuts={shortcut.aria}
       disabled={disabled}
       onClick={() => {
         onClose(true)
@@ -94,7 +96,7 @@ export function TerminalMenu({ x, y, canCopy, hints, onCopy, onPaste, onClose }:
     >
       <span className="text-fg-3">{icon}</span>
       <span className="flex-1">{label}</span>
-      <span className="pl-4 font-mono text-[11px] text-fg-3">{hint}</span>
+      <span className="pl-4 font-mono text-[11px] text-fg-3">{shortcut.hint}</span>
     </button>
   )
 
@@ -108,8 +110,8 @@ export function TerminalMenu({ x, y, canCopy, hints, onCopy, onPaste, onClose }:
       onKeyDown={onKeyDown}
       onContextMenu={event => event.preventDefault()}
     >
-      {row(t('terminal.copy'), hints.copy, <IconCopy />, onCopy, !canCopy)}
-      {row(t('terminal.paste'), hints.paste, <IconClipboard />, onPaste)}
+      {row(t('terminal.copy'), keys.copy, <IconCopy />, onCopy, !canCopy)}
+      {row(t('terminal.paste'), keys.paste, <IconClipboard />, onPaste)}
     </div>
   )
 }

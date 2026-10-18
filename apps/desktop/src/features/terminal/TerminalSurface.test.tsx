@@ -458,15 +458,43 @@ describe('the Terminal menu', () => {
     expect(bridge.readClipboard).not.toHaveBeenCalled()
   })
 
-  it('opens from the keyboard menu key', async () => {
+  it.each([
+    ['the menu key', 'ContextMenu', {}],
+    ['Shift+F10', 'F10', { shiftKey: true }]
+  ])('opens from the keyboard with %s', async (_label, key, init) => {
     let event!: KeyboardEvent
     await act(async () => {
-      event = xterm.terminal.press('ContextMenu')
+      event = xterm.terminal.press(key, init)
     })
 
     expect(event.defaultPrevented).toBe(true)
     expect(menu()).not.toBeNull()
+    expect(document.activeElement).toBe(item('Paste'))
     expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('leaves F10 without Shift, and Ctrl+Shift+F10, to the program', () => {
+    expect(xterm.terminal.keys(new KeyboardEvent('keydown', { key: 'F10' }))).toBe(true)
+    expect(xterm.terminal.keys(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, ctrlKey: true }))).toBe(true)
+    expect(menu()).toBeNull()
+  })
+
+  it('gives the keyboard back to the terminal when the window loses focus', async () => {
+    await rightClick()
+    xterm.terminal.focus.mockClear()
+    act(() => {
+      window.dispatchEvent(new Event('blur'))
+    })
+
+    expect(menu()).toBeNull()
+    expect(xterm.terminal.focus).toHaveBeenCalled()
+  })
+
+  it('names each item’s keys for assistive technology', async () => {
+    await rightClick()
+
+    expect(item('Copy')?.getAttribute('aria-keyshortcuts')).toBe('Control+Shift+C')
+    expect(item('Paste')?.getAttribute('aria-keyshortcuts')).toBe('Control+Shift+V')
   })
 
   it('reads in the chosen language, with the Mac keys on a Mac', async () => {
@@ -479,5 +507,7 @@ describe('the Terminal menu', () => {
     expect(menu()?.getAttribute('aria-label')).toBe('Copiar e colar')
     expect(item('Copiar')?.textContent).toContain('⌘C')
     expect(item('Colar')?.textContent).toContain('⌘V')
+    expect(item('Copiar')?.getAttribute('aria-keyshortcuts')).toBe('Meta+C Control+Shift+C')
+    expect(item('Colar')?.getAttribute('aria-keyshortcuts')).toBe('Meta+V Control+Shift+V')
   })
 })

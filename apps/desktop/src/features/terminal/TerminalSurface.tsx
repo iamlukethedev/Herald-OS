@@ -51,6 +51,15 @@ const THEME = {
   brightWhite: '#f4f6f8'
 }
 
+const KEYS = {
+  copy: { hint: 'Ctrl+Shift+C', aria: 'Control+Shift+C' },
+  paste: { hint: 'Ctrl+Shift+V', aria: 'Control+Shift+V' }
+}
+const MAC_KEYS = {
+  copy: { hint: '⌘C', aria: 'Meta+C Control+Shift+C' },
+  paste: { hint: '⌘V', aria: 'Meta+V Control+Shift+V' }
+}
+
 /** A request this recent, found at mount, is what opened the Terminal: it becomes the first tab. */
 const FRESH_REQUEST_MS = 3000
 
@@ -279,7 +288,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       }
     }
     terminal.attachCustomKeyEventHandler(event => {
-      if (event.type === 'keydown' && event.key === 'ContextMenu') {
+      if (event.type === 'keydown' && opensMenu(event)) {
         event.preventDefault()
         // xterm keeps its hidden input at the caret, so the menu opens there.
         const caret = terminal.textarea?.getBoundingClientRect() ?? el.getBoundingClientRect()
@@ -370,7 +379,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
           x={menu.x}
           y={menu.y}
           canCopy={menu.selection.length > 0}
-          hints={mac ? { copy: '⌘C', paste: '⌘V' } : { copy: 'Ctrl+Shift+C', paste: 'Ctrl+Shift+V' }}
+          keys={mac ? MAC_KEYS : KEYS}
           onCopy={() => void copyText(menu.selection)}
           onPaste={() => {
             const terminal = term.current
@@ -384,6 +393,11 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       )}
     </>
   )
+}
+
+/** The keyboard's menu key, or Shift+F10. */
+function opensMenu(event: KeyboardEvent): boolean {
+  return event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey)
 }
 
 /**
