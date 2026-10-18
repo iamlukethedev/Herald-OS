@@ -340,12 +340,14 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
     }
     el.addEventListener('copy', onCopy, true)
     // xterm takes no drops, and dropped text would sit unread and unfiltered in its hidden input.
-    // Dropped text pastes like any paste, filtered and capped; anything else dropped is refused.
+    // Dropped text pastes like any paste, filtered and capped; anything else dropped is refused,
+    // with a notice. Chromium only fires drop where dragover accepted the drag, so every drag that
+    // carries something is accepted here and the drop decides.
     const onDragOver = (event: DragEvent) => {
       event.preventDefault()
 
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = event.dataTransfer.types.includes('text/plain') ? 'copy' : 'none'
+        event.dataTransfer.dropEffect = event.dataTransfer.types.length > 0 ? 'copy' : 'none'
       }
     }
     const onDrop = (event: DragEvent) => {
@@ -362,7 +364,6 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
         sayPasteOutcome(pasteText(terminal, text), 'drop')
         terminal.focus()
       } else {
-        // A fallback: Chromium does not usually fire drop after dragover offered dropEffect 'none'.
         notify({ title: t('terminal.dropNotText'), body: t('terminal.dropNotTextBody'), level: 'info', key: 'terminal.clipboard' })
       }
     }
