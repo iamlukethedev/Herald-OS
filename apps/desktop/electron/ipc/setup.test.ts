@@ -110,6 +110,17 @@ describe('changePassword', () => {
     expect(long.detail).toBe('x'.repeat(200))
   })
 
+  it('runs passwd in the C locale, so its prompts and BAD PASSWORD line are the English ones it answers and reads', async () => {
+    vi.stubEnv('LANG', 'pt_BR.UTF-8')
+    vi.stubEnv('LC_ALL', 'zh_CN.UTF-8')
+    fakePasswd([], 0)
+    await changePassword('correct horse')
+
+    const spawn = (host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn
+    expect(spawn).toHaveBeenCalledWith('passwd', [], expect.objectContaining({ env: expect.objectContaining({ LANG: 'C', LC_ALL: 'C' }) }))
+    vi.unstubAllEnvs()
+  })
+
   it('says it was refused, without a reason, when the reason was only control characters', async () => {
     fakePasswd(['\r\nBAD PASSWORD: \u001b\u0007\r\n'], null)
 
