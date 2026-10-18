@@ -3231,7 +3231,14 @@ def ssh_alive(tree: dict) -> list[int]:
     groups or sessions, which is what the command started or left there (a child it orphaned keeps the
     group and session, so it is caught too). A zombie has ended. Raises OSError when /proc cannot be
     listed. A group or session no process carries any more (a zombie still does) is dropped from the
-    tree for good, so a new leader later given that freed id is not taken for the tree's."""
+    tree for good, so a new leader later given that freed id is not taken for the tree's. That drop is
+    the only guard against reuse; it needs no start time or /proc/uptime, so nothing is weakened when
+    those cannot be read. Its one gap is a freed id taken by an unrelated process in the window between
+    two checks, before any check sees it empty: ssh_reap looks every tenth of a second while the id is
+    still a command's, and a group or session id only frees when every process in it has gone, so for
+    an unrelated process to take it unseen the whole id would have to empty and a pid wrap onto its
+    leader between two looks. The risk is ending one stray process, never leaving SSH open, so the
+    simple drop is kept over a start-time guard, which wrongly skipped the command's own orphans."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
     tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}
