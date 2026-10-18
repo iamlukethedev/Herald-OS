@@ -87,6 +87,7 @@ vi.mock('../../shell/surfaces/shell-utils.ts', () => ({ useShellCommands() {} })
 const { $env, $prefs } = await import('../../store/backend.ts')
 const { $notifications } = await import('../../store/notifications.ts')
 const { TerminalSurface } = await import('./TerminalSurface.tsx')
+const PREFS = $prefs.get()
 
 let root: Root
 let container: HTMLDivElement
@@ -116,7 +117,7 @@ beforeEach(async () => {
   bridge.readClipboard.mockReset().mockResolvedValue('echo pasted')
   bridge.writeClipboard.mockReset().mockResolvedValue(undefined)
   $notifications.set([])
-  $prefs.set({})
+  $prefs.set({ ...PREFS, language: 'en' })
   $env.set({ hermesHome: '/h/.hermes', homeDir: '/h', version: '0.0.0', isDev: false, platform: 'linux' } as never)
   Object.assign(window, {
     heraldOS: {
@@ -331,7 +332,7 @@ describe('the Terminal menu', () => {
 
   it('reads in the chosen language, with the Mac keys on a Mac', async () => {
     act(() => {
-      $prefs.set({ language: 'pt-BR' })
+      $prefs.set({ ...PREFS, language: 'pt-BR' })
       $env.set({ ...$env.get(), platform: 'darwin' } as never)
     })
     await rightClick()
