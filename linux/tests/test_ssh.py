@@ -2169,6 +2169,84 @@ def a_reused_group_or_session_id_is_not_the_tree_s(machine: System, tmp_path: Pa
     return first == [500, 501] and second == [] and third == [] and tree["groups"] == tree["sessions"] == set()
 
 
+def ssh_alive_matches_a_process_by_session(machine: System, tmp_path: Path, capsys) -> bool:
+    """A process in the tree's session but not its groups, and not a tracked pid, is still the tree's."""
+    tree = {"pids": {}, "since": 0, "groups": set(), "sessions": {600}}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "ssh_processes", lambda: {700: (1, 700, 600, 5, "S")})
+        return machine.module.ssh_alive(tree) == [700]
+
+
+def a_kill_closes_the_command_s_pipes(machine: System, tmp_path: Path, capsys) -> bool:
+    """A killed command's pipes are closed, so nothing of this run is left holding them open."""
+    proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, process_group=0)
+    try:
+        machine.module.ssh_kill(proc, 0.3)
+    finally:
+        machine.module.SSH_LEFT.clear()
+    return all(stream is None or stream.closed for stream in (proc.stdin, proc.stdout, proc.stderr))
+
+
+def the_rollback_reaps_at_the_start(machine: System, tmp_path: Path, capsys) -> bool:
+    """The rollback ends what this run left running twice: once at the start (so what it then reads is
+    how things stay), and once at the very end. Dropping the first leaves only one."""
+    calls = []
+    real = machine.module.ssh_reap
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "ssh_reap", lambda timeout: calls.append(timeout) or real(timeout))
+        odd_before(machine, "sshd.service", "disabled", "inactive")
+        outcome(machine, "--key", public_key())
+    return len(calls) >= 2
+
+
+def rollback_on_a_fake_clock(machine: System, patch, budget: int = 8) -> tuple[list, list]:
+    """Run ssh_rollback with a clock that moves only as commands run, so the budget maths is exact and
+    nothing waits in real time. Nothing is to put back but the keys; every command uses its whole slot.
+    Returns (the timeouts the keys step was granted, the timeouts the reaps were granted)."""
+    module = machine.module
+    clock = [1000.0]
+    patch.setattr(module, "time", types.SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
+    patch.setattr(module, "SSH_ROLLBACK_BUDGET", budget)
+    patch.setattr(module, "SSH_ROLLBACK_LAST", 1000)
+    patch.setattr(module, "SSH_TIMEOUT", budget)
+
+    def advance(argv, timeout=None, input=None, grace=None, **kwargs):
+        clock[0] += timeout or 0
+        return subprocess.CompletedProcess(argv, 0, "active", "")
+    patch.setattr(module, "ssh_run", advance)
+    patch.setattr(module, "root_run", lambda argv, timeout=None, grace=None: advance(argv, timeout=timeout, grace=grace))
+    reaps: list = []
+    patch.setattr(module, "ssh_reap", lambda timeout: (reaps.append(timeout) or []))
+    module.SSH_LEFT.clear()
+    module.SSH_LOADED.clear()
+    before = {"files": {p: None for p in (module.SSHD_DROP_IN, module.SSH_LIMIT_RULES, module.SSH_LIMIT_UNIT, *module.SSH_LIMIT_REQUIRED)},
+              "units": {unit: ("enabled", "active") for unit in module.SSH_ROLLBACK_UNITS}, "table": False, "rules": {}}
+    called: list = []
+
+    def keys_out(timeout, grace, undone, trouble):
+        called.append(timeout)
+        undone.append("keys out")
+    module.ssh_rollback(before, keys_out)
+    return called, reaps
+
+
+def the_keys_get_a_reserved_share(machine: System, tmp_path: Path, capsys) -> bool:
+    """A share of the budget is kept so the keys this run added are taken out even when the budget is
+    tight; without it, the keys step is skipped and the keys are left behind."""
+    with pytest.MonkeyPatch.context() as patch:
+        called, _ = rollback_on_a_fake_clock(machine, patch)
+    return bool(called)
+
+
+def the_end_gets_a_reserved_share(machine: System, tmp_path: Path, capsys) -> bool:
+    """Two shares are kept for the end (ending what this run left running, and the last firewall look);
+    without them, the final reap is starved to nothing."""
+    with pytest.MonkeyPatch.context() as patch:
+        _, reaps = rollback_on_a_fake_clock(machine, patch)
+    return len(reaps) >= 2 and reaps[-1] > 0
+
+
 def a_process_older_than_the_tree_is_not_the_tree_s(machine: System, tmp_path: Path, capsys) -> bool:
     """500 is the command's group; before any scan catches it empty, an unrelated process that was
     already running when the tree was read (start 2, before `since` 5) leads group 500. The drop guard
@@ -2317,6 +2395,11 @@ MUTANTS = {
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
     "a process older than the tree still matched": (a_process_older_than_the_tree_is_not_the_tree_s, "start >= since and ", ""),
+    "ssh_alive ignoring sessions": (ssh_alive_matches_a_process_by_session, 'group in tree["groups"] or session in tree["sessions"]', 'group in tree["groups"]'),
+    "a kill leaving the pipes open": (a_kill_closes_the_command_s_pipes, "                stream.close()", "                pass"),
+    "the reap at the start of the rollback dropped": (the_rollback_reaps_at_the_start, "    ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free())))\n", ""),
+    "no share kept for the keys": (the_keys_get_a_reserved_share, '"keys": 1 if keys_out else 0', '"keys": 0'),
+    "no share kept for the end": (the_end_gets_a_reserved_share, '"end": 2}', '"end": 0}'),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
@@ -3949,6 +4032,39 @@ def test_a_group_or_session_id_reused_after_the_tree_s_ended_is_left_alone(machi
 
 def test_a_process_older_than_the_tree_is_not_matched_by_a_shared_id(machine, capsys, tmp_path):
     assert a_process_older_than_the_tree_is_not_the_tree_s(machine, tmp_path, capsys)
+
+
+def test_ssh_alive_matches_a_process_by_its_session(machine, capsys, tmp_path):
+    assert ssh_alive_matches_a_process_by_session(machine, tmp_path, capsys)
+
+
+def test_a_kill_closes_the_command_s_pipes(machine, capsys, tmp_path):
+    assert a_kill_closes_the_command_s_pipes(machine, tmp_path, capsys)
+
+
+def test_the_rollback_ends_what_is_left_at_the_start_and_the_end(machine, capsys, tmp_path):
+    assert the_rollback_reaps_at_the_start(machine, tmp_path, capsys)
+
+
+def test_the_keys_and_the_end_each_keep_a_share_of_the_budget(machine, capsys, tmp_path):
+    with pytest.MonkeyPatch.context() as patch:
+        called, reaps = rollback_on_a_fake_clock(machine, patch)
+    assert called and len(reaps) >= 2 and reaps[-1] > 0
+
+
+def test_ssh_reap_does_not_signal_an_unrelated_process_that_reused_an_id(machine, monkeypatch):
+    # A stale record from a killed command still holds group 500; now only an unrelated process, older
+    # than the tree, carries 500. ssh_reap must not signal it.
+    sent = []
+    monkeypatch.setattr(cli, "ssh_run",
+                        lambda argv, timeout=None, grace=None, input=None: sent.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(cli, "ssh_processes", lambda: {800: (1, 500, 800, 10, "S")})
+    cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": {"pids": {}, "since": 50, "groups": {500}, "sessions": set()}}]
+    try:
+        assert cli.ssh_reap(5) == []
+        assert not [argv for argv in sent if "kill" in argv]
+    finally:
+        cli.SSH_LEFT.clear()
 
 
 def test_a_child_started_after_the_tree_was_read_is_matched_by_the_group(monkeypatch):
