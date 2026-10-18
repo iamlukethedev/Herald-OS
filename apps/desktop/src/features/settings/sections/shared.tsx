@@ -4,7 +4,7 @@ import type React from 'react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Dropdown, GlassCard } from '../../../components/ui/glass.tsx'
 import { cn } from '../../../lib/cn.ts'
-import { t, useT } from '../../../store/i18n.ts'
+import { useT } from '../../../store/i18n.ts'
 
 /*
  * Building blocks shared by every Settings section: the row/group vocabulary from the mockup,
