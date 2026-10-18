@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { requestCommands } from '../commands/requests.ts'
+import { requestCommands, resetRequestFocus } from '../commands/requests.ts'
 import { PetApprovalCard } from '../features/pet/PetView.tsx'
 import { $petHeldApproval } from '../features/pet/transport.ts'
 import { $pendingRequests, type PendingRequest } from '../store/requests.ts'
@@ -20,6 +20,7 @@ let field: HTMLInputElement
 let elsewhere: HTMLButtonElement
 
 beforeEach(() => {
+  resetRequestFocus()
   $pendingRequests.set([])
   $petHeldApproval.set(null)
   page = document.createElement('div')
@@ -324,6 +325,9 @@ function asking(id: string, description: string): { entry: PendingRequest; respo
   return { entry, respond }
 }
 
+/** The answers a Tab from the card reaches, in order. */
+const tabStops = (from: HTMLElement) => [...from.querySelectorAll<HTMLElement>('button, input, textarea, select, [tabindex]')].filter(element => element.tabIndex >= 0 && !element.hasAttribute('disabled'))
+
 describe('a request arriving while another waits', () => {
   it('counts everything waiting and names the card the shortcut reaches, the oldest', async () => {
     field.focus()
@@ -359,5 +363,31 @@ describe('a request arriving while another waits', () => {
 
     act(() => petRoot.unmount())
     petHost.remove()
+  })
+})
+
+describe('the order of the answers', () => {
+  it('puts Deny first after the card, so Tab and Enter from the card deny', async () => {
+    const { entry, respond } = asking('r1', 'Delete the Old folder')
+    field.focus()
+    arrive(entry)
+    expect((await focusRequest().run({}, { source: 'cli' })).ok).toBe(false)
+    expect(document.activeElement).toBe(field)
+    await focusRequest().run({}, { source: 'shortcut' })
+    expect(document.activeElement).toBe(card())
+
+    const [first] = tabStops(card()!)
+    expect(first.textContent).toBe('Deny')
+    act(() => first.focus())
+    press('Enter')
+
+    expect(respond).toHaveBeenCalledWith({ choice: 'deny' })
+  })
+
+  it('draws Deny first wherever the card is drawn, and keeps Allow once the primary answer', () => {
+    act(() => root.render(<ApprovalCard id="r1" params={{ choices: ['once', 'session', 'always', 'deny'] }} onChoice={() => undefined} />))
+
+    expect(choices().map(button => button.textContent)).toEqual(['Deny', 'Allow once', 'Allow this session', 'Always allow'])
+    expect(tabStops(host)[0].textContent).toBe('Deny')
   })
 })

@@ -50,4 +50,10 @@ describe("the approval card in the pet's hands", () => {
     expect(document.activeElement).toBe(field)
   })
 
+  it('puts Deny first after the card, so Tab and Enter from it deny', () => {
+    act(() => root.render(<PetApprovalCard approval={{ ...approval, params: { ...approval.params, choices: ['once', 'session', 'always', 'deny'] } }} waiting={0} />))
+
+    const stops = [...card()!.querySelectorAll<HTMLElement>('button, input, [tabindex]')].filter(element => element.tabIndex >= 0)
+    expect(stops[0].textContent).toBe('Deny')
+  })
 })

@@ -43,9 +43,17 @@ into the chat. [Privacy and the audit log](privacy.md) explains the rules.
 A card never takes the keyboard from a field you are typing in, and never puts it on one of its
 answers, so a key meant for something else cannot answer it. To reach the card from the keyboard,
 press `Cmd+Option+A` on a Mac or `Super+Shift+A` on Herald OS Linux (or run **Go to the waiting
-request** from the command bar), then press Tab to get to an answer. When the card goes, the
-keyboard returns to where it was. Screen readers announce each card once as it arrives: what Hermes
-asks, how many more are waiting, and the keys that go to it.
+request** from the command bar or by voice). The keyboard lands on the card itself, for the oldest
+request waiting; Tab reaches **Deny** first, then **Allow once** and the rest. When the card goes,
+the keyboard returns to where it was. Screen readers announce each card once as it arrives: what
+Hermes asks, how many requests are waiting, and which card the keys go to.
+
+Your keys, the command bar and voice can move the keyboard to a card; Hermes's own tools and
+plugins cannot. On Herald OS Linux the key works through `herald-os os requests.focus`, so any
+program running as you can call that too, including a command Hermes runs in a terminal (Hermes's
+approval settings decide whether it may), at most once a second. A program running as you can also
+type keys into any window, with `wtype` for example, so the card guards against stray keys, not
+against such a program.
 
 ## Voice
 

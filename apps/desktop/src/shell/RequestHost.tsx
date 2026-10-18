@@ -109,7 +109,8 @@ export type ApprovalCardParams = ApprovalShape & Pick<Partial<ApprovalRequestPar
 /**
  * The approval card, here and in the pet's hands. `onChoice` routes the answer (the pet's goes to the
  * window that holds the request); `voiceHint` says whether a spoken answer counts when this window
- * cannot tell. No answer is ever focused for the person, so a key pressed elsewhere cannot answer it.
+ * cannot tell. No answer is ever focused for the person, so a key pressed elsewhere cannot answer it,
+ * and Deny comes first in the tab order, so Tab and Enter from the card deny.
  */
 export function ApprovalCard({ id, params, onChoice, voiceHint }: { id: string; params: ApprovalCardParams; onChoice?: (choice: ApprovalChoice) => void; voiceHint?: boolean }) {
   const voiceActive = useStore($voiceActive)
@@ -117,6 +118,7 @@ export function ApprovalCard({ id, params, onChoice, voiceHint }: { id: string; 
   // A running conversation on this card's session takes a spoken "yes" (allow once) or "no".
   const answerByVoice = voiceHint ?? (voiceActive && voiceSession !== null && (params.session_id === voiceSession || params.gateway_session_id === voiceSession))
   const { bridgeTool, toolName, destructive, choices } = approvalFacts(params)
+  const answers = [...choices.filter(choice => choice === 'deny'), ...choices.filter(choice => choice !== 'deny')]
 
   return (
     <div className="flex flex-col gap-3">
@@ -142,7 +144,7 @@ export function ApprovalCard({ id, params, onChoice, voiceHint }: { id: string; 
         </div>
       )}
       <div className="flex flex-wrap justify-end gap-2">
-        {choices.map(choice => (
+        {answers.map(choice => (
           <Button
             key={choice}
             variant={choice === 'deny' ? 'danger' : choice === 'once' ? 'primary' : 'secondary'}
