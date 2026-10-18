@@ -3992,6 +3992,40 @@ def test_sudo_expiring_before_any_table_is_loaded_does_not_claim_one_may_be_load
     assert a_table_that_was_never_loaded_is_not_claimed_loaded(machine, Path("/nonexistent"), capsys)
 
 
+def test_the_table_delete_s_not_there_is_read_under_a_non_english_locale(machine, monkeypatch, capsys):
+    """The table is there when the rollback lists it and gone when it deletes it. nft reports the delete
+    as 'not there' in the machine's language, but the rollback runs it under LC_ALL=C, so it reads it
+    as gone rather than a table that may still be loaded."""
+    machine.language = "de"
+    state = {"rollback": False}
+    realfw = machine.firewall
+
+    def firewall(tool, args, root):
+        if any(arg.startswith("--add-rich-rule") for arg in args):
+            state["rollback"] = True
+            return "", 11
+        return realfw(tool, args, root)
+    machine.firewall = firewall
+    real = machine.run
+    seen = []
+
+    def run(argv, timeout=None, input=None, grace=None, **kwargs):
+        bare = argv[2:] if argv[:2] == ["sudo", "-n"] else argv
+        in_c = bare[:2] == ["env", "LC_ALL=C"]
+        nft_argv = bare[2:] if in_c else bare
+        if state["rollback"] and nft_argv and Path(nft_argv[0]).name == "nft":
+            seen.append(bare)
+            if nft_argv[1:2] == ["list"]:
+                return subprocess.CompletedProcess(bare, 0, "table inet herald_os_ssh present", "")
+            if nft_argv[1:2] == ["delete"]:
+                return subprocess.CompletedProcess(bare, 1, "", NFT_NO_TABLE if in_c else NFT_NO_TABLE_DE)
+        return real(argv, timeout=timeout, input=input, grace=grace, **kwargs)
+    monkeypatch.setattr(machine, "run", run)
+    err = refused(machine, capsys, "--key", public_key())
+    assert any(b[:2] == ["env", "LC_ALL=C"] and "delete" in b for b in seen), seen
+    assert "may still be loaded" not in err
+
+
 def test_a_table_nft_says_is_not_there_in_another_language_is_still_left_alone(machine, capsys):
     """In German, nft's "No such file or directory" is "Datei oder Verzeichnis nicht gefunden"; the
     rollback asks in the C locale, so a table that is plainly not there is still read as not there."""
