@@ -3,16 +3,21 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// A stand-in for xterm: the key handler the Terminal installs runs first, and a key it lets
-// through reaches the shell as xterm would send it (Ctrl+C as ^C).
+// A stand-in for xterm 6: the key handler the Terminal installs runs first, and a key it lets
+// through reaches the shell as xterm would send it (Ctrl+C as ^C). A paste goes to the shell as
+// xterm's Clipboard.ts sends it: line breaks as CR, wrapped in ESC[200~ and ESC[201~ while the
+// program has bracketed paste on, and nothing else changed. A paste event that reaches xterm's
+// own listeners (on its input and its element) goes the same way, unfiltered.
 const xterm = vi.hoisted(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
   class FakeTerminal {
     options = {}
     selection = ''
+    bracketedPaste = true
+    element?: HTMLElement
     textarea?: HTMLTextAreaElement
-    paste = vi.fn()
+    paste = vi.fn((data: string) => this.send(data))
     focus = vi.fn()
     keys: (event: KeyboardEvent) => boolean = () => true
     private input: (data: string) => void = () => {}
@@ -26,8 +31,21 @@ const xterm = vi.hoisted(() => {
     }
 
     open(parent: HTMLElement) {
+      this.element = document.createElement('div')
       this.textarea = document.createElement('textarea')
-      parent.append(this.textarea)
+      this.element.append(this.textarea)
+      parent.append(this.element)
+      const onPaste = (event: ClipboardEvent) => {
+        event.stopPropagation()
+        this.send(event.clipboardData?.getData('text/plain') ?? '')
+      }
+      this.textarea.addEventListener('paste', onPaste)
+      this.element.addEventListener('paste', onPaste)
+    }
+
+    private send(data: string) {
+      const text = data.replace(/\r?\n/g, '\r')
+      this.input(this.bracketedPaste ? `\x1b[200~${text}\x1b[201~` : text)
     }
 
     /** What xterm does with a key from the keyboard. */
@@ -96,6 +114,19 @@ async function settle() {
   await act(async () => {
     await new Promise(resolve => setTimeout(resolve, 0))
   })
+}
+
+/** Everything the shell has been sent. */
+const shell = () => bridge.write.mock.calls.map(([, data]) => data as string).join('')
+
+/** A paste event on xterm's input, as Cmd+V, Shift+Insert and Edit > Paste make. */
+function nativePaste(text: string): ClipboardEvent {
+  const clipboardData = new DataTransfer()
+  clipboardData.setData('text/plain', text)
+  const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData })
+  xterm.terminal.textarea?.dispatchEvent(event)
+
+  return event
 }
 
 const menu = () => container.querySelector<HTMLElement>('[role="menu"][aria-label]')
@@ -177,7 +208,7 @@ describe('the Terminal keys', () => {
 
     expect(event.defaultPrevented).toBe(true)
     expect(xterm.terminal.paste).toHaveBeenCalledExactlyOnceWith('first\nsecond')
-    expect(bridge.write).not.toHaveBeenCalled()
+    expect(shell()).toBe('\x1b[200~first\rsecond\x1b[201~')
   })
 
   it('finds the keys by position on a layout without Latin letters', () => {
@@ -246,6 +277,88 @@ describe('the Terminal keys', () => {
   })
 })
 
+describe('what a paste sends the shell', () => {
+  const PATHS: [string, (text: string) => Promise<void>][] = [
+    [
+      'Ctrl+Shift+V',
+      async text => {
+        bridge.readClipboard.mockResolvedValue(text)
+        xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+        await settle()
+      }
+    ],
+    [
+      'the menu’s Paste',
+      async text => {
+        bridge.readClipboard.mockResolvedValue(text)
+        await rightClick()
+        await act(async () => item('Paste')?.click())
+        await settle()
+      }
+    ],
+    [
+      'a paste event (Cmd+V, Shift+Insert)',
+      async text => {
+        nativePaste(text)
+        await settle()
+      }
+    ]
+  ]
+
+  const CLIPBOARDS: [string, string, string][] = [
+    ['ESC[201~ at the start', '\x1b[201~echo pwned\r', 'echo pwned\r'],
+    ['ESC[201~ in the middle', 'echo safe\x1b[201~echo pwned\r', 'echo safeecho pwned\r'],
+    ['ESC[201~ at the end', 'echo safe\x1b[201~', 'echo safe'],
+    ['ESC[200~ at the start', '\x1b[200~echo pwned', 'echo pwned'],
+    ['ESC[200~ in the middle', 'echo safe\x1b[200~echo pwned', 'echo safeecho pwned'],
+    ['ESC[200~ at the end', 'echo safe\x1b[200~', 'echo safe'],
+    ['a bare ESC', 'echo \x1bsafe\x1b', 'echo safe'],
+    ['the 8-bit CSI and 201~', '\x9b201~echo pwned\r', 'echo pwned\r'],
+    ['other C0 controls and DEL', 'echo\x00\x03\x04\x08\x1a\x7f safe', 'echo safe'],
+    ['lines and tabs', 'echo one\necho two\r\nprintf "a\tb"\n', 'echo one\recho two\rprintf "a\tb"\r']
+  ]
+
+  for (const [path, paste] of PATHS) {
+    it.each(CLIPBOARDS)(`through ${path}, with %s`, async (_label, clipboard, expected) => {
+      await paste(clipboard)
+
+      expect(shell()).toBe(`\x1b[200~${expected}\x1b[201~`)
+    })
+  }
+
+  it('takes a paste event from xterm, which never sees it', async () => {
+    const event = nativePaste('\x1b[201~echo pwned\r')
+    await settle()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(xterm.terminal.paste).toHaveBeenCalledExactlyOnceWith('echo pwned\r')
+    expect(bridge.write).toHaveBeenCalledOnce()
+  })
+
+  it('filters one paste event as a whole, before xterm splits anything', async () => {
+    const big = `${'x'.repeat(5000)}\x1b[201~echo pwned\r${'y'.repeat(5000)}`
+    nativePaste(big)
+    await settle()
+
+    expect(xterm.terminal.paste).toHaveBeenCalledExactlyOnceWith(`${'x'.repeat(5000)}echo pwned\r${'y'.repeat(5000)}`)
+  })
+
+  it('cannot be fooled by a marker split across two pastes', async () => {
+    nativePaste('echo safe\x1b')
+    nativePaste('[201~echo pwned\r')
+    await settle()
+
+    expect(shell()).toBe('\x1b[200~echo safe\x1b[201~\x1b[200~[201~echo pwned\r\x1b[201~')
+  })
+
+  it('sends nothing for a clipboard of nothing but controls', async () => {
+    nativePaste('\x1b[201~\x1b\x9b\x7f')
+    await settle()
+
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+})
+
 describe('the Terminal menu', () => {
   it('opens on a right-click with Copy and Paste, Copy off with nothing selected', async () => {
     const event = await rightClick()
@@ -276,7 +389,7 @@ describe('the Terminal menu', () => {
     await settle()
 
     expect(xterm.terminal.paste).toHaveBeenCalledExactlyOnceWith('echo pasted')
-    expect(bridge.write).not.toHaveBeenCalled()
+    expect(shell()).toBe('\x1b[200~echo pasted\x1b[201~')
   })
 
   it('moves between its items with the arrow keys', async () => {

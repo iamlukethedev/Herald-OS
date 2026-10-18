@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { sanitizePaste } from '../../../shared/terminal-clipboard.ts'
 import { terminalColors } from '../../../shared/theme.ts'
 import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/primitives.tsx'
@@ -305,6 +306,14 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       showMenu(event.clientX, event.clientY)
     }
     el.addEventListener('contextmenu', onContextMenu)
+    // Cmd+V, Shift+Insert and Edit > Paste arrive as a paste event, which xterm would hand to the
+    // shell unfiltered; caught on the way down, it never reaches xterm's own listeners.
+    const onPaste = (event: ClipboardEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '')
+    }
+    el.addEventListener('paste', onPaste, true)
     const offData = window.heraldOS.terminal.onData((tid, data) => {
       if (tid === id) {
         terminal.write(data)
@@ -322,6 +331,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
 
     return () => {
       el.removeEventListener('contextmenu', onContextMenu)
+      el.removeEventListener('paste', onPaste, true)
       observer.disconnect()
       offData()
       onInput.dispose()
@@ -400,7 +410,6 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-/** Through xterm's paste, which brackets the text for a program that asked for bracketed paste. */
 async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void> {
   let text: string
 
@@ -414,8 +423,20 @@ async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void>
     return
   }
 
-  if (text && live()) {
-    terminal.paste(text)
+  if (live()) {
+    pasteText(terminal, text)
+  }
+}
+
+/**
+ * Every paste ends here, filtered as one string, then goes through xterm's paste, which brackets
+ * it for a program that asked for bracketed paste.
+ */
+function pasteText(terminal: Terminal, text: string): void {
+  const clean = sanitizePaste(text)
+
+  if (clean) {
+    terminal.paste(clean)
   }
 }
 
