@@ -2157,7 +2157,7 @@ def the_budget_is_five_minutes(machine: System, tmp_path: Path, capsys) -> bool:
 def a_reused_group_or_session_id_is_not_the_tree_s(machine: System, tmp_path: Path, capsys) -> bool:
     """A killed command's group (500) and session (600) empty, and the next scan sees that; later a new
     process leads a group and a session that reuse both ids. It is not the tree's, so not killed."""
-    tree = {"pids": {500: 1}, "since": 5, "groups": {500}, "sessions": {600}}
+    tree = {"pids": {500: 1}, "groups": {500}, "sessions": {600}}
     scans = iter([
         {500: (1, 500, 600, 1, "S"), 501: (500, 500, 600, 7, "S")},    # still there (a late child too)
         {},                                                            # gone: both ids free
@@ -2171,7 +2171,7 @@ def a_reused_group_or_session_id_is_not_the_tree_s(machine: System, tmp_path: Pa
 
 def ssh_alive_matches_a_process_by_session(machine: System, tmp_path: Path, capsys) -> bool:
     """A process in the tree's session but not its groups, and not a tracked pid, is still the tree's."""
-    tree = {"pids": {}, "since": 0, "groups": set(), "sessions": {600}}
+    tree = {"pids": {}, "groups": set(), "sessions": {600}}
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(machine.module, "ssh_processes", lambda: {700: (1, 700, 600, 5, "S")})
         return machine.module.ssh_alive(tree) == [700]
@@ -2245,18 +2245,6 @@ def the_end_gets_a_reserved_share(machine: System, tmp_path: Path, capsys) -> bo
     with pytest.MonkeyPatch.context() as patch:
         _, reaps = rollback_on_a_fake_clock(machine, patch)
     return len(reaps) >= 2 and reaps[-1] > 0
-
-
-def a_process_older_than_the_tree_is_not_the_tree_s(machine: System, tmp_path: Path, capsys) -> bool:
-    """500 is the command's group; before any scan catches it empty, an unrelated process that was
-    already running when the tree was read (start 2, before `since` 5) leads group 500. The drop guard
-    never fires, so only the start-time guard keeps it from being matched and killed."""
-    tree = {"pids": {500: 1}, "since": 5, "groups": {500}, "sessions": set()}
-    processes = {800: (1, 500, 800, 2, "S"), 900: (1, 900, 900, 9, "S")}
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(machine.module, "ssh_processes", lambda: processes)
-        alive = machine.module.ssh_alive(tree)
-    return alive == []
 
 
 def a_table_that_was_never_loaded_is_not_claimed_loaded(machine: System, tmp_path: Path, capsys) -> bool:
@@ -2394,7 +2382,6 @@ MUTANTS = {
     "a file put back with each command's full time": (a_file_put_back_splits_its_time, "slot(ssh_limit(None), parts=2)", "slot(ssh_limit(None))"),
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
-    "a process older than the tree still matched": (a_process_older_than_the_tree_is_not_the_tree_s, "start >= since and ", ""),
     "ssh_alive ignoring sessions": (ssh_alive_matches_a_process_by_session, 'group in tree["groups"] or session in tree["sessions"]', 'group in tree["groups"]'),
     "a kill leaving the pipes open": (a_kill_closes_the_command_s_pipes, "                stream.close()", "                pass"),
     "the reap at the start of the rollback dropped": (the_rollback_reaps_at_the_start, "    ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free())))\n", ""),
@@ -4030,10 +4017,6 @@ def test_a_group_or_session_id_reused_after_the_tree_s_ended_is_left_alone(machi
     assert a_reused_group_or_session_id_is_not_the_tree_s(machine, tmp_path, capsys)
 
 
-def test_a_process_older_than_the_tree_is_not_matched_by_a_shared_id(machine, capsys, tmp_path):
-    assert a_process_older_than_the_tree_is_not_the_tree_s(machine, tmp_path, capsys)
-
-
 def test_ssh_alive_matches_a_process_by_its_session(machine, capsys, tmp_path):
     assert ssh_alive_matches_a_process_by_session(machine, tmp_path, capsys)
 
@@ -4052,14 +4035,15 @@ def test_the_keys_and_the_end_each_keep_a_share_of_the_budget(machine, capsys, t
     assert called and len(reaps) >= 2 and reaps[-1] > 0
 
 
-def test_ssh_reap_does_not_signal_an_unrelated_process_that_reused_an_id(machine, monkeypatch):
-    # A stale record from a killed command still holds group 500; now only an unrelated process, older
-    # than the tree, carries 500. ssh_reap must not signal it.
+def test_ssh_reap_leaves_a_process_that_reused_a_freed_id_alone(machine, monkeypatch):
+    # A stale record from a killed command holds group 500. The command has ended (500 empty), so the
+    # first scan drops 500; a later process that reuses 500 is not the tree's and is not signalled.
     sent = []
     monkeypatch.setattr(cli, "ssh_run",
                         lambda argv, timeout=None, grace=None, input=None: sent.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
-    monkeypatch.setattr(cli, "ssh_processes", lambda: {800: (1, 500, 800, 10, "S")})
-    cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": {"pids": {}, "since": 50, "groups": {500}, "sessions": set()}}]
+    scans = iter([{}, {800: (1, 500, 800, 10, "S")}, {800: (1, 500, 800, 10, "S")}])
+    monkeypatch.setattr(cli, "ssh_processes", lambda: next(scans))
+    cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": {"pids": {}, "groups": {500}, "sessions": set()}}]
     try:
         assert cli.ssh_reap(5) == []
         assert not [argv for argv in sent if "kill" in argv]
@@ -4067,12 +4051,52 @@ def test_ssh_reap_does_not_signal_an_unrelated_process_that_reused_an_id(machine
         cli.SSH_LEFT.clear()
 
 
-def test_a_child_started_after_the_tree_was_read_is_matched_by_the_group(monkeypatch):
-    # The command forks a child after it was looked at; it shares the group and is no older, so it is
-    # the tree's and gets ended.
-    tree = {"pids": {500: 1}, "since": 5, "groups": {500}, "sessions": set()}
+def test_a_child_the_command_left_in_its_group_is_matched(monkeypatch):
+    # A child the command started or orphaned shares the group (or session), so it is the tree's and
+    # gets ended, even though it is not one of the tracked pids.
+    tree = {"pids": {500: 1}, "groups": {500}, "sessions": set()}
     monkeypatch.setattr(cli, "ssh_processes", lambda: {500: (1, 500, 500, 1, "S"), 600: (500, 500, 500, 8, "S")})
     assert cli.ssh_alive(tree) == [500, 600]
+
+
+@needs_linux_procs
+def test_an_orphan_the_command_left_in_its_session_is_found_so_it_is_reaped(tmp_path):
+    """A command and a process it orphaned share a session and group; the orphan's parent is now init,
+    so it is not in the tree's pids. After the group is killed the orphan is still there, and ssh_alive
+    must find it by its group and session so ssh_reap ends it. (The repro the reviewer gave.)"""
+    import time
+    before = {session for _, _, session, _, _ in cli.ssh_processes().values()}
+    proc = subprocess.Popen(["setsid", "sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"])
+    leader = members = None
+    try:
+        for _ in range(100):
+            procs = cli.ssh_processes()
+            by_session: dict = {}
+            for pid, (_, _, session, _, state) in procs.items():
+                if state not in ("Z", "X"):
+                    by_session.setdefault(session, []).append(pid)
+            fresh = [s for s in by_session if s not in before and s in procs and len(by_session[s]) >= 2]
+            if fresh:
+                leader, members = fresh[0], by_session[fresh[0]]
+                break
+            time.sleep(0.05)
+        assert leader is not None, "the session with the orphan never appeared"
+        tree = cli.ssh_tree(leader)
+        orphans = [pid for pid in members if pid != leader and pid not in tree["pids"]]
+        assert orphans, "the orphan should not be one of the tree's own pids"
+        os.kill(leader, signal.SIGKILL)
+        for _ in range(100):
+            if leader not in cli.ssh_processes():
+                break
+            time.sleep(0.05)
+        alive = cli.ssh_alive(tree)
+        assert set(orphans) & set(alive), f"the orphan {orphans} was not found in {alive}"
+    finally:
+        try:
+            os.killpg(leader, signal.SIGKILL)
+        except (ProcessLookupError, TypeError):
+            pass
+        proc.wait(timeout=5)
 
 
 def test_a_group_carried_only_by_a_zombie_is_still_the_tree_s(monkeypatch):
