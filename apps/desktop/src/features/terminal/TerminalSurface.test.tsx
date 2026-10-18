@@ -533,6 +533,30 @@ describe('a drop on the Terminal', () => {
     ])
   })
 
+  it('says only text can be dropped once in five seconds, not once a drop', async () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+
+    const first = dragAndDrop({ Files: '' })
+    now += 1000
+    const second = dragAndDrop({ Files: '', 'image/png': '' })
+    await settle()
+
+    expect(raised).toEqual(['Only text can be dropped here'])
+    expect(first.drop?.defaultPrevented).toBe(true)
+    expect(second.drop?.defaultPrevented).toBe(true)
+
+    now += 5000
+    dragAndDrop({ Files: '' })
+    await settle()
+    stop()
+
+    expect(raised).toEqual(['Only text can be dropped here', 'Only text can be dropped here'])
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
   it('pastes a link dragged from a browser as its address, bracketed, with no notice', async () => {
     const url = 'https://example.com/docs?page=2'
     const { over, drop } = dragAndDrop({ 'text/uri-list': url, 'text/plain': url })
