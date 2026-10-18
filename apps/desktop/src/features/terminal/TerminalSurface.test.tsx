@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // through reaches the shell as xterm would send it (Ctrl+C as ^C). A paste goes to the shell as
 // xterm's Clipboard.ts sends it: line breaks as CR, wrapped in ESC[200~ and ESC[201~ while the
 // program has bracketed paste on, and nothing else changed. A paste event that reaches xterm's
-// own listeners (on its input and its element) goes the same way, unfiltered.
+// own listeners (on its input and its element) goes the same way, unfiltered, and a copy event
+// that reaches xterm's gets the whole selection, as its copyHandler gives it.
 const xterm = vi.hoisted(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -41,6 +42,12 @@ const xterm = vi.hoisted(() => {
       }
       this.textarea.addEventListener('paste', onPaste)
       this.element.addEventListener('paste', onPaste)
+      this.textarea.addEventListener('copy', event => {
+        if (this.selection) {
+          event.clipboardData?.setData('text/plain', this.selection)
+          event.preventDefault()
+        }
+      })
     }
 
     private send(data: string) {
@@ -127,6 +134,15 @@ function nativePaste(text: string): ClipboardEvent {
   xterm.terminal.textarea?.dispatchEvent(event)
 
   return event
+}
+
+/** A copy event on xterm's input, as Cmd+C, Edit > Copy and a spoken "copy" make. */
+function nativeCopy(): { event: ClipboardEvent; copied: string } {
+  const clipboardData = new DataTransfer()
+  const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData })
+  xterm.terminal.textarea?.dispatchEvent(event)
+
+  return { event, copied: clipboardData.getData('text/plain') }
 }
 
 const menu = () => container.querySelector<HTMLElement>('[role="menu"][aria-label]')
@@ -274,6 +290,33 @@ describe('the Terminal keys', () => {
 
     expect(terminal.paste).not.toHaveBeenCalled()
     root = createRoot(container)
+  })
+})
+
+describe('a copy event (Cmd+C, Edit > Copy)', () => {
+  it('copies the selection as Ctrl+Shift+C does, and xterm never answers it', () => {
+    xterm.terminal.selection = 'selected output'
+    const { event, copied } = nativeCopy()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(copied).toBe('')
+    expect(bridge.writeClipboard).toHaveBeenCalledExactlyOnceWith('selected output')
+  })
+
+  it('holds the copy to the same limit', () => {
+    xterm.terminal.selection = 'a'.repeat(1024 * 1024 + 1)
+    const { copied } = nativeCopy()
+
+    expect(copied).toBe('')
+    expect(bridge.writeClipboard).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => n.title)).toEqual(['Too much to copy'])
+  })
+
+  it('leaves the clipboard alone with nothing selected', () => {
+    const { event } = nativeCopy()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(bridge.writeClipboard).not.toHaveBeenCalled()
   })
 })
 

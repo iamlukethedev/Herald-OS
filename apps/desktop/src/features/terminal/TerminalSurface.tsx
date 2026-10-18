@@ -325,6 +325,14 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       pasteText(terminal, event.clipboardData?.getData('text/plain') ?? '')
     }
     el.addEventListener('paste', onPaste, true)
+    // Cmd+C, Edit > Copy and a spoken "copy" arrive as a copy event, which xterm would answer with
+    // the whole selection; caught the same way, it takes Ctrl+Shift+C's copy and its limit.
+    const onCopy = (event: ClipboardEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      void copyText(terminal.getSelection())
+    }
+    el.addEventListener('copy', onCopy, true)
     const offData = window.heraldOS.terminal.onData((tid, data) => {
       if (tid === id) {
         terminal.write(data)
@@ -343,6 +351,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
     return () => {
       el.removeEventListener('contextmenu', onContextMenu)
       el.removeEventListener('paste', onPaste, true)
+      el.removeEventListener('copy', onCopy, true)
       observer.disconnect()
       offData()
       onInput.dispose()
