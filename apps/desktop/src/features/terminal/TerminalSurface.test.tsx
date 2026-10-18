@@ -591,6 +591,57 @@ describe('a drop on the Terminal', () => {
     expect(bridge.write).not.toHaveBeenCalled()
   })
 
+  it('does not let the drop notice and a paste refusal hold each other back', async () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    try {
+      dragAndDrop({ Files: '' })
+      now += 100
+      nativePaste('echo hello\r')
+      now += 100
+      dragAndDrop({ Files: '' })
+      nativePaste('echo hello\r')
+      await settle()
+
+      expect(raised).toEqual(['That can’t be dropped here', 'The Terminal is not in front'])
+    } finally {
+      focus.mockRestore()
+      stop()
+    }
+  })
+
+  it.each([
+    ['the drop notice', () => dragAndDrop({ Files: '' }), 'That can’t be dropped here'],
+    ['a paste refusal', () => nativePaste('echo hello\r'), 'The Terminal is not in front']
+  ])('holds %s back for exactly five seconds', async (_label, raise, title) => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    try {
+      raise()
+      now += 4999
+      raise()
+      await settle()
+      expect(raised).toEqual([title])
+
+      now += 1
+      raise()
+      await settle()
+
+      expect(raised).toEqual([title, title])
+    } finally {
+      focus.mockRestore()
+      stop()
+    }
+  })
+
   it('shows the notice its full six seconds when a drop raises it again after five', () => {
     let now = Date.now()
     clock.mockImplementation(() => now)
