@@ -519,7 +519,19 @@ describe('what a paste sends the shell', () => {
     await settle()
 
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
-    expect($notifications.get().map(n => [n.title, n.body, n.level])).toEqual([['Too much to paste', 'The clipboard holds more than 1 MB of text, more than the Terminal pastes at once.', 'warn']])
+    expect($notifications.get().map(n => [n.title, n.body, n.level])).toEqual([['Too much to paste', 'The clipboard holds more than 1 MiB of text, more than the Terminal pastes at once.', 'warn']])
+  })
+
+  it.each([
+    ['pt-BR', 'A área de transferência tem mais de 1 MiB de texto, mais do que o Terminal cola de uma vez.'],
+    ['zh-CN', '剪贴板中的文本超过 1 MiB，超出了终端一次能粘贴的上限。']
+  ] as const)('names the limit as 1 MiB in %s too', async (language, body) => {
+    act(() => $prefs.set({ ...PREFS, language }))
+    bridge.readClipboard.mockResolvedValue({ tooLarge: true })
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    await settle()
+
+    expect($notifications.get().map(n => n.body)).toEqual([body])
   })
 
   it('holds a paste event to the same limit', async () => {

@@ -75,7 +75,7 @@ is there once some text is selected. A paste reaches the program as a paste, so 
 shell that tells pasted text from typing still does. Escape sequences and other control characters
 are taken out of what you paste, so text copied from a web page cannot end the paste early and run
 a command of its own. Text dragged onto the Terminal pastes the same way. The Terminal pastes or
-copies up to 1 MB at a time.
+copies up to 1 MiB at a time.
 
 | Action | macOS | Herald OS Linux |
 | --- | --- | --- |

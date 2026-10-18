@@ -89,7 +89,7 @@ export const en = {
   'terminal.pasteFailed': 'Could not paste into the Terminal',
   'terminal.clipboardUnavailable': 'Herald OS could not reach the system clipboard. Try again in a moment.',
   'terminal.pasteTooLarge': 'Too much to paste',
-  // {size} is a size such as “1 MB”.
+  // {size} is a size in binary units, such as “1 MiB”.
   'terminal.pasteTooLargeBody': 'The clipboard holds more than {size} of text, more than the Terminal pastes at once.',
   'terminal.copyTooLarge': 'Too much to copy',
   'terminal.copyTooLargeBody': 'The selection is more than {size}, more than the Terminal copies at once.',

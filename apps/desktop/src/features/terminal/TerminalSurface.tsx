@@ -10,7 +10,6 @@ import { terminalColors } from '../../../shared/theme.ts'
 import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
-import { formatBytes } from '../../lib/format.ts'
 import { logFailure } from '../../lib/report.ts'
 import { useShellCommands } from '../../shell/surfaces/shell-utils.ts'
 import { $env, $prefs } from '../../store/backend.ts'
@@ -543,5 +542,5 @@ function pasteRefused(reason: 'unfocused' | 'rate-limited'): void {
 }
 
 function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody'): void {
-  notify({ title: t(title), body: t(body, { size: formatBytes(TERMINAL_CLIPBOARD_LIMIT, 0) }), level: 'warn', key: 'terminal.clipboard' })
+  notify({ title: t(title), body: t(body, { size: `${TERMINAL_CLIPBOARD_LIMIT / (1024 * 1024)} MiB` }), level: 'warn', key: 'terminal.clipboard' })
 }
