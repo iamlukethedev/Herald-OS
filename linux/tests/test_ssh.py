@@ -4079,49 +4079,85 @@ def test_ssh_alive_wants_the_recorded_start_time(machine, capsys, tmp_path):
     assert ssh_alive_wants_the_recorded_start_time(machine, tmp_path, capsys)
 
 
+# A recorded member of the command, in our own session (so the session is not in the tree), that moves
+# to a new group on SIGTERM is held only by its pid and start time. The driver reaps it, as root, inside
+# a session of its own (setsid), so a regressed own-group/session exclusion could not reach the real
+# shell: and before reaping it asserts the reaper's own group and session are not among the targets.
+PID_MOVE_DRIVER = """
+import json, os, signal, subprocess, sys, time
+sys.path.insert(0, {tests!r})
+import test_ssh
+cli = test_ssh.cli
+marker = sys.argv[1]
+cli.SSH_KILL_GRACE = 1
+cli.os.geteuid = lambda: 0
+# A bystander in our (the driver's) own group and session, which must never be a target.
+bystander = subprocess.Popen(["sleep", "60"])
+# A child in our group and session that, on SIGTERM, moves to a new group of its own and lives on.
+code = ("import os, signal, time\\n"
+        "signal.signal(signal.SIGTERM, lambda *a: os.setpgid(0, 0))\\n"
+        "open(%r, 'w').write(str(os.getpid()))\\n"
+        "[time.sleep(0.05) for _ in range(1200)]" % marker)
+command = subprocess.Popen([sys.executable, "-c", code])
+for _ in range(200):
+    if os.path.exists(marker) and command.pid in cli.ssh_processes():
+        break
+    time.sleep(0.05)
+tree = cli.ssh_tree(command.pid)
+in_pids = command.pid in tree["pids"]
+in_groups = command.pid in tree["groups"]
+os.kill(command.pid, signal.SIGTERM)
+for _ in range(200):
+    try:
+        if os.getpgid(command.pid) == command.pid:
+            break
+    except ProcessLookupError:
+        break
+    time.sleep(0.05)
+targets = cli.ssh_alive(tree)
+safe = (os.getpgrp() not in tree["groups"] and os.getsid(0) not in tree["sessions"]
+        and os.getpid() not in targets and bystander.pid not in targets)
+cli.SSH_LEFT[:] = [{{"argv": ["firewall-cmd", "--add"], "tree": tree}}]
+left = cli.ssh_reap(10)
+procs = cli.ssh_processes()
+reaped = command.pid not in procs or procs[command.pid][4] in ("Z", "X")
+bystander_alive = bystander.poll() is None and bystander.pid in procs and procs[bystander.pid][4] not in ("Z", "X")
+print(json.dumps({{"in_pids": in_pids, "in_groups": in_groups, "safe": safe, "reaped": reaped,
+                   "bystander_alive": bystander_alive, "left": left}}))
+sys.stdout.flush()
+for pid in (command.pid, bystander.pid):
+    try:
+        os.kill(pid, 9)
+    except (ProcessLookupError, OSError):
+        pass
+"""
+
+
 @needs_linux_procs
-def test_a_recorded_process_that_moves_group_on_sigterm_is_still_reaped_by_pid(monkeypatch, tmp_path):
+def test_a_recorded_process_that_moves_group_on_sigterm_is_still_reaped_by_pid(tmp_path):
     """A recorded member of the command, in our own session (so the session is not in the tree), that
     moves to a new group on SIGTERM is no longer caught by any group or session the tree holds; only its
-    pid and start time match, so dropping the pid clause would leave it unreaped. Reaped as root here on
-    our own child; the own-session exclusion keeps the kill off the rest of our session."""
+    pid and start time match, so dropping the pid clause would leave it unreaped. The reap runs in a
+    caged session of its own, and the driver asserts the reaper's group and session, and a bystander in
+    them, are not among the targets, so a regressed exclusion could not reach the real shell."""
     import sys
-    import time
-    monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
-    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    # A child in our own group and session that, on SIGTERM, moves to a new group of its own and lives on.
-    code = ("import os, signal, time\n"
-            "signal.signal(signal.SIGTERM, lambda *a: os.setpgid(0, 0))\n"
-            "open('%s', 'w').write(str(os.getpid()))\n"
-            "[time.sleep(0.05) for _ in range(6000)]")
     marker = tmp_path / "pid"
-    command = subprocess.Popen([sys.executable, "-c", code % marker])
+    driver = tmp_path / "pid_move.py"
+    driver.write_text(PID_MOVE_DRIVER.format(tests=str(Path(__file__).parent)))
+    proc = subprocess.Popen([sys.executable, str(driver), str(marker)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        for _ in range(100):
-            if marker.exists() and command.pid in cli.ssh_processes():
-                break
-            time.sleep(0.05)
-        tree = cli.ssh_tree(command.pid)
-        # The command is in our own group and session, both excluded from the tree, so it is held only
-        # by its pid.
-        assert command.pid in tree["pids"] and command.pid not in tree["groups"], tree
-        os.kill(command.pid, signal.SIGTERM)
-        for _ in range(100):
-            if os.getpgid(command.pid) == command.pid:  # it moved to a new group of its own
-                break
-            time.sleep(0.05)
-        assert os.getpgid(command.pid) == command.pid and command.pid not in tree["groups"] and command.pid not in tree["sessions"]
-        cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": tree}]
-        assert cli.ssh_reap(10) == [], "the moved process was not reaped"
-        command.wait(timeout=5)
-        assert command.poll() is not None
+        out, err = proc.communicate(timeout=60)
     finally:
-        cli.SSH_LEFT.clear()
         try:
-            os.kill(command.pid, signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        command.wait(timeout=5)
+    result = json.loads(out.strip().splitlines()[-1])
+    assert result["in_pids"] and not result["in_groups"], result
+    assert result["safe"], (result, err)
+    assert result["reaped"], (result, err)
+    assert result["bystander_alive"], (result, err)
 
 
 def test_ssh_alive_matches_a_process_by_its_session(machine, capsys, tmp_path):
@@ -4199,7 +4235,7 @@ assert libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
 # The command is its own session leader (start_new_session). A subshell backgrounds the orphan, which
 # writes its pid to the marker, then exits, so the orphan is reparented (to this subreaper), keeping
 # the command's session and group.
-script = "( sh -c 'echo $$ > %s; exec sleep 300' & ) ; exec sleep 300" % marker
+script = "( sh -c 'echo $$ > %s; exec sleep 60' & ) ; exec sleep 60" % marker
 command = subprocess.Popen(["sh", "-c", script], start_new_session=True)
 leader = command.pid
 orphan = None
@@ -4284,9 +4320,9 @@ if mode == "remove":
     cli.os.getsid = lambda pid=0: -1
 
 # A bystander in our own group and session (we are the session leader under setsid).
-bystander = subprocess.Popen(["sleep", "300"])
+bystander = subprocess.Popen(["sleep", "60"])
 # A command in a new group but our session, as ssh_run runs one; it leaves an orphan in that new group.
-command = subprocess.Popen(["sh", "-c", "sh -c 'sleep 300 &'; exec sleep 300"], process_group=0)
+command = subprocess.Popen(["sh", "-c", "sh -c 'sleep 60 &'; exec sleep 60"], process_group=0)
 cmd_group = os.getpgid(command.pid)
 orphan = None
 for _ in range(200):
