@@ -2177,6 +2177,24 @@ def ssh_alive_matches_a_process_by_session(machine: System, tmp_path: Path, caps
         return machine.module.ssh_alive(tree) == [700]
 
 
+def ssh_alive_matches_a_recorded_pid_that_moved(machine: System, tmp_path: Path, capsys) -> bool:
+    """A recorded process that moved to a new group and session (none the tree holds) is still found by
+    its pid and start time, so the pid clause alone must catch it."""
+    tree = {"pids": {500: 3}, "groups": set(), "sessions": set()}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "ssh_processes", lambda: {500: (1, 999, 888, 3, "S")})
+        return machine.module.ssh_alive(tree) == [500]
+
+
+def ssh_alive_wants_the_recorded_start_time(machine: System, tmp_path: Path, capsys) -> bool:
+    """A process on a recorded pid but with a different start time is a reused pid, not the recorded
+    process, so it must not match on the pid clause."""
+    tree = {"pids": {500: 3}, "groups": set(), "sessions": set()}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(machine.module, "ssh_processes", lambda: {500: (1, 999, 888, 9, "S")})
+        return machine.module.ssh_alive(tree) == []
+
+
 def a_kill_closes_the_command_s_pipes(machine: System, tmp_path: Path, capsys) -> bool:
     """A killed command's pipes are closed, so nothing of this run is left holding them open."""
     proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -2383,6 +2401,8 @@ MUTANTS = {
     "a budget other than five minutes": (the_budget_is_five_minutes, "SSH_ROLLBACK_BUDGET = 300\n", "SSH_ROLLBACK_BUDGET = 3000\n"),
     "a reused group or session id still matched": (a_reused_group_or_session_id_is_not_the_tree_s, '    tree["groups"] &= {group for _, group, _, _, _ in processes.values()}\n    tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}\n', ""),
     "ssh_alive ignoring sessions": (ssh_alive_matches_a_process_by_session, 'group in tree["groups"] or session in tree["sessions"]', 'group in tree["groups"]'),
+    "ssh_alive ignoring a recorded pid": (ssh_alive_matches_a_recorded_pid_that_moved, 'tree["pids"].get(pid) == start or ', ''),
+    "ssh_alive not checking the recorded start": (ssh_alive_wants_the_recorded_start_time, 'tree["pids"].get(pid) == start', 'pid in tree["pids"]'),
     "a kill leaving the pipes open": (a_kill_closes_the_command_s_pipes, "                stream.close()", "                pass"),
     "the reap at the start of the rollback dropped": (the_rollback_reaps_at_the_start, "    ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free())))\n", ""),
     "no share kept for the keys": (the_keys_get_a_reserved_share, '"keys": 1 if keys_out else 0', '"keys": 0'),
@@ -4049,6 +4069,59 @@ def test_only_the_mutants_that_need_a_session_of_their_own_are_skipped_off_linux
 
 def test_a_group_or_session_id_reused_after_the_tree_s_ended_is_left_alone(machine, capsys, tmp_path):
     assert a_reused_group_or_session_id_is_not_the_tree_s(machine, tmp_path, capsys)
+
+
+def test_ssh_alive_matches_a_recorded_pid_that_moved(machine, capsys, tmp_path):
+    assert ssh_alive_matches_a_recorded_pid_that_moved(machine, tmp_path, capsys)
+
+
+def test_ssh_alive_wants_the_recorded_start_time(machine, capsys, tmp_path):
+    assert ssh_alive_wants_the_recorded_start_time(machine, tmp_path, capsys)
+
+
+@needs_linux_procs
+def test_a_recorded_process_that_moves_group_on_sigterm_is_still_reaped_by_pid(monkeypatch, tmp_path):
+    """A recorded member of the command, in our own session (so the session is not in the tree), that
+    moves to a new group on SIGTERM is no longer caught by any group or session the tree holds; only its
+    pid and start time match, so dropping the pid clause would leave it unreaped. Reaped as root here on
+    our own child; the own-session exclusion keeps the kill off the rest of our session."""
+    import sys
+    import time
+    monkeypatch.setattr(cli, "SSH_KILL_GRACE", 1)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    # A child in our own group and session that, on SIGTERM, moves to a new group of its own and lives on.
+    code = ("import os, signal, time\n"
+            "signal.signal(signal.SIGTERM, lambda *a: os.setpgid(0, 0))\n"
+            "open('%s', 'w').write(str(os.getpid()))\n"
+            "[time.sleep(0.05) for _ in range(6000)]")
+    marker = tmp_path / "pid"
+    command = subprocess.Popen([sys.executable, "-c", code % marker])
+    try:
+        for _ in range(100):
+            if marker.exists() and command.pid in cli.ssh_processes():
+                break
+            time.sleep(0.05)
+        tree = cli.ssh_tree(command.pid)
+        # The command is in our own group and session, both excluded from the tree, so it is held only
+        # by its pid.
+        assert command.pid in tree["pids"] and command.pid not in tree["groups"], tree
+        os.kill(command.pid, signal.SIGTERM)
+        for _ in range(100):
+            if os.getpgid(command.pid) == command.pid:  # it moved to a new group of its own
+                break
+            time.sleep(0.05)
+        assert os.getpgid(command.pid) == command.pid and command.pid not in tree["groups"] and command.pid not in tree["sessions"]
+        cli.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": tree}]
+        assert cli.ssh_reap(10) == [], "the moved process was not reaped"
+        command.wait(timeout=5)
+        assert command.poll() is not None
+    finally:
+        cli.SSH_LEFT.clear()
+        try:
+            os.kill(command.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        command.wait(timeout=5)
 
 
 def test_ssh_alive_matches_a_process_by_its_session(machine, capsys, tmp_path):
