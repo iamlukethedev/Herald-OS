@@ -117,6 +117,7 @@ const { $notifications } = await import('../../store/notifications.ts')
 const { TerminalSurface } = await import('./TerminalSurface.tsx')
 const { editCommands } = await import('../../commands/edit.ts')
 const { defineCommands, resetCommands, runCommand } = await import('../../store/os-commands.ts')
+const { rememberFocusedEditable } = await import('../../store/edit-target.ts')
 const PREFS = $prefs.get()
 
 let root: Root
@@ -391,6 +392,20 @@ describe('a spoken or Hermes "paste" into the Terminal', () => {
     expect(result).toMatchObject({ ok: true, summary: 'Pasted into the terminal' })
     expect(fresh.paste).toHaveBeenCalledExactlyOnceWith('echo fresh')
     expect(old.paste).not.toHaveBeenCalled()
+  })
+
+  it('does not take a spoken paste into a Terminal that cannot have the keyboard, such as a hidden tab', async () => {
+    const input = xterm.terminal.textarea!
+    rememberFocusedEditable()
+    input.blur()
+    // A hidden tab's input is still on the page but cannot take the focus.
+    vi.spyOn(input, 'focus').mockImplementation(() => {})
+    const result = await runCommand('edit.paste', {}, { source: 'voice' })
+
+    expect(result).toMatchObject({ ok: false, error: 'Nothing to type into. Click a text field (or the terminal) first, then say it again.' })
+    expect(bridge.readClipboard).not.toHaveBeenCalled()
+    expect(bridge.editPerform).not.toHaveBeenCalled()
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
   })
 
   it('pastes through main and the filter, and says it did', async () => {

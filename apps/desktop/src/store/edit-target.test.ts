@@ -12,7 +12,7 @@ vi.mock('./windows.ts', async () => {
   return { $focusedWindowId: atom(null), $windows: atom({}), focusWindow: vi.fn() }
 })
 
-const { performEdit, setOwnPaste } = await import('./edit-target.ts')
+const { performEdit, rememberFocusedEditable, setOwnPaste } = await import('./edit-target.ts')
 
 const perform = vi.fn()
 let field: HTMLTextAreaElement
@@ -61,6 +61,20 @@ describe('a field with its own paste', () => {
 
     expect(newer).toHaveBeenCalledOnce()
     expect(older).not.toHaveBeenCalled()
+    expect(perform).not.toHaveBeenCalled()
+  })
+
+  it('does not paste by itself while it cannot have the focus, as a hidden tab cannot', async () => {
+    const paste = vi.fn(async () => null)
+    const off = setOwnPaste(field, paste)
+    rememberFocusedEditable()
+    field.blur()
+    vi.spyOn(field, 'focus').mockImplementation(() => {})
+
+    await expect(performEdit({ kind: 'paste' }, { needsField: true })).rejects.toThrow('Nothing to type into')
+    off()
+
+    expect(paste).not.toHaveBeenCalled()
     expect(perform).not.toHaveBeenCalled()
   })
 

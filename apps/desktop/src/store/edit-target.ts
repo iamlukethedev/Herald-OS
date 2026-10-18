@@ -191,6 +191,12 @@ export async function performEdit(action: EditAction, options: { needsField?: bo
   const own = action.kind === 'paste' && element ? ownPastes.get(element) : undefined
 
   if (own) {
+    // A field that could not take the focus, such as a hidden Terminal tab, is not where the
+    // person is pasting.
+    if (document.activeElement !== element) {
+      throw new NoEditTargetError()
+    }
+
     const problem = await own()
 
     if (problem) {
