@@ -4133,6 +4133,84 @@ for pid in (command.pid, bystander.pid):
 """
 
 
+# Documents the known escape as root (or with sudo !use_pty): the command shares the driver's session,
+# which ssh_tree drops as ours, so a process the record does not hold escapes by being in a group the
+# record does not hold, even in that session. (a) one forked after the record, in its own group; (b) one
+# that existed before the record (never held), in its own group. Both survive the reap; the command, in
+# its recorded group, is reaped. Caged under setsid so the reap cannot reach the real session.
+ESCAPE_DRIVER = """
+import json, os, subprocess, sys, time
+sys.path.insert(0, {tests!r})
+import test_ssh
+cli = test_ssh.cli
+cli.SSH_KILL_GRACE = 1
+cli.os.geteuid = lambda: 0
+our_session = os.getsid(0)
+# (b) a process that existed before the record, in our session, in its own group (never recorded).
+before_proc = subprocess.Popen(["sleep", "60"], process_group=0)
+# The command: a new group in our session, as ssh_run runs one as root or with sudo !use_pty.
+command = subprocess.Popen(["sleep", "60"], process_group=0)
+for _ in range(200):
+    procs = cli.ssh_processes()
+    if command.pid in procs and before_proc.pid in procs:
+        break
+    time.sleep(0.05)
+tree = cli.ssh_tree(command.pid)
+# (a) a process forked after the record, in our session, in its own group.
+after_proc = subprocess.Popen(["sleep", "60"], process_group=0)
+for _ in range(200):
+    if after_proc.pid in cli.ssh_processes():
+        break
+    time.sleep(0.05)
+cli.SSH_LEFT[:] = [{{"argv": ["firewall-cmd", "--add"], "tree": tree}}]
+cli.ssh_reap(10)
+procs = cli.ssh_processes()
+
+
+def alive(proc):
+    return proc.poll() is None and proc.pid in procs and procs[proc.pid][4] not in ("Z", "X")
+
+
+print(json.dumps({{
+    "our_session_untracked": our_session not in tree["sessions"],
+    "command_reaped": command.pid not in procs or procs[command.pid][4] in ("Z", "X"),
+    "before_escaped": alive(before_proc),
+    "after_escaped": alive(after_proc),
+}}))
+sys.stdout.flush()
+for proc in (command, before_proc, after_proc):
+    try:
+        os.kill(proc.pid, 9)
+    except (ProcessLookupError, OSError):
+        pass
+"""
+
+
+@needs_linux_procs
+def test_as_root_a_regrouped_process_escapes_the_reap_documenting_current_behaviour(tmp_path):
+    """Documents the known escape (a follow-up to fix with a cgroup or transient scope): as root, the
+    command shares our session, which ssh_tree drops, so a process the record does not hold escapes the
+    reap by being in a group the record does not hold -- whether forked after the record (a) or existing
+    before it (b). The command, in its recorded group, is still reaped. Caged under setsid."""
+    import sys
+    driver = tmp_path / "escape.py"
+    driver.write_text(ESCAPE_DRIVER.format(tests=str(Path(__file__).parent)))
+    proc = subprocess.Popen([sys.executable, str(driver)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=60)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    result = json.loads(out.strip().splitlines()[-1])
+    assert result["our_session_untracked"], (result, err)
+    assert result["command_reaped"], (result, err)
+    assert result["before_escaped"], (result, err)  # (b) known escape
+    assert result["after_escaped"], (result, err)   # (a) known escape
+
+
 @needs_linux_procs
 def test_a_recorded_process_that_moves_group_on_sigterm_is_still_reaped_by_pid(tmp_path):
     """A recorded member of the command, in our own session (so the session is not in the tree), that
