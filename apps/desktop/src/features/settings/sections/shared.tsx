@@ -4,7 +4,6 @@ import type React from 'react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Dropdown, GlassCard } from '../../../components/ui/glass.tsx'
 import { cn } from '../../../lib/cn.ts'
-import type { TextKey } from '../../../../shared/i18n.ts'
 import { t, useT } from '../../../store/i18n.ts'
 
 /*
@@ -34,34 +33,7 @@ export function markSaved(): void {
   $settingsSavedAt.set(Date.now())
 }
 
-// Messages the gateway client raises in English, word for word.
-// A Map, so inherited object keys such as 'toString' or '__proto__' never match.
-const KNOWN_ERRORS: ReadonlyMap<string, TextKey> = new Map<string, TextKey>([
-  ['gateway not connected', 'settings.agents.gatewayNotConnected']
-])
-
-/** `value` as text, or null when it has none: String() throws for an object without a prototype or a working toString. */
-function textOf(value: unknown): string | null {
-  try {
-    return String(value)
-  } catch {
-    return null
-  }
-}
-
-/** What went wrong, in the person's language when it is a message Herald knows; any other as it came. */
-export function errorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : error
-  const text = typeof message === 'string' ? message : textOf(message)
-
-  if (text === null) {
-    return t('settings.somethingWentWrong')
-  }
-
-  const known = KNOWN_ERRORS.get(text.trim().toLowerCase())
-
-  return known ? t(known) : text
-}
+export { errorText } from '../../../lib/error-text.ts'
 
 // ---- Search filter -------------------------------------------------------------------------
 

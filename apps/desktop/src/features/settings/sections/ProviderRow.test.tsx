@@ -191,4 +191,22 @@ describe('the model provider row, when Hermes cannot be reached', () => {
     await click(chooser(host))
     expect([...host.querySelectorAll('.text-danger')].map(error => error.textContent)).toEqual(['model.options: inventory unavailable'])
   })
+
+  it.each([
+    ["new Error('')", new Error('')],
+    ['whitespace', '  \n'],
+    ['undefined', undefined],
+    ['null', null],
+    ['{}', {}]
+  ])('says something went wrong for a rejection with no text (%s), never a blank line', async (_what, reason) => {
+    vi.mocked(loadModelOptions).mockRejectedValue(reason)
+    const host = await show('pt-BR')
+    const generic = t('settings.somethingWentWrong')
+
+    expect(host.textContent).toContain(t('settings.agents.provider.unreadable', { error: generic }))
+    await click(chooser(host))
+    expect([...host.querySelectorAll('.text-danger')].map(error => error.textContent)).toEqual([generic])
+    expect(host.textContent).not.toContain(t('settings.agents.provider.noMatch'))
+    expect(host.textContent).not.toMatch(/undefined|null|\[object Object\]/)
+  })
 })

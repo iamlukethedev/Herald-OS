@@ -1,9 +1,11 @@
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { $connectionEpoch } from '../store/gateway.ts'
+import { errorText } from './error-text.ts'
 
 export interface AsyncState<T> {
   data: T | null
+  /** What went wrong, never blank, so `error &&` holds whenever the loader failed. */
   error: string | null
   loading: boolean
   reload: () => void
@@ -38,7 +40,7 @@ export function useBackendData<T>(loader: () => Promise<T>, deps: readonly unkno
       })
       .catch(err => {
         if (mine === generation.current) {
-          setError(err instanceof Error ? err.message : String(err))
+          setError(errorText(err))
         }
       })
       .finally(() => {
@@ -74,7 +76,7 @@ export function useLocalData<T>(loader: () => Promise<T>, deps: readonly unknown
       })
       .catch(err => {
         if (mine === generation.current) {
-          setError(err instanceof Error ? err.message : String(err))
+          setError(errorText(err))
         }
       })
       .finally(() => {

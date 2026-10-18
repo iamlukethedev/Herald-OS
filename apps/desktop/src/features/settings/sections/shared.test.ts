@@ -34,12 +34,38 @@ describe('errorText', () => {
     expect(errorText('  Disk is full \n')).toBe('  Disk is full \n')
   })
 
-  it('does not throw for an Error whose message is not a string', () => {
+  it('says something went wrong for an Error whose message is undefined', () => {
     const error = new Error('x')
     Object.defineProperty(error, 'message', { value: undefined })
 
     expect(() => errorText(error)).not.toThrow()
-    expect(errorText(error)).toBe(String(undefined))
+    expect(errorText(error)).toBe(t('settings.somethingWentWrong'))
+  })
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says something went wrong in %s for an error with no text', language => {
+    $prefs.set({ ...$prefs.get(), language })
+    const generic = t('settings.somethingWentWrong')
+    const nothing: [string, unknown][] = [
+      ["new Error('')", new Error('')],
+      ["new Error('  ')", new Error(' \n\t ')],
+      ["''", ''],
+      ['whitespace', ' \n\t '],
+      ['undefined', undefined],
+      ['null', null],
+      ['{}', {}],
+      ["new Error('[object Object]')", new Error('[object Object]')],
+      ['an Error whose message is null', Object.defineProperty(new Error('x'), 'message', { value: null })],
+      ['an Error whose message is {}', Object.defineProperty(new Error('x'), 'message', { value: {} })]
+    ]
+
+    for (const [what, error] of nothing) {
+      expect(errorText(error), what).toBe(generic)
+    }
+  })
+
+  it('shows text that only looks empty, such as "0" or "false", as it came', () => {
+    expect(errorText(0)).toBe('0')
+    expect(errorText(false)).toBe('false')
   })
 
   it.each(['en', 'pt-BR', 'zh-CN'] as const)('says something went wrong in %s for an Error whose message has no prototype', language => {
