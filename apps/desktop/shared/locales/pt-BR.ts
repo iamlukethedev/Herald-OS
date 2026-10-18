@@ -584,6 +584,7 @@ export const ptBR: Translation = {
   'firstRun.account.passwordAgain': 'Repita a senha',
   'firstRun.account.mismatch': 'As senhas não são iguais.',
   'firstRun.account.passwordNotSet': 'A senha não foi definida.',
+  'firstRun.account.nameNotSaved': 'Seu nome não foi salvo. Tente de novo.',
   'firstRun.account.tooShort': 'Use pelo menos 8 caracteres.',
   'firstRun.account.refused': 'Essa senha foi recusada: {reason}.',
   'firstRun.account.refusedNoReason': 'Essa senha foi recusada; tente uma mais longa ou menos parecida com uma palavra.',

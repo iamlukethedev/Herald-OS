@@ -594,6 +594,7 @@ export const en = {
   'firstRun.account.passwordAgain': 'The same password again',
   'firstRun.account.mismatch': 'The passwords do not match.',
   'firstRun.account.passwordNotSet': 'The password was not set.',
+  'firstRun.account.nameNotSaved': 'Your name was not saved. Try again.',
   'firstRun.account.tooShort': 'Use at least 8 characters.',
   // {reason} is pwquality's reason, in English as the system gives it, such as “The password is shorter than 8 characters”.
   'firstRun.account.refused': 'That password was refused: {reason}.',

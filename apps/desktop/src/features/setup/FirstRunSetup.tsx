@@ -196,6 +196,8 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
       } else {
         setError(result)
       }
+    } catch {
+      setError({ ok: false, reason: 'failed' })
     } finally {
       setBusy(false)
     }
@@ -230,7 +232,7 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
           </label>
         </>
       )}
-      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : error && passwordError(error)}</p>}
+      {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : signedIn ? t('firstRun.account.nameNotSaved') : error && passwordError(error)}</p>}
       <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!name.trim() || (!signedIn && (password.length < 8 || password !== again))} />
     </form>
   )

@@ -147,6 +147,7 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
   }
 
   await click(button(host, t('firstRun.welcome.forMe')))
+  const says = (expected: string) => expect(host.querySelector('.text-danger')?.textContent).toBe(expected)
 
   if (path === 'mine') {
     at('account', 'firstRun.account.title')
@@ -157,7 +158,6 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
     at('passwords differ', 'firstRun.account.title')
     expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.account.mismatch'))
     await type(again, 'correct horse')
-    const says = (expected: string) => expect(host.querySelector('.text-danger')?.textContent).toBe(expected)
     bridge.setup.password.mockResolvedValueOnce({ ok: false, reason: 'refused' })
     await click(button(host, t('firstRun.next')))
     at('password refused', 'firstRun.account.title')
@@ -177,9 +177,17 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
     bridge.setup.password.mockResolvedValueOnce({ ok: false })
     await click(button(host, t('firstRun.next')))
     says(t('firstRun.account.passwordNotSet'))
+    bridge.setup.password.mockRejectedValueOnce(new Error('No handler registered for herald-os:setup:password'))
+    await click(button(host, t('firstRun.next')))
+    at('password call failed', 'firstRun.account.title')
+    says(t('firstRun.account.passwordNotSet'))
   } else {
     at('account', 'firstRun.account.titleSignedIn')
     await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    bridge.setup.name.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+    await click(button(host, t('firstRun.next')))
+    at('name call failed', 'firstRun.account.titleSignedIn')
+    says(t('firstRun.account.nameNotSaved'))
   }
 
   await click(button(host, t('firstRun.next')))

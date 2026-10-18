@@ -567,6 +567,7 @@ export const zhCN: Translation = {
   'firstRun.account.passwordAgain': '再次输入密码',
   'firstRun.account.mismatch': '两次输入的密码不一致。',
   'firstRun.account.passwordNotSet': '密码未能设置。',
+  'firstRun.account.nameNotSaved': '未能保存你的名字，请重试。',
   'firstRun.account.tooShort': '请至少使用 8 个字符。',
   'firstRun.account.refused': '这个密码被拒绝了：{reason}。',
   'firstRun.account.refusedNoReason': '这个密码被拒绝了；请换一个更长、更不像单词的密码。',
