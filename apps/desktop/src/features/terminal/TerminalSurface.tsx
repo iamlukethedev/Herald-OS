@@ -3,16 +3,19 @@ import { IconChevronDown, IconPlus, IconSparkles, IconX } from '@tabler/icons-re
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { terminalColors } from '../../../shared/theme.ts'
 import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
 import { logFailure } from '../../lib/report.ts'
 import { useShellCommands } from '../../shell/surfaces/shell-utils.ts'
-import { $prefs } from '../../store/backend.ts'
+import { $env, $prefs } from '../../store/backend.ts'
 import { $catalog, loadCatalog } from '../../store/catalog.ts'
+import { t } from '../../store/i18n.ts'
+import { notify } from '../../store/notifications.ts'
 import { $terminalRequest } from '../../store/terminal.ts'
+import { TerminalMenu } from './TerminalMenu.tsx'
 
 const MONO_STACK = 'SF Mono, JetBrains Mono, Menlo, monospace'
 
@@ -218,6 +221,8 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
   const host = useRef<HTMLDivElement>(null)
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; selection: string } | null>(null)
+  const mac = useStore($env)?.platform === 'darwin'
   const prefs = useStore($prefs)
   const theme = useMemo(() => (prefs.themeColors ? terminalColors(prefs.themeColors, prefs.themeScheme) : THEME), [prefs.themeColors, prefs.themeScheme])
   const fontFamily = prefs.fonts?.mono ? `${JSON.stringify(prefs.fonts.mono)}, ${MONO_STACK}` : MONO_STACK
@@ -262,6 +267,44 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
 
     term.current = terminal
     fit.current = fitAddon
+    const live = () => term.current === terminal
+    const showMenu = (clientX: number, clientY: number) => {
+      const bounds = el.parentElement?.getBoundingClientRect()
+
+      if (bounds) {
+        setMenu({ x: clientX - bounds.left, y: clientY - bounds.top, selection: terminal.getSelection() })
+      }
+    }
+    terminal.attachCustomKeyEventHandler(event => {
+      if (event.type === 'keydown' && event.key === 'ContextMenu') {
+        event.preventDefault()
+        // xterm keeps its hidden input at the caret, so the menu opens there.
+        const caret = terminal.textarea?.getBoundingClientRect() ?? el.getBoundingClientRect()
+        showMenu(caret.left, caret.bottom)
+
+        return false
+      }
+
+      const action = clipboardShortcut(event)
+
+      if (!action) {
+        return true
+      }
+
+      // Chromium would also copy or paste for these keys, and xterm would send them to the shell.
+      event.preventDefault()
+
+      if (event.type === 'keydown' && !event.repeat) {
+        void (action === 'copy' ? copyText(terminal.getSelection()) : pasteInto(terminal, live))
+      }
+
+      return false
+    })
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault()
+      showMenu(event.clientX, event.clientY)
+    }
+    el.addEventListener('contextmenu', onContextMenu)
     const offData = window.heraldOS.terminal.onData((tid, data) => {
       if (tid === id) {
         terminal.write(data)
@@ -278,6 +321,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
     fitAddon.fit()
 
     return () => {
+      el.removeEventListener('contextmenu', onContextMenu)
       observer.disconnect()
       offData()
       onInput.dispose()
@@ -293,8 +337,89 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
         fit.current?.fit()
         term.current?.focus()
       })
+    } else {
+      setMenu(null)
     }
   }, [active])
 
-  return <div ref={host} className={cn('absolute inset-x-3 inset-y-0 bottom-3 overflow-hidden rounded-lg hairline', !active && 'invisible')} style={{ background: theme.background }} />
+  const closeMenu = useCallback((refocus: boolean) => {
+    setMenu(null)
+
+    if (refocus) {
+      term.current?.focus()
+    }
+  }, [])
+
+  return (
+    <>
+      <div ref={host} className={cn('absolute inset-x-3 inset-y-0 bottom-3 overflow-hidden rounded-lg hairline', !active && 'invisible')} style={{ background: theme.background }} />
+      {menu && (
+        <TerminalMenu
+          x={menu.x}
+          y={menu.y}
+          canCopy={menu.selection.length > 0}
+          hints={mac ? { copy: '⌘C', paste: '⌘V' } : { copy: 'Ctrl+Shift+C', paste: 'Ctrl+Shift+V' }}
+          onCopy={() => void copyText(menu.selection)}
+          onPaste={() => {
+            const terminal = term.current
+
+            if (terminal) {
+              void pasteInto(terminal, () => term.current === terminal)
+            }
+          }}
+          onClose={closeMenu}
+        />
+      )}
+    </>
+  )
+}
+
+/**
+ * Ctrl+Shift+C and Ctrl+Shift+V, by letter or, on a layout without Latin letters, by key position.
+ * Ctrl+C without Shift stays the shell's interrupt.
+ */
+function clipboardShortcut(event: KeyboardEvent): 'copy' | 'paste' | null {
+  if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.isComposing) {
+    return null
+  }
+
+  const letter = /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() : event.code === 'KeyC' ? 'c' : event.code === 'KeyV' ? 'v' : ''
+
+  return letter === 'c' ? 'copy' : letter === 'v' ? 'paste' : null
+}
+
+async function copyText(text: string): Promise<void> {
+  if (!text) {
+    return
+  }
+
+  try {
+    await window.heraldOS.terminal.writeClipboard(text)
+  } catch (error) {
+    clipboardFailed('terminal.copyFailed', error)
+  }
+}
+
+/** Through xterm's paste, which brackets the text for a program that asked for bracketed paste. */
+async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void> {
+  let text: string
+
+  try {
+    text = await window.heraldOS.terminal.readClipboard()
+  } catch (error) {
+    if (live()) {
+      clipboardFailed('terminal.pasteFailed', error)
+    }
+
+    return
+  }
+
+  if (text && live()) {
+    terminal.paste(text)
+  }
+}
+
+function clipboardFailed(title: 'terminal.copyFailed' | 'terminal.pasteFailed', error: unknown): void {
+  logFailure('terminal.clipboard')(error)
+  notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
 }
