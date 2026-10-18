@@ -4204,21 +4204,11 @@ cli = test_ssh.cli
 mode = sys.argv[1]
 # Reap as if root, so ssh_reap's kill runs directly on our own children (no sudo in the test box).
 cli.os.geteuid = lambda: 0
-
-
-def tree_without_own(pid):
-    procs = cli.ssh_processes()
-    children = {{}}
-    for each, (parent, *_) in procs.items():
-        children.setdefault(parent, []).append(each)
-    members, todo = {{}}, [pid]
-    while todo:
-        each = todo.pop()
-        if each in procs and each not in members:
-            members[each] = procs[each][3]
-            todo += children.get(each, [])
-    return {{"pids": members, "groups": {{procs[m][1] for m in members}},
-            "sessions": {{procs[m][2] for m in members}}}}
+# 'remove' uses the real ssh_tree, but with the own group/session set emptied, so the test exercises
+# the actual code path rather than a copy that could drift from it.
+if mode == "remove":
+    cli.os.getpgrp = lambda: -1
+    cli.os.getsid = lambda pid=0: -1
 
 # A bystander in our own group and session (we are the session leader under setsid).
 bystander = subprocess.Popen(["sleep", "300"])
@@ -4234,7 +4224,7 @@ for _ in range(200):
         orphan = here[0]
         break
     time.sleep(0.05)
-tree = cli.ssh_tree(command.pid) if mode == "keep" else tree_without_own(command.pid)
+tree = cli.ssh_tree(command.pid)
 # Kill only the command leader, so the orphan (same group) is left for the reap to find.
 os.kill(command.pid, 9)
 for _ in range(100):
