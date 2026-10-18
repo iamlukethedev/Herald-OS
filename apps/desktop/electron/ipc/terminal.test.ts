@@ -159,6 +159,34 @@ describe('the Terminal clipboard', () => {
     await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
   })
 
+  it('lets each read age out a full second after it was made, and not before', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    const read = handler(IPC.terminalClipboardRead)
+
+    for (let i = 0; i < 4; i++) {
+      await read(shell)
+    }
+
+    vi.advanceTimersByTime(500)
+    await read(shell)
+
+    vi.advanceTimersByTime(499)
+    await expect(read(shell)).resolves.toEqual({ refused: 'rate-limited' })
+
+    // The first four reads are a second old now; the fifth, half a second.
+    vi.advanceTimersByTime(1)
+    for (let i = 0; i < 4; i++) {
+      await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
+    }
+
+    await expect(read(shell)).resolves.toEqual({ refused: 'rate-limited' })
+
+    vi.advanceTimersByTime(499)
+    await expect(read(shell)).resolves.toEqual({ refused: 'rate-limited' })
+    vi.advanceTimersByTime(1)
+    await expect(read(shell)).resolves.toEqual({ text: 'echo hello' })
+  })
+
   it('counts each window on its own, and forgets a window that is gone', async () => {
     vi.useFakeTimers({ now: 1_000_000 })
     const read = handler(IPC.terminalClipboardRead)
