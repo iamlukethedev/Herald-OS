@@ -43,6 +43,8 @@ const xterm = vi.hoisted(() => {
       }
       this.textarea.addEventListener('paste', onPaste)
       this.element.addEventListener('paste', onPaste)
+      // Where a drop would land if nothing took it first: xterm's hidden input.
+      this.textarea.addEventListener('drop', () => xterm.dropsReachingXterm++)
       this.textarea.addEventListener('copy', event => {
         if (this.selection) {
           event.clipboardData?.setData('text/plain', this.selection)
@@ -90,7 +92,7 @@ const xterm = vi.hoisted(() => {
     dispose() {}
   }
 
-  return { terminal: null as unknown as FakeTerminal, FakeTerminal }
+  return { terminal: null as unknown as FakeTerminal, FakeTerminal, dropsReachingXterm: 0 }
 })
 
 const bridge = vi.hoisted(() => ({ write: vi.fn(), readClipboard: vi.fn(), writeClipboard: vi.fn(), editPerform: vi.fn() }))
@@ -421,6 +423,20 @@ describe('a drop on the Terminal', () => {
     expect($notifications.get().map(n => [n.title, n.body])).toEqual([
       ['Too much to paste', 'The dropped text is more than 1 MiB, more than the Terminal pastes at once.']
     ])
+  })
+
+  it('takes a drop on its way down, before xterm’s input or anything above the Terminal sees it', async () => {
+    xterm.dropsReachingXterm = 0
+    let reachedDocument = 0
+    const onDocument = () => reachedDocument++
+    document.addEventListener('drop', onDocument)
+    drag('drop', { 'text/plain': 'echo hello' })
+    drag('drop', { 'text/uri-list': 'file:///etc/passwd' })
+    await settle()
+    document.removeEventListener('drop', onDocument)
+
+    expect(xterm.dropsReachingXterm).toBe(0)
+    expect(reachedDocument).toBe(0)
   })
 
   it('refuses a drop with no text, sending nothing, and says so', async () => {
