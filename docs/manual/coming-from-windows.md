@@ -46,7 +46,8 @@ just ask. In the virtual machine, `Super` is `Alt` instead (see [Hotkeys](hotkey
 - **Updates are whole and undoable.** An update installs a complete new version of the system next
   to the one you run; it takes effect at the next restart, and the previous one stays in the boot
   menu.
-- **Copy and paste are `Ctrl+C` and `Ctrl+V` in apps,** as on Windows.
+- **Copy and paste are `Ctrl+C` and `Ctrl+V` in apps,** as on Windows. In the Terminal, where
+  `Ctrl+C` stops the running command, they are `Ctrl+Shift+C` and `Ctrl+Shift+V`, or right-click.
 
 ## Your files
 

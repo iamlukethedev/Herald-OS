@@ -67,6 +67,19 @@ work everywhere.
 | Pick a colour from the screen | `Super+Ctrl+Print` |
 | Ask Hermes about part of the screen | `Super+Shift+S` |
 
+## The Terminal
+
+In Herald's Terminal, `Ctrl+C` stops the running command, as in any terminal, so copy and paste
+add `Shift`. Right-click (or press the keyboard's menu key) for Copy and Paste; Copy is there once
+some text is selected. A paste reaches the program as a paste, so an editor or a shell that tells
+pasted text from typing still does.
+
+| Action | macOS | Herald OS Linux |
+| --- | --- | --- |
+| Copy the selected text | `Cmd+C` or `Ctrl+Shift+C` | `Ctrl+Shift+C` |
+| Paste | `Cmd+V` or `Ctrl+Shift+V` | `Ctrl+Shift+V` |
+| Stop the running command | `Ctrl+C` | `Ctrl+C` |
+
 ## Herald Canvas
 
 The image editor uses the usual photo-editor keys; [the Herald Canvas page](canvas.md#tools) lists
