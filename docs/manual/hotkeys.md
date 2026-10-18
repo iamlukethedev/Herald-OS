@@ -12,6 +12,7 @@ work everywhere.
 | Command bar | `Cmd+K` | `Super+Shift+Space` or `Ctrl+K` |
 | All applications | `Cmd+Shift+A` | `Super+A` |
 | Talk to Hermes | `Alt+Space` | `Super+V` |
+| Go to the approval or question Hermes is waiting on | `Cmd+Option+A` | `Super+Shift+A` |
 | Dictate into any app (again, or a pause, to finish) | `Cmd+Ctrl+X` | `Super+Ctrl+X` |
 | Emoji, typed into any app | `Cmd+Ctrl+E` | `Super+Ctrl+E` |
 | Put the desktop pet away, or bring it back | `Cmd+Ctrl+H` | `Super+Ctrl+H` |

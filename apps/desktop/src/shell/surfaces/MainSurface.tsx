@@ -1,8 +1,10 @@
 import { useStore } from '@nanostores/react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { afterExit, motion } from '../../lib/motion.ts'
+import { isRequestShortcut } from '../../lib/request-keys.ts'
 import { $backend, $prefs } from '../../store/backend.ts'
 import { bindDesktopNotifications } from '../../store/notifications.ts'
+import { runCommand } from '../../store/os-commands.ts'
 import { toggleSidebar } from '../../store/sidebar.ts'
 import { $applicationsOpen, $commandBarOpen, toggleCommandBar } from '../../store/surface.ts'
 import { ensureMainWindow, openApp } from '../../store/windows.ts'
@@ -45,6 +47,14 @@ export function MainSurface() {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey
       const key = event.key.toLowerCase()
+
+      // The waiting request's card: Cmd+Option+A on macOS, Super+Shift+A elsewhere (lib/request-keys.ts).
+      if (isRequestShortcut(event)) {
+        event.preventDefault()
+        void runCommand('requests.focus', {}, { source: 'shortcut' })
+
+        return
+      }
 
       if (meta && key === 'k') {
         event.preventDefault()

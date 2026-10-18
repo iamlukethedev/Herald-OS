@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useState } from 'react'
 import { afterExit, motion } from '../lib/motion.ts'
+import { isRequestShortcut } from '../lib/request-keys.ts'
 import { $backend } from '../store/backend.ts'
 import { openEmojiPicker } from '../store/emoji.ts'
 import { runCommand } from '../store/os-commands.ts'
@@ -18,6 +19,14 @@ export function App() {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey
       const key = event.key.toLowerCase()
+
+      // The waiting request's card: Cmd+Option+A on macOS, Super+Shift+A elsewhere (lib/request-keys.ts).
+      if (isRequestShortcut(event)) {
+        event.preventDefault()
+        void runCommand('requests.focus', {}, { source: 'shortcut' })
+
+        return
+      }
 
       if (meta && key === 'k') {
         event.preventDefault()

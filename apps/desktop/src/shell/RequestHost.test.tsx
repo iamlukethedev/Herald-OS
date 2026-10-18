@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { requestCommands } from '../commands/requests.ts'
 import { $petHeldApproval } from '../features/pet/transport.ts'
 import { $pendingRequests, type PendingRequest } from '../store/requests.ts'
 import { ApprovalCard, RequestHost } from './RequestHost.tsx'
@@ -70,7 +71,8 @@ function press(key: 'Enter' | ' '): void {
   })
 }
 
-const card = () => host.querySelector<HTMLElement>('[role="group"]')
+const card = () => host.querySelector<HTMLElement>('[data-request-card]')
+const spoken = () => host.querySelector('[role="status"]')
 const choices = () => [...host.querySelectorAll('button')]
 
 describe('RequestHost focus', () => {
@@ -187,5 +189,128 @@ describe('ApprovalCard', () => {
     }
 
     expect(callers[0]).not.toMatch(/autoFocus/)
+  })
+})
+
+describe('RequestHost cards', () => {
+  it('gives each new request a card of its own, which takes and gives back the focus for itself', () => {
+    elsewhere.focus()
+    arrive(approval('r1').entry)
+    const first = card()
+    expect(document.activeElement).toBe(first)
+
+    act(() => $pendingRequests.set([approval('r2').entry]))
+
+    const second = card()
+    expect(second).not.toBeNull()
+    expect(second).not.toBe(first)
+    expect(document.activeElement).toBe(second)
+
+    act(() => $pendingRequests.set([]))
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
+  it('names the request shortcut on the card', () => {
+    arrive(approval().entry)
+
+    expect(card()?.getAttribute('aria-keyshortcuts')).toBe('Meta+Alt+A')
+    expect(card()?.getAttribute('aria-label')).toBe('Hermes is asking for permission')
+  })
+})
+
+describe('RequestHost announcements', () => {
+  it('says what a request asks as it arrives, politely, while the focus stays in the field', () => {
+    field.focus()
+
+    arrive(approval().entry)
+
+    expect(spoken()?.getAttribute('aria-live')).toBe('polite')
+    expect(spoken()?.textContent).toBe('Hermes is asking for permission: Delete the Old folder. Press Cmd+Option+A to go to it.')
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('announces a request once, not again as the host renders', () => {
+    const { entry } = approval()
+    arrive(entry)
+    const said = spoken()?.firstElementChild
+
+    act(() => $pendingRequests.set([...$pendingRequests.get()]))
+    act(() => $petHeldApproval.set('r1'))
+    act(() => $petHeldApproval.set(null))
+
+    expect(spoken()?.firstElementChild).toBe(said)
+  })
+
+  it('announces the next request, even in the same words', () => {
+    arrive(approval('r1').entry)
+    const first = spoken()?.firstElementChild
+
+    act(() => $pendingRequests.set([approval('r2').entry]))
+
+    expect(spoken()?.firstElementChild).not.toBe(first)
+    expect(spoken()?.textContent).toContain('Delete the Old folder')
+  })
+
+  it('announces an approval the pet takes straight away, and says how many more wait', () => {
+    act(() => $petHeldApproval.set('r1'))
+
+    act(() => $pendingRequests.set([approval('r1').entry, approval('r2').entry]))
+
+    expect(spoken()?.textContent).toContain('1 more is waiting.')
+  })
+})
+
+describe('the request shortcut', () => {
+  const focusRequest = requestCommands.find(command => command.id === 'requests.focus')!
+
+  it('moves the focus from the field to the card itself, and the card gives it back when answered', async () => {
+    const { entry, respond } = approval()
+    field.focus()
+    arrive(entry)
+
+    const result = await focusRequest.run({}, { source: 'shortcut' })
+
+    expect(result.ok).toBe(true)
+    expect(document.activeElement).toBe(card())
+    press('Enter')
+    press(' ')
+    expect(respond).not.toHaveBeenCalled()
+
+    const deny = choices().find(button => button.textContent === 'Deny')!
+    act(() => {
+      deny.focus()
+      deny.click()
+    })
+    expect(respond).toHaveBeenCalledWith({ choice: 'deny' })
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('never lets Hermes or a plugin move the focus', async () => {
+    field.focus()
+    arrive(approval().entry)
+
+    expect((await focusRequest.run({}, { source: 'agent' })).ok).toBe(false)
+    expect((await focusRequest.run({}, { source: 'plugin' })).ok).toBe(false)
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('says so when nothing is waiting', async () => {
+    field.focus()
+
+    expect((await focusRequest.run({}, { source: 'shortcut' })).ok).toBe(false)
+    expect(document.activeElement).toBe(field)
+  })
+
+  it('is checked before All applications in both window key handlers, which would take Super+Shift+A', () => {
+    const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+    for (const file of ['shell/App.tsx', 'shell/surfaces/MainSurface.tsx']) {
+      const source = fs.readFileSync(path.join(src, file), 'utf8')
+      const shortcut = source.indexOf('isRequestShortcut(event)')
+
+      expect(shortcut, file).toBeGreaterThan(-1)
+      expect(shortcut, file).toBeLessThan(source.indexOf("event.shiftKey && key === 'a'"))
+      expect(source, file).toContain("runCommand('requests.focus', {}, { source: 'shortcut' })")
+    }
   })
 })

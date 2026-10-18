@@ -61,10 +61,11 @@ Herald's own approval card, with the same choices it offers anywhere else (Allow
 rest). Answer it there; when more approvals are waiting, the card says how many.
 
 The card in the pet's hands never takes the keyboard, so a key pressed in another window cannot
-answer it, and nothing is ever answered for you. In a voice conversation, saying "yes" or "no"
-still answers it, as the card says. On a Mac the card appears only in the pet's hands; on Herald
-OS Linux the Hermes window shows it too, so it cannot get lost behind other windows. While the pet
-is away or hidden, approvals appear in the usual place. Questions, passwords and secrets that
+answer it, and nothing is ever answered for you; `Cmd+Option+A` (`Super+Shift+A` on Herald OS
+Linux) moves the keyboard to it. In a voice conversation, saying "yes" or "no" still answers it, as
+the card says. On a Mac the usual card shows while the pet walks over, then the pet holds it alone;
+on Herald OS Linux the Hermes window shows it too, so it cannot get lost behind other windows. While
+the pet is away or hidden, approvals appear in the usual place. Questions, passwords and secrets that
 Hermes asks for are never handed to the pet: they appear where they always do.
 
 ## The chat bubble

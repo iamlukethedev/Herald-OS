@@ -17,6 +17,7 @@ import { navigationCommands } from './navigation.ts'
 import { officeCommands } from './office.ts'
 import { openCommands } from './open.ts'
 import { petCommands } from './pet.ts'
+import { requestCommands } from './requests.ts'
 import { roomCommands } from './room.ts'
 import { studioCommands } from './studio.ts'
 import { screenCommands } from './screen.ts'
@@ -62,6 +63,7 @@ export const commandGroups: Record<string, readonly OsCommand[]> = {
   sheets: sheetsCommands,
   slides: slidesCommands,
   pet: petCommands,
+  requests: requestCommands,
   room: roomCommands,
   calc: calcCommands
 }

@@ -40,6 +40,13 @@ session and always choices. With voice on, say "yes" to allow once or "no" to de
 ask a question, or for your administrator password for a system task; type it into the card, never
 into the chat. [Privacy and the audit log](privacy.md) explains the rules.
 
+A card never takes the keyboard from a field you are typing in, and never puts it on one of its
+answers, so a key meant for something else cannot answer it. To reach the card from the keyboard,
+press `Cmd+Option+A` on a Mac or `Super+Shift+A` on Herald OS Linux (or run **Go to the waiting
+request** from the command bar), then press Tab to get to an answer. When the card goes, the
+keyboard returns to where it was. Screen readers announce each card once as it arrives: what Hermes
+asks, how many more are waiting, and the keys that go to it.
+
 ## Voice
 
 Settings > Voice turns voice on (the microphone is never opened while it is off), and its **Try it**

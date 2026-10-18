@@ -332,6 +332,7 @@ binds {
     // Nested niri (a VM without GPU acceleration) uses Alt as Mod, where Mod+Alt+Space is just Mod+Space.
     Mod+M hotkey-overlay-title="Herald OS menu" repeat=false { spawn "herald-os" "menu"; }
     Mod+V hotkey-overlay-title="Talk to Hermes" repeat=false { spawn "herald-os" "voice"; }
+    Mod+Shift+A hotkey-overlay-title="Go to the waiting approval or question" repeat=false { spawn "herald-os" "os" "requests.focus"; }
     Mod+K hotkey-overlay-title="Show these hotkeys" { show-hotkey-overlay; }
 
     Mod+Return hotkey-overlay-title="Terminal" { spawn "herald-os" "open" "terminal"; }

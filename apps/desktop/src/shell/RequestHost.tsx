@@ -1,13 +1,16 @@
 import { useStore } from '@nanostores/react'
 import type { ApprovalChoice, ApprovalRequestParams, ClarifyRequestParams } from '@herald-os/client'
 import { IconKey, IconLock, IconMicrophone, IconQuestionMark, IconShieldCheck } from '@tabler/icons-react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '../components/ui/button.tsx'
 import { Badge } from '../components/ui/primitives.tsx'
 import { type ApprovalShape, approvalFacts } from '../lib/approval-choices.ts'
 import { deviceNoun } from '../lib/platform-labels.ts'
+import { announcementOf, freshArrivals } from '../lib/request-announce.ts'
 import { takeRequestFocus } from '../lib/request-focus.ts'
+import { requestShortcut } from '../lib/request-keys.ts'
 import { $petHeldApproval } from '../features/pet/transport.ts'
+import { useT } from '../store/i18n.ts'
 import { $pendingRequests, type PendingRequest, resolveRequest } from '../store/requests.ts'
 import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
 
@@ -15,36 +18,72 @@ import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
  * One host for every server->client question. Cards stack bottom-right; the oldest is on top so
  * the agent thread that has waited longest unblocks first. Gestures never grant approval. An
  * approval the desktop pet is holding up stays with the pet. No card ever focuses one of its own
- * answers, so a key pressed for something else cannot answer it.
+ * answers, so a key pressed for something else cannot answer it. Since a card does not take the focus
+ * from someone typing, a polite live region says what each request asks as it arrives, and the
+ * request shortcut (`requestShortcut`) moves the focus to the card.
  */
 export function RequestHost() {
+  const all = useStore($pendingRequests)
   const held = useStore($petHeldApproval)
-  const pending = useStore($pendingRequests).filter(entry => entry.request.id !== held)
-
-  if (pending.length === 0) {
-    return null
-  }
-
-  const [current, ...rest] = pending
+  const announcement = useArrivalAnnouncement(all)
+  const [current, ...rest] = all.filter(entry => entry.request.id !== held)
 
   return (
-    <div className="pointer-events-none absolute right-5 bottom-[92px] z-(--z-request) flex w-[420px] flex-col items-stretch gap-2">
-      {rest.length > 0 && <div className="pointer-events-auto self-end text-[11px] text-fg-3">{rest.length} more waiting</div>}
-      <RequestFrame key={current.request.id} entry={current} />
-    </div>
+    <>
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement && <p key={announcement.serial}>{announcement.text}</p>}
+      </div>
+      {current && (
+        <div className="pointer-events-none absolute right-5 bottom-[92px] z-(--z-request) flex w-[420px] flex-col items-stretch gap-2">
+          {rest.length > 0 && <div className="pointer-events-auto self-end text-[11px] text-fg-3">{rest.length} more waiting</div>}
+          <RequestFrame key={current.request.id} entry={current} />
+        </div>
+      )}
+    </>
   )
 }
 
-const FRAME_LABEL: Record<PendingRequest['kind'], string> = { approval: 'Hermes is asking for permission', clarify: 'Hermes has a question', sudo: 'Administrator password', secret: 'Hermes needs a secret' }
+/** Requests this window has announced, kept across renders and remounts of its host. */
+const announced = new Set<string>()
+
+/**
+ * The live region's text: what the newest arrivals ask, said once per request. Each announcement is
+ * a new node, so the same words for a later request are read again.
+ */
+function useArrivalAnnouncement(pending: readonly PendingRequest[]): { text: string; serial: number } | null {
+  const [announcement, setAnnouncement] = useState<{ text: string; serial: number } | null>(null)
+
+  useEffect(() => {
+    const fresh = freshArrivals(pending, announced)
+
+    if (fresh.length > 0) {
+      const text = announcementOf(fresh[0], fresh.length - 1)
+      setAnnouncement(previous => ({ text, serial: (previous?.serial ?? 0) + 1 }))
+    }
+  }, [pending])
+
+  return announcement
+}
+
+const FRAME_LABEL = { approval: 'requests.card.approval', clarify: 'requests.card.clarify', sudo: 'requests.card.sudo', secret: 'requests.card.secret' } as const
 
 /** One request's card: it takes the focus only from nothing being typed in, and gives it back when it goes. */
 function RequestFrame({ entry }: { entry: PendingRequest }) {
+  const t = useT()
   const frame = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => (frame.current ? takeRequestFocus(frame.current) : undefined), [])
 
   return (
-    <div ref={frame} role="group" aria-label={FRAME_LABEL[entry.kind]} tabIndex={-1} className="float pointer-events-auto rounded-2xl p-4 outline-none animate-rise">
+    <div
+      ref={frame}
+      role="group"
+      aria-label={t(FRAME_LABEL[entry.kind])}
+      aria-keyshortcuts={requestShortcut().aria}
+      data-request-card=""
+      tabIndex={-1}
+      className="float pointer-events-auto rounded-2xl p-4 outline-none animate-rise"
+    >
       <RequestCard entry={entry} />
     </div>
   )
