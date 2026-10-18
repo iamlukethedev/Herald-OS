@@ -154,13 +154,62 @@ function sources(dir: string): string[] {
   })
 }
 
+const ELECTRON = String.raw`['"]electron['"]`
+
+/** Whether `source` reaches Electron's Notification: imported (on one line or several), through a namespace or default import, or through require. */
+function usesElectronNotification(source: string): boolean {
+  const aliases = ['electron', 'Electron', ...[...source.matchAll(new RegExp(String.raw`import\s+(?:\*\s+as\s+)?(\w+)\s+from\s+${ELECTRON}`, 'g'))].map(match => match[1])]
+  const patterns = [
+    /\bnew\s+Notification\s*\(/,
+    new RegExp(String.raw`import\s+(?:type\s+)?(?:\w+\s*,\s*)?\{[^}]*\bNotification\b[^}]*\}\s*from\s*${ELECTRON}`),
+    new RegExp(String.raw`require\(\s*${ELECTRON}\s*\)\s*(?:\.|\[\s*['"])\s*Notification\b`),
+    new RegExp(String.raw`\{[^}]*\bNotification\b[^}]*\}\s*=\s*(?:await\s+import|require)\(\s*${ELECTRON}\s*\)`),
+    new RegExp(String.raw`\b(?:${aliases.join('|')})\s*(?:\.|\[\s*['"])\s*Notification\b`)
+  ]
+
+  return patterns.some(pattern => pattern.test(source))
+}
+
+describe('usesElectronNotification', () => {
+  it.each([
+    ["import { app, Notification } from 'electron'"],
+    ["import {\n  app,\n  Notification,\n  shell\n} from 'electron'"],
+    ["import { Notification as Toast } from \"electron\""],
+    ["import * as electron from 'electron'\nelectron.Notification.isSupported()"],
+    ["import * as el from 'electron'\nconst N = el.Notification"],
+    ["import el from 'electron'\nel['Notification']"],
+    ["const N = require('electron').Notification"],
+    ["const { app, Notification } = require('electron')"],
+    ["const {\n  Notification\n} = await import('electron')"],
+    ['new Notification({ title })']
+  ])('catches %j', source => {
+    expect(usesElectronNotification(source)).toBe(true)
+  })
+
+  it.each([
+    ["import { app, BrowserWindow } from 'electron'"],
+    ["import { type IncomingNotification } from '../shared/ipc.ts'"],
+    ['notifications.native(title, body)'],
+    ['const options: Electron.NotificationConstructorOptions = {}']
+  ])('lets %j through', source => {
+    expect(usesElectronNotification(source)).toBe(false)
+  })
+})
+
 describe('the main process and preload', () => {
   const root = path.dirname(fileURLToPath(import.meta.url))
 
   it('create Electron notifications only in native-notification.ts', () => {
-    const offenders = sources(root).filter(file => path.basename(file) !== 'native-notification.ts' && /new Notification\(|\bNotification\b[^'\n]*\} from 'electron'/.test(fs.readFileSync(file, 'utf8')))
+    const offenders = sources(root).filter(file => path.basename(file) !== 'native-notification.ts' && usesElectronNotification(fs.readFileSync(file, 'utf8')))
 
     expect(offenders.map(file => path.relative(root, file))).toEqual([])
+  })
+
+  it("serve notifications.native through nativeNotifier, which knows when Herald's own daemon serves the bus", () => {
+    const main = fs.readFileSync(path.join(root, 'main.ts'), 'utf8')
+
+    expect(main).toMatch(/const notifyNative = nativeNotifier\(\{ shellServes: \(\) => notifications\?\.serving\(\) \?\? false \}\)/)
+    expect(main).toMatch(/ipcMain\.handle\(IPC\.notifyNative, \(_event, title: string, body: string\) => notifyNative\(title, body\)\)/)
   })
 
   it('never wait on main with synchronous IPC', () => {
@@ -186,6 +235,22 @@ describe('DesktopNotifyClient', () => {
     expect(connect).toHaveBeenCalledTimes(1)
     expect(bus.call).toHaveBeenCalledTimes(2)
     expect(bus.on).toHaveBeenCalledWith('error', expect.any(Function))
+  })
+
+  it('drops a connection that reports an error, and connects again next time', async () => {
+    const broken = fakeBus(async () => null)
+    const fresh = fakeBus(async () => null)
+    const connect = vi.fn().mockReturnValueOnce(broken).mockReturnValueOnce(fresh)
+    const client = new DesktopNotifyClient(connect)
+    await client.notify({ title: 'a', body: 'b' })
+
+    const onError = broken.on.mock.calls.find(([event]) => event === 'error')?.[1] as (error: Error) => void
+    onError(new Error('connection closed'))
+
+    expect(broken.disconnect).toHaveBeenCalledTimes(1)
+    await client.notify({ title: 'c', body: 'd' })
+    expect(connect).toHaveBeenCalledTimes(2)
+    expect(fresh.call).toHaveBeenCalledTimes(1)
   })
 
   it('gives up on a server that does not answer, and connects again next time', async () => {
