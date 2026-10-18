@@ -417,12 +417,13 @@ switched from another bootc system is different: it gets a login screen and a lo
   reach) is noted, process tree, groups and sessions, and the rollback ends it as root (`kill`, TERM
   then KILL) and waits until none of it is left before it looks at the firewall for the last time;
   one it cannot see end makes the rollback incomplete, with the exact `firewall-cmd` commands that
-  remove the rule. A recorded process is still found if it later moves, by its pid, and one that
-  called `setsid` before the record has its new session recorded; both are reaped. What escapes is
-  only what is forked after the record and then leaves every recorded group and session: a process
-  the command forks after the record that moves out of them, or children forked after a recorded
-  process moves. Those are in no id the record holds, so they are not found, reaped or warned about.
-  Catching them needs a cgroup or a transient systemd scope to kill, not pgid and sid; a follow-up.
+  remove the rule. A recorded process is still found if it moves, by its pid; a later process is
+  found by the command's group and session, so moving group alone does not escape: the session still
+  catches it. What escapes is only leaving the session (`setsid`) by something forked after the
+  record: a process the command forks after the record that then calls `setsid`, or children forked
+  after a recorded process moves to a new session. Those are in no id the record holds, so they are
+  not found, reaped or warned about. Catching them needs a cgroup or a transient scope, not pgid and
+  sid; a follow-up.
   If any step after the checks fails, or anything else stops it (Ctrl+C, SIGTERM,
   SIGHUP, a file error, a command that times out), `on` puts back what it changed (files, units, the
   table, which it loads again with `nft -f` when one was there, the firewall rule, the keys it
