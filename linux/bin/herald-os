@@ -3209,7 +3209,9 @@ def ssh_processes() -> dict[int, tuple[int, int, int, int, str]]:
 
 def ssh_tree(pid: int) -> dict:
     """A command and every process under it (with its start time, so a reused pid is not taken for
-    it), and the process groups and sessions they are in, but for this process's own."""
+    it), and the process groups and sessions they are in, but for this process's own. The record is
+    these ids; a process that later leaves them all (setsid of its own, or a new group or session) is
+    beyond it and is not reaped. See ssh_alive for the window and the reach this leaves."""
     processes = ssh_processes()
     children: dict[int, list[int]] = {}
     for each, (parent, *_) in processes.items():
@@ -3233,12 +3235,19 @@ def ssh_alive(tree: dict) -> list[int]:
     listed. A group or session no process carries any more (a zombie still does) is dropped from the
     tree for good, so a new leader later given that freed id is not taken for the tree's. That drop is
     the only guard against reuse; it needs no start time or /proc/uptime, so nothing is weakened when
-    those cannot be read. Its one gap is a freed id taken by an unrelated process in the window between
-    two checks, before any check sees it empty: ssh_reap looks every tenth of a second while the id is
-    still a command's, and a group or session id only frees when every process in it has gone, so for
-    an unrelated process to take it unseen the whole id would have to empty and a pid wrap onto its
-    leader between two looks. The risk is ending one stray process, never leaving SSH open, so the
-    simple drop is kept over a start-time guard, which wrongly skipped the command's own orphans."""
+    those cannot be read. Its one gap is a freed id taken by an unrelated process before any check sees
+    it empty, so the id is never dropped. That window runs from when the tree is recorded (in ssh_kill,
+    just before the group is signalled) to the next check of it: the reap at the start of the rollback,
+    or, for a command killed during the rollback, the final reap. Between the record and the first reap
+    the gap can be about ten seconds (the sudo renewal); before the final reap it can be up to the rest
+    of the rollback budget, so minutes. (The tenth-of-a-second polling is only within a single reap,
+    waiting for a kill to take; it is not this window.) For the gap to bite, the whole id must empty and
+    a pid wrap onto its leader within it; the cost would be ending one stray process, never leaving SSH
+    open, so the simple drop is kept over a start-time guard, which wrongly skipped the command's own
+    orphans. The record is pgid and sid, so a process that leaves both -- it calls setsid of its own, or
+    moves to a new group or session on SIGTERM and then forks -- is in no id the tree holds and is not
+    found or reaped (nothing warns either); catching that needs a cgroup or a transient systemd scope,
+    a follow-up."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
     tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}

@@ -417,7 +417,11 @@ switched from another bootc system is different: it gets a login screen and a lo
   reach) is noted, process tree, groups and sessions, and the rollback ends it as root (`kill`, TERM
   then KILL) and waits until none of it is left before it looks at the firewall for the last time;
   one it cannot see end makes the rollback incomplete, with the exact `firewall-cmd` commands that
-  remove the rule. If any step after the checks fails, or anything else stops it (Ctrl+C, SIGTERM,
+  remove the rule. The record is pgid and sid, so a process leaving both (one that calls `setsid` of
+  its own, or moves to a new group or session on SIGTERM and then forks) is in no id the record
+  holds and is not found or reaped, and nothing warns about it. Catching that needs a cgroup or a
+  transient systemd scope to kill, not pgid and sid; it is a known follow-up.
+  If any step after the checks fails, or anything else stops it (Ctrl+C, SIGTERM,
   SIGHUP, a file error, a command that times out), `on` puts back what it changed (files, units, the
   table, which it loads again with `nft -f` when one was there, the firewall rule, the keys it
   added), lists it, and exits 130 for Ctrl+C, 143 for SIGTERM, 129 for SIGHUP and 124 for a timeout,
