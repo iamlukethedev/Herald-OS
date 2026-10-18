@@ -64,15 +64,33 @@ function showElectronNotification(notice: NativeNotice): void {
   notification.show()
 }
 
-/** The `Notify` call of the Desktop Notifications spec for one notice, without sound. */
-export function notifyMessage({ title, body }: NativeNotice): dbus.Message {
+/** The app's .desktop id as Electron's libnotify path names it: CHROME_DESKTOP, which Electron sets at startup, without `.desktop`. */
+export function desktopEntry(env: NodeJS.ProcessEnv = process.env): string | null {
+  const id = (env.CHROME_DESKTOP ?? '').trim().replace(/\.desktop$/, '')
+
+  return id || null
+}
+
+/**
+ * The `Notify` call of the Desktop Notifications spec for one notice, without sound. The
+ * `desktop-entry` and `sender-pid` hints are the ones Electron's libnotify path sent, which GNOME
+ * and KDE use for the icon and grouping; a server that is not running is not started for it.
+ */
+export function notifyMessage({ title, body }: NativeNotice, { entry = desktopEntry(), pid = process.pid }: { entry?: string | null; pid?: number } = {}): dbus.Message {
+  const hints: Record<string, dbus.Variant> = { 'suppress-sound': new dbus.Variant('b', true), 'sender-pid': new dbus.Variant('x', pid) }
+
+  if (entry) {
+    hints['desktop-entry'] = new dbus.Variant('s', entry)
+  }
+
   return new dbus.Message({
     destination: BUS_NAME,
     path: OBJECT_PATH,
     interface: BUS_NAME,
     member: 'Notify',
     signature: 'susssasa{sv}i',
-    body: [APP_NAME, 0, '', title, body, [], { 'suppress-sound': new dbus.Variant('b', true) }, -1]
+    flags: dbus.MessageFlag.NO_AUTO_START,
+    body: [APP_NAME, 0, '', title, body, [], hints, -1]
   })
 }
 

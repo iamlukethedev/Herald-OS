@@ -23,7 +23,9 @@ vi.mock('electron', () => {
 })
 vi.mock('./log.ts', () => ({ log: vi.fn() }))
 
-const { DesktopNotifyClient, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
+const dbus = await import('dbus-next')
+const wire = (await import('dbus-next/lib/message.js' as string)) as { marshall: (message: unknown) => [Buffer, number[]] }
+const { desktopEntry, DesktopNotifyClient, nativeNotifier, notifyMessage, NOTIFY_TIMEOUT_MS } = await import('./native-notification.ts')
 
 beforeEach(() => {
   electron.constructed = 0
@@ -106,6 +108,41 @@ describe('notifyMessage', () => {
     expect(message.body.slice(0, 6)).toEqual(['Herald OS', 0, '', 'Approval needed', 'Hermes is asking for permission', []])
     expect(message.body[6]['suppress-sound'].value).toBe(true)
     expect(message.body[7]).toBe(-1)
+  })
+
+  it('does not start a notification server that is not running', () => {
+    expect(notifyMessage({ title: 't', body: 'b' }).flags & dbus.MessageFlag.NO_AUTO_START).toBe(dbus.MessageFlag.NO_AUTO_START)
+  })
+
+  it("carries the hints Electron's libnotify path sent, for the icon and grouping", () => {
+    const hints = notifyMessage({ title: 't', body: 'b' }, { entry: 'herald-os', pid: 4242 }).body[6]
+
+    expect(hints['desktop-entry']).toMatchObject({ signature: 's', value: 'herald-os' })
+    expect(hints['sender-pid']).toMatchObject({ signature: 'x', value: 4242 })
+  })
+
+  it('names this process as the sender by default, and leaves out an unknown desktop entry', () => {
+    const hints = notifyMessage({ title: 't', body: 'b' }, { entry: null }).body[6]
+
+    expect(hints['sender-pid'].value).toBe(process.pid)
+    expect(hints).not.toHaveProperty('desktop-entry')
+  })
+
+  it('marshals onto the wire with the flag in its header', () => {
+    const message = notifyMessage({ title: 't', body: 'b' }, { entry: 'herald-os', pid: 4242 })
+    message.serial = 1
+    const [bytes] = wire.marshall(message)
+
+    expect(bytes[2]).toBe(dbus.MessageFlag.NO_AUTO_START)
+  })
+})
+
+describe('desktopEntry', () => {
+  it('is CHROME_DESKTOP without .desktop, as Electron derives it', () => {
+    expect(desktopEntry({ CHROME_DESKTOP: 'herald-os.desktop' })).toBe('herald-os')
+    expect(desktopEntry({ CHROME_DESKTOP: 'Herald OS.desktop' })).toBe('Herald OS')
+    expect(desktopEntry({})).toBeNull()
+    expect(desktopEntry({ CHROME_DESKTOP: ' ' })).toBeNull()
   })
 })
 
