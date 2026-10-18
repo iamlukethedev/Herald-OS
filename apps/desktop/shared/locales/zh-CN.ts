@@ -88,6 +88,10 @@ export const zhCN: Translation = {
   'terminal.copyFailed': '无法复制所选内容',
   'terminal.pasteFailed': '无法粘贴到终端',
   'terminal.clipboardUnavailable': 'Herald OS 无法访问系统剪贴板，请稍后再试。',
+  'terminal.pasteTooLarge': '内容过多，无法粘贴',
+  'terminal.pasteTooLargeBody': '剪贴板中的文本超过 {size}，超出了终端一次能粘贴的上限。',
+  'terminal.copyTooLarge': '内容过多，无法复制',
+  'terminal.copyTooLargeBody': '所选内容超过 {size}，超出了终端一次能复制的上限。',
 
   'time.justNow': '刚刚',
   'time.minutesAgo': '{count} 分钟前',

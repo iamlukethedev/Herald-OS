@@ -94,6 +94,10 @@ export const ptBR: Translation = {
   'terminal.copyFailed': 'Não foi possível copiar a seleção',
   'terminal.pasteFailed': 'Não foi possível colar no Terminal',
   'terminal.clipboardUnavailable': 'O Herald OS não conseguiu acessar a área de transferência do sistema. Tente de novo daqui a pouco.',
+  'terminal.pasteTooLarge': 'Texto grande demais para colar',
+  'terminal.pasteTooLargeBody': 'A área de transferência tem mais de {size} de texto, mais do que o Terminal cola de uma vez.',
+  'terminal.copyTooLarge': 'Seleção grande demais para copiar',
+  'terminal.copyTooLargeBody': 'A seleção tem mais de {size}, mais do que o Terminal copia de uma vez.',
 
   'time.justNow': 'agora mesmo',
   'time.minutesAgo': 'há {count} min',

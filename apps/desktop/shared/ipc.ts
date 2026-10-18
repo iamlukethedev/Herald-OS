@@ -490,6 +490,9 @@ export interface TerminalHandle {
   shell: string
 }
 
+/** The clipboard's text for the Terminal, or that there is more than it pastes at once. */
+export type TerminalClipboardRead = { text: string } | { tooLarge: true }
+
 export interface SpaceDef {
   id: string
   name: string
@@ -975,6 +978,7 @@ export const IPC = {
   terminalWrite: 'herald-os:terminal:write',
   terminalResize: 'herald-os:terminal:resize',
   terminalDispose: 'herald-os:terminal:dispose',
+  /** Resolves with a `TerminalClipboardRead`. */
   terminalClipboardRead: 'herald-os:terminal:clipboard-read',
   terminalClipboardWrite: 'herald-os:terminal:clipboard-write',
   terminalData: 'herald-os:terminal:data',

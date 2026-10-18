@@ -4,11 +4,13 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { sanitizePaste } from '../../../shared/terminal-clipboard.ts'
+import type { TerminalClipboardRead } from '../../../shared/ipc.ts'
+import { overClipboardLimit, sanitizePaste, TERMINAL_CLIPBOARD_LIMIT } from '../../../shared/terminal-clipboard.ts'
 import { terminalColors } from '../../../shared/theme.ts'
 import { Button } from '../../components/ui/button.tsx'
 import { EmptyState } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
+import { formatBytes } from '../../lib/format.ts'
 import { logFailure } from '../../lib/report.ts'
 import { useShellCommands } from '../../shell/surfaces/shell-utils.ts'
 import { $env, $prefs } from '../../store/backend.ts'
@@ -403,6 +405,12 @@ async function copyText(text: string): Promise<void> {
     return
   }
 
+  if (overClipboardLimit(text)) {
+    tooLarge('terminal.copyTooLarge', 'terminal.copyTooLargeBody')
+
+    return
+  }
+
   try {
     await window.heraldOS.terminal.writeClipboard(text)
   } catch (error) {
@@ -411,10 +419,10 @@ async function copyText(text: string): Promise<void> {
 }
 
 async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void> {
-  let text: string
+  let clipboard: TerminalClipboardRead
 
   try {
-    text = await window.heraldOS.terminal.readClipboard()
+    clipboard = await window.heraldOS.terminal.readClipboard()
   } catch (error) {
     if (live()) {
       clipboardFailed('terminal.pasteFailed', error)
@@ -423,8 +431,14 @@ async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void>
     return
   }
 
-  if (live()) {
-    pasteText(terminal, text)
+  if (!live()) {
+    return
+  }
+
+  if ('tooLarge' in clipboard) {
+    tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
+  } else {
+    pasteText(terminal, clipboard.text)
   }
 }
 
@@ -433,6 +447,12 @@ async function pasteInto(terminal: Terminal, live: () => boolean): Promise<void>
  * it for a program that asked for bracketed paste.
  */
 function pasteText(terminal: Terminal, text: string): void {
+  if (overClipboardLimit(text)) {
+    tooLarge('terminal.pasteTooLarge', 'terminal.pasteTooLargeBody')
+
+    return
+  }
+
   const clean = sanitizePaste(text)
 
   if (clean) {
@@ -443,4 +463,8 @@ function pasteText(terminal: Terminal, text: string): void {
 function clipboardFailed(title: 'terminal.copyFailed' | 'terminal.pasteFailed', error: unknown): void {
   logFailure('terminal.clipboard')(error)
   notify({ title: t(title), body: t('terminal.clipboardUnavailable'), level: 'error', key: 'terminal.clipboard' })
+}
+
+function tooLarge(title: 'terminal.copyTooLarge' | 'terminal.pasteTooLarge', body: 'terminal.copyTooLargeBody' | 'terminal.pasteTooLargeBody'): void {
+  notify({ title: t(title), body: t(body, { size: formatBytes(TERMINAL_CLIPBOARD_LIMIT, 0) }), level: 'warn', key: 'terminal.clipboard' })
 }

@@ -72,6 +72,7 @@ import {
   type SystemInfo,
   type SystemSpeech,
   type SystemStats,
+  type TerminalClipboardRead,
   type TerminalCreateOptions,
   type TerminalHandle,
   type TreeChangedEvent,
@@ -438,7 +439,7 @@ const api = {
     resize: (id: string, cols: number, rows: number): void => ipcRenderer.send(IPC.terminalResize, id, cols, rows),
     dispose: (id: string): Promise<void> => ipcRenderer.invoke(IPC.terminalDispose, id),
     /** The system clipboard's text, read in main: the shell's pages may not read the clipboard themselves. */
-    readClipboard: (): Promise<string> => ipcRenderer.invoke(IPC.terminalClipboardRead),
+    readClipboard: (): Promise<TerminalClipboardRead> => ipcRenderer.invoke(IPC.terminalClipboardRead),
     writeClipboard: (text: string): Promise<void> => ipcRenderer.invoke(IPC.terminalClipboardWrite, text),
     onData: (listener: (id: string, data: string) => void): Unsubscribe => {
       const wrapped = (_event: unknown, id: string, data: string) => listener(id, data)

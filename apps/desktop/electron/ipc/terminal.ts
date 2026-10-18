@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { IPC, type TerminalCreateOptions, type TerminalHandle } from '../../shared/ipc.ts'
+import { IPC, type TerminalClipboardRead, type TerminalCreateOptions, type TerminalHandle } from '../../shared/ipc.ts'
+import { overClipboardLimit } from '../../shared/terminal-clipboard.ts'
 import { terminalBin } from '../catalog/catalog.ts'
 import { log } from '../log.ts'
 import { isShellPage } from '../paths.ts'
@@ -187,16 +188,21 @@ export function registerTerminalIpc(getWindow: () => BrowserWindow | null): void
     }
   }
 
-  ipcMain.handle(IPC.terminalClipboardRead, async (event): Promise<string> => {
+  ipcMain.handle(IPC.terminalClipboardRead, async (event): Promise<TerminalClipboardRead> => {
     fromShell(event)
+    const text = await clipboard.readText()
 
-    return clipboard.readText()
+    return overClipboardLimit(text) ? { tooLarge: true } : { text }
   })
   ipcMain.handle(IPC.terminalClipboardWrite, async (event, text: unknown): Promise<void> => {
     fromShell(event)
 
     if (typeof text !== 'string') {
       throw new Error('Only text can be copied from the Terminal')
+    }
+
+    if (overClipboardLimit(text)) {
+      throw new Error('That is more text than the Terminal copies at once')
     }
 
     if (text) {

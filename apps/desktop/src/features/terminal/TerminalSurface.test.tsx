@@ -145,7 +145,7 @@ beforeEach(async () => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('requestAnimationFrame', (callback: () => void) => setTimeout(callback, 0))
   bridge.write.mockReset()
-  bridge.readClipboard.mockReset().mockResolvedValue('echo pasted')
+  bridge.readClipboard.mockReset().mockResolvedValue({ text: 'echo pasted' })
   bridge.writeClipboard.mockReset().mockResolvedValue(undefined)
   $notifications.set([])
   $prefs.set({ ...PREFS, language: 'en' })
@@ -202,7 +202,7 @@ describe('the Terminal keys', () => {
   })
 
   it('pastes with Ctrl+Shift+V through xterm, not straight to the shell', async () => {
-    bridge.readClipboard.mockResolvedValue('first\nsecond')
+    bridge.readClipboard.mockResolvedValue({ text: 'first\nsecond' })
     const event = xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
     await settle()
 
@@ -264,12 +264,12 @@ describe('the Terminal keys', () => {
   })
 
   it('drops a paste that arrives after the tab closed', async () => {
-    let resolve!: (text: string) => void
-    bridge.readClipboard.mockImplementation(() => new Promise<string>(done => (resolve = done)))
+    let resolve!: (clipboard: { text: string }) => void
+    bridge.readClipboard.mockImplementation(() => new Promise<{ text: string }>(done => (resolve = done)))
     const terminal = xterm.terminal
     terminal.press('V', { ctrlKey: true, shiftKey: true })
     act(() => root.unmount())
-    resolve('too late')
+    resolve({ text: 'too late' })
     await new Promise(done => setTimeout(done, 0))
 
     expect(terminal.paste).not.toHaveBeenCalled()
@@ -282,7 +282,7 @@ describe('what a paste sends the shell', () => {
     [
       'Ctrl+Shift+V',
       async text => {
-        bridge.readClipboard.mockResolvedValue(text)
+        bridge.readClipboard.mockResolvedValue({ text })
         xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
         await settle()
       }
@@ -290,7 +290,7 @@ describe('what a paste sends the shell', () => {
     [
       'the menu’s Paste',
       async text => {
-        bridge.readClipboard.mockResolvedValue(text)
+        bridge.readClipboard.mockResolvedValue({ text })
         await rightClick()
         await act(async () => item('Paste')?.click())
         await settle()
@@ -349,6 +349,32 @@ describe('what a paste sends the shell', () => {
     await settle()
 
     expect(shell()).toBe('\x1b[200~echo safe\x1b[201~\x1b[200~[201~echo pwned\r\x1b[201~')
+  })
+
+  it('says so, and pastes nothing, when the clipboard holds more than the Terminal pastes at once', async () => {
+    bridge.readClipboard.mockResolvedValue({ tooLarge: true })
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    await settle()
+
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => [n.title, n.body, n.level])).toEqual([['Too much to paste', 'The clipboard holds more than 1 MB of text, more than the Terminal pastes at once.', 'warn']])
+  })
+
+  it('holds a paste event to the same limit', async () => {
+    const event = nativePaste('a'.repeat(1024 * 1024 + 1))
+    await settle()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(bridge.write).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => n.title)).toEqual(['Too much to paste'])
+  })
+
+  it('says so, and copies nothing, when the selection is more than it copies at once', () => {
+    xterm.terminal.selection = 'a'.repeat(1024 * 1024 + 1)
+    xterm.terminal.press('C', { ctrlKey: true, shiftKey: true })
+
+    expect(bridge.writeClipboard).not.toHaveBeenCalled()
+    expect($notifications.get().map(n => n.title)).toEqual(['Too much to copy'])
   })
 
   it('sends nothing for a clipboard of nothing but controls', async () => {

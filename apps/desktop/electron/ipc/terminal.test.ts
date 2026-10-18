@@ -61,7 +61,7 @@ describe('the Terminal clipboard', () => {
   })
 
   it('reads and writes the system clipboard for the shell', async () => {
-    await expect(handler(IPC.terminalClipboardRead)(shell)).resolves.toBe('echo hello')
+    await expect(handler(IPC.terminalClipboardRead)(shell)).resolves.toEqual({ text: 'echo hello' })
     await handler(IPC.terminalClipboardWrite)(shell, 'selected output')
 
     expect(electron.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
@@ -87,6 +87,18 @@ describe('the Terminal clipboard', () => {
     await expect(handler(IPC.terminalClipboardWrite)(event, 'secret')).rejects.toThrow()
 
     expect(electron.readText).not.toHaveBeenCalled()
+    expect(electron.writeText).not.toHaveBeenCalled()
+  })
+
+  it('keeps a clipboard of more than a mebibyte on this side', async () => {
+    electron.readText.mockResolvedValue('a'.repeat(1024 * 1024 + 1))
+
+    await expect(handler(IPC.terminalClipboardRead)(shell)).resolves.toEqual({ tooLarge: true })
+  })
+
+  it('copies no more than a mebibyte', async () => {
+    await expect(handler(IPC.terminalClipboardWrite)(shell, 'a'.repeat(1024 * 1024 + 1))).rejects.toThrow()
+
     expect(electron.writeText).not.toHaveBeenCalled()
   })
 
