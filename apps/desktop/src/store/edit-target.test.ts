@@ -78,6 +78,24 @@ describe('a field with its own paste', () => {
     expect(perform).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { kind: 'copy' },
+    { kind: 'cut' },
+    { kind: 'selectAll' },
+    { kind: 'undo' },
+    { kind: 'insert', text: 'hello' },
+    { kind: 'key', key: 'enter' }
+  ] as const)('leaves $kind to the browser, pasting nothing', async action => {
+    const paste = vi.fn(async () => null)
+    const off = setOwnPaste(field, paste)
+
+    await performEdit(action)
+    off()
+
+    expect(paste).not.toHaveBeenCalled()
+    expect(perform).toHaveBeenCalledExactlyOnceWith(action)
+  })
+
   it('reports why it did not paste', async () => {
     const off = setOwnPaste(field, async () => 'The clipboard has no text to paste.')
 

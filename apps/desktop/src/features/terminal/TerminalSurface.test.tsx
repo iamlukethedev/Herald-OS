@@ -427,6 +427,18 @@ describe('a spoken or Hermes "paste" into the Terminal', () => {
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
   })
 
+  it('takes a spoken "copy" as a copy: the clipboard is not read and nothing is pasted', async () => {
+    xterm.terminal.selection = 'selected output'
+    const result = await runCommand('edit.copy', {}, { source: 'voice' })
+    await settle()
+
+    expect(result).toMatchObject({ ok: true, summary: 'Copied' })
+    expect(bridge.editPerform).toHaveBeenCalledExactlyOnceWith({ kind: 'copy' })
+    expect(bridge.readClipboard).not.toHaveBeenCalled()
+    expect(xterm.terminal.paste).not.toHaveBeenCalled()
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
   it('pastes through main and the filter, and says it did', async () => {
     bridge.readClipboard.mockResolvedValue({ text: '\x1b[201~echo pwned\r' })
     const result = await runCommand('edit.paste', {}, { source: 'voice' })
