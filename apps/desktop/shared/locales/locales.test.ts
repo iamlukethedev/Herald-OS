@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Language, Translation } from '../i18n.ts'
+import type { Language, PluralForms, Translation } from '../i18n.ts'
 import { en } from './en.ts'
 import { ptBR } from './pt-BR.ts'
 import { zhCN } from './zh-CN.ts'
@@ -176,12 +176,12 @@ describe("the pet's count of approvals waiting", () => {
     expect(message, language).toBeDefined()
     expect(typeof message, language).toBe('object')
 
-    const forms = message as Record<string, string>
+    const forms = message as PluralForms
     const rules = new Intl.PluralRules(language)
 
     for (let count = 1; count <= 100; count++) {
       const form = rules.select(count)
-      expect(forms[form], `${language} ${count} (${form})`).toContain('{count}')
+      expect(forms[form as keyof PluralForms], `${language} ${count} (${form})`).toContain('{count}')
     }
 
     if (language !== 'en') {
