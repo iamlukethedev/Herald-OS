@@ -236,10 +236,13 @@ function ClarifyCard({ id, params }: { id: string; params: ClarifyRequestParams 
   )
 }
 
-/** A password or secret: only Cancel sends an empty value, so Tab and Return from the card cannot. */
+/**
+ * A password or secret: only Cancel sends an empty value, so Tab and Return from the card cannot.
+ * Spaces alone count as empty; anything else is sent exactly as typed, spaces included.
+ */
 function ValueCard({ id, icon, title, description, secret }: { id: string; icon: React.ReactNode; title: string; description?: string; secret?: boolean }) {
   const [value, setValue] = useState('')
-  const filled = value !== ''
+  const filled = value.trim() !== ''
 
   return (
     <div className="flex flex-col gap-3">

@@ -433,6 +433,8 @@ describe('password and secret cards', () => {
     })
   }
 
+  const continueAnswer = () => choices().find(button => button.textContent === 'Continue')!
+
   it.each(['sudo', 'secret'] as const)('%s: Tab then Return from the card sends nothing while the field is empty', async kind => {
     const { entry, respond } = asked(kind)
     field.focus()
@@ -490,5 +492,44 @@ describe('password and secret cards', () => {
 
     expect(respond).toHaveBeenCalledTimes(1)
     expect(respond.mock.calls[0]).toStrictEqual([{ value: '' }])
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: counts as empty, so neither Return nor Continue sends it', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    const input = card()!.querySelector('input')!
+
+    for (const blank of [' ', '   ', '\t', ' \t ']) {
+      type(input, blank)
+      act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+
+      expect(continueAnswer().disabled, JSON.stringify(blank)).toBe(true)
+    }
+
+    act(() => continueAnswer().click())
+    expect(respond).not.toHaveBeenCalled()
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: a value with spaces around it is sent exactly as typed, not trimmed', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    const input = card()!.querySelector('input')!
+
+    type(input, '  pass word ')
+    expect(continueAnswer().disabled).toBe(false)
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+
+    expect(respond).toHaveBeenCalledTimes(1)
+    expect(respond.mock.calls[0]).toStrictEqual([{ value: '  pass word ' }])
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: Continue sends a value with spaces around it as typed too', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    type(card()!.querySelector('input')!, ' secret ')
+
+    act(() => continueAnswer().click())
+
+    expect(respond.mock.calls[0]).toStrictEqual([{ value: ' secret ' }])
   })
 })
