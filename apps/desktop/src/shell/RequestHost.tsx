@@ -236,8 +236,10 @@ function ClarifyCard({ id, params }: { id: string; params: ClarifyRequestParams 
   )
 }
 
+/** A password or secret: only Cancel sends an empty value, so Tab and Return from the card cannot. */
 function ValueCard({ id, icon, title, description, secret }: { id: string; icon: React.ReactNode; title: string; description?: string; secret?: boolean }) {
   const [value, setValue] = useState('')
+  const filled = value !== ''
 
   return (
     <div className="flex flex-col gap-3">
@@ -253,7 +255,7 @@ function ValueCard({ id, icon, title, description, secret }: { id: string; icon:
         value={value}
         onChange={event => setValue(event.target.value)}
         onKeyDown={event => {
-          if (event.key === 'Enter') {
+          if (event.key === 'Enter' && filled) {
             resolveRequest(id, { value })
           }
         }}
@@ -263,7 +265,7 @@ function ValueCard({ id, icon, title, description, secret }: { id: string; icon:
         <Button variant="ghost" size="sm" onClick={() => resolveRequest(id, { value: '' })}>
           Cancel
         </Button>
-        <Button variant="primary" size="sm" onClick={() => resolveRequest(id, { value })}>
+        <Button variant="primary" size="sm" disabled={!filled} onClick={() => resolveRequest(id, { value })}>
           Continue
         </Button>
       </div>

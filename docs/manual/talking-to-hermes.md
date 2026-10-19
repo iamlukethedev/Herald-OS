@@ -38,7 +38,8 @@ renaming files, a card asks first:
 Destructive actions (moving files to the Trash, stopping a program) ask every time, without the
 session and always choices. With voice on, say "yes" to allow once or "no" to deny. Hermes may also
 ask a question, or for your administrator password for a system task; type it into the card, never
-into the chat. [Privacy and the audit log](privacy.md) explains the rules.
+into the chat. Continue and Return wait until something is typed; Cancel answers without it.
+[Privacy and the audit log](privacy.md) explains the rules.
 
 A card never takes the keyboard from a field you are typing in, and never puts it on one of its
 answers, so a key meant for something else cannot answer it. To reach the card from the keyboard,

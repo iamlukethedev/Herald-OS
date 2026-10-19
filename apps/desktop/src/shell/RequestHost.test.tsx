@@ -416,3 +416,68 @@ describe('the order of the answers', () => {
     expect(choices().filter(button => button.classList.contains('bg-accent'))).toEqual([allowOnce])
   })
 })
+
+describe('password and secret cards', () => {
+  function asked(kind: 'sudo' | 'secret'): { entry: PendingRequest; respond: ReturnType<typeof vi.fn> } {
+    const respond = vi.fn()
+    const params = kind === 'sudo' ? { command: 'apt upgrade' } : { env_var: 'OPENAI_API_KEY', prompt: 'Your OpenAI key' }
+
+    return { entry: { kind, request: { id: `${kind}-1`, method: kind, params, respond, fail: vi.fn() }, receivedAt: 0 } as unknown as PendingRequest, respond }
+  }
+
+  /** Type into the field as a person does, so React sees the change. */
+  function type(input: HTMLInputElement, text: string): void {
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  it.each(['sudo', 'secret'] as const)('%s: Tab then Return from the card sends nothing while the field is empty', async kind => {
+    const { entry, respond } = asked(kind)
+    field.focus()
+    arrive(entry)
+    await focusRequest().run({}, { source: 'shortcut' })
+
+    const [first] = tabStops(card()!)
+    expect(first).toBeInstanceOf(HTMLInputElement)
+    act(() => first.focus())
+    press('Enter')
+
+    expect(respond).not.toHaveBeenCalled()
+    expect(choices().find(button => button.textContent === 'Continue')?.disabled).toBe(true)
+    expect(tabStops(card()!).map(element => element.textContent)).not.toContain('Continue')
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: sends what was typed on Return', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    const input = card()!.querySelector('input')!
+
+    type(input, 'hunter2')
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+
+    expect(respond).toHaveBeenCalledWith({ value: 'hunter2' })
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: Continue sends the typed value once it is filled', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    type(card()!.querySelector('input')!, 'hunter2')
+    const continueButton = choices().find(button => button.textContent === 'Continue')!
+
+    expect(continueButton.disabled).toBe(false)
+    act(() => continueButton.click())
+
+    expect(respond).toHaveBeenCalledWith({ value: 'hunter2' })
+  })
+
+  it.each(['sudo', 'secret'] as const)('%s: Cancel still sends an empty value on purpose', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+
+    act(() => choices().find(button => button.textContent === 'Cancel')!.click())
+
+    expect(respond).toHaveBeenCalledWith({ value: '' })
+  })
+})
