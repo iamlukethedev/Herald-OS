@@ -30,7 +30,6 @@ function approval(id: string, description: string): PendingRequest {
   return { kind: 'approval', request: { id, method: 'approval', params: { description, choices: ['once', 'deny'] }, respond: vi.fn(), fail: vi.fn() }, receivedAt: 0 } as unknown as PendingRequest
 }
 
-
 /** The snapshot the pet's brain publishes for what is pending, with a reason to step away if any. */
 function publish(hiddenBy: PetHideReason | null = null): void {
   const { approval: held, waiting } = approvalOf($pendingRequests.get(), { active: false, sessionId: null })
