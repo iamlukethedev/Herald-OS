@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { focusRequestCard } from '../../lib/request-focus.ts'
+import { $prefs } from '../../store/backend.ts'
 import { PetApprovalCard } from './PetView.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -55,5 +56,30 @@ describe("the approval card in the pet's hands", () => {
 
     const stops = [...card()!.querySelectorAll<HTMLElement>('button, input, [tabindex]')].filter(element => element.tabIndex >= 0)
     expect(stops[0].textContent).toBe('Deny')
+  })
+
+  it.each([
+    ['en', 1, '1 more approval waiting'],
+    ['en', 2, '2 more approvals waiting'],
+    ['pt-BR', 1, 'Mais 1 aprovação aguardando'],
+    ['pt-BR', 3, 'Mais 3 aprovações aguardando'],
+    ['zh-CN', 1, '还有 1 个批准请求在等待'],
+    ['zh-CN', 4, '还有 4 个批准请求在等待']
+  ] as const)('counts the approvals behind it in %s: %i reads "%s"', (language, waiting, text) => {
+    act(() => $prefs.set({ ...$prefs.get(), language }))
+
+    try {
+      act(() => root.render(<PetApprovalCard approval={approval} waiting={waiting} />))
+
+      expect(card()?.lastElementChild?.textContent).toBe(text)
+    } finally {
+      act(() => $prefs.set({ ...$prefs.get(), language: 'en' }))
+    }
+  })
+
+  it('says nothing about a queue when no other approval waits', () => {
+    act(() => root.render(<PetApprovalCard approval={approval} waiting={0} />))
+
+    expect(card()?.textContent).not.toMatch(/waiting/)
   })
 })

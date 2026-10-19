@@ -181,6 +181,7 @@ export const zhCN: Translation = {
   'requests.announce.jump': '按 {keys} 前往该请求。',
   'requests.announce.waiting': { other: '共有 {count} 个请求在等待。' },
   'requests.announce.jumpFirst': '按 {keys} 前往第一个：{first}。',
+  'requests.approvalsWaiting': { other: '还有 {count} 个批准请求在等待' },
 
   'overview.ready': 'Hermes 已就绪',
   'overview.connecting': '正在连接 Hermes',

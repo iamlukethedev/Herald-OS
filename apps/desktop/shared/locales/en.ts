@@ -182,6 +182,7 @@ export const en = {
   'requests.announce.jump': 'Press {keys} to go to it.',
   'requests.announce.waiting': { one: '{count} request is waiting.', other: '{count} requests are waiting.' },
   'requests.announce.jumpFirst': 'Press {keys} to go to the first one: {first}.',
+  'requests.approvalsWaiting': { one: '{count} more approval waiting', other: '{count} more approvals waiting' },
 
   'overview.ready': 'Hermes is ready',
   'overview.connecting': 'Connecting to Hermes',

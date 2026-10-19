@@ -115,7 +115,7 @@ export function PetApprovalCard({ approval, waiting }: { approval: NonNullable<P
   return (
     <div ref={card} role="group" aria-label={t('requests.card.approval')} aria-keyshortcuts={requestShortcut().aria} data-request-card={approval.id} tabIndex={-1} className="float pointer-events-auto w-[360px] rounded-2xl p-4 outline-none animate-rise">
       <ApprovalCard id={approval.id} params={approval.params} voiceHint={approval.voice} onChoice={choice => petAct({ type: 'answer', id: approval.id, choice })} />
-      {waiting > 0 && <div className="mt-2 text-right text-[11px] text-fg-3">{waiting} more {waiting === 1 ? 'approval' : 'approvals'} waiting</div>}
+      {waiting > 0 && <div className="mt-2 text-right text-[11px] text-fg-3">{t('requests.approvalsWaiting', { count: waiting })}</div>}
     </div>
   )
 }

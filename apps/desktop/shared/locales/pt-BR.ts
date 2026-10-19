@@ -187,6 +187,7 @@ export const ptBR: Translation = {
   'requests.announce.jump': 'Pressione {keys} para ir até o pedido.',
   'requests.announce.waiting': { one: '{count} pedido aguardando.', other: '{count} pedidos aguardando.' },
   'requests.announce.jumpFirst': 'Pressione {keys} para ir ao primeiro: {first}.',
+  'requests.approvalsWaiting': { one: 'Mais {count} aprovação aguardando', other: 'Mais {count} aprovações aguardando' },
 
   'overview.ready': 'O Hermes está pronto',
   'overview.connecting': 'Conectando ao Hermes',

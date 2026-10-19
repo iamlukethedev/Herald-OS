@@ -166,3 +166,27 @@ describe('the copied-English check', () => {
     expect(wordsLeft('Open Terminal', ['Terminal'])).toBe('Open')
   })
 })
+
+describe("the pet's count of approvals waiting", () => {
+  const catalogs: Record<Language, Translation> = { en, ...TRANSLATIONS }
+
+  it.each(Object.keys(catalogs) as Language[])('is translated in %s, with every plural form the language uses', language => {
+    const message = catalogs[language]['requests.approvalsWaiting']
+
+    expect(message, language).toBeDefined()
+    expect(typeof message, language).toBe('object')
+
+    const forms = message as Record<string, string>
+    const rules = new Intl.PluralRules(language)
+
+    for (let count = 1; count <= 100; count++) {
+      const form = rules.select(count)
+      expect(forms[form], `${language} ${count} (${form})`).toContain('{count}')
+    }
+
+    if (language !== 'en') {
+      expect(Object.values(forms), language).not.toContain(en['requests.approvalsWaiting'].one)
+      expect(Object.values(forms), language).not.toContain(en['requests.approvalsWaiting'].other)
+    }
+  })
+})
