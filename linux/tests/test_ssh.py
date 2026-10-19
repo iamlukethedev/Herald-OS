@@ -2075,27 +2075,116 @@ def in_session(session: int) -> list[int]:
     return sorted(found)
 
 
+def run_caged(work, regroup: bool = False) -> bool:
+    """Run work() (returns a bool) in a forked child that is a session of its own (setsid), so a reap
+    inside work() can never reach the test runner even if the own group/session exclusion is broken.
+    With regroup, the child then also puts itself in a process group of its own (setpgid), so the
+    reaper's pgid and sid differ and a half-dropped exclusion (only the group, or only the session) is
+    caught. work() runs against the in-memory module, mutant and all, which the fork inherits."""
+    read, write = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read)
+        answer = b"E"
+        try:
+            os.setsid()
+            if regroup:
+                grandchild = os.fork()
+                if grandchild:
+                    os.close(write)
+                    os.waitpid(grandchild, 0)
+                    os._exit(0)
+                os.setpgid(0, 0)
+            answer = b"1" if work() else b"0"
+        except BaseException:
+            answer = b"E"
+        try:
+            os.write(write, answer)
+        except OSError:
+            pass
+        os._exit(0)
+    os.close(write)
+    data = b""
+    while True:
+        chunk = os.read(read, 1)
+        if not chunk:
+            break
+        data += chunk
+    os.waitpid(pid, 0)
+    os.close(read)
+    return data[-1:] == b"1"
+
+
 def a_root_command_left_running_is_ended(machine: System, tmp_path: Path, capsys, quiet: bool = True) -> bool:
     """The add lets go of its pipes and adds its rule after the run: nothing of it may be left, and
-    the run may not wait for it to end by itself."""
+    the run may not wait for it to end by itself. Run caged (a session of its own), so that a broken
+    own-exclusion reaping our session cannot reach the test runner."""
     import time
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(machine.module, "SSH_TIMEOUT", 1)
         patch.setattr(machine.module, "SSH_KILL_GRACE", 1)
         paths = lands_late(machine, patch, tmp_path, 4, quiet=quiet)
-        started = time.monotonic()
-        outcome(machine, "--key", public_key())
-        quick = time.monotonic() - started < 15
-        session = int(paths["session"].read_text())
-        try:
-            return quick and in_session(session) == []
-        finally:
-            for pid in in_session(session):
-                os.kill(pid, signal.SIGKILL)
+
+        def work():
+            started = time.monotonic()
+            outcome(machine, "--key", public_key())
+            quick = time.monotonic() - started < 15
+            session = int(paths["session"].read_text())
+            try:
+                return quick and in_session(session) == []
+            finally:
+                for pid in in_session(session):
+                    os.kill(pid, signal.SIGKILL)
+        return run_caged(work)
 
 
 def a_root_command_holding_the_pipes_is_not_waited_for(machine: System, tmp_path: Path, capsys) -> bool:
     return a_root_command_left_running_is_ended(machine, tmp_path, capsys, quiet=False)
+
+
+def the_own_exclusion_covers_group_and_session(machine: System, tmp_path: Path, capsys) -> bool:
+    """ssh_tree drops the reaping process's own group and session, so the reap never touches a bystander
+    in either. Run from a child whose process group and session differ (regroup), so dropping only one
+    of them is caught: a bystander in the reaper's group, and one in its session, must both survive while
+    the recorded command (whose tree holds both ids) is reaped. Caged, as the reap runs for real."""
+    import sys
+    import time
+    module = machine.module
+
+    def work():
+        module.os.geteuid = lambda: 0
+        module.SSH_KILL_GRACE = 1
+        # The real ssh_run (the stand-in replaced it), with the module's globals, so the reap kills for
+        # real through the module's own ssh_kill/ssh_alive (a mutant's included).
+        module.ssh_run = types.FunctionType(REAL_SSH_RUN.__code__, vars(module), "ssh_run", REAL_SSH_RUN.__defaults__)
+        # The command is in the reaper's own group and session; it forks a child into a new group of the
+        # same session, so its tree holds the reaper's group, a new group, and the reaper's session.
+        code = "import os, time\nk = os.fork()\nk == 0 and os.setpgid(0, 0)\n[time.sleep(0.05) for _ in range(1200)]"
+        command = subprocess.Popen([sys.executable, "-c", code])
+        in_group = subprocess.Popen(["sleep", "60"])                    # the reaper's own group and session
+        in_session_only = subprocess.Popen(["sleep", "60"], process_group=0)  # the reaper's session, a new group
+        for _ in range(200):
+            if any(ppid == command.pid for _, (ppid, *rest) in module.ssh_processes().items()):
+                break
+            time.sleep(0.05)
+        tree = module.ssh_tree(command.pid)
+        module.SSH_LEFT[:] = [{"argv": ["firewall-cmd", "--add"], "tree": tree}]
+        module.ssh_reap(10)
+        procs = module.ssh_processes()
+
+        def alive(proc):
+            return proc.pid in procs and procs[proc.pid][4] not in ("Z", "X")
+        survived = alive(in_group) and alive(in_session_only)
+        reaped = not alive(command)
+        leftovers = [command.pid, in_group.pid, in_session_only.pid]
+        leftovers += [pid for pid, (ppid, *rest) in procs.items() if ppid == command.pid]
+        for pid in leftovers:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+        return survived and reaped
+    return run_caged(work, regroup=True)
 
 
 def a_table_not_listed_is_reported(machine: System, tmp_path: Path, capsys) -> bool:
@@ -2407,13 +2496,16 @@ MUTANTS = {
     "the reap at the start of the rollback dropped": (the_rollback_reaps_at_the_start, "    ssh_reap(max(0.0, min(ssh_limit(None) + 2 * SSH_KILL_GRACE, free())))\n", ""),
     "no share kept for the keys": (the_keys_get_a_reserved_share, '"keys": 1 if keys_out else 0', '"keys": 0'),
     "no share kept for the end": (the_end_gets_a_reserved_share, '"end": 2}', '"end": 0}'),
+    "own exclusion drops the session not the group": (the_own_exclusion_covers_group_and_session, "own = {os.getpgrp(), os.getsid(0)}", "own = {os.getpgrp()}"),
+    "own exclusion drops the group not the session": (the_own_exclusion_covers_group_and_session, "own = {os.getpgrp(), os.getsid(0)}", "own = {os.getsid(0)}"),
     "--json errors in plain text": (json_errors_are_json, '    if "--json" not in args:\n        return setup_ssh_run(args)', "    if True:\n        return setup_ssh_run(args)"),
 }
 
 
 # The mutants whose scenario runs a command in a session of its own (lands_late), skipped where that
 # cannot be done; every other mutant runs everywhere.
-LINUX_ONLY_MUTANTS = {"a root command left running not noted", "what is left never ended", "waiting on the pipes of what is left"}
+LINUX_ONLY_MUTANTS = {"a root command left running not noted", "what is left never ended", "waiting on the pipes of what is left",
+                      "own exclusion drops the session not the group", "own exclusion drops the group not the session"}
 
 
 @pytest.mark.parametrize("name", [pytest.param(name, marks=needs_linux_procs) if name in LINUX_ONLY_MUTANTS else name
@@ -4062,7 +4154,8 @@ def test_a_table_nft_says_is_not_there_in_another_language_is_still_left_alone(m
 def test_only_the_mutants_that_need_a_session_of_their_own_are_skipped_off_linux():
     assert LINUX_ONLY_MUTANTS <= set(MUTANTS)
     needing = {name for name, (scenario, _, _) in MUTANTS.items()
-               if scenario in (a_root_command_left_running_is_ended, a_root_command_holding_the_pipes_is_not_waited_for)}
+               if scenario in (a_root_command_left_running_is_ended, a_root_command_holding_the_pipes_is_not_waited_for,
+                               the_own_exclusion_covers_group_and_session)}
     assert needing == LINUX_ONLY_MUTANTS
 
 
