@@ -30,6 +30,7 @@ function approval(id: string, description: string): PendingRequest {
   return { kind: 'approval', request: { id, method: 'approval', params: { description, choices: ['once', 'deny'] }, respond: vi.fn(), fail: vi.fn() }, receivedAt: 0 } as unknown as PendingRequest
 }
 
+
 /** The snapshot the pet's brain publishes for what is pending, with a reason to step away if any. */
 function publish(hiddenBy: PetHideReason | null = null): void {
   const { approval: held, waiting } = approvalOf($pendingRequests.get(), { active: false, sessionId: null })
@@ -40,6 +41,7 @@ function setHidden(hidden: boolean): void {
   act(() => $prefs.set({ ...$prefs.get(), pet: { ...$petPrefs.get(), hidden } }))
 }
 
+const pet = () => host.querySelector(`[aria-label^="Hermes's pet"]`)
 const cards = () => [...host.querySelectorAll('[data-request-card]')].map(card => card.getAttribute('data-request-card'))
 
 beforeEach(() => {
@@ -74,7 +76,7 @@ afterEach(() => {
 
 describe('the desktop pet going away with approvals queued', () => {
   it('holds the oldest and the queue while it is shown', () => {
-    expect(host.querySelector('[aria-label^="Hermes\'s pet"]')).not.toBeNull()
+    expect(pet()).not.toBeNull()
     expect($petHeldApproval.get()).toBe('r1')
     expect(cards()).toEqual(['r1'])
     expect(host.textContent).toContain('2 more approvals waiting')
@@ -85,7 +87,7 @@ describe('the desktop pet going away with approvals queued', () => {
 
     expect($petHeldApproval.get()).toBeNull()
     expect(cards()).toEqual(['r1'])
-    expect(host.querySelector('[aria-label^="Hermes\'s pet"]')).toBeNull()
+    expect(pet()).toBeNull()
     expect(host.textContent).toContain('2 more waiting')
     expect(host.textContent).not.toContain('approvals waiting')
   })
@@ -104,5 +106,37 @@ describe('the desktop pet going away with approvals queued', () => {
 
     expect($petHeldApproval.get()).toBe('r1')
     expect(host.textContent).toContain('2 more approvals waiting')
+  })
+
+  it('lets go of the card while it walks, still on screen, and the host shows it once for one answer', () => {
+    vi.useFakeTimers()
+
+    try {
+      const [first, second] = $pendingRequests.get().map(entry => entry.request.respond as ReturnType<typeof vi.fn>)
+
+      // The Dock stops hiding: the approval corner moves up, and the pet walks there.
+      act(() => $prefs.set({ ...$prefs.get(), dockAutoHide: false }))
+
+      expect(pet()).not.toBeNull()
+      expect($petHeldApproval.get()).toBeNull()
+      expect(cards()).toEqual(['r1'])
+      expect(host.textContent).toContain('2 more waiting')
+      expect(host.textContent).not.toContain('approvals waiting')
+
+      const deny = [...host.querySelectorAll<HTMLButtonElement>('[data-request-card="r1"] button')].find(button => button.textContent === 'Deny')!
+      act(() => deny.click())
+      publish()
+      act(() => vi.advanceTimersByTime(5000))
+
+      expect(first).toHaveBeenCalledTimes(1)
+      expect(first).toHaveBeenCalledWith({ choice: 'deny' })
+      expect(second).not.toHaveBeenCalled()
+      expect($petHeldApproval.get()).toBe('r2')
+      expect(cards()).toEqual(['r2'])
+      expect(host.textContent).toContain('1 more approval waiting')
+    } finally {
+      vi.useRealTimers()
+      act(() => $prefs.set({ ...$prefs.get(), dockAutoHide: undefined }))
+    }
   })
 })
