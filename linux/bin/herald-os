@@ -3247,14 +3247,16 @@ def ssh_alive(tree: dict) -> list[int]:
     the gap to bite, the whole id must empty and a pid wrap onto its leader within it; the cost would be
     ending one stray process, never leaving SSH open, so the simple drop is kept over a start-time guard,
     which wrongly skipped the command's own orphans. Reach is bounded too. A recorded process is always
-    found, by pid and start time, even if it moves group or session. Moving group alone does not escape
-    when the command has its own session (sudo with use_pty, the default since sudo 1.9.14): the session
-    is recorded and still catches it. As root, or with !use_pty, the command shares this process's
-    session, which ssh_tree drops as ours, so a process the record does not hold escapes by changing
-    group (setpgid) as well as by setsid: for example one forked after the record that then regroups, or
-    one orphaned before the record (never held) that then regroups. Those are in no id the tree holds,
-    are not found, reaped or warned about; catching them needs a cgroup or a transient systemd scope, a
-    follow-up."""
+    found, by pid and start time, even if it moves group or session. A process the record does not hold
+    is caught only through the command's group or session. herald-os runs root commands with `sudo -n`,
+    which has no terminal, so sudo gives the command no pty and no session of its own: the command shares
+    this process's session, which ssh_tree drops as ours. So such a process escapes by moving to a new
+    group (setpgid) just as by leaving the session (setsid): for example one forked after the record that
+    regroups, or one orphaned before the record (never held) that regroups. (Even if a command did get
+    its own session, as sudo with a pty would give it, setsid still escapes, leaving that session too.)
+    These are in no id the tree holds, are not found, reaped or warned about, and SSH is not necessarily
+    left closed: an escaped root command could run a firewall-cmd add after the reap and the final rule
+    check, reopening SSH. Catching them needs a cgroup or a transient systemd scope, a follow-up."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
     tree["sessions"] &= {session for _, _, session, _, _ in processes.values()}
