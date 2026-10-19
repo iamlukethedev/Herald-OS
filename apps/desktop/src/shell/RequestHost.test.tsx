@@ -480,4 +480,15 @@ describe('password and secret cards', () => {
 
     expect(respond).toHaveBeenCalledWith({ value: '' })
   })
+
+  it.each(['sudo', 'secret'] as const)('%s: Cancel sends an empty value even after something was typed, never what was typed', kind => {
+    const { entry, respond } = asked(kind)
+    arrive(entry)
+    type(card()!.querySelector('input')!, 'hunter2')
+
+    act(() => choices().find(button => button.textContent === 'Cancel')!.click())
+
+    expect(respond).toHaveBeenCalledTimes(1)
+    expect(respond.mock.calls[0]).toStrictEqual([{ value: '' }])
+  })
 })
