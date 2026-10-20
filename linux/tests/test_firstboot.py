@@ -1205,6 +1205,14 @@ def test_a_reset_forgets_the_install_s_account_name_and_keys_so_the_next_first_b
     assert session_user(tmp_path / "next")[0] == "hermes"
 
 
+def test_a_reset_marks_the_next_account_as_a_new_owners(tmp_path):
+    """So setup asks them for a disk password of their own (herald-os password --disk --new-owner)."""
+    helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
+    run_reset_apply(tmp_path, helper)
+    assert (tmp_path / "state" / "new-owner").read_text().strip()
+    assert not (tmp_path / "state" / "reset-pending").exists()
+
+
 @pytest.mark.parametrize("kept", ["/etc/herald-os/install.conf", "/etc/herald-os/ssh-keys"])
 def test_keeping_either_install_setting_through_a_reset_is_caught(tmp_path, kept):
     helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
