@@ -712,17 +712,20 @@ cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loa
 loader.exec_module(cli)
 stop_after, ctrl_z_after = float(sys.argv[2]), float(sys.argv[3])
 # The root side's stand-in stops itself, as a sudo that suspends on Ctrl+Z would, then ends.
-cli.disk_root_argv = lambda op: ["sh", "-c", f"cat >/dev/null; sleep {stop_after}; kill -STOP $$; echo resumed; exit 0"]
+stops = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+cli.disk_root_argv = lambda op: ["sh", "-c", "cat >/dev/null; " + " ".join([f"sleep {stop_after}; kill -STOP $$;"] * stops) + " echo resumed; exit 0"]
 threading.Timer(ctrl_z_after, lambda: os.kill(os.getpid(), signal.SIGTSTP)).start()
 print("code", cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": "x", "new": "y"}), flush=True)
 """
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
-@pytest.mark.parametrize("stop_after, ctrl_z_after", [(0.8, 0.2), (0.1, 0.4)], ids=["stops after Ctrl+Z", "stopped before Ctrl+Z"])
-def test_after_ctrl_z_a_stopped_root_side_is_continued_and_waited_for(stop_after, ctrl_z_after):
-    """Continuing it once, as Ctrl+Z comes, would leave one that stops a moment later stopped for good."""
-    result = subprocess.run([sys.executable, "-c", CTRL_Z_DRIVER, str(CLI), str(stop_after), str(ctrl_z_after)], capture_output=True, text=True, timeout=30)
+@pytest.mark.parametrize("stop_after, ctrl_z_after, stops", [(0.8, 0.2, 1), (0.1, 0.4, 1), (0.6, 0.2, 2)],
+                         ids=["stops after Ctrl+Z", "stopped before Ctrl+Z", "stops twice"])
+def test_after_ctrl_z_a_stopped_root_side_is_continued_and_waited_for(stop_after, ctrl_z_after, stops):
+    """Continuing it once, as Ctrl+Z comes, would leave one that stops a moment later stopped for good;
+    one that stops again after being continued is continued again."""
+    result = subprocess.run([sys.executable, "-c", CTRL_Z_DRIVER, str(CLI), str(stop_after), str(ctrl_z_after), str(stops)], capture_output=True, text=True, timeout=30)
     assert "resumed" in result.stdout and "code 0" in result.stdout, result
     assert result.stderr.count("still changing") == 1
 
@@ -815,6 +818,16 @@ def test_a_new_owner_s_slot_that_cannot_be_told_leaves_the_others_and_says_so(mo
     assert sorted(header["keyslots"].values()) == sorted(["someone else's", NEW])
 
 
+def test_an_unnamed_leftover_slot_of_the_new_password_is_refused(monkeypatch, capsys):
+    """The new password already opens the device, but no slot on its own: it cannot be told whose that
+    slot is, so it is not taken for a leftover a take back could remove."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 1: NEW}, hidden=(NEW,))
+    before = dict(header["keyslots"])
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_NEW_IS_OTHER_KEY
+    assert "already opens /dev/vda3, through a key slot that cannot be told apart" in capsys.readouterr().err
+    assert header["keyslots"] == before
+
+
 def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monkeypatch, capsys):
     """The check found the old password in two plain slots; a token then comes to use one of them
     while the new password goes in. That slot stays, and the change says so (exit 6)."""
@@ -825,6 +838,22 @@ def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monke
     err = capsys.readouterr().err
     assert "also opens key slot 2 of /dev/vda3, which systemd-recovery unlocking uses, so that slot was left" in err
     assert header["keyslots"] == {1: NEW, 2: OLD} and header["tokens"]["0"]["keyslots"] == ["2"]
+
+
+@pytest.mark.parametrize("code", [0, 1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 127, 130])
+def test_every_end_the_root_side_says_itself_is_passed_on_without_looking(monkeypatch, tmp_path, code):
+    """A code in DISK_ENDS (the refusals 9 to 13 among them) is the root side's own word; only another
+    end, a killed root side, is looked at afterwards."""
+    looked = tmp_path / "looked"
+    argv = {"change": ["sh", "-c", f"cat >/dev/null; exit {code}"], "probe": ["sh", "-c", f"touch {looked}; echo '{{}}'"]}
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: argv[op])
+    assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == code
+    assert not looked.exists()
+
+
+def test_the_refusals_are_all_ends_the_root_side_says_itself():
+    assert {cli.DISK_RECOVERY_KEY, cli.DISK_TPM_SLOT, cli.DISK_FIDO2_SLOT, cli.DISK_OTHER_SLOT, cli.DISK_NEW_IS_OTHER_KEY} <= cli.DISK_ENDS
+    assert {9, 10, 11, 12, 13} <= cli.DISK_ENDS
 
 
 def test_the_end_state_in_words():
