@@ -604,6 +604,8 @@ def test_without_lsblk_it_refuses_rather_than_guess_from_crypttab(tmp_path, lsbl
     assert result.returncode == cli.DISK_UNKNOWN
     assert "lsblk" in result.stderr and "Nothing was changed" in result.stderr and "another disk" in result.stderr
     assert not calls.exists(), "nothing ran as root"
+    # The util-linux note only where lsblk's own words say the column is unknown.
+    assert ("util-linux 2.37 or later is needed" in result.stderr) == ("unknown column" in lsblk)
     status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env)
     state = json.loads(status.stdout)
     assert status.returncode == 0 and state["encrypted"] is None and state["devices"] == [] and "lsblk" in state["error"]
@@ -624,6 +626,13 @@ def test_without_lsblk_at_all_it_says_so_without_a_traceback(tmp_path, flags):
     else:
         assert result.returncode == cli.DISK_UNKNOWN
         assert "lsblk is not installed" in result.stderr and "Nothing was changed" in result.stderr
+
+
+def test_the_util_linux_note_is_only_for_an_old_lsblk():
+    assert cli.lsblk_version_hint("lsblk: unknown column: MOUNTPOINTS\n") == " (util-linux 2.37 or later is needed)"
+    assert cli.lsblk_version_hint("lsblk: Unknown column: MOUNTPOINTS") != ""
+    for other in ("", "lsblk: failed to access sysfs directory: /sys/dev/block: No such file or directory", "Segmentation fault"):
+        assert cli.lsblk_version_hint(other) == ""
 
 
 def test_the_cli_never_reads_crypttab():

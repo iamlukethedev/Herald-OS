@@ -2781,6 +2781,12 @@ class DiskUnknown(Exception):
     """Which devices hold the root filesystem cannot be told; the message says why."""
 
 
+def lsblk_version_hint(stderr: str) -> str:
+    """The note that a newer lsblk is needed, only when that is why it failed: before util-linux 2.37 it
+    has no MOUNTPOINTS column and says "unknown column" (pure; tested)."""
+    return " (util-linux 2.37 or later is needed)" if "unknown column" in stderr.lower() else ""
+
+
 def disk_devices() -> list[str]:
     """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
     (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
@@ -2797,7 +2803,7 @@ def disk_devices() -> list[str]:
         tree = None
     if not isinstance(tree, list):
         said = (listing.stderr or "").strip().splitlines()
-        raise DiskUnknown("lsblk could not list the disks" + (f" ({said[-1]})" if said else "") + " (util-linux 2.37 or later is needed)")
+        raise DiskUnknown("lsblk could not list the disks" + (f" ({said[-1]})" if said else "") + lsblk_version_hint(listing.stderr or ""))
     return lsblk_root_luks(tree, disk_root_uuid())
 
 
