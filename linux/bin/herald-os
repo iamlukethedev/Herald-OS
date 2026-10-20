@@ -2707,6 +2707,9 @@ DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN, DISK_NO
 # A current password that opens a key slot some other way of unlocking uses: the recovery key, TPM, a
 # security key (FIDO2), or another token's, or a slot that cannot be told apart from one.
 DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT = 9, 10, 11, 12
+# A new password that already opens a key slot a token uses, or one that cannot be told apart: a take
+# back would remove that slot with it. Not 2, which also means the new password will not do as typed.
+DISK_NEW_IS_OTHER_KEY = 13
 DISK_NOT_ENCRYPTED_TEXT = (
     "this computer's disk is not encrypted, so there is no disk password to change. Herald OS encrypts "
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
@@ -2716,15 +2719,13 @@ DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyb
                    "it is typed before anything else starts, without an input method. Nothing was changed.")
 # How the root side of a change can end and say so itself; any other end (it was killed) is looked
 # at afterwards (disk_probe).
-DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, 127, 130}
+DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, DISK_NEW_IS_OTHER_KEY, 127, 130}
 # /sysroot is the real root filesystem on the image (ostree); / elsewhere.
 DISK_ROOT_MOUNTS = ("/sysroot", "/")
 # Made by reset-helper apply: the next account belongs to someone new, so setup asks for a disk
 # password of their own. The root side removes it once they have one.
 NEW_OWNER_MARK = Path("/var/lib/herald-os/new-owner")
 CRYPTSETUP_TIMEOUT = 300
-# Every LUKS2 key slot a header can hold; a passphrase cannot be in more slots than that.
-LUKS_SLOTS = 32
 
 
 def lsblk_children(node: dict) -> list[dict]:
@@ -2882,6 +2883,28 @@ def luks_which_slot(device: str, passphrase: str) -> int | None:
     return -1
 
 
+def luks_opened_slots(device: str, passphrase: str) -> tuple[list[int], dict[int, list[str]]]:
+    """Every key slot the passphrase opens, each slot the header lists tried on its own (--key-slot), and
+    the token types that use each of those. A passphrase can be in several slots, a token's among them,
+    so this, not the slot cryptsetup names first, is what may be removed. Raises RuntimeError or
+    json.JSONDecodeError when the header cannot be read."""
+    metadata = luks_metadata(device)
+    listed = sorted(int(each) for each in (metadata.get("keyslots") or {}) if str(each).isdigit())
+    opened = [each for each in listed
+              if cryptsetup(["open", "--test-passphrase", "--key-slot", str(each), device], passphrase).returncode == 0]
+    return opened, {each: kinds for each in opened if (kinds := luks_slot_tokens(metadata, each))}
+
+
+def luks_kill_slots(device: str, slots: list[int], key: str) -> list[str]:
+    """luksKillSlot each of these slots, with a passphrase that opens another one; what went wrong."""
+    problems = []
+    for slot in slots:
+        result = cryptsetup(["luksKillSlot", device, str(slot)], key)
+        if result.returncode != 0:
+            problems.append(f"key slot {slot} of {device} could not be removed: {cryptsetup_said(result)}")
+    return problems
+
+
 def luks_metadata(device: str) -> dict:
     result = cryptsetup(["luksDump", "--dump-json-metadata", device])
     if result.returncode != 0:
@@ -2991,23 +3014,28 @@ def disk_root_op(args: list[str]) -> int:
             die(f"{device} is not an encrypted (LUKS) device. Nothing was changed.", DISK_NOT_ENCRYPTED)
     old_slots: dict[str, int] = {}
     for device in devices:
-        slot = luks_which_slot(device, current)
-        if slot is None:
+        if luks_slot(device, current) is None:
             die("that is not the disk password" + (f" (it does not open {device})" if len(devices) > 1 else "") + ". Nothing was changed.", DISK_WRONG)
-        old_slots[device] = slot
-    # Only a slot of its own counts as the disk password. One a token uses (the recovery key, TPM or
-    # FIDO2 unlocking) would be removed in its place, leaving the owner's password working and the token
-    # pointing at nothing; a slot cryptsetup did not name cannot be told apart, so it is refused too.
-    for device, slot in old_slots.items():
-        if slot < 0:
-            die(f"cryptsetup did not say which key slot that password opens on {device}, so it cannot be told apart from "
-                "a key slot another way of unlocking uses. Nothing was changed.", DISK_OTHER_SLOT)
+        # Every slot it opens, not the one cryptsetup names first: only slots of its own count as the
+        # disk password. One a token uses (the recovery key, TPM or FIDO2 unlocking) would go in its place,
+        # or with it when the same secret is in both, leaving the token pointing at nothing; one that
+        # cannot be told at all is refused too.
         try:
-            kinds = luks_slot_tokens(luks_metadata(device), slot)
+            opened, bound = luks_opened_slots(device, current)
         except (RuntimeError, json.JSONDecodeError) as error:
             die(f"{error}. Nothing was changed.", 1)
-        if kinds:
-            die(*disk_not_the_password(device, slot, kinds))
+        if not opened:
+            die(f"cryptsetup did not say which key slot that password opens on {device}, so it cannot be told apart from "
+                "a key slot another way of unlocking uses. Nothing was changed.", DISK_OTHER_SLOT)
+        if bound:
+            slot = min(bound)
+            message, code = disk_not_the_password(device, slot, bound[slot])
+            if len(bound) < len(opened):
+                message = (f"the disk password also opens key slot {slot} of {device}, which {' and '.join(bound[slot])} unlocking "
+                           "uses: the same secret is in both, and changing the password would remove that slot too, or leave the "
+                           "old password working through it. Give that way of unlocking a secret of its own first. Nothing was changed.")
+            die(message, code)
+        old_slots[device] = opened[0]
     if op == "check":
         return 0
     problem = disk_password_problem(new, new, current)
@@ -3026,24 +3054,26 @@ def disk_root_op(args: list[str]) -> int:
 def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old_slots: dict[str, int]) -> int:
     added: list[str] = []
     new_slots: dict[str, int] = {}
-    # Devices the new password opens already, left by an earlier run that stopped part-way. A take back
-    # removes it from these too, which is safe: the current password opens a slot of its own on each.
-    # It must not be a slot a token uses (the recovery key's), or that take back would remove that.
+    # Devices the new password opens already: left by an earlier run that stopped part-way, or a plain
+    # slot someone gave that password, which cannot be told apart. A take back removes the new password
+    # from these too, every slot it opens, which is safe while those are plain slots: the current
+    # password opens a slot of its own on each. Any of them a token uses (the recovery key's), or one
+    # that cannot be told at all, is refused here, before anything changes, so it is never removed.
     leftover: list[str] = []
     for device in devices:
-        slot = luks_which_slot(device, new)
-        if slot is None:
+        if luks_slot(device, new) is None:
             continue
         try:
-            kinds = luks_slot_tokens(luks_metadata(device), slot) if slot >= 0 else []
+            opened, bound = luks_opened_slots(device, new)
         except (RuntimeError, json.JSONDecodeError) as error:
             disk_say(f"herald-os: {error}. Nothing was changed.", file=sys.stderr)
             return 1
-        if slot < 0 or kinds:
-            through = f"a key slot {' and '.join(kinds)} unlocking uses" if kinds else "a key slot that cannot be told apart"
+        if bound or not opened:
+            through = (f"key slot {min(bound)}, which {' and '.join(bound[min(bound)])} unlocking uses" if bound
+                       else "a key slot that cannot be told apart")
             disk_say(f"herald-os: the new disk password already opens {device}, through {through}: choose another one. "
                      "Nothing was changed.", file=sys.stderr)
-            return 2
+            return DISK_NEW_IS_OTHER_KEY
         leftover.append(device)
 
     def take_back(why: str) -> int:
@@ -3052,18 +3082,27 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
         disk_say(f"herald-os: {why}", file=sys.stderr)
         left: list[str] = []
         for device in [*added, *leftover]:
+            # Exactly the slots the new password opens, and only plain ones: never a token's, and never
+            # the current password's own.
+            why_left = ""
             try:
-                for _ in range(LUKS_SLOTS):
-                    result = cryptsetup(["luksRemoveKey", device], new)
-                    gone = luks_slot(device, new) is None
-                    if gone or result.returncode != 0:
-                        break
-            except (OSError, subprocess.TimeoutExpired) as error:
-                result, gone = subprocess.CompletedProcess([], 1, b"", str(error).encode()), False
+                if luks_slot(device, new) is None:
+                    continue
+                opened, bound = luks_opened_slots(device, new)
+                if bound:
+                    why_left = f"key slot {min(bound)}, which it opens, is one {' and '.join(bound[min(bound)])} unlocking uses"
+                elif not opened:
+                    why_left = "which key slot it opens cannot be told"
+                else:
+                    failed = luks_kill_slots(device, [slot for slot in opened if slot != old_slots[device]], current)
+                    why_left = failed[0] if failed else ""
+                gone = not why_left and luks_slot(device, new) is None
+            except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as error:
+                why_left, gone = str(error), False
             if not gone:
                 left.append(device)
                 disk_say(f"herald-os: the new disk password could not be taken back out of {device} "
-                      f"({cryptsetup_said(result) if result.returncode else 'it still opens it'}).", file=sys.stderr)
+                      f"({why_left or 'it still opens it'}).", file=sys.stderr)
             elif device in leftover:
                 disk_say(f"herald-os: the new disk password was also on {device} from an earlier run; it was taken out of it too.", file=sys.stderr)
         if not left:
@@ -3071,8 +3110,9 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                      "herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
             return 1
         disk_say(f"herald-os: the current disk password still opens every device, but the new one may open {' and '.join(left)} "
-              "too. To take it out: " + "; ".join(f"sudo cryptsetup luksRemoveKey {shlex.quote(device)}" for device in left)
-              + " (it asks for the new password), or run `herald-os password --disk` again with the same new password.", file=sys.stderr)
+              "too. To see which key slot: " + "; ".join(f"sudo cryptsetup luksDump {shlex.quote(device)}" for device in left)
+              + ", then `sudo cryptsetup luksKillSlot <device> <slot>` for a slot no token uses, or run "
+              "`herald-os password --disk` again with the same new password.", file=sys.stderr)
         return DISK_NOT_TAKEN_BACK
 
     for device in devices:
@@ -3106,13 +3146,16 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             for token in tokens:
                 cryptsetup(["token", "remove", "--token-id", str(token), device])
         else:
-            for _ in range(LUKS_SLOTS):
-                if luks_slot(device, current) is None:
-                    break
-                result = cryptsetup(["luksRemoveKey", device], current)
-                if result.returncode != 0:
-                    problems.append(f"the old disk password could not be removed from {device}: {cryptsetup_said(result)}")
-                    break
+            # Every slot the old password opens, and only plain ones; the check refused a password that
+            # also opens a token's, which is looked at again here rather than removed.
+            try:
+                opened, bound = luks_opened_slots(device, current)
+            except (RuntimeError, json.JSONDecodeError) as error:
+                problems.append(str(error))
+                continue
+            for slot, kinds in sorted(bound.items()):
+                problems.append(f"the old disk password also opens key slot {slot} of {device}, which {' and '.join(kinds)} unlocking uses, so that slot was left")
+            problems += luks_kill_slots(device, [slot for slot in opened if slot not in bound and slot != new_slots[device]], new)
         if luks_slot(device, current) is not None:
             problems.append(f"the old disk password still opens {device}")
         if luks_slot(device, new) is None:

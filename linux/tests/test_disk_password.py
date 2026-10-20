@@ -110,15 +110,16 @@ def test_a_new_password_that_does_not_open_the_disk_is_taken_back(monkeypatch, c
     monkeypatch.setattr(cli, "cryptsetup", lambda args, key=None, new=None: calls.append((args[0], key)) or subprocess.CompletedProcess(args, 0, b"", b""))
     monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: 0 if passphrase == OLD else None)
     assert cli.disk_change(["/dev/vda3"], OLD, NEW, False, {"/dev/vda3": 0}) == 1
-    assert calls == [("luksAddKey", OLD), ("luksRemoveKey", NEW)]
+    # Nothing to take back from a device the new password does not open; the old one is never touched.
+    assert calls == [("luksAddKey", OLD)]
     assert "does not open /dev/vda3" in capsys.readouterr().err
 
 
 def stand_in_disks(monkeypatch, remove, removes=True):
     """cryptsetup and luks_slot for two devices: adding works on the first and fails on the second, so
-    the new password is taken back from the first; `remove(device)` is what luksRemoveKey does there
-    (a returncode, or raises), and the new password opens the first until a removal works; with
-    `removes` False, a removal that says yes leaves it there."""
+    the new password is taken back from the first; `remove(device)` is what luksKillSlot does there
+    (a returncode, or raises), and the new password opens the first (slot 1) until a removal works;
+    with `removes` False, a removal that says yes leaves it there."""
     opened = {"/dev/vda3": {OLD}, "/dev/vdb1": {OLD}}
 
     def cryptsetup(args, key=None, new=None):
@@ -128,15 +129,19 @@ def stand_in_disks(monkeypatch, remove, removes=True):
                 return subprocess.CompletedProcess(args, 1, b"", b"Keyslot area too small.")
             opened[device].add(new)
             return subprocess.CompletedProcess(args, 0, b"", b"")
-        if args[0] == "luksRemoveKey":
+        if args[0] == "luksKillSlot":
+            device, slot = args[1], args[2]
+            assert slot == "1" and key == OLD, "only the new password's slot goes, with the current password"
             code = remove(device)
             if code == 0 and removes:
-                opened[device].discard(key)
+                opened[device].discard(NEW)
             return subprocess.CompletedProcess(args, code, b"", b"Device /dev/vda3 is busy.")
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
+    slot_of = {OLD: 0, NEW: 1}
     monkeypatch.setattr(cli, "cryptsetup", cryptsetup)
-    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: (0 if passphrase == OLD else 1) if passphrase in opened[device] else None)
+    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: slot_of[passphrase] if passphrase in opened[device] else None)
+    monkeypatch.setattr(cli, "luks_opened_slots", lambda device, passphrase: ([slot_of[passphrase]] if passphrase in opened[device] else [], {}))
     return opened
 
 
@@ -157,7 +162,7 @@ def test_a_rollback_that_fails_says_the_new_password_may_still_open_that_device(
     err = capsys.readouterr().err
     assert "nothing was changed" not in err
     assert "could not be taken back out of /dev/vda3" in err and "may open /dev/vda3 too" in err
-    assert "sudo cryptsetup luksRemoveKey /dev/vda3" in err and "vdb1 too" not in err
+    assert "sudo cryptsetup luksDump /dev/vda3" in err and "luksKillSlot" in err and "vdb1 too" not in err
     assert OLD in opened["/dev/vda3"] and opened["/dev/vdb1"] == {OLD}
 
 
@@ -400,7 +405,7 @@ def test_a_rollback_that_fails_on_a_real_disk_leaves_both_passwords_there_and_sa
     first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
     second.chmod(0o444)
     real = cli.cryptsetup
-    monkeypatch.setattr(cli, "cryptsetup", lambda args, key=None, new=None: subprocess.CompletedProcess(args, 1, b"", b"Device is busy.") if args[0] == "luksRemoveKey" else real(args, key, new))
+    monkeypatch.setattr(cli, "cryptsetup", lambda args, key=None, new=None: subprocess.CompletedProcess(args, 1, b"", b"Device is busy.") if args[0] == "luksKillSlot" else real(args, key, new))
     assert cli.disk_change([str(first), str(second)], OLD, NEW, False, {str(first): 0, str(second): 0}) == cli.DISK_NOT_TAKEN_BACK
     err = capsys.readouterr().err
     assert f"may open {first} too" in err and "Device is busy" in err and "nothing was changed" not in err
@@ -447,8 +452,70 @@ def test_a_new_password_that_already_opens_a_token_s_slot_is_refused_before_anyt
     second = make_image(tmp_path / "b.img", OLD)
     before = {disk: dump(disk) for disk in (first, second)}
     result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": RECOVERY})
-    assert result.returncode == 2 and f"already opens {first}, through a key slot systemd-recovery unlocking uses" in result.stderr
+    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and f"already opens {first}, through key slot 1, which systemd-recovery unlocking uses" in result.stderr
     assert {disk: dump(disk) for disk in (first, second)} == before
+
+
+@needs_cryptsetup
+def test_a_new_password_in_a_plain_slot_and_a_token_s_slot_is_refused_and_both_stay(tmp_path):
+    """The same secret in plain slot 1 and in the recovery token's slot 2: taking it back would remove
+    both and leave the token with no slot, so it is refused before anything changes."""
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    add_key(tmp_path, first, NEW)
+    with_token_slot(tmp_path, first, NEW, "systemd-recovery")
+    assert slots(first) == ["0", "1", "2"]
+    before = {disk: dump(disk) for disk in (first, second)}
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and "key slot 2, which systemd-recovery unlocking uses" in result.stderr
+    assert {disk: dump(disk) for disk in (first, second)} == before
+    assert json.loads(dump(first))["tokens"]["0"]["keyslots"] == ["2"]
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes to a read-only file")
+def test_two_plain_leftover_slots_of_the_new_password_both_go(tmp_path):
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    add_key(tmp_path, first, NEW)
+    add_key(tmp_path, first, NEW)
+    assert slots(first) == ["0", "1", "2"]
+    second.chmod(0o444)
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    assert result.returncode == 1, result.stderr
+    assert slots(first) == ["0"] and opens(first, OLD) and not opens(first, NEW)
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_the_old_password_also_in_a_token_s_slot_is_refused_and_both_stay(tmp_path, new_owner):
+    """The current password in plain slot 0 and in the recovery token's slot 1: a change would remove both."""
+    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), OLD, "systemd-recovery")
+    before = dump(first)
+    result = root_side("change", {"devices": [str(first)], "current": OLD, "new": NEW, "newOwner": new_owner})
+    assert result.returncode == cli.DISK_RECOVERY_KEY, result.stderr
+    assert "also opens key slot 1" in result.stderr and "Nothing was changed" in result.stderr
+    assert dump(first) == before
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes to a read-only file")
+def test_a_take_back_never_removes_a_slot_a_token_came_to_use(tmp_path, monkeypatch, capsys):
+    """While the change runs, a token comes to use the slot the new password went into on the first
+    device; then adding to the second fails. The take back leaves that slot and the token, and says so."""
+    monkeypatch.setenv("PATH", C_ENV["PATH"])
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    second.chmod(0o444)
+    real = cli.cryptsetup
+
+    def cryptsetup(args, key=None, new=None):
+        if args[0] == "luksAddKey" and args[-1] == str(second):
+            token = {"type": "systemd-recovery", "keyslots": [max(slots(first), key=int)]}
+            subprocess.run([CRYPTSETUP, "token", "import", "--disable-external-tokens", "--json-file", "-", str(first)], input=json.dumps(token).encode(), env=C_ENV, check=True)
+        return real(args, key, new)
+
+    monkeypatch.setattr(cli, "cryptsetup", cryptsetup)
+    assert cli.disk_change([str(first), str(second)], OLD, NEW, False, {str(first): 0, str(second): 0}) == cli.DISK_NOT_TAKEN_BACK
+    assert "is one systemd-recovery unlocking uses" in capsys.readouterr().err
+    assert slots(first) == ["0", "1"] and json.loads(dump(first))["tokens"]["0"]["keyslots"] == ["1"]
 
 
 def fake_tools(folder: Path, disk: Path, *more: Path) -> dict:
@@ -660,10 +727,12 @@ def test_after_ctrl_z_a_stopped_root_side_is_continued_and_waited_for(stop_after
     assert result.stderr.count("still changing") == 1
 
 
-def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None = None, named_by_slot: bool = True):
+def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None = None, named_by_slot: bool = True,
+                     hidden: tuple[str, ...] = (), on_add=None):
     """A cryptsetup that opens a device without saying which key slot opened it (no "Key slot N
     unlocked"), on one device whose slots hold `keyslots`. With named_by_slot False, trying a slot on its
-    own (--key-slot) never opens either, so the slot cannot be told at all."""
+    own (--key-slot) never opens either, so the slot cannot be told at all; `hidden` does that for the
+    slots of those passphrases only. `on_add(header)` runs when a key is added."""
     header = {"keyslots": dict(keyslots), "tokens": dict(tokens or {})}
     tried: list[int] = []
 
@@ -675,12 +744,14 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
             if "--key-slot" in args:
                 slot = int(args[args.index("--key-slot") + 1])
                 tried.append(slot)
-                return ok if named_by_slot and slots.get(slot) == key else no
+                return ok if named_by_slot and key not in hidden and slots.get(slot) == key else no
             return ok if key in slots.values() else no
         if args[0] == "luksDump":
             return subprocess.CompletedProcess(args, 0, json.dumps({"keyslots": {str(n): {} for n in slots}, "tokens": header["tokens"]}).encode(), b"")
         if args[0] == "luksAddKey":
             slots[min(set(range(32)) - set(slots))] = new
+            if on_add:
+                on_add(header)
             return ok
         if args[0] == "luksRemoveKey":
             slot = next((n for n, value in sorted(slots.items()) if value == key), None)
@@ -742,6 +813,18 @@ def test_a_new_owner_s_slot_that_cannot_be_told_leaves_the_others_and_says_so(mo
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW, "newOwner": True}) == cli.DISK_PARTLY
     assert "could not be told, so its other key slots were left" in capsys.readouterr().err
     assert sorted(header["keyslots"].values()) == sorted(["someone else's", NEW])
+
+
+def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monkeypatch, capsys):
+    """The check found the old password in two plain slots; a token then comes to use one of them
+    while the new password goes in. That slot stays, and the change says so (exit 6)."""
+    def token_on_slot_2(header):
+        header["tokens"]["0"] = {"type": "systemd-recovery", "keyslots": ["2"]}
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 2: OLD}, on_add=token_on_slot_2)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    err = capsys.readouterr().err
+    assert "also opens key slot 2 of /dev/vda3, which systemd-recovery unlocking uses, so that slot was left" in err
+    assert header["keyslots"] == {1: NEW, 2: OLD} and header["tokens"]["0"]["keyslots"] == ["2"]
 
 
 def test_the_end_state_in_words():
