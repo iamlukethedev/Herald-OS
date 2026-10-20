@@ -2787,6 +2787,8 @@ def disk_devices() -> list[str]:
     every other key slot of each device it is given."""
     try:
         listing = subprocess.run(["lsblk", "-J", "-p", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,MOUNTPOINTS"], capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        raise DiskUnknown("lsblk is not installed (it comes with util-linux)") from None
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DiskUnknown(f"lsblk could not run ({error})") from None
     try:

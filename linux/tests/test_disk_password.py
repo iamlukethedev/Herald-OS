@@ -609,6 +609,23 @@ def test_without_lsblk_it_refuses_rather_than_guess_from_crypttab(tmp_path, lsbl
     assert status.returncode == 0 and state["encrypted"] is None and state["devices"] == [] and "lsblk" in state["error"]
 
 
+@pytest.mark.parametrize("flags", [["--disk", "--status"], ["--disk"], ["--disk", "--new-owner"]])
+def test_without_lsblk_at_all_it_says_so_without_a_traceback(tmp_path, flags):
+    """No lsblk on PATH (nor findmnt or sudo): a plain refusal, and --status still answers in JSON."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = subprocess.run([sys.executable, str(CLI), "password", *flags], capture_output=True, text=True,
+                            env={"PATH": str(empty), "HOME": str(tmp_path)}, stdin=subprocess.DEVNULL)
+    assert "Traceback" not in result.stderr and "FileNotFoundError" not in result.stderr
+    if "--status" in flags:
+        assert result.returncode == 0
+        state = json.loads(result.stdout)
+        assert state["encrypted"] is None and state["error"] == "lsblk is not installed (it comes with util-linux)"
+    else:
+        assert result.returncode == cli.DISK_UNKNOWN
+        assert "lsblk is not installed" in result.stderr and "Nothing was changed" in result.stderr
+
+
 def test_the_cli_never_reads_crypttab():
     assert "/etc/crypttab\")" not in CLI.read_text() and "crypttab_sources" not in CLI.read_text()
 
