@@ -1,13 +1,23 @@
 # bootc-image-builder: the installer ISO. Without a kickstart of ours it writes one that installs to
 # the first disk it finds, without asking. With ours (bootc-image-builder adds only the line that
 # installs the image), Anaconda's storage screen is the person's: erase a disk, install next to
-# Windows or macOS (dual boot), encrypt it (btrfs, Fedora's default). For an unattended install,
-# boot it with inst.ks=<url> pointing at a kickstart like unattended.ks.
+# Windows or macOS (dual boot). For an unattended install, boot it with inst.ks=<url> pointing at a
+# kickstart like unattended.ks.
+#
+# Encrypted unless the person says otherwise (ADR-018). Anaconda has no setting for "Encrypt my data"
+# itself; its storage screen ticks the box when the kickstart's automatic layout is encrypted. So
+# autopart --encrypted, with no passphrase (Anaconda asks for one, in a window of its own, once the
+# disks are read) and no clearpart or ignoredisk: nothing is erased unless the person chooses it,
+# every disk stays on the storage screen, and until someone changes it the layout goes into free
+# space, which is what keeps dual boot working (only Herald OS's own partitions are encrypted).
+# Unticking the box there installs without encryption. Opening any screen of the installer stops it
+# from starting the install by itself; the Root Account screen still needs a visit, as before.
 #
 # xconfig: Anaconda sets multi-user.target unless told otherwise, since greetd provides no
 # service(graphical-login), and the login screen and the session need graphical.target.
 [customizations.installer.kickstart]
 contents = """
+autopart --type=btrfs --encrypted
 xconfig --startxonboot
 """
 
