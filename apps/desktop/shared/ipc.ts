@@ -458,14 +458,28 @@ export interface SetupState {
    * account signed in with a password of its own and setup does not ask for one.
    */
   signedIn: boolean
+  /** The root filesystem is on LUKS: the computer asks for a disk password when it starts. */
+  diskEncrypted: boolean
+  /**
+   * The computer was set up for someone else, or reset: this account is a new owner's, who chooses
+   * a disk password of their own in setup (the previous one stops working).
+   */
+  newOwner: boolean
 }
 
 /** Why the password was not set; the renderer says it in the person's language. */
 export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' | 'failed'
 
+/**
+ * Why the disk password was not changed. `wrongCurrent`: the one typed at start-up was not it;
+ * `notAdmin`: sudo refused the account password; `notAscii`: a character there is no sure way to type
+ * at start-up; `partly`: the new one was added but an old one could not be taken out.
+ */
+export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'timeout' | 'noTerminal' | 'failed'
+
 export interface SetupResult {
   ok: boolean
-  reason?: PasswordFailure
+  reason?: PasswordFailure | DiskPasswordFailure
   /** pwquality's own reason for a refusal, in English (passwd runs under LANG=C), without control characters and at most 200 characters. */
   detail?: string
 }
@@ -962,6 +976,7 @@ export const IPC = {
   setupState: 'herald-os:setup:state',
   setupName: 'herald-os:setup:name',
   setupPassword: 'herald-os:setup:password',
+  setupDiskPassword: 'herald-os:setup:disk-password',
   setupFinish: 'herald-os:setup:finish',
 
   /** The events main emitted lately (`HeraldEvent[]`, newest first), for Settings and the agent. */

@@ -654,7 +654,32 @@ export const en = {
   'firstRun.done.start': 'Start using Herald OS',
   'firstRun.handOver.title': 'Ready to hand over',
   'firstRun.handOver.text': 'The next time it starts, it asks its new owner for a name, a password and their Hermes sign-in.',
+  'firstRun.handOver.textEncrypted': 'The next time it starts, it asks for the disk password chosen when it was installed: tell it to its new owner. Setup then asks them for a name, a password, a disk password of their own and their Hermes sign-in.',
+  'firstRun.handOver.notEncrypted': 'This disk is not encrypted: anyone who has it can read its files, and a reset deletes them but is not a secure erase.',
   'firstRun.handOver.done': 'Done',
+  // The disk password unlocks the encrypted disk when the computer starts, before Herald OS does.
+  'firstRun.disk.title': 'Your disk password',
+  'firstRun.disk.text': 'This computer’s disk is encrypted, and the password it asks for when it starts was chosen by whoever set it up before you. Choose your own; the old one stops working.',
+  'firstRun.disk.keyboard': 'You type it before anything else starts, so use a wired keyboard or one with a 2.4 GHz receiver; a Bluetooth keyboard does not work there.',
+  'firstRun.disk.current': 'The disk password you typed when it started',
+  'firstRun.disk.password': 'New disk password (at least 8 characters)',
+  'firstRun.disk.passwordAgain': 'The same disk password again',
+  'firstRun.disk.account': 'Your account password',
+  'firstRun.disk.mismatch': 'The disk passwords do not match.',
+  'firstRun.disk.busy': 'Adding your disk password, then removing the old one. Keep the computer on.',
+  // herald-os password --disk --new-owner is a command, and stays as it is.
+  'firstRun.disk.laterHint': 'Until you change it, the old disk password still opens the disk; herald-os password --disk --new-owner changes it later.',
+  'firstRun.disk.notAscii': 'Use only letters, digits, spaces and the symbols on the keyboard, without accents or other scripts: there is no input method when the computer starts.',
+  'firstRun.disk.wrongCurrent': 'That is not the disk password the computer asked for when it started. Nothing was changed.',
+  'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
+  'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
+  // herald-os password --disk --new-owner is a command, and stays as it is.
+  'firstRun.disk.partly': 'Your disk password was added, but an old one could not be removed. Run herald-os password --disk --new-owner in a terminal.',
+  'firstRun.disk.timeout': 'Changing the disk password took too long. At the next start, try your new disk password first, then the old one.',
+  // herald-os password --disk --new-owner is a command, and stays as it is.
+  'firstRun.disk.noTerminal': 'The disk password cannot be changed here; run herald-os password --disk --new-owner in a terminal.',
+  // herald-os password --disk --new-owner is a command, and stays as it is.
+  'firstRun.disk.failed': 'The disk password was not changed, and the old one still works. Run herald-os password --disk --new-owner in a terminal to see why.',
 
   // When the voice Hermes speaks with fails and the computer's own voice stands in, or nothing can.
   // {voice} is a voice.name message that begins the sentence; {system} is voice.name.mac or

@@ -1,15 +1,21 @@
 import fs from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const host = vi.hoisted(() => ({ pty: null as unknown, handlers: new Map<string, (...args: unknown[]) => unknown>() }))
+const host = vi.hoisted(() => ({
+  pty: null as unknown,
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  run: { stdout: '', stderr: '', code: 0 }
+}))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => host.handlers.set(channel, handler)) } }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
 vi.mock('./terminal.ts', () => ({ loadPty: () => host.pty }))
+vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
-const { changePassword, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { run } = await import('../platform/exec.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -158,6 +164,169 @@ describe('the setup password handler', () => {
     expect(await handler?.({}, 'short')).toEqual({ ok: false, reason: 'tooShort' })
     expect(await handler?.({}, 'long enough\nreally')).toEqual({ ok: false, reason: 'tooShort' })
     expect((host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A terminal running `herald-os password --disk --new-owner`: it shows each prompt in turn, the next
+ * once something is typed, and exits with `exitCode` after the last.
+ */
+function fakeDisk(prompts: string[], exitCode: number | null) {
+  let onData: (data: string) => void = () => undefined
+  let onExit: (event: { exitCode: number }) => void = () => undefined
+  const pending = [...prompts]
+  const typed: string[] = []
+  const next = () =>
+    queueMicrotask(() => {
+      const prompt = pending.shift()
+
+      if (prompt !== undefined) {
+        onData(prompt)
+      } else if (exitCode !== null) {
+        onExit({ exitCode })
+      }
+    })
+  const child = {
+    onData: (listener: typeof onData) => {
+      onData = listener
+      queueMicrotask(() => onData('The disk password unlocks /dev/vda3 when the computer starts.\r\n'))
+      next()
+    },
+    onExit: (listener: typeof onExit) => {
+      onExit = listener
+    },
+    write: vi.fn((text: string) => {
+      typed.push(text)
+      next()
+    }),
+    kill: vi.fn(() => queueMicrotask(() => onExit({ exitCode: 1 })))
+  }
+  host.pty = { spawn: vi.fn(() => child) }
+
+  return { child, typed }
+}
+
+const SECRETS = { current: 'given at start-up', password: 'my own disk pass', account: 'account pass' }
+const PROMPTS = ['[sudo] password for hermes: ', 'Current disk password: ', 'New disk password: ', 'New disk password again: ']
+
+describe('the disk password', () => {
+  it('answers sudo with the account password, then the current disk password and the new one twice', async () => {
+    const { typed } = fakeDisk(PROMPTS, 0)
+    vi.spyOn(fs, 'rmSync').mockImplementation(() => undefined)
+
+    await expect(changeDiskPassword(SECRETS)).resolves.toEqual({ ok: true })
+    expect(typed).toEqual(['account pass\r', 'given at start-up\r', 'my own disk pass\r', 'my own disk pass\r'])
+    const spawn = (host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn
+    expect(spawn).toHaveBeenCalledWith('herald-os', ['password', '--disk', '--new-owner'], expect.objectContaining({ env: expect.objectContaining({ LANG: 'C', LC_ALL: 'C' }) }))
+    expect(fs.rmSync).toHaveBeenCalledWith(expect.stringMatching(/\.config\/herald-os\/new-owner$/), { force: true })
+  })
+
+  it('needs no account password when sudo still remembers it', async () => {
+    const { typed } = fakeDisk(PROMPTS.slice(1), 0)
+    vi.spyOn(fs, 'rmSync').mockImplementation(() => undefined)
+
+    await expect(changeDiskPassword(SECRETS)).resolves.toEqual({ ok: true })
+    expect(typed).toHaveLength(3)
+  })
+
+  it('says why from the exit code', async () => {
+    for (const [code, reason] of [
+      [3, 'wrongCurrent'],
+      [4, 'notEncrypted'],
+      [5, 'notAdmin'],
+      [6, 'partly'],
+      [1, 'failed'],
+      [2, 'failed']
+    ] as const) {
+      fakeDisk(PROMPTS, code)
+      await expect(changeDiskPassword(SECRETS)).resolves.toEqual({ ok: false, reason })
+    }
+  })
+
+  it('does not type a refused account password again', async () => {
+    const { child, typed } = fakeDisk(['[sudo] password for hermes: ', 'Sorry, try again.\r\n[sudo] password for hermes: '], null)
+
+    await expect(changeDiskPassword(SECRETS)).resolves.toEqual({ ok: false, reason: 'notAdmin' })
+    expect(typed).toEqual(['account pass\r'])
+    expect(child.kill).toHaveBeenCalled()
+  })
+
+  it('says it took too long', async () => {
+    vi.useFakeTimers()
+    const { child } = fakeDisk([], null)
+    const result = changeDiskPassword(SECRETS)
+
+    await vi.advanceTimersByTimeAsync(300_000)
+    await expect(result).resolves.toEqual({ ok: false, reason: 'timeout' })
+    expect(child.kill).toHaveBeenCalled()
+  })
+
+  it('says there is no terminal', async () => {
+    await expect(changeDiskPassword(SECRETS)).resolves.toEqual({ ok: false, reason: 'noTerminal' })
+  })
+
+  it('tells the prompts apart, most specific first', () => {
+    expect(diskReply('New disk password again: ', SECRETS)).toEqual({ reply: 'my own disk pass\r', sudo: false })
+    expect(diskReply('Current disk password: ', SECRETS)).toEqual({ reply: 'given at start-up\r', sudo: false })
+    expect(diskReply('[sudo] password for someone-else: ', SECRETS)).toEqual({ reply: 'account pass\r', sudo: true })
+    expect(diskReply('Adding the new disk password and checking it…\r\n', SECRETS)).toBeNull()
+  })
+
+  it('takes only printable ASCII of 8 characters or more', () => {
+    expect(diskPasswordProblem('my own disk pass')).toBeNull()
+    expect(diskPasswordProblem('short')).toBe('tooShort')
+    expect(diskPasswordProblem('coração do disco')).toBe('notAscii')
+    expect(diskPasswordProblem('磁盘密码磁盘密码磁盘')).toBe('notAscii')
+  })
+
+  it('turns down a short, non-ASCII or multi-line password before running anything', async () => {
+    fakeDisk(PROMPTS, 0)
+    registerSetupIpc()
+    const handler = host.handlers.get(IPC.setupDiskPassword)
+
+    expect(await handler?.({}, { ...SECRETS, password: 'short' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(await handler?.({}, { ...SECRETS, password: 'senha do coração' })).toEqual({ ok: false, reason: 'notAscii' })
+    expect(await handler?.({}, { ...SECRETS, current: '' })).toEqual({ ok: false, reason: 'wrongCurrent' })
+    expect(await handler?.({}, { ...SECRETS, account: 'two\nlines' })).toEqual({ ok: false, reason: 'wrongCurrent' })
+    expect((host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn).not.toHaveBeenCalled()
+  })
+
+  it('reads whether the disk is encrypted from the command, and counts anything else as not', async () => {
+    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "newOwner": false}\n', stderr: '', code: 0 }
+    await expect(diskEncrypted()).resolves.toBe(true)
+    expect(run).toHaveBeenCalledWith('herald-os', ['password', '--disk', '--status'], expect.any(Number))
+    host.run = { stdout: '{"encrypted": false}', stderr: '', code: 0 }
+    await expect(diskEncrypted()).resolves.toBe(false)
+    host.run = { stdout: '', stderr: 'herald-os: not found', code: 127 }
+    await expect(diskEncrypted()).resolves.toBe(false)
+    host.run = { stdout: 'not json', stderr: '', code: 0 }
+    await expect(diskEncrypted()).resolves.toBe(false)
+  })
+})
+
+describe('a new owner', () => {
+  it('is someone setup was finished for, or the account after a reset', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation(file => String(file).endsWith('/.config/herald-os/new-owner'))
+    expect(setupState().newOwner).toBe(true)
+    vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/new-owner')
+    expect(setupState().newOwner).toBe(true)
+    vi.spyOn(fs, 'existsSync').mockImplementation(() => false)
+    expect(setupState().newOwner).toBe(false)
+  })
+
+  it('is marked when setup is finished for someone else, and the mark goes when it is finished for good', async () => {
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    const written = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined)
+    const removed = vi.spyOn(fs, 'rmSync').mockImplementation(() => undefined)
+    registerSetupIpc()
+    const finish = host.handlers.get(IPC.setupFinish)
+
+    await finish?.({}, { later: true })
+    expect(written.mock.calls.map(([file]) => String(file))).toEqual([expect.stringMatching(/herald-os\/new-owner$/)])
+    written.mockClear()
+    await finish?.({}, {})
+    expect(removed).toHaveBeenCalledWith(expect.stringMatching(/herald-os\/new-owner$/), { force: true })
+    expect(written.mock.calls.map(([file]) => String(file))).toEqual([expect.stringMatching(/herald-os\/setup-done$/)])
   })
 })
 

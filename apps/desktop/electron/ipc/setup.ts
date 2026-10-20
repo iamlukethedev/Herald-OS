@@ -2,23 +2,31 @@ import { ipcMain } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { IPC, type SetupResult, type SetupState } from '../../shared/ipc.ts'
+import { type DiskPasswordFailure, IPC, type SetupResult, type SetupState } from '../../shared/ipc.ts'
 import { log } from '../log.ts'
+import { run } from '../platform/exec.ts'
 import { loadPty } from './terminal.ts'
 
 /*
  * First-boot setup on the Herald OS image: the image's first boot made the account (no password)
  * and installed Hermes; the person names it, sets a password, joins Wi-Fi and signs in to Hermes.
- * Nothing here needs root: `passwd` changes the person's own password (the current one is empty on
+ * The account needs no root: `passwd` changes the person's own password (the current one is empty on
  * a new account), and the name Herald greets with lives in ~/.config/herald-os/name. On a system
  * switched from another bootc system the first boot leaves a login screen instead (firstboot.sh), so
  * the account has a password already and setup asks only for the name.
+ * The one step with root is a new owner's disk password, on an encrypted disk: `herald-os password
+ * --disk --new-owner` asks sudo, which takes the account password they have just set.
  */
 
 const FIRSTBOOT_DONE = '/var/lib/herald-os/firstboot-done'
 const LOGIN_SCREEN = '/var/lib/herald-os/login-screen'
+// reset-helper leaves this for the account first boot makes next; `herald-os password --disk
+// --new-owner` takes it away once the new owner has a disk password of their own.
+const NEW_OWNER_RESET = '/var/lib/herald-os/new-owner'
 const configDir = () => path.join(os.homedir(), '.config', 'herald-os')
 const doneFile = () => path.join(configDir(), 'setup-done')
+// Setup finished "for someone else": the same account, a new owner at the next start.
+const newOwnerFile = () => path.join(configDir(), 'new-owner')
 export const nameFile = (): string => path.join(configDir(), 'name')
 
 export function setupState(): SetupState {
@@ -31,7 +39,123 @@ export function setupState(): SetupState {
     // Not named yet.
   }
 
-  return { needed: process.platform === 'linux' && image && !fs.existsSync(doneFile()), user: os.userInfo().username, name, signedIn: fs.existsSync(LOGIN_SCREEN) }
+  return {
+    needed: process.platform === 'linux' && image && !fs.existsSync(doneFile()),
+    user: os.userInfo().username,
+    name,
+    signedIn: fs.existsSync(LOGIN_SCREEN),
+    diskEncrypted: false,
+    newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET)
+  }
+}
+
+/** Whether the root filesystem is encrypted, from `herald-os password --disk --status`; unknown counts as not. */
+export async function diskEncrypted(): Promise<boolean> {
+  const result = await run('herald-os', ['password', '--disk', '--status'], 15_000)
+
+  try {
+    return result.code === 0 && (JSON.parse(result.stdout) as { encrypted?: unknown }).encrypted === true
+  } catch {
+    return false
+  }
+}
+
+export interface DiskSecrets {
+  current: string
+  password: string
+  account: string
+}
+
+/**
+ * What `herald-os password --disk` asks (LANG=C), most specific first: sudo's prompt is the one the
+ * command gives it, and "New disk password again:" also ends in "disk password:". `sudo` counts the
+ * times sudo has asked, so a refused account password is not typed again.
+ */
+export function diskReply(screen: string, secrets: DiskSecrets): { reply: string; sudo: boolean } | null {
+  const tail = screen.slice(-160).toLowerCase()
+
+  if (/\[sudo\] password for [^:\s]*:\s*$/.test(tail)) {
+    return { reply: `${secrets.account}\r`, sudo: true }
+  }
+
+  if (/new disk password again:\s*$/.test(tail) || /new disk password:\s*$/.test(tail)) {
+    return { reply: `${secrets.password}\r`, sudo: false }
+  }
+
+  if (/current disk password:\s*$/.test(tail)) {
+    return { reply: `${secrets.current}\r`, sudo: false }
+  }
+
+  return null
+}
+
+/** Exit codes of `herald-os password --disk` (linux/bin/herald-os: DISK_WRONG and the rest). */
+const DISK_EXITS: Record<number, DiskPasswordFailure> = { 3: 'wrongCurrent', 4: 'notEncrypted', 5: 'notAdmin', 6: 'partly' }
+// Adding a key slot and checking each passphrase take seconds apiece (argon2id), more with two disks.
+const DISK_TIMEOUT_MS = 300_000
+
+/** Printable ASCII only: at start-up there is no input method, and the layout may not be the one it was typed with. */
+export function diskPasswordProblem(password: string): DiskPasswordFailure | null {
+  if (password.length < 8) {
+    return 'tooShort'
+  }
+
+  return /^[\x20-\x7e]+$/.test(password) ? null : 'notAscii'
+}
+
+/**
+ * `herald-os password --disk --new-owner`, answered through a terminal: sudo with the account's
+ * password, then the disk password typed at start-up and the new one. The command adds the new one
+ * before it removes any other, so stopping it here (the timeout) never leaves the disk without one.
+ */
+export function changeDiskPassword(secrets: DiskSecrets): Promise<SetupResult> {
+  const pty = loadPty()
+
+  if (!pty) {
+    return Promise.resolve({ ok: false, reason: 'noTerminal' })
+  }
+
+  return new Promise(resolve => {
+    const child = pty.spawn('herald-os', ['password', '--disk', '--new-owner'], { name: 'xterm', cols: 100, rows: 24, cwd: os.homedir(), env: { ...process.env, LANG: 'C', LC_ALL: 'C' } })
+    let screen = ''
+    let asked = 0
+    let refused = false
+    const timer = setTimeout(() => {
+      child.kill()
+      resolve({ ok: false, reason: 'timeout' })
+    }, DISK_TIMEOUT_MS)
+
+    child.onData(data => {
+      screen += data
+      const answer = diskReply(screen, secrets)
+
+      if (answer === null) {
+        return
+      }
+
+      if (answer.sudo && ++asked > 1) {
+        refused = true
+        child.kill()
+
+        return
+      }
+
+      screen = ''
+      child.write(answer.reply)
+    })
+    child.onExit(({ exitCode }) => {
+      clearTimeout(timer)
+
+      if (exitCode === 0) {
+        fs.rmSync(newOwnerFile(), { force: true })
+        resolve({ ok: true })
+      } else {
+        const last = screen.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
+        log('setup', `herald-os password --disk exited ${exitCode}: ${last}`)
+        resolve({ ok: false, reason: refused ? 'notAdmin' : (DISK_EXITS[exitCode] ?? 'failed') })
+      }
+    })
+  })
 }
 
 /** What `passwd` asks (LANG=C), most specific first: "Retype new password:" also ends in "new password:". */
@@ -125,7 +249,11 @@ export function changePassword(password: string, current = ''): Promise<SetupRes
 }
 
 export function registerSetupIpc(): void {
-  ipcMain.handle(IPC.setupState, () => setupState())
+  ipcMain.handle(IPC.setupState, async () => {
+    const state = setupState()
+
+    return state.needed ? { ...state, diskEncrypted: await diskEncrypted() } : state
+  })
   ipcMain.handle(IPC.setupName, (_event, name: string) => {
     const clean = String(name ?? '').replace(/[\r\n:]/g, ' ').trim().slice(0, 64)
     fs.mkdirSync(configDir(), { recursive: true })
@@ -142,10 +270,28 @@ export function registerSetupIpc(): void {
 
     return changePassword(value)
   })
-  // `later`: set up for someone else; setup shows again for them at the next start.
+  ipcMain.handle(IPC.setupDiskPassword, (_event, request: Partial<DiskSecrets> = {}) => {
+    const secrets = { current: String(request.current ?? ''), password: String(request.password ?? ''), account: String(request.account ?? '') }
+    const problem = diskPasswordProblem(secrets.password)
+
+    if (problem) {
+      return { ok: false, reason: problem } satisfies SetupResult
+    }
+
+    if (Object.values(secrets).some(value => /[\r\n]/.test(value)) || !secrets.current) {
+      return { ok: false, reason: 'wrongCurrent' } satisfies SetupResult
+    }
+
+    return changeDiskPassword(secrets)
+  })
+  // `later`: set up for someone else; setup shows again for them at the next start, as a new owner.
   ipcMain.handle(IPC.setupFinish, (_event, options: { later?: boolean } = {}) => {
-    if (!options.later) {
-      fs.mkdirSync(configDir(), { recursive: true })
+    fs.mkdirSync(configDir(), { recursive: true })
+
+    if (options.later) {
+      fs.writeFileSync(newOwnerFile(), `${new Date().toISOString()}\n`)
+    } else {
+      fs.rmSync(newOwnerFile(), { force: true })
       fs.writeFileSync(doneFile(), `${new Date().toISOString()}\n`)
     }
 

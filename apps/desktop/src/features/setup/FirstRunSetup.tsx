@@ -1,11 +1,11 @@
 import { useStore } from '@nanostores/react'
-import { IconArrowRight, IconCheck, IconGift, IconLock, IconUser, IconWifi } from '@tabler/icons-react'
+import { IconArrowRight, IconCheck, IconGift, IconKey, IconLock, IconUser, IconWifi } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { GlassButton, GlassCard, LinkAction } from '../../components/ui/glass.tsx'
 import { Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
-import type { PasswordFailure, SetupResult } from '../../../shared/ipc.ts'
+import type { DiskPasswordFailure, PasswordFailure, SetupResult } from '../../../shared/ipc.ts'
 import type { TextKey } from '../../../shared/i18n.ts'
 import { $hermesAuth, refreshHermesAuth, requestHermesLogin } from '../../store/hermes-auth.ts'
 import { t, useT } from '../../store/i18n.ts'
@@ -13,17 +13,22 @@ import { $providerFocus, providerName } from '../../store/model-provider.ts'
 import { ModelProviderRow } from '../settings/sections/ProviderRow.tsx'
 import { StatusPanel } from '../status/StatusPanel.tsx'
 
-type Step = 'welcome' | 'account' | 'wifi' | 'hermes' | 'done'
+type Step = 'welcome' | 'account' | 'disk' | 'wifi' | 'hermes' | 'done'
 
 /**
  * First-boot setup on the Herald OS image: who the computer is for, their name and password,
  * Wi-Fi, and Hermes's sign-in. Setting it up for someone else skips the account and leaves setup
- * waiting for them at the next start.
+ * waiting for them at the next start. On an encrypted disk, a new owner (after that, or a reset)
+ * also replaces the disk password they were given with one of their own.
  */
 export function FirstRunSetup() {
   const t = useT()
   const [due, setDue] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
+  const [diskEncrypted, setDiskEncrypted] = useState(false)
+  const [newOwner, setNewOwner] = useState(false)
+  // The account password from the account step, for sudo when the disk password changes.
+  const [accountPassword, setAccountPassword] = useState('')
   const [step, setStep] = useState<Step>('welcome')
   const [forSomeoneElse, setForSomeoneElse] = useState(false)
   // Kept here: the Hermes step unmounts while the sign-in card is up.
@@ -37,6 +42,8 @@ export function FirstRunSetup() {
       .then(state => {
         setDue(state.needed)
         setSignedIn(state.signedIn)
+        setDiskEncrypted(state.diskEncrypted)
+        setNewOwner(state.newOwner)
       })
       .catch(() => undefined)
   }, [])
@@ -62,7 +69,7 @@ export function FirstRunSetup() {
     setDue(false)
   }
 
-  const steps: Step[] = forSomeoneElse ? ['welcome', 'wifi', 'done'] : ['welcome', 'account', 'wifi', 'hermes', 'done']
+  const steps: Step[] = forSomeoneElse ? ['welcome', 'wifi', 'done'] : ['welcome', 'account', ...(diskEncrypted && newOwner ? (['disk'] as const) : []), 'wifi', 'hermes', 'done']
   const next = () => setStep(steps[Math.min(steps.length - 1, steps.indexOf(step) + 1)] ?? 'done')
 
   return (
@@ -87,7 +94,16 @@ export function FirstRunSetup() {
             }}
           />
         )}
-        {step === 'account' && <Account onDone={next} signedIn={signedIn} />}
+        {step === 'account' && (
+          <Account
+            onDone={password => {
+              setAccountPassword(password)
+              next()
+            }}
+            signedIn={signedIn}
+          />
+        )}
+        {step === 'disk' && <DiskStep onDone={next} account={accountPassword} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />
@@ -103,8 +119,9 @@ export function FirstRunSetup() {
             <Heading
               icon={forSomeoneElse ? <IconGift size={18} /> : <IconCheck size={18} />}
               title={t(forSomeoneElse ? 'firstRun.handOver.title' : 'firstRun.done.title')}
-              text={t(forSomeoneElse ? 'firstRun.handOver.text' : 'firstRun.done.text')}
+              text={t(forSomeoneElse ? (diskEncrypted ? 'firstRun.handOver.textEncrypted' : 'firstRun.handOver.text') : 'firstRun.done.text')}
             />
+            {forSomeoneElse && !diskEncrypted && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
             <Footer onNext={() => void finish()} label={t(forSomeoneElse ? 'firstRun.handOver.done' : 'firstRun.done.start')} />
           </div>
         )}
@@ -170,11 +187,11 @@ function passwordError({ reason, detail }: SetupResult): string {
     return why ? t('firstRun.account.refused', { reason: why.replace(/\.$/, '') }) : t('firstRun.account.refusedNoReason')
   }
 
-  return t(reason && Object.hasOwn(PASSWORD_FAILURES, reason) ? PASSWORD_FAILURES[reason] : 'firstRun.account.passwordNotSet')
+  return t(reason && Object.hasOwn(PASSWORD_FAILURES, reason) ? PASSWORD_FAILURES[reason as keyof typeof PASSWORD_FAILURES] : 'firstRun.account.passwordNotSet')
 }
 
 /** The name, and the password unless the account signed in at a login screen with one of its own. */
-function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }) {
+function Account({ onDone, signedIn }: { onDone: (password: string) => void; signedIn: boolean }) {
   const t = useT()
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
@@ -203,7 +220,7 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
       const result = signedIn ? { ok: true } : await window.heraldOS.setup.password(password)
 
       if (result.ok) {
-        onDone()
+        onDone(signedIn ? '' : password)
       } else {
         setError(result)
       }
@@ -245,6 +262,99 @@ function Account({ onDone, signedIn }: { onDone: () => void; signedIn: boolean }
       )}
       {(error || mismatch) && <p className="text-[12.5px] text-danger">{mismatch ? t('firstRun.account.mismatch') : error === 'name' ? t('firstRun.account.nameNotSaved') : error && passwordError(error)}</p>}
       <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!name.trim() || (!signedIn && (password.length < 8 || password !== again))} />
+    </form>
+  )
+}
+
+const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
+  tooShort: 'firstRun.account.tooShort',
+  notAscii: 'firstRun.disk.notAscii',
+  wrongCurrent: 'firstRun.disk.wrongCurrent',
+  notAdmin: 'firstRun.disk.notAdmin',
+  notEncrypted: 'firstRun.disk.notEncrypted',
+  partly: 'firstRun.disk.partly',
+  timeout: 'firstRun.disk.timeout',
+  noTerminal: 'firstRun.disk.noTerminal',
+  failed: 'firstRun.disk.failed'
+}
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
+
+/**
+ * A new owner's disk password, in place of the one they typed at start-up (whoever set the computer
+ * up before them chose it). The account password goes to sudo; it is asked here only when the account
+ * step did not set it (an account that signed in at a login screen).
+ */
+function DiskStep({ onDone, account }: { onDone: () => void; account: string }) {
+  const t = useT()
+  const [current, setCurrent] = useState('')
+  const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
+  const [accountPassword, setAccountPassword] = useState(account)
+  const [error, setError] = useState<TextKey | null>(null)
+  const [busy, setBusy] = useState(false)
+  const mismatch = again.length > 0 && password !== again
+  const notAscii = !PRINTABLE_ASCII.test(password)
+
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+
+    try {
+      const result = await window.heraldOS.setup.diskPassword({ current, password, account: accountPassword })
+
+      if (result.ok) {
+        onDone()
+      } else {
+        const reason = result.reason as DiskPasswordFailure | undefined
+        setError(reason && Object.hasOwn(DISK_FAILURES, reason) ? DISK_FAILURES[reason] : 'firstRun.disk.failed')
+      }
+    } catch {
+      setError('firstRun.disk.failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const field = (label: TextKey, value: string, onChange: (value: string) => void, autoComplete: string, autoFocus = false) => (
+    <label className="flex flex-col gap-1.5 text-[12px] text-fg-3">
+      {t(label)}
+      <input
+        type="password"
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        autoFocus={autoFocus}
+        autoComplete={autoComplete}
+        disabled={busy}
+        className="glass-input h-10 rounded-lg px-3 text-[14px] text-fg outline-none"
+      />
+    </label>
+  )
+  const problem = mismatch ? 'firstRun.disk.mismatch' : notAscii ? 'firstRun.disk.notAscii' : error
+
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={event => {
+        event.preventDefault()
+        void save()
+      }}
+    >
+      <Heading icon={<IconKey size={18} />} title={t('firstRun.disk.title')} text={t('firstRun.disk.text')} />
+      <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.disk.keyboard')}</p>
+      {field('firstRun.disk.current', current, setCurrent, 'current-password', true)}
+      {field('firstRun.disk.password', password, setPassword, 'new-password')}
+      {field('firstRun.disk.passwordAgain', again, setAgain, 'new-password')}
+      {!account && field('firstRun.disk.account', accountPassword, setAccountPassword, 'current-password')}
+      {busy && <p className="text-[12.5px] text-fg-3">{t('firstRun.disk.busy')}</p>}
+      {problem && <p className="text-[12.5px] text-danger">{t(problem)}</p>}
+      <p className="text-[12px] leading-relaxed text-fg-3">{t('firstRun.disk.laterHint')}</p>
+      <div className="flex items-center justify-end gap-2">
+        <GlassButton variant="ghost" onClick={onDone} disabled={busy}>
+          {t('firstRun.later')}
+        </GlassButton>
+        <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!current || password.length < 8 || password !== again || notAscii || !accountPassword} />
+      </div>
     </form>
   )
 }

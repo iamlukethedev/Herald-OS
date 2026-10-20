@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Language, TextKey } from '../../../shared/i18n.ts'
-import type { SetupResult } from '../../../shared/ipc.ts'
+import type { SetupResult, SetupState } from '../../../shared/ipc.ts'
 import { en } from '../../../shared/locales/en.ts'
 import { $prefs } from '../../store/backend.ts'
 import { $connection, $connectionEpoch } from '../../store/gateway.ts'
@@ -17,9 +17,10 @@ import { FirstRunSetup } from './FirstRunSetup.tsx'
 const bridge = vi.hoisted(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const setup = {
-    state: vi.fn(async () => ({ needed: true, signedIn: true })),
+    state: vi.fn(async (): Promise<Partial<SetupState>> => ({ needed: true, signedIn: true })),
     name: vi.fn(async () => undefined),
     password: vi.fn(async (): Promise<SetupResult> => ({ ok: true })),
+    diskPassword: vi.fn(async (_request: { current: string; password: string; account: string }): Promise<SetupResult> => ({ ok: true })),
     finish: vi.fn(async () => undefined)
   }
   const rest = vi.fn(async (_request: { path: string }): Promise<unknown> => null)
@@ -40,12 +41,13 @@ vi.mock('../../store/model-provider.ts', async importActual => ({
 
 const SIGNED_OUT_AUTH = $hermesAuth.get()
 
-// What may read the same in every language: product names, and the keyboard shortcuts and
-// command that stay as they are (en.ts says which).
-const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password', 'API']
+// What may read the same in every language: product names, and the keyboard shortcuts, commands
+// and units that stay as they are (en.ts says which). The longer command goes first.
+const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz']
 
-// Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal").
-const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['for', 'menu', 'terminal', 'Use'], 'zh-CN': [] }
+// Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal",
+// "teclado Bluetooth").
+const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['Bluetooth', 'for', 'menu', 'terminal', 'use', 'Use'], 'zh-CN': [] }
 
 let root: Root | null = null
 let container: HTMLElement | null = null
@@ -122,7 +124,20 @@ async function mount(language: Language): Promise<HTMLElement> {
   return host
 }
 
-type Path = 'mine' | 'signed in' | 'someone else'
+type Path = 'mine' | 'signed in' | 'someone else' | 'new owner'
+
+// Each way the disk password can fail, and what setup says.
+const DISK_FAILURES = [
+  ['wrongCurrent', 'firstRun.disk.wrongCurrent'],
+  ['notAdmin', 'firstRun.disk.notAdmin'],
+  ['notEncrypted', 'firstRun.disk.notEncrypted'],
+  ['partly', 'firstRun.disk.partly'],
+  ['timeout', 'firstRun.disk.timeout'],
+  ['noTerminal', 'firstRun.disk.noTerminal'],
+  ['tooShort', 'firstRun.account.tooShort'],
+  ['notAscii', 'firstRun.disk.notAscii'],
+  ['failed', 'firstRun.disk.failed']
+] as const
 
 /** Every step on one way through setup, each with what it shows, checked to have its own heading. */
 async function walk(language: Language, path: Path): Promise<{ step: string; texts: string[] }[]> {
@@ -149,7 +164,39 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
   await click(button(host, t('firstRun.welcome.forMe')))
   const says = (expected: string) => expect(host.querySelector('.text-danger')?.textContent).toBe(expected)
 
-  if (path === 'mine') {
+  if (path === 'new owner') {
+    at('account', 'firstRun.account.title')
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+    at('disk', 'firstRun.disk.title')
+    // The account password is known from the step before, so only the disk passwords are asked.
+    const [current, password, again, ...more] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(more).toHaveLength(0)
+    await type(current, 'given at start-up')
+    await type(password, 'my own disk pass')
+    await type(again, 'my own disk pasz')
+    at('disk passwords differ', 'firstRun.disk.title')
+    says(t('firstRun.disk.mismatch'))
+    await type(password, 'coração do disco')
+    await type(again, 'coração do disco')
+    at('disk password not ASCII', 'firstRun.disk.title')
+    says(t('firstRun.disk.notAscii'))
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(password, 'my own disk pass')
+    await type(again, 'my own disk pass')
+    for (const [reason, key] of DISK_FAILURES) {
+      bridge.setup.diskPassword.mockResolvedValueOnce({ ok: false, reason })
+      await click(button(host, t('firstRun.next')))
+      at(`disk ${reason}`, 'firstRun.disk.title')
+      says(t(key))
+    }
+    bridge.setup.diskPassword.mockRejectedValueOnce(new Error('No handler registered for herald-os:setup:disk-password'))
+    await click(button(host, t('firstRun.next')))
+    says(t('firstRun.disk.failed'))
+  } else if (path === 'mine') {
     at('account', 'firstRun.account.title')
     await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
     const [password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
@@ -207,10 +254,13 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
 
   await click(button(host, t('firstRun.next')))
   at('wifi', 'firstRun.wifi.title')
+  if (path === 'new owner') {
+    expect(bridge.setup.diskPassword).toHaveBeenLastCalledWith({ current: 'given at start-up', password: 'my own disk pass', account: 'correct horse' })
+  }
   await click(button(host, t('firstRun.next')))
   at('hermes', 'firstRun.hermes.title')
 
-  if (path === 'mine') {
+  if (path === 'mine' || path === 'new owner') {
     expect(button(host, t('settings.agents.provider.signIn'))).toBeTruthy()
     await click(button(host, t('firstRun.hermes.otherProvider')))
     at('another provider', 'firstRun.hermes.title')
@@ -235,7 +285,7 @@ function unmount() {
 }
 
 function given(path: Path) {
-  bridge.setup.state.mockResolvedValue({ needed: true, signedIn: path !== 'mine' })
+  bridge.setup.state.mockResolvedValue({ needed: true, signedIn: path === 'signed in' || path === 'someone else', diskEncrypted: path === 'new owner', newOwner: path === 'new owner' })
   bridge.rest.mockImplementation(async ({ path: url }) => {
     if (path !== 'signed in') {
       return null
@@ -357,7 +407,7 @@ describe("first-run setup's account step for a new account", () => {
 })
 
 describe('first-run setup', () => {
-  it.each(['mine', 'signed in', 'someone else'] as const)('reads as before in English, the %s way through', async path => {
+  it.each(['mine', 'signed in', 'someone else', 'new owner'] as const)('reads as before in English, the %s way through', async path => {
     given(path)
     const steps = await walk('en', path)
     const all = steps.flatMap(step => step.texts)
@@ -371,7 +421,7 @@ describe('first-run setup', () => {
   })
 
   describe.each(['pt-BR', 'zh-CN'] as const)('in %s', language => {
-    it.each(['mine', 'signed in', 'someone else'] as const)('keeps nothing English but product names, the %s way through', async path => {
+    it.each(['mine', 'signed in', 'someone else', 'new owner'] as const)('keeps nothing English but product names, the %s way through', async path => {
       given(path)
       const english = await walk('en', path)
       unmount()
@@ -398,5 +448,74 @@ describe('first-run setup', () => {
       expect(host.querySelector(`[role="dialog"][aria-label="${t('firstRun.label')}"]`)).not.toBeNull()
       expect(host.querySelector(`[aria-label="${en['firstRun.label']}"]`)).toBeNull()
     })
+  })
+})
+
+describe("first-run setup's disk password", () => {
+  async function toTheStepAfterTheAccount(state: { diskEncrypted: boolean; newOwner: boolean; signedIn?: boolean }): Promise<HTMLElement> {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: state.signedIn ?? false, ...state })
+    const host = await mount('en')
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+
+    return host
+  }
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true]
+  ])('is not asked for when the disk is encrypted: %s, and the owner is new: %s', async (diskEncrypted, newOwner) => {
+    const host = await toTheStepAfterTheAccount({ diskEncrypted, newOwner })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+
+  it('says to use a wired or 2.4 GHz keyboard, and that the old one still works until it changes', async () => {
+    const host = await toTheStepAfterTheAccount({ diskEncrypted: true, newOwner: true })
+    expect(host.textContent).toContain('wired keyboard')
+    expect(host.textContent).toContain('2.4 GHz')
+    expect(host.textContent).toContain(t('firstRun.disk.laterHint'))
+  })
+
+  it('can wait, without changing anything', async () => {
+    bridge.setup.diskPassword.mockClear()
+    const host = await toTheStepAfterTheAccount({ diskEncrypted: true, newOwner: true })
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    expect(bridge.setup.diskPassword).not.toHaveBeenCalled()
+  })
+
+  it('asks for the account password when the account step did not set one', async () => {
+    const host = await toTheStepAfterTheAccount({ diskEncrypted: true, newOwner: true, signedIn: true })
+    const inputs = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(inputs).toHaveLength(4)
+    expect(host.textContent).toContain(t('firstRun.disk.account'))
+    await type(inputs[0], 'given at start-up')
+    await type(inputs[1], 'my own disk pass')
+    await type(inputs[2], 'my own disk pass')
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(inputs[3], 'my account pass')
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.diskPassword).toHaveBeenLastCalledWith({ current: 'given at start-up', password: 'my own disk pass', account: 'my account pass' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+})
+
+describe('handing the computer over', () => {
+  it.each([
+    [true, 'firstRun.handOver.textEncrypted', false],
+    [false, 'firstRun.handOver.text', true]
+  ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns) => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted, newOwner: false })
+    const host = await mount('en')
+    await click(button(host, t('firstRun.welcome.forSomeoneElse')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.handOver.title'))
+    expect(host.textContent).toContain(t(text))
+    expect(host.textContent?.includes(t('firstRun.handOver.notEncrypted'))).toBe(warns)
   })
 })

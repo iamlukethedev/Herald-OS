@@ -405,6 +405,8 @@ const api = {
     state: (): Promise<SetupState> => ipcRenderer.invoke(IPC.setupState),
     name: (name: string): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupName, name),
     password: (password: string): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupPassword, password),
+    /** A new owner's own disk password in place of the one typed at start-up; `account` is the account password sudo asks for. */
+    diskPassword: (request: { current: string; password: string; account: string }): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupDiskPassword, request),
     /** `later`: setting it up for someone else, who finishes setup at the next start. */
     finish: (options: { later?: boolean } = {}): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupFinish, options)
   },
