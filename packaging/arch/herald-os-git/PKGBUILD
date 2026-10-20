@@ -14,6 +14,7 @@ makedepends=('git' 'nodejs' 'npm' 'python' 'base-devel')
 optdepends=(
   'niri: the full Herald OS session (menu bar, dock, tiling)'
   'greetd: a login screen that starts the session'
+  'org.freedesktop.secrets: a keyring apps keep passwords and sign-ins in (gnome-keyring, KeePassXC, KWallet or oo7)'
   'swaybg: the wallpaper in the session'
   'swaylock: locking the session'
   'swayidle: locking and screens off when idle'
