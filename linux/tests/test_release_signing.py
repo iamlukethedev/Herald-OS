@@ -229,11 +229,43 @@ def test_with_the_release_key_makepkg_checks_the_signed_sha256sums(tmp_path):
         "herald-os-release-check.sh",
         f"SHA256SUMS-{version}::{base}/SHA256SUMS",
         f"SHA256SUMS-{version}.sig::{base}/SHA256SUMS.sig",
-        f"herald-os-release-key-{version}.asc::{base}/herald-os-release-key.asc",
+        f"herald-os-release-key-{version}.key::{base}/herald-os-release-key.asc",
         lines[6], check, "SKIP", "SKIP", "SKIP",
     ]
     # makepkg checks the local files' hashes, which the Arch workflow skips (--skipchecksums).
     assert lines[6] == hashlib.sha256((PKGBUILD.parent / "herald-os-package.sh").read_bytes()).hexdigest()
+
+
+# makepkg's own rule (libmakepkg/integrity/verify_signature.sh): a source whose name matches
+# *.@(sig?(n)|asc) is a detached signature of the source named without that ending, which must exist.
+SIGNATURE_PAIRS = r"""shopt -s extglob
+source "$1"
+names=()
+for entry in "${source[@]}" "${source_x86_64[@]}" "${source_aarch64[@]}"; do
+  name="${entry%%::*}"
+  [[ "$entry" == *::* ]] || name="${entry##*/}"
+  names+=("$name")
+done
+for name in "${names[@]}"; do
+  if [[ "$name" == *.@(sig?(n)|asc) ]]; then
+    found=missing
+    for other in "${names[@]}"; do [[ "$other" == "${name%.*}" ]] && found=paired; done
+    echo "$found $name"
+  fi
+done
+"""
+
+
+@pytest.mark.parametrize("keys_set", [False, True])
+def test_every_source_makepkg_takes_for_a_signature_signs_another_source(tmp_path, keys_set):
+    """A key file saved as .asc made makepkg look for the file it would sign, and stop."""
+    (tmp_path / "pkg").mkdir()
+    path = pkgbuild(tmp_path / "pkg", FINGERPRINT if keys_set else "")
+    done = subprocess.run([BASH, "-c", SIGNATURE_PAIRS, "pairs", str(path)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    pairs = done.stdout.split("\n")[:-1]
+    version = sourced(path, 'echo "$_version"').stdout.strip()
+    assert pairs == ([f"paired SHA256SUMS-{version}.sig"] if keys_set else []), pairs
 
 
 @pytest.mark.parametrize("carch,build", [("x86_64", "x64"), ("aarch64", "arm64")])
@@ -243,7 +275,7 @@ def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build, k
     srcdir = tmp_path / "src"
     srcdir.mkdir()
     shutil.copy(PKGBUILD.parent / "herald-os-release-check.sh", srcdir)
-    (srcdir / f"herald-os-release-key-{version}.asc").write_bytes(keys.export(keys.release))
+    (srcdir / f"herald-os-release-key-{version}.key").write_bytes(keys.export(keys.release))
     tarball = srcdir / f"herald-os-{version}-{build}.tar.gz"
     tarball.write_bytes(b"the release tarball")
     good = hashlib.sha256(b"the release tarball").hexdigest()
@@ -269,7 +301,7 @@ def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build, k
     (tmp_path / "expired").mkdir()
     expired = pkgbuild(tmp_path / "expired", keys.expired)
     keys.sign(keys.expired, sums, faked="20200601T000000")
-    (srcdir / f"herald-os-release-key-{version}.asc").write_bytes(keys.export(keys.expired))
+    (srcdir / f"herald-os-release-key-{version}.key").write_bytes(keys.export(keys.expired))
     done = sourced(expired, "set -eE; trap 'exit 3' ERR; prepare", env)
     assert done.returncode != 0 and "expired or been revoked" in done.stderr, done.stderr
     # A tarball of your own is checked by nothing here, as before.
