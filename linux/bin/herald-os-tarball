@@ -483,7 +483,8 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
                 for fields in block
             ):
                 trusted.add(fingerprint)
-        # Counted in the file itself: gpg's report stops early on some bad signatures.
+        # Counted in the file itself, to name the refusal: gpg's report stops early at a bad signature,
+        # which is refused anyway, so only the message depends on it.
         packets = sum(line.startswith(":signature packet:") for line in run("--list-packets", str(signature)).stdout.splitlines())
         checked = run("--status-fd", "1", "--verify", str(signature), str(sums))
         status = [fields[1:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"]
@@ -491,7 +492,7 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
         valid = [fields for fields in status if fields[0] == "VALIDSIG"]
         signer = valid[0][10] if valid and len(valid[0]) > 10 else ""
         # One signature only: with several, which of gpg's lines belong to which is not ours to guess.
-        single = packets == 1 and kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
+        single = kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
         if checked.returncode == 0 and single and signer in trusted:
             return signer
         if packets > 1 or kinds.count("NEWSIG") > 1:
