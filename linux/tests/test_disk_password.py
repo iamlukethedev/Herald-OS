@@ -525,6 +525,21 @@ def test_ctrl_c_before_the_change_stops_and_changes_nothing(tmp_path, at):
     assert opens(disk, OLD) and not opens(disk, NEW) and slots(disk) == ["0"]
 
 
+@needs_cryptsetup
+@pytest.mark.parametrize("at", ["Current disk password:", "New disk password:", "New disk password again:"])
+@pytest.mark.parametrize("language", ["C.UTF-8", "C"])
+def test_a_byte_that_is_not_text_is_refused_like_anything_outside_ascii(tmp_path, at, language):
+    """getpass cannot decode it; that is the ASCII refusal, not a traceback, at every prompt."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = {**fake_tools(tmp_path / "bin", disk), "LC_ALL": language, "LANG": language}
+    answers = CHANGE[:[prompt for prompt, _ in CHANGE].index(at)]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*answers, (at, b"New-pass\xff2\n")])
+    assert code == 2, screen
+    assert "Traceback" not in screen and "UnicodeDecodeError" not in screen
+    assert "use only letters, digits, spaces and the symbols on the keyboard (ASCII)" in screen and "Nothing was changed." in screen
+    assert opens(disk, OLD) and slots(disk) == ["0"]
+
+
 def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeypatch, capsys):
     state = {"/dev/vda3": {"current": True, "new": True}, "/dev/vdb1": {"current": True, "new": False}}
     argv = {"change": ["sh", "-c", "kill -9 $$"], "probe": [sys.executable, "-c", f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(state))})"]}
