@@ -370,37 +370,49 @@ an unencrypted disk, it says first that this is deletion, not a secure erase. A 
 another bootc system is different: it gets a login screen and a locked account instead ([Switching a
 bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
-**The disk password.** `herald-os password --disk` finds the LUKS devices under the root filesystem
-(`/sysroot` on the image) from `lsblk`; when `lsblk` cannot list them it changes nothing and says so
-(exit 7), rather than guess from `/etc/crypttab`, which also names data and USB disks. It asks sudo
-for root first, then the current disk password, which it checks before it asks for the new one
-twice. It adds the new one to every device, checks that it opens each, and only then removes the old
-one (every slot it opens). It refuses, before anything changes, a current password that opens a slot
-a token uses, with an exit code for each (9 the recovery key, 10 TPM, 11 FIDO2, 12 another token's,
-or a slot that cannot be told: cryptsetup is asked slot by slot with `--key-slot` when it does not
-name one): that slot would go in the disk password's place, leaving the owner's password working and
-the token pointing at nothing, so an interruption leaves a password that works; while it runs,
-Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits for the root side to finish or
-put things back, and says how it ended. Should the root side be killed anyway, the command looks and
-says which password opens which device (exit 6). Ctrl+C at a prompt, or during the current
-password's check, stops with nothing changed, said once (exit 130). If adding it fails on one
-device, it comes back out of the others; a device it cannot be taken back out of (cryptsetup fails,
-or it still opens) is named, with the command that removes it (exit 8), and a cryptsetup that runs
-out of time says which passwords may work (exit 6). Exit 6 therefore means the change may be
-part-way: the new password was added but an old one could not be removed, cryptsetup ran out of
-time, or the root side was killed; the message says which, and what opens each device. A rollback
-also removes a new password an earlier run left on a device, and a new password that already opens a
-slot a token uses is refused first. It takes printable ASCII only (no input method at start-up),
-refuses on a disk that is not encrypted, and `--status` prints `{"encrypted", "devices", "newOwner",
-"error"}` without root, with `encrypted` null when it cannot tell; setup then neither asks for a
-disk password nor calls the disk unencrypted. After setup "for someone else"
-(`~/.config/herald-os/new-owner`) or a reset (`/var/lib/herald-os/new-owner`, from `reset-helper
-apply`), setup on an encrypted disk asks the new owner for the disk password they typed at start-up
-and one of their own, and runs `herald-os password --disk --new-owner` in a terminal of its own with
-their new account password for sudo: it also removes every other key slot and the tokens left with
-none, so only the new owner's password opens the disk. "Later" skips it.
-`linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device and checks that
-the old password no longer opens them.
+**The disk password.** `herald-os password --disk` changes the LUKS passphrase typed at start-up.
+
+- **Which devices.** The LUKS devices under the root filesystem (`/sysroot` on the image), from
+  `lsblk`. When `lsblk` is missing or cannot list them, it changes nothing and says so (exit 7),
+  rather than guess from `/etc/crypttab`, which also names data and USB disks.
+- **Order.** sudo for root first, then the current disk password, checked before the new one is
+  asked for twice. It adds the new password to every device and checks that it opens each, and only
+  then removes the old one, so an interruption leaves a password that works.
+- **Key slots.** Every slot in the header is tried on its own (`--test-passphrase --key-slot N`), so
+  it knows each slot a password opens and the tokens that use each, not only the slot cryptsetup
+  names first. Removing a password means `luksKillSlot` on exactly those slots, never a token's.
+- **Refusals before anything changes.** A current password that opens a slot a token uses, alone or
+  as well as a plain slot of its own: exit 9 for the recovery key, 10 TPM, 11 FIDO2, 12 another
+  token's, or a slot that cannot be told. Removing that slot would leave the owner's password
+  working or the token pointing at nothing. A new password that already opens a token's slot, or
+  one that cannot be told: exit 13. Exit 2 is for a new password that will not do as typed (too
+  short, not ASCII, the two differ, the same as the current one).
+- **A leftover new password.** A plain slot the new password already opens counts as left by an
+  earlier run that stopped part-way. It cannot be told apart from a plain slot someone gave that
+  password on purpose: if this run fails and takes the new password back, that slot goes too. The
+  current password still opens its own slot on that device.
+- **When it fails part-way.** If adding fails on one device, the new password comes back out of the
+  others. A device it cannot be taken back out of (cryptsetup fails, the slot is a token's, or it
+  still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means the change may
+  be part-way: the new password was added but an old one could not be removed, cryptsetup ran out
+  of time, or the root side was killed; the message says which, and what opens each device.
+- **Signals.** While it runs, Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits
+  for the root side to finish or put things back, continues it if it stops after a Ctrl+Z, and says
+  how it ended. Ctrl+C at a prompt, or during the current password's check, stops with nothing
+  changed, said once (exit 130).
+- **The rest.** Printable ASCII only (no input method at start-up). It refuses on a disk that is not
+  encrypted (exit 4), and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without
+  root, with `encrypted` null when it cannot tell; setup then neither asks for a disk password nor
+  calls the disk unencrypted.
+- **A new owner.** After setup "for someone else" (`~/.config/herald-os/new-owner`) or a reset
+  (`/var/lib/herald-os/new-owner`, from `reset-helper apply`), setup on an encrypted disk asks the
+  new owner for the disk password they typed at start-up and one of their own, and runs
+  `herald-os password --disk --new-owner` in a terminal of its own with their new account password
+  for sudo. That also removes every other key slot and the tokens left with none, so only the new
+  owner's password opens the disk. "Later" skips it.
+
+`linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device, with stand-ins
+for what cannot happen there, and checks which password opens which slot afterwards.
 
 **Security.**
 

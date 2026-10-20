@@ -1684,7 +1684,10 @@ the installer less of the person's.
   which replaces a slot device by device without a check in between. Signals wait until it is done,
   on both sides: the person's side waits for the root side rather than stopping sudo with it.
   Only a key slot of its own counts as the disk password: a secret that opens one a token uses (the
-  recovery key, TPM or FIDO2) is refused, as replacing it would keep the owner's password.
+  recovery key, TPM or FIDO2), also as well as a plain slot, is refused, as replacing it would keep
+  the owner's password. Every slot is tried on its own (`--key-slot`), and a password is removed by
+  killing exactly the plain slots it opens, never by `luksRemoveKey` until it opens nothing, which
+  would take a token's slot holding the same secret with it.
   If adding fails on one device, the new passphrase comes out of the others again. The devices come
   from `lsblk` only: when it cannot list them, nothing changes, because `/etc/crypttab` also names
   data and USB disks whose other key slots `--new-owner` would remove. It runs as root
