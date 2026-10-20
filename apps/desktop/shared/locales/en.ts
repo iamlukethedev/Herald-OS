@@ -659,7 +659,9 @@ export const en = {
   'firstRun.handOver.done': 'Done',
   // The disk password unlocks the encrypted disk when the computer starts, before Herald OS does.
   'firstRun.disk.title': 'Your disk password',
-  'firstRun.disk.text': 'This computer’s disk is encrypted, and the password it asks for when it starts was chosen by whoever set it up before you. Choose your own; the old one stops working.',
+  // TPM (the computer's security chip) stays as it is.
+  'firstRun.disk.text':
+    'This computer’s disk is encrypted, and the password it asks for when it starts was chosen by whoever set it up before you. Choose your own: it becomes the only way to open the disk. The old password stops working, and so does anything else set up to open it before: other passwords, recovery keys, and unlocking with a security key or the TPM.',
   'firstRun.disk.keyboard': 'You type it before anything else starts, so use a wired keyboard or one with a 2.4 GHz receiver; a Bluetooth keyboard does not work there.',
   'firstRun.disk.current': 'The disk password you typed when it started',
   'firstRun.disk.password': 'New disk password (at least 8 characters)',

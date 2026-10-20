@@ -625,7 +625,7 @@ export const zhCN: Translation = {
   'firstRun.handOver.notEncrypted': '这块磁盘没有加密：拿到它的人都能读取其中的文件；重置会删除这些文件，但不是安全擦除。',
   'firstRun.handOver.done': '完成',
   'firstRun.disk.title': '你的磁盘密码',
-  'firstRun.disk.text': '这台电脑的磁盘已加密，开机时要求输入的密码是之前设置这台电脑的人选的。请设置你自己的密码，旧密码随之失效。',
+  'firstRun.disk.text': '这台电脑的磁盘已加密，开机时要求输入的密码是之前设置这台电脑的人选的。请设置你自己的密码：它将成为打开磁盘的唯一方式。旧密码会失效，之前为打开磁盘设置的其他一切也会失效，包括其他密码、恢复密钥，以及用安全密钥或 TPM 解锁。',
   'firstRun.disk.keyboard': '这个密码要在其他一切启动之前输入，所以请使用有线键盘或带 2.4 GHz 接收器的键盘；蓝牙键盘在那时无法使用。',
   'firstRun.disk.current': '开机时你输入的磁盘密码',
   'firstRun.disk.password': '新的磁盘密码（至少 8 个字符）',

@@ -43,7 +43,7 @@ const SIGNED_OUT_AUTH = $hermesAuth.get()
 
 // What may read the same in every language: product names, and the keyboard shortcuts, commands
 // and units that stay as they are (en.ts says which). The longer command goes first.
-const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz']
+const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz', 'TPM']
 
 // Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal",
 // "teclado Bluetooth").
@@ -521,5 +521,24 @@ describe('handing the computer over', () => {
     expect(heading(host)).toBe(t('firstRun.handOver.title'))
     expect(host.textContent).toContain(t(text))
     expect(host.textContent?.includes(t('firstRun.handOver.notEncrypted'))).toBe(warns)
+  })
+})
+
+describe("the disk step's warning", () => {
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s that every other way to open the disk goes too', async language => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: true, newOwner: true })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.disk.title'))
+    const text = host.textContent ?? ''
+    const words = { en: ['recovery keys', 'security key', 'TPM'], 'pt-BR': ['chaves de recuperação', 'chave de segurança', 'TPM'], 'zh-CN': ['恢复密钥', '安全密钥', 'TPM'] }[language]
+    for (const word of words) {
+      expect(text, word).toContain(word)
+    }
   })
 })

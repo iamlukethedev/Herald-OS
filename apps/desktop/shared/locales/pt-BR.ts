@@ -644,7 +644,8 @@ export const ptBR: Translation = {
   'firstRun.handOver.notEncrypted': 'Este disco não é criptografado: quem estiver com ele consegue ler os arquivos, e uma redefinição apaga esses arquivos, mas não faz um apagamento seguro.',
   'firstRun.handOver.done': 'Concluir',
   'firstRun.disk.title': 'Sua senha do disco',
-  'firstRun.disk.text': 'O disco deste computador é criptografado, e a senha que ele pede ao ligar foi escolhida por quem o configurou antes de você. Escolha a sua; a antiga deixa de funcionar.',
+  'firstRun.disk.text':
+    'O disco deste computador é criptografado, e a senha que ele pede ao ligar foi escolhida por quem o configurou antes de você. Escolha a sua: ela passa a ser a única forma de abrir o disco. A senha antiga deixa de funcionar, e o mesmo vale para tudo o que foi configurado antes para abri-lo: outras senhas, chaves de recuperação e o desbloqueio com chave de segurança ou pelo TPM.',
   'firstRun.disk.keyboard': 'Você digita essa senha antes de qualquer outra coisa iniciar, então use um teclado com fio ou com receptor de 2,4 GHz; um teclado Bluetooth não funciona nesse momento.',
   'firstRun.disk.current': 'A senha do disco que você digitou ao ligar o computador',
   'firstRun.disk.password': 'Nova senha do disco (pelo menos 8 caracteres)',

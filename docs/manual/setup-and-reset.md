@@ -38,8 +38,9 @@ What stays on the disk depends on its encryption:
 
 - **Encrypted** (the installer's default): the disk password stays yours until the next owner
   chooses theirs in setup. Tell it to them; they type it once to start the computer. Setup then
-  asks for it and a new one, and only the new one opens the disk afterwards (any other passwords or
-  keys added to it go too).
+  asks for it and a new one, and only the new one opens the disk afterwards: every other way to open
+  it goes too, including other passwords, recovery keys, and unlocking with a security key (FIDO2)
+  or the TPM.
 - **Not encrypted:** reset deletes the files, but it is not a secure erase. Someone with the disk and
   recovery tools may get some of them back, and `herald-os reset` says so before it asks you to
   confirm.
