@@ -4333,6 +4333,12 @@ SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 # is not relied on. A signal that arrives after another has been handled is ignored.
 SSH_STOP: dict = {"by": None}
 
+# True when herald-os runs as its own process (set where it starts), not imported. A signal that stops
+# `on` then decides the process's exit code, so INT, TERM and HUP stay blocked from the end of `on`
+# until the process has exited: the handlers put back there (SIGTERM's default ends the process at once)
+# would otherwise let a later signal replace that code in the moments before the exit.
+SSH_OWN_PROCESS = False
+
 
 def ssh_ignored(signum: int, frame) -> None:
     """INT, TERM and HUP while `on` is stopping: nothing. A Python handler that does nothing rather
@@ -4475,6 +4481,8 @@ def ssh_on(opts: dict) -> int:
                 ssh_signals(ignored)
             raise
     finally:
+        if SSH_OWN_PROCESS and SSH_STOP["by"] is not None:
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, *SSH_STOPS})
         ssh_signals(stops)
         SSH_STOP["by"] = None
     count = len(authorized(updated))
@@ -5372,4 +5380,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    SSH_OWN_PROCESS = True
     sys.exit(main(sys.argv[1:]))

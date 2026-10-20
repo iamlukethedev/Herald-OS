@@ -1720,6 +1720,19 @@ def handlers_come_back(machine: System, tmp_path: Path, capsys) -> bool:
     return after == before
 
 
+def a_stopped_command_holds_later_signals(machine: System, tmp_path: Path, capsys) -> bool:
+    """As its own process, `on` stopped by a signal leaves INT, TERM and HUP blocked for the exit."""
+    module, mask = machine.module, signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    module.SSH_OWN_PROCESS = True
+    try:
+        result = guarded(machine, signal.SIGTERM)
+        held = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP} <= signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    finally:
+        module.SSH_OWN_PROCESS = False
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+    return result == "exit 143" and held
+
+
 def keys_never_written_are_not_taken_out(machine: System, tmp_path: Path, capsys) -> bool:
     # Writing into ~/.ssh fails (as for a read-only folder, also when this runs as root).
     machine.ssh.mkdir(mode=0o700)
@@ -2375,7 +2388,8 @@ MUTANTS = {
     "SIGTERM not handled": (sigterm_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGHUP,)"),
     "SIGHUP not handled": (sighup_rolls_back, "SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)", "SSH_STOPS = (signal.SIGTERM,)"),
     "a signal exits with the wrong code": (sigterm_rolls_back, "    raise SystemExit(128 + signum)", "    raise SystemExit(1)"),
-    "the handlers not put back": (handlers_come_back, "    finally:\n        ssh_signals(stops)\n", "    finally:\n        pass\n"),
+    "the handlers not put back": (handlers_come_back, "        ssh_signals(stops)\n        SSH_STOP", "        SSH_STOP"),
+    "a later signal let in before the exit": (a_stopped_command_holds_later_signals, "            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, *SSH_STOPS})\n", "            pass\n"),
     "keys never written taken out": (keys_never_written_are_not_taken_out, "keys_out if wrote_keys else None", "keys_out if added else None"),
     "only an exact active or enabled closed again": (a_hung_start_leaves_sshd_closed, "        if active not in SSH_OPEN_ACTIVE and now_active not in SSH_CLOSED_ACTIVE:\n", "        if active != \"active\" and now_active == \"active\":\n"),
     "a unit's enabled state taken at its word": (a_hung_enable_leaves_sshd_closed, "        if enabled not in SSH_OPEN_ENABLED and now_enabled not in SSH_CLOSED_ENABLED:\n", "        if enabled != \"enabled\" and now_enabled == \"enabled\":\n"),
@@ -3295,6 +3309,8 @@ import test_ssh
 machine = test_ssh.System(test_ssh.cli, Path({tmp!r}), pytest.MonkeyPatch())
 machine.hang = [["systemctl", "restart", "herald-os-ssh-limit.service"]]
 os.environ["HANG_MARK"] = {mark!r}
+# A process of its own, as the herald-os command is.
+test_ssh.cli.SSH_OWN_PROCESS = True
 
 def state():
     files, ssh, units, table, rules = test_ssh.snapshot(machine)
@@ -3306,7 +3322,11 @@ try:
     machine.setup("--key", test_ssh.public_key())
 except SystemExit as stopped:
     code = stopped.code
-print(json.dumps({{"code": code, "same": state() == before}}))
+print(json.dumps({{"code": code, "same": state() == before}}), flush=True)
+if {hold}:
+    # Setup is over and its handlers are back; the exit waits for a line on stdin, so a test can
+    # signal the process in the moments a real exit takes.
+    sys.stdin.readline()
 sys.exit(code)
 """
 
@@ -3319,7 +3339,7 @@ def test_setup_ssh_killed_while_a_command_hangs_puts_everything_back(tmp_path, s
     mark, work = tmp_path / "hanging", tmp_path / "machine"
     work.mkdir()
     script = tmp_path / "driver.py"
-    script.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark)))
+    script.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False))
     child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         for _ in range(200):
@@ -3862,7 +3882,7 @@ def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tm
     work, mark = tmp_path / "machine", tmp_path / "hanging"
     work.mkdir()
     driver = tmp_path / "driver.py"
-    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark)))
+    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False))
     sender = tmp_path / "send.py"
     sender.write_text(TWO_SIGNALS.format(work=str(work), mark=str(mark), driver=str(driver), first=int(first), second=int(second), gap=gap))
     done = subprocess.run([sys.executable, str(sender)], capture_output=True, text=True, timeout=120)
@@ -3875,6 +3895,52 @@ def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tm
     else:
         # Sent back to back, the kernel may hand them over in either order; one of the two decides.
         assert code in (128 + first, 128 + second)
+
+
+@pytest.mark.parametrize("first, second", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM), (signal.SIGHUP, signal.SIGTERM)])
+def test_setup_ssh_signalled_again_after_the_rollback_still_exits_with_the_first_code(tmp_path, first, second):
+    """The rollback is done and setup has returned, but the process has not exited yet: a second signal
+    then must not replace the first one's code (SIGTERM's default would end it as killed, -15)."""
+    import sys
+    import time
+    work, mark = tmp_path / "machine", tmp_path / "hanging"
+    work.mkdir()
+    driver = tmp_path / "driver.py"
+    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=True))
+    child = subprocess.Popen([sys.executable, str(driver)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(200):
+            if mark.exists() or child.poll() is not None:
+                break
+            time.sleep(0.1)
+        assert mark.exists(), child.communicate(timeout=10)
+        child.send_signal(first)
+        # The driver prints its JSON line once setup has returned, and then waits on stdin to exit.
+        line = child.stdout.readline()
+        while line and not line.startswith("{"):
+            line = child.stdout.readline()
+        assert line, child.communicate(timeout=10)
+        child.send_signal(second)
+        out, err = child.communicate("exit\n", timeout=30)
+    finally:
+        if child.poll() is None:
+            child.kill()
+    assert json.loads(line) == {"code": 128 + first, "same": True}, err
+    assert child.returncode == 128 + first, err
+    assert err.count("SSH is as it was before this run") == 1 and "Traceback" not in err
+
+
+def test_only_the_herald_os_command_counts_as_its_own_process():
+    import sys
+    probe = (
+        "import runpy, sys\n"
+        "sys.argv = ['herald-os', 'help']\n"
+        "sys.exit = lambda code=0: print(sys._getframe(1).f_globals['SSH_OWN_PROCESS'])\n"
+        f"runpy.run_path({str(CLI_PATH)!r}, run_name='__main__')\n"
+    )
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip().splitlines()[-1] == "True", done.stderr
+    assert cli.SSH_OWN_PROCESS is False
 
 
 
