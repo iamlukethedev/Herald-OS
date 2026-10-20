@@ -504,15 +504,29 @@ def test_two_plain_leftover_slots_of_the_new_password_both_go(tmp_path, copies):
 
 
 @needs_cryptsetup
-@pytest.mark.parametrize("new_owner", [False, True])
-def test_the_old_password_also_in_a_token_s_slot_is_refused_and_both_stay(tmp_path, new_owner):
-    """The current password in plain slot 0 and in the recovery token's slot 1: a change would remove both."""
-    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), OLD, "systemd-recovery")
+@pytest.mark.parametrize("kind, words", [("systemd-recovery", "the recovery key"), ("systemd-tpm2", "the TPM"),
+                                         ("systemd-fido2", "a security key (FIDO2)"), ("clevis", "Clevis")])
+@pytest.mark.parametrize("op, new_owner", [("check", False), ("change", False), ("change", True)])
+def test_the_old_password_also_in_a_token_s_slot_is_refused_and_both_stay(tmp_path, kind, words, op, new_owner):
+    """The current password in plain slot 0 and in a token's slot 1: it is the disk password, so not
+    9 to 12 ("that is not the disk password"), but 14, whatever the token, and nothing changes."""
+    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), OLD, kind)
     before = dump(first)
-    result = root_side("change", {"devices": [str(first)], "current": OLD, "new": NEW, "newOwner": new_owner})
-    assert result.returncode == cli.DISK_RECOVERY_KEY, result.stderr
-    assert "also opens key slot 1" in result.stderr and "Nothing was changed" in result.stderr
+    result = root_side(op, {"devices": [str(first)], "current": OLD, "new": NEW, "newOwner": new_owner})
+    assert result.returncode == cli.DISK_SHARED_SECRET == 14, result.stderr
+    assert f"the disk password also opens key slot 1 of {first}, which {words}" in result.stderr
+    assert "Give that way of unlocking a secret of its own first. Nothing was changed." in result.stderr
+    assert "not the disk password" not in result.stderr
     assert dump(first) == before
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("kind, code", [("systemd-recovery", 9), ("systemd-tpm2", 10)])
+def test_a_token_s_secret_alone_still_says_it_is_not_the_disk_password(tmp_path, kind, code):
+    """9 and 10 keep their meaning: what was typed opens only the token's slot."""
+    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), RECOVERY, kind)
+    result = root_side("check", {"devices": [str(first)], "current": RECOVERY})
+    assert result.returncode == code and "not the disk password" in result.stderr and "also opens" not in result.stderr
 
 
 @needs_cryptsetup
@@ -932,7 +946,7 @@ def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monke
     assert header["keyslots"] == {1: NEW, 2: OLD} and header["tokens"]["0"]["keyslots"] == ["2"]
 
 
-@pytest.mark.parametrize("code", [0, 1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 127, 130])
+@pytest.mark.parametrize("code", [0, 1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 14, 127, 130])
 def test_every_end_the_root_side_says_itself_is_passed_on_without_looking(monkeypatch, tmp_path, code):
     """A code in DISK_ENDS (the refusals 9 to 13 among them) is the root side's own word; only another
     end, a killed root side, is looked at afterwards."""
@@ -944,8 +958,8 @@ def test_every_end_the_root_side_says_itself_is_passed_on_without_looking(monkey
 
 
 def test_the_refusals_are_all_ends_the_root_side_says_itself():
-    assert {cli.DISK_RECOVERY_KEY, cli.DISK_TPM_SLOT, cli.DISK_FIDO2_SLOT, cli.DISK_OTHER_SLOT, cli.DISK_NEW_IS_OTHER_KEY} <= cli.DISK_ENDS
-    assert {9, 10, 11, 12, 13} <= cli.DISK_ENDS
+    assert {cli.DISK_RECOVERY_KEY, cli.DISK_TPM_SLOT, cli.DISK_FIDO2_SLOT, cli.DISK_OTHER_SLOT, cli.DISK_NEW_IS_OTHER_KEY, cli.DISK_SHARED_SECRET} <= cli.DISK_ENDS
+    assert {9, 10, 11, 12, 13, 14} <= cli.DISK_ENDS
 
 
 def test_the_end_state_in_words():

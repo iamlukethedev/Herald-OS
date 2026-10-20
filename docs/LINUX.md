@@ -381,11 +381,13 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 - **Key slots.** Every slot in the header is tried on its own (`--test-passphrase --key-slot N`), so
   it knows each slot a password opens and the tokens that use each, not only the slot cryptsetup
   names first. Removing a password means `luksKillSlot` on exactly those slots, never a token's.
-- **Refusals before anything changes.** A current password that opens a slot a token uses, alone or
-  as well as a plain slot of its own: exit 9 for the recovery key, 10 TPM, 11 FIDO2, 12 another
-  token's, or a slot that cannot be told. Removing that slot would leave the owner's password
-  working or the token pointing at nothing. A new password that already opens a token's slot, or
-  one that cannot be told: exit 13. The messages name the way of unlocking in plain words (the
+- **Refusals before anything changes.** A current password that opens only a slot a token uses is
+  not the disk password: exit 9 for the recovery key, 10 TPM, 11 FIDO2, 12 another token's, or a
+  slot that cannot be told. A current password that opens a plain slot of its own and also a
+  token's slot (the same secret in both, whatever the token) is the disk password, but that way of
+  unlocking needs a secret of its own first: exit 14. Changing it then would remove the token's
+  slot too, or leave the old password working through it. A new password that already opens a
+  token's slot, or one that cannot be told: exit 13. The messages name the way of unlocking in plain words (the
   recovery key, the TPM, a security key), not its token type. Exit 2 is for a new password that will
   not do as typed (too short, not ASCII, the two differ, the same as the current one); setup checks
   all of those itself first, so it never meets exit 2.

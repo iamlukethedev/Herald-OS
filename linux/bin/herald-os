@@ -2711,6 +2711,10 @@ DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT = 9, 10, 11, 
 # A new password that already opens a key slot a token uses, or one that cannot be told apart: a take
 # back would remove that slot with it. Not 2, which also means the new password will not do as typed.
 DISK_NEW_IS_OTHER_KEY = 13
+# The current password opens a plain slot of its own and also a slot a token uses (the same secret in
+# both), whatever the token: it is the disk password, but that way of unlocking needs a secret of its
+# own before it can change. Not 9 to 12, which say what was typed is not the disk password at all.
+DISK_SHARED_SECRET = 14
 DISK_NOT_ENCRYPTED_TEXT = (
     "this computer's disk is not encrypted, so there is no disk password to change. Herald OS encrypts "
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
@@ -2722,7 +2726,7 @@ DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyb
 DISK_CHANGE_BEGINS = b"Adding the new disk password to "
 # How the root side of a change can end and say so itself; any other end (it was killed) is looked
 # at afterwards (disk_probe).
-DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, DISK_NEW_IS_OTHER_KEY, 127, 130}
+DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, DISK_NEW_IS_OTHER_KEY, DISK_SHARED_SECRET, 127, 130}
 # /sysroot is the real root filesystem on the image (ostree); / elsewhere.
 DISK_ROOT_MOUNTS = ("/sysroot", "/")
 # Made by reset-helper apply: the next account belongs to someone new, so setup asks for a disk
@@ -3044,9 +3048,10 @@ def disk_root_op(args: list[str]) -> int:
             slot = min(bound)
             message, code = disk_not_the_password(device, slot, bound[slot])
             if len(bound) < len(opened):
-                message = (f"the disk password also opens key slot {slot} of {device}, which {token_words(bound[slot])} uses to "
-                           "unlock it: the same secret is in both, and changing the password would remove that slot too, or leave the "
-                           "old password working through it. Give that way of unlocking a secret of its own first. Nothing was changed.")
+                message, code = (f"the disk password also opens key slot {slot} of {device}, which {token_words(bound[slot])} uses to "
+                                 "unlock it: the same secret is in both, and changing the password would remove that slot too, or leave "
+                                 "the old password working through it. Give that way of unlocking a secret of its own first. Nothing was "
+                                 "changed."), DISK_SHARED_SECRET
             die(message, code)
         old_slots[device] = opened[0]
     if op == "check":

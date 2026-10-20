@@ -582,3 +582,47 @@ describe('handing over a computer whose encryption could not be told', () => {
     }
   })
 })
+
+describe('a disk password whose secret another way of unlocking shares', () => {
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says so in %s, and does not ask for it again', async language => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: true, newOwner: true })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+    const [current, password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    await type(current, 'given at start-up')
+    await type(password, 'my own disk pass')
+    await type(again, 'my own disk pass')
+    bridge.setup.diskPassword.mockClear()
+    bridge.setup.diskPassword.mockResolvedValue({ ok: false, reason: 'sharedSecret' })
+    await click(button(host, t('firstRun.next')))
+    expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.disk.sharedSecret'))
+    // Not the recovery key's or the TPM's "that is not the disk password", and no asking to type it again.
+    expect(t('firstRun.disk.sharedSecret')).not.toBe(t('firstRun.disk.recoveryKey'))
+    expect(t('firstRun.disk.sharedSecret')).not.toBe(t('firstRun.disk.tpmKey'))
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await act(async () => host.querySelector('form')?.requestSubmit())
+    await settle()
+    expect(bridge.setup.diskPassword).toHaveBeenCalledTimes(1)
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    bridge.setup.diskPassword.mockReset()
+    bridge.setup.diskPassword.mockResolvedValue({ ok: true })
+  })
+
+  it('names the shared secret, not a wrong password, in every language', () => {
+    for (const language of ['en', 'pt-BR', 'zh-CN'] as const) {
+      $prefs.set({ ...$prefs.get(), language })
+      const text = t('firstRun.disk.sharedSecret')
+      expect(text, language).toContain('herald-os password --disk --new-owner')
+      expect(text, language).toContain('TPM')
+    }
+    $prefs.set({ ...$prefs.get(), language: 'en' })
+    expect(t('firstRun.disk.sharedSecret')).not.toMatch(/type the password/i)
+    expect(t('firstRun.disk.sharedSecret')).toContain('secret of its own first')
+  })
+})

@@ -241,6 +241,7 @@ describe('the disk password', () => {
       [11, 'fido2Key'],
       [12, 'otherKey'],
       [13, 'newIsOtherKey'],
+      [14, 'sharedSecret'],
       [7, 'failed'],
       [1, 'failed'],
       [2, 'failed']

@@ -282,6 +282,7 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
   otherKey: 'firstRun.disk.otherKey',
   newIsOtherKey: 'firstRun.disk.newIsOtherKey',
   sameAsCurrent: 'firstRun.disk.sameAsCurrent',
+  sharedSecret: 'firstRun.disk.sharedSecret',
   timeout: 'firstRun.disk.timeout',
   noTerminal: 'firstRun.disk.noTerminal',
   failed: 'firstRun.disk.failed'
@@ -304,8 +305,15 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
   const [busy, setBusy] = useState(false)
   const mismatch = again.length > 0 && password !== again
   const notAscii = !PRINTABLE_ASCII.test(password)
+  // The same secret opens another way of unlocking: trying again gives the same answer until that way
+  // has a secret of its own, which setup cannot do, so only "Later" goes on.
+  const blocked = error === 'firstRun.disk.sharedSecret'
 
   const save = async () => {
+    if (blocked) {
+      return
+    }
+
     setBusy(true)
     setError(null)
 
@@ -362,7 +370,7 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
         <GlassButton variant="ghost" onClick={onDone} disabled={busy}>
           {t('firstRun.later')}
         </GlassButton>
-        <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!current || password.length < 8 || password !== again || notAscii || !accountPassword} />
+        <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={blocked || !current || password.length < 8 || password !== again || notAscii || !accountPassword} />
       </div>
     </form>
   )

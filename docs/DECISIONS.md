@@ -1683,9 +1683,10 @@ the installer less of the person's.
   two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
   which replaces a slot device by device without a check in between. Signals wait until it is done,
   on both sides: the person's side waits for the root side rather than stopping sudo with it.
-  Only a key slot of its own counts as the disk password: a secret that opens one a token uses (the
-  recovery key, TPM or FIDO2), also as well as a plain slot, is refused, as replacing it would keep
-  the owner's password. Every slot is tried on its own (`--key-slot`), and a password is removed by
+  Only a key slot of its own counts as the disk password. A secret that opens a slot a token uses
+  (the recovery key, TPM or FIDO2) is refused, whether it opens only that slot (it is not the disk
+  password) or a plain slot as well (the same secret in both, which that way of unlocking must stop
+  sharing first), as replacing it would keep the owner's password or take the token's slot with it. Every slot is tried on its own (`--key-slot`), and a password is removed by
   killing exactly the plain slots it opens, never by `luksRemoveKey` until it opens nothing, which
   would take a token's slot holding the same secret with it.
   If adding fails on one device, the new passphrase comes out of the others again. The devices come

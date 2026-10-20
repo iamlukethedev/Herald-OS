@@ -643,6 +643,7 @@ export const zhCN: Translation = {
   'firstRun.disk.otherKey': '这不是磁盘密码：它属于另一种解锁磁盘的方式，或者 Herald OS 无法判断它是否属于。请输入电脑开机时要求输入的密码。未做任何更改。',
   'firstRun.disk.newIsOtherKey': '这个新的磁盘密码已属于另一种解锁磁盘的方式，例如恢复密钥。请换一个。未做任何更改。',
   'firstRun.disk.sameAsCurrent': '新的磁盘密码就是电脑开机时你输入的那个。请换一个。',
+  'firstRun.disk.sharedSecret': '你的磁盘密码没有错，但同一个密钥也能用另一种方式解锁磁盘，例如恢复密钥或 TPM。现在更改会把那种方式一并删除，或者让旧密码通过它继续有效。请先为那种解锁方式设置它自己的密钥（或将其删除），再用 herald-os password --disk --new-owner 更改磁盘密码。未做任何更改。',
   'firstRun.disk.notAdmin': '你的账户密码未被接受，无法进行更改。未做任何更改。',
   'firstRun.disk.notEncrypted': '这台电脑的磁盘没有加密，因此没有可更改的磁盘密码。',
   'firstRun.disk.partly': '已添加你的磁盘密码，但有一个旧密码未能移除。请在终端中运行 herald-os password --disk --new-owner。',
