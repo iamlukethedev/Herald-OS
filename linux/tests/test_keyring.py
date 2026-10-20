@@ -357,3 +357,56 @@ def test_without_a_keyring_service_nothing_is_made(tmp_path):
     assert result.returncode == cli.KEYRING_NO_SERVICE, result.stderr
     assert "did not answer" in result.stderr and "Nothing was changed" in result.stderr
     assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+def test_the_lock_lives_in_the_runtime_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert cli.keyring_lock_path() == tmp_path / "herald-os-keyring.lock"
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    assert cli.keyring_lock_path() == cli.CONFIG_DIR / "herald-os-keyring.lock"
+
+
+def test_a_setup_that_cannot_get_the_lock_gives_up_and_says_why(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "KEYRING_LOCK_WAIT", 0.3)
+    with open(tmp_path / "herald-os-keyring.lock", "a") as held:
+        import fcntl
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(SystemExit) as stopped:
+            with cli.keyring_lock():
+                pytest.fail("the lock was taken twice")
+    assert stopped.value.code == 1 and "still running" in capsys.readouterr().err
+    # Free again, it is taken at once.
+    with cli.keyring_lock():
+        pass
+
+
+@real_daemon
+def test_a_setup_waits_for_one_already_running(tmp_path):
+    # The shell holds the lock as a running setup would; the command must wait for it before it looks.
+    result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
+                               '{ "$PY" "$CLI" keyring setup --no-password 9>&- & pid=$!; } && sleep 1.5 && '
+                               '{ kill -0 "$pid" && [ ! -e "$HOME/.local/share/keyrings/login.keyring" ] && echo waited; }; '
+                               'flock -u 9; wait "$pid"; echo "rc=$?"')
+    assert result.stdout.split()[0] == "waited", result.stdout + result.stderr
+    assert "rc=0" in result.stdout, result.stderr
+
+
+@real_daemon
+def test_two_setups_at_once_make_one_keyring(tmp_path):
+    result = session(tmp_path, 'for flag in --no-password --password; do { printf "correct horse\\n" | "$PY" "$CLI" keyring setup "$flag"; '
+                               'echo "rc=$?" >> "$XDG_RUNTIME_DIR/codes"; } & done; wait; cat "$XDG_RUNTIME_DIR/codes"')
+    assert sorted(re.findall(r"rc=(\d+)", result.stdout)) == ["0", "3"], result.stdout + result.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert sorted(path.name for path in folder.glob("*.keyring")) == ["login.keyring"]
+    assert (folder / "default").read_text().strip() == "login"
+
+
+@real_daemon
+def test_a_keyring_made_while_setup_waited_is_found_under_the_lock(tmp_path):
+    result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
+                               '{ "$PY" "$CLI" keyring setup --no-password 9>&- & pid=$!; } && sleep 1 && '
+                               'mkdir -p "$HOME/.local/share/keyrings" && printf "[keyring]\\ndisplay-name=Login\\n" > "$HOME/.local/share/keyrings/login.keyring"; '
+                               'flock -u 9; wait "$pid"; echo "rc=$?"')
+    assert "rc=3" in result.stdout, result.stdout + result.stderr
+    assert "already has a keyring (with no password of its own)" in result.stderr

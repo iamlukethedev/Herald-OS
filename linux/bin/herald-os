@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import getpass
 import io
 import json
@@ -3223,6 +3224,8 @@ SECRET_SERVICE = "org.freedesktop.Secret.Service"
 # gnome-keyring 3.0.
 KEYRING_INTERNAL = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"
 KEYRING_TIMEOUT_MS = 20_000
+# How long a second `keyring setup` waits for one already running (setup's own times out at 30 s).
+KEYRING_LOCK_WAIT = 25
 
 
 def keyring_dir() -> Path:
@@ -3340,6 +3343,37 @@ def keyring_unencrypted_note() -> str | None:
     return "note: this disk is not encrypted, so anyone with the disk can read what apps keep in this keyring."
 
 
+def keyring_lock_path() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return (Path(runtime) if runtime and os.path.isabs(runtime) else CONFIG_DIR) / "herald-os-keyring.lock"
+
+
+@contextlib.contextmanager
+def keyring_lock():
+    """Held while a keyring is checked for and made. gnome-keyring names a second keyring with the same
+    label login_1, so two setups at once (setup and a terminal) would make two; the second waits and
+    then finds the first one's."""
+    path = keyring_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        deadline = time.monotonic() + KEYRING_LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    die(f"another `herald-os keyring setup` is still running ({path}). Nothing was changed.", 1)
+                time.sleep(0.1)
+        yield
+
+
+def keyring_refuse_existing(directory: Path) -> None:
+    state = keyring_state(directory)
+    if state != "none":
+        die(f"this account already has a keyring ({KEYRING_STATES[state]}) in {directory}. Nothing was changed.", KEYRING_EXISTS)
+
+
 def keyring_cmd(args: list[str]) -> int:
     """`keyring --status` as JSON; `keyring setup --no-password | --password` makes the default keyring
     when there is none. An existing keyring is never replaced: it holds what apps saved."""
@@ -3349,11 +3383,12 @@ def keyring_cmd(args: list[str]) -> int:
         return 0
     if args not in (["setup", "--no-password"], ["setup", "--password"]):
         die(KEYRING_USAGE, 2)
-    state = keyring_state(directory)
-    if state != "none":
-        die(f"this account already has a keyring ({KEYRING_STATES[state]}) in {directory}. Nothing was changed.", KEYRING_EXISTS)
+    # Checked before the password is asked, and again under the lock.
+    keyring_refuse_existing(directory)
     password = keyring_password_input() if args[1] == "--password" else ""
-    keyring_create(password)
+    with keyring_lock():
+        keyring_refuse_existing(directory)
+        keyring_create(password)
     if password:
         print("The keyring is ready. After each start, the first app that needs it asks for its password.")
         return 0
