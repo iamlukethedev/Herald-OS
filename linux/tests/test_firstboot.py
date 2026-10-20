@@ -5,6 +5,7 @@ sleep, Hermes's installer and the parts of herald-os that change things; the rea
 Hermes."""
 
 import re
+import shutil
 
 import pytest
 import shlex
@@ -1178,6 +1179,9 @@ def run_reset_apply(tmp_path: Path, helper: str) -> str:
     for tool in ("loginctl", "userdel", "flatpak", "herald-os"):
         executable(bin_dir / tool, f'echo "{tool} $*" >>"$CALLS"')
     executable(bin_dir / "id", '[ "$1" = -u ] && echo 1000; exit 0')
+    # date as BSD (macOS) has it: no GNU -I.
+    real_date = shutil.which("date") or "/bin/date"
+    executable(bin_dir / "date", f'for arg; do case "$arg" in -I*) echo "date: invalid argument for -I" >&2; exit 1;; esac; done; exec {real_date} "$@"')
     script = helper.replace("STATE=/var/lib/herald-os", f"STATE={shlex.quote(str(state))}")
     script = script.replace("/etc/herald-os/ssh-keys", str(tmp_path / "ssh-keys")).replace("/etc/herald-os/install.conf", str(tmp_path / "install.conf")).replace("/etc/NetworkManager/system-connections/", str(tmp_path) + "/nm-")
     result = subprocess.run(["bash", "-c", script, "reset-helper", "apply"], env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CALLS": str(calls)}, capture_output=True, text=True, timeout=30, check=False)
@@ -1209,8 +1213,10 @@ def test_a_reset_marks_the_next_account_as_a_new_owners(tmp_path):
     """So setup asks them for a disk password of their own (herald-os password --disk --new-owner)."""
     helper = (ROOT / "linux" / "image" / "reset-helper").read_text()
     run_reset_apply(tmp_path, helper)
-    assert (tmp_path / "state" / "new-owner").read_text().strip()
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n", (tmp_path / "state" / "new-owner").read_text())
     assert not (tmp_path / "state" / "reset-pending").exists()
+    # GNU date's -I is not in BSD date (macOS), where the tests run too.
+    assert "date -I" not in helper
 
 
 @pytest.mark.parametrize("kept", ["/etc/herald-os/install.conf", "/etc/herald-os/ssh-keys"])
