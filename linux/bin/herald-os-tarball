@@ -71,7 +71,14 @@ UNUSABLE = frozenset("reid")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 # Every request goes over HTTPS, redirects included: GitHub sends release files on to its CDN, and
 # a redirect to plain http would let anyone on the way swap the tarball and its checksum together.
-CURL = ("curl", "--proto", "=https", "--proto-redir", "=https", "--fail", "--location", "--retry", "2")
+CURL = ("curl", "--proto", "=https", "--proto-redir", "=https", "--fail", "--location", "--retry", "2", "--connect-timeout", "15")
+# Every request has an end, so a server that stalls cannot hold check or update. The signing files
+# are small: a minute and 1 MiB each, retries included. A tarball may take long on a slow line, so
+# it is cut off when it stalls (under 1 KB/s for a minute) and after an hour at most.
+SMALL_TIME = 60
+SMALL_LIMIT = KEY_ASSET_LIMIT
+TARBALL_TIME = 3600
+STALL = ("--speed-limit", "1024", "--speed-time", "60")
 AT_FDCWD = -100
 RENAME_EXCHANGE = 2
 # What renameat2 answers where the kernel, the C library or the filesystem cannot exchange two paths.
@@ -352,7 +359,7 @@ def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[
         with tempfile.TemporaryDirectory(prefix="herald-os-check-") as folder:
             sums = Path(folder) / SUMS
             try:
-                signer = checked_signature(layout, release, Path(folder), sums, quiet=True)
+                signer = checked_signature(layout, release, Path(folder), sums, quiet=True, deadline=started + VERIFY_BUDGET)
                 listed_checksum(sums, release["name"])
             except ReleaseError as exc:
                 skipped.append(f"{release['version']}: {exc}")
@@ -361,10 +368,24 @@ def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[
     return None, skipped
 
 
-def download(url: str, target: Path) -> None:
-    progress = ["--progress-bar"] if sys.stderr.isatty() else ["-sS"]
-    if not url.startswith("https://") or subprocess.call([*CURL, *progress, "-o", str(target), url]) != 0:
+def download(url: str, target: Path, small: bool = False, deadline: float | None = None) -> None:
+    """Fetch `url` into `target` over HTTPS only. A small file (SHA256SUMS, its signature, the key file)
+    gets SMALL_TIME and SMALL_LIMIT, and no more time than is left before `deadline` (time.monotonic())."""
+    if not url.startswith("https://"):
         raise ReleaseError(f"could not download {url} over HTTPS")
+    if small:
+        seconds = SMALL_TIME if deadline is None else min(SMALL_TIME, int(deadline - time.monotonic()))
+        if seconds < 1:
+            raise ReleaseError("ran out of time checking releases; nothing was changed")
+        limits = ["--max-time", str(seconds), "--retry-max-time", str(seconds), "--max-filesize", str(SMALL_LIMIT)]
+    else:
+        limits = ["--max-time", str(TARBALL_TIME), *STALL]
+    progress = ["--progress-bar"] if sys.stderr.isatty() and not small else ["-sS"]
+    if subprocess.call([*CURL, *progress, *limits, "-o", str(target), url]) != 0:
+        raise ReleaseError(f"could not download {url} over HTTPS")
+    # --max-filesize cannot stop a transfer that does not say its size up front.
+    if small and target.stat().st_size > SMALL_LIMIT:
+        raise ReleaseError(f"{url} is too big to be a signing file; nothing was changed")
 
 
 def listed_checksum(checksum: Path, name: str) -> str:
@@ -414,7 +435,7 @@ def primary_keys(listing: str) -> dict[str, list[list[str]]]:
     return keys
 
 
-def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | None = None) -> str:
+def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | None = None, deadline: float | None = None) -> str:
     """Check that `signature` is a good OpenPGP signature over `sums` by a key in `pinned` (the release
     keys of the version in use), or by a key in `offered` (the release's own key file) that one of them
     has certified. Returns the signing key's primary fingerprint. Works in a keyring of its own, which
@@ -426,10 +447,13 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
 
     def run(*args: str) -> subprocess.CompletedProcess:
         argv = [gpg, "--batch", "--no-options", "--no-autostart", "--no-auto-key-retrieve", "--homedir", str(home), *args]
+        seconds = GPG_TIMEOUT if deadline is None else min(GPG_TIMEOUT, deadline - time.monotonic())
+        if seconds <= 0:
+            raise ReleaseError("ran out of time checking releases; nothing was changed")
         try:
-            return subprocess.run(argv, capture_output=True, text=True, timeout=GPG_TIMEOUT, check=False)
+            return subprocess.run(argv, capture_output=True, text=True, timeout=seconds, check=False)
         except subprocess.TimeoutExpired as exc:
-            raise ReleaseError(f"gpg did not finish in {GPG_TIMEOUT} s; nothing was changed") from exc
+            raise ReleaseError(f"gpg did not finish in {seconds:.0f} s; nothing was changed") from exc
 
     try:
         if run("--import", str(pinned)).returncode != 0:
@@ -600,22 +624,22 @@ def check(layout: Layout, channel: str) -> int:
     return 1
 
 
-def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False) -> str:
+def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False, deadline: float | None = None) -> str:
     """Download the release's SHA256SUMS into `sums` and check its signature, before anything else of
     the release is trusted or downloaded."""
     if not release["sums_url"] or not release["sig_url"]:
         missing = SUMS if not release["sums_url"] else SUMS_SIG
         raise ReleaseError(f"Herald OS {release['version']} is not signed (the release has no {missing}), and this version only installs signed releases; nothing was changed")
     signature = staging / SUMS_SIG
-    download(release["sums_url"], sums)
-    download(release["sig_url"], signature)
+    download(release["sums_url"], sums, small=True, deadline=deadline)
+    download(release["sig_url"], signature, small=True, deadline=deadline)
     offered = None
     if release["key_url"]:
         offered = staging / KEY_ASSET
-        download(release["key_url"], offered)
+        download(release["key_url"], offered, small=True, deadline=deadline)
         if offered.stat().st_size > KEY_ASSET_LIMIT:
             raise ReleaseError(f"the release's {KEY_ASSET} is too big to be a key file; nothing was changed")
-    signer = verify_signature(sums, signature, layout.release_keys, offered)
+    signer = verify_signature(sums, signature, layout.release_keys, offered, deadline=deadline)
     if not quiet:
         print(f"  {SUMS} is signed with the release key {spaced(signer)}")
     return signer
@@ -667,7 +691,7 @@ def update(layout: Layout, version: str | None = None) -> int:
             checked_signature(layout, release, staging, checksum)
         else:
             # Versions from before signed releases carry no key, so they check what they always did.
-            download(release["checksum_url"], checksum)
+            download(release["checksum_url"], checksum, small=True)
         download(release["url"], tarball)
         verify(tarball, checksum)
         print("  the checksum matches; unpacking")
