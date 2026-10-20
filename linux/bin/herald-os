@@ -2703,7 +2703,7 @@ def password() -> int:
 # root side (`password --disk-root`, through sudo) takes them as JSON on stdin and runs cryptsetup.
 DISK_USAGE = "password --disk [--new-owner] | password --disk --status"
 DISK_MIN = 8
-DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN = 3, 4, 5, 6, 7
+DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN, DISK_NOT_TAKEN_BACK = 3, 4, 5, 6, 7, 8
 DISK_NOT_ENCRYPTED_TEXT = (
     "this computer's disk is not encrypted, so there is no disk password to change. Herald OS encrypts "
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
@@ -2913,7 +2913,13 @@ def disk_root(args: list[str]) -> int:
     if problem:
         die(problem, 2)
     with disk_signals_held():
-        return disk_change(devices, current, new, new_owner, old_slots)
+        try:
+            return disk_change(devices, current, new, new_owner, old_slots)
+        except subprocess.TimeoutExpired as error:
+            print(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped. "
+                  "The new password was added before anything was removed, so at least one of the two opens the disk: "
+                  "try the new one first at the next start, then run `herald-os password --disk` again.", file=sys.stderr)
+            return DISK_PARTLY
 
 
 def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old_slots: dict[str, int]) -> int:
@@ -2921,12 +2927,27 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     new_slots: dict[str, int] = {}
 
     def take_back(why: str) -> int:
-        # Back to the old password alone: the new one goes again from the devices it went into.
-        for device in added:
-            cryptsetup(["luksRemoveKey", device], new)
+        # Back to the old password alone: the new one goes again from the devices it went into, and
+        # only a device it no longer opens counts as taken back.
         print(f"herald-os: {why}", file=sys.stderr)
-        print("herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
-        return 1
+        left: list[str] = []
+        for device in added:
+            try:
+                result = cryptsetup(["luksRemoveKey", device], new)
+                gone = luks_slot(device, new) is None
+            except (OSError, subprocess.TimeoutExpired) as error:
+                result, gone = subprocess.CompletedProcess([], 1, b"", str(error).encode()), False
+            if not gone:
+                left.append(device)
+                print(f"herald-os: the new disk password could not be taken back out of {device} "
+                      f"({cryptsetup_said(result) if result.returncode else 'it still opens it'}).", file=sys.stderr)
+        if not left:
+            print("herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
+            return 1
+        print(f"herald-os: the current disk password still opens every device, but the new one may open {' and '.join(left)} "
+              "too. To take it out: " + "; ".join(f"sudo cryptsetup luksRemoveKey {shlex.quote(device)}" for device in left)
+              + " (it asks for the new password), or run `herald-os password --disk` again with the same new password.", file=sys.stderr)
+        return DISK_NOT_TAKEN_BACK
 
     for device in devices:
         if luks_slot(device, new) is None:

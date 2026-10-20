@@ -376,13 +376,15 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 for root first, then the current disk password, which it checks before it asks for the new one
 twice. It adds the new one to every device, checks that it opens each, and only then removes the old
 one (every slot it opens), so an interruption leaves a password that works; while it runs, Ctrl+C
-and a closed terminal wait. If adding it fails on one device, it comes back out of the others. It
-takes printable ASCII only (no input method at start-up), refuses on a disk that is not encrypted,
-and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without root, with `encrypted`
-null when it cannot tell; setup then neither asks for a disk password nor calls the disk
-unencrypted. After setup "for someone else" (`~/.config/herald-os/new-owner`) or a reset
-(`/var/lib/herald-os/new-owner`, from `reset-helper apply`), setup on an encrypted disk asks the new
-owner for the disk password they typed at start-up and one of their own, and runs `herald-os
+and a closed terminal wait. If adding it fails on one device, it comes back out of the others; a
+device it cannot be taken back out of (cryptsetup fails, or it still opens) is named, with the
+command that removes it (exit 8), and a cryptsetup that runs out of time says which passwords may
+work (exit 6). It takes printable ASCII only (no input method at start-up), refuses on a disk that
+is not encrypted, and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without
+root, with `encrypted` null when it cannot tell; setup then neither asks for a disk password nor
+calls the disk unencrypted. After setup "for someone else" (`~/.config/herald-os/new-owner`) or a
+reset (`/var/lib/herald-os/new-owner`, from `reset-helper apply`), setup on an encrypted disk asks
+the new owner for the disk password they typed at start-up and one of their own, and runs `herald-os
 password --disk --new-owner` in a terminal of its own with their new account password for sudo: it
 also removes every other key slot and the tokens left with none, so only the new owner's password
 opens the disk. "Later" skips it. `linux/tests/test_disk_password.py` does all of it on LUKS2 images

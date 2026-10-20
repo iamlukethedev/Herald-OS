@@ -132,6 +132,7 @@ const DISK_FAILURES = [
   ['notAdmin', 'firstRun.disk.notAdmin'],
   ['notEncrypted', 'firstRun.disk.notEncrypted'],
   ['partly', 'firstRun.disk.partly'],
+  ['notTakenBack', 'firstRun.disk.notTakenBack'],
   ['timeout', 'firstRun.disk.timeout'],
   ['noTerminal', 'firstRun.disk.noTerminal'],
   ['tooShort', 'firstRun.account.tooShort'],

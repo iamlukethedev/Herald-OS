@@ -114,6 +114,74 @@ def test_a_new_password_that_does_not_open_the_disk_is_taken_back(monkeypatch, c
     assert "does not open /dev/vda3" in capsys.readouterr().err
 
 
+def stand_in_disks(monkeypatch, remove, removes=True):
+    """cryptsetup and luks_slot for two devices: adding works on the first and fails on the second, so
+    the new password is taken back from the first; `remove(device)` is what luksRemoveKey does there
+    (a returncode, or raises), and the new password opens the first until a removal works; with
+    `removes` False, a removal that says yes leaves it there."""
+    opened = {"/dev/vda3": {OLD}, "/dev/vdb1": {OLD}}
+
+    def cryptsetup(args, key=None, new=None):
+        device = args[-1]
+        if args[0] == "luksAddKey":
+            if device == "/dev/vdb1":
+                return subprocess.CompletedProcess(args, 1, b"", b"Keyslot area too small.")
+            opened[device].add(new)
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        if args[0] == "luksRemoveKey":
+            code = remove(device)
+            if code == 0 and removes:
+                opened[device].discard(key)
+            return subprocess.CompletedProcess(args, code, b"", b"Device /dev/vda3 is busy.")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(cli, "cryptsetup", cryptsetup)
+    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: (0 if passphrase == OLD else 1) if passphrase in opened[device] else None)
+    return opened
+
+
+def test_a_rollback_that_works_says_nothing_was_changed(monkeypatch, capsys):
+    opened = stand_in_disks(monkeypatch, lambda device: 0)
+    assert cli.disk_change(["/dev/vda3", "/dev/vdb1"], OLD, NEW, False, {"/dev/vda3": 0, "/dev/vdb1": 0}) == 1
+    assert opened == {"/dev/vda3": {OLD}, "/dev/vdb1": {OLD}}
+    assert "nothing was changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("remove", [
+    lambda device: 1,
+    lambda device: (_ for _ in ()).throw(subprocess.TimeoutExpired(["cryptsetup"], 300)),
+], ids=["luksRemoveKey fails", "luksRemoveKey times out"])
+def test_a_rollback_that_fails_says_the_new_password_may_still_open_that_device(monkeypatch, capsys, remove):
+    opened = stand_in_disks(monkeypatch, remove)
+    assert cli.disk_change(["/dev/vda3", "/dev/vdb1"], OLD, NEW, False, {"/dev/vda3": 0, "/dev/vdb1": 0}) == cli.DISK_NOT_TAKEN_BACK
+    err = capsys.readouterr().err
+    assert "nothing was changed" not in err
+    assert "could not be taken back out of /dev/vda3" in err and "may open /dev/vda3 too" in err
+    assert "sudo cryptsetup luksRemoveKey /dev/vda3" in err and "vdb1 too" not in err
+    assert OLD in opened["/dev/vda3"] and opened["/dev/vdb1"] == {OLD}
+
+
+def test_a_removal_that_says_yes_but_leaves_the_password_counts_as_failed(monkeypatch, capsys):
+    stand_in_disks(monkeypatch, lambda device: 0, removes=False)
+    assert cli.disk_change(["/dev/vda3", "/dev/vdb1"], OLD, NEW, False, {"/dev/vda3": 0, "/dev/vdb1": 0}) == cli.DISK_NOT_TAKEN_BACK
+    assert "(it still opens it)" in capsys.readouterr().err
+
+
+def test_cryptsetup_running_out_of_time_says_which_passwords_may_work(monkeypatch, tmp_path):
+    def timeout(args, key=None, new=None):
+        if args[0] == "luksAddKey":
+            raise subprocess.TimeoutExpired(["cryptsetup", "luksAddKey"], 300)
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+    monkeypatch.setattr(cli, "cryptsetup", timeout)
+    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: 0 if passphrase == OLD else None)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/sbin/cryptsetup")
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps({"devices": ["/dev/vda3"], "current": OLD, "new": NEW})))
+    errors = __import__("io").StringIO()
+    monkeypatch.setattr(sys, "stderr", errors)
+    assert cli.disk_root(["change"]) == cli.DISK_PARTLY
+    assert "did not finish in 300 s (luksAddKey)" in errors.getvalue() and "at least one of the two opens the disk" in errors.getvalue()
+
+
 # ----- real LUKS2 images
 
 
@@ -227,6 +295,23 @@ def test_a_failed_add_takes_the_new_password_back_out(tmp_path):
     assert "nothing was changed" in result.stderr
     assert opens(first, OLD) and not opens(first, NEW)
     assert slots(first) == ["0"]
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes to a read-only file")
+def test_a_rollback_that_fails_on_a_real_disk_leaves_both_passwords_there_and_says_so(tmp_path, monkeypatch, capsys):
+    """The second image refuses the new password, and taking it back out of the first fails: the first
+    then opens with both, the second with the old one, and the message says exactly that."""
+    monkeypatch.setenv("PATH", C_ENV["PATH"])
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    second.chmod(0o444)
+    real = cli.cryptsetup
+    monkeypatch.setattr(cli, "cryptsetup", lambda args, key=None, new=None: subprocess.CompletedProcess(args, 1, b"", b"Device is busy.") if args[0] == "luksRemoveKey" else real(args, key, new))
+    assert cli.disk_change([str(first), str(second)], OLD, NEW, False, {str(first): 0, str(second): 0}) == cli.DISK_NOT_TAKEN_BACK
+    err = capsys.readouterr().err
+    assert f"may open {first} too" in err and "Device is busy" in err and "nothing was changed" not in err
+    assert opens(first, OLD) and opens(first, NEW)
+    assert opens(second, OLD) and not opens(second, NEW)
 
 
 def fake_tools(folder: Path, disk: Path) -> dict:

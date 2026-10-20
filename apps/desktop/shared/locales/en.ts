@@ -675,6 +675,8 @@ export const en = {
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
   'firstRun.disk.partly': 'Your disk password was added, but an old one could not be removed. Run herald-os password --disk --new-owner in a terminal.',
+  // herald-os password --disk --new-owner is a command, and stays as it is.
+  'firstRun.disk.notTakenBack': 'Your disk password could not be added to every encrypted part of the disk, and taking it back out did not finish: the old one still opens the disk, and the new one may too. Run herald-os password --disk --new-owner in a terminal with the same new password.',
   'firstRun.disk.timeout': 'Changing the disk password took too long. At the next start, try your new disk password first, then the old one.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
   'firstRun.disk.noTerminal': 'The disk password cannot be changed here; run herald-os password --disk --new-owner in a terminal.',

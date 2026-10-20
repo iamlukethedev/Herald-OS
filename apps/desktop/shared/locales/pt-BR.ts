@@ -658,6 +658,8 @@ export const ptBR: Translation = {
   'firstRun.disk.notAdmin': 'A senha da sua conta não foi aceita para fazer a troca. Nada foi alterado.',
   'firstRun.disk.notEncrypted': 'O disco deste computador não é criptografado, então não há senha do disco para trocar.',
   'firstRun.disk.partly': 'Sua senha do disco foi adicionada, mas não foi possível remover uma senha antiga. Execute herald-os password --disk --new-owner em um terminal.',
+  'firstRun.disk.notTakenBack':
+    'Não foi possível adicionar sua senha do disco a todas as partes criptografadas do disco, e a remoção dela não terminou: a senha antiga continua abrindo o disco, e a nova talvez também abra. Execute herald-os password --disk --new-owner em um terminal com a mesma senha nova.',
   'firstRun.disk.timeout': 'A troca da senha do disco demorou demais. Na próxima vez que ligar o computador, tente primeiro a nova senha do disco e depois a antiga.',
   'firstRun.disk.noTerminal': 'Não é possível trocar a senha do disco aqui; execute herald-os password --disk --new-owner em um terminal.',
   'firstRun.disk.failed': 'A senha do disco não foi trocada, e a antiga continua funcionando. Execute herald-os password --disk --new-owner em um terminal para ver o motivo.',

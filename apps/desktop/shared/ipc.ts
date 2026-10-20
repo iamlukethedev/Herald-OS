@@ -476,9 +476,10 @@ export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' 
 /**
  * Why the disk password was not changed. `wrongCurrent`: the one typed at start-up was not it;
  * `notAdmin`: sudo refused the account password; `notAscii`: a character there is no sure way to type
- * at start-up; `partly`: the new one was added but an old one could not be taken out.
+ * at start-up; `partly`: the new one was added but an old one could not be taken out; `notTakenBack`: adding it failed
+ * part-way, and it could not be taken back out of every device, so it may open some of them too.
  */
-export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'timeout' | 'noTerminal' | 'failed'
+export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'notTakenBack' | 'timeout' | 'noTerminal' | 'failed'
 
 export interface SetupResult {
   ok: boolean

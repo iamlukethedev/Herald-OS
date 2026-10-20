@@ -639,6 +639,7 @@ export const zhCN: Translation = {
   'firstRun.disk.notAdmin': '你的账户密码未被接受，无法进行更改。未做任何更改。',
   'firstRun.disk.notEncrypted': '这台电脑的磁盘没有加密，因此没有可更改的磁盘密码。',
   'firstRun.disk.partly': '已添加你的磁盘密码，但有一个旧密码未能移除。请在终端中运行 herald-os password --disk --new-owner。',
+  'firstRun.disk.notTakenBack': '未能把你的磁盘密码添加到磁盘的每个加密部分，撤回也没有完成：旧密码仍能打开磁盘，新密码可能也能打开。请在终端中运行 herald-os password --disk --new-owner，并使用同一个新密码。',
   'firstRun.disk.timeout': '更改磁盘密码超时。下次开机时，请先试新的磁盘密码，再试旧密码。',
   'firstRun.disk.noTerminal': '无法在这里更改磁盘密码；请在终端中运行 herald-os password --disk --new-owner。',
   'firstRun.disk.failed': '磁盘密码未更改，旧密码仍然有效。请在终端中运行 herald-os password --disk --new-owner 查看原因。',
