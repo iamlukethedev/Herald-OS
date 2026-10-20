@@ -366,11 +366,11 @@ def listed_checksum(checksum: Path, name: str) -> str:
             continue
         match = CHECKSUM_LINE.match(line.strip())
         if not match:
-            raise ReleaseError(f"{checksum.name} is not a list of checksums")
+            raise ReleaseError(f"{checksum.name} is not a list of checksums; nothing was changed")
         if match.group(2) == name:
             found.add(match.group(1))
     if len(found) != 1:
-        raise ReleaseError(f"{checksum.name} does not give one checksum for {name}")
+        raise ReleaseError(f"{checksum.name} does not give one checksum for {name}; nothing was changed")
     return found.pop()
 
 
@@ -449,16 +449,18 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
                 for fields in block
             ):
                 trusted.add(fingerprint)
+        # Counted in the file itself: gpg's report stops early on some bad signatures.
+        packets = sum(line.startswith(":signature packet:") for line in run("--list-packets", str(signature)).stdout.splitlines())
         checked = run("--status-fd", "1", "--verify", str(signature), str(sums))
         status = [fields[1:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"]
         kinds = [fields[0] for fields in status]
         valid = [fields for fields in status if fields[0] == "VALIDSIG"]
-        signer = valid[0][10] if len(valid) == 1 and len(valid[0]) > 10 else ""
+        signer = valid[0][10] if valid and len(valid[0]) > 10 else ""
         # One signature only: with several, which of gpg's lines belong to which is not ours to guess.
-        single = kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
+        single = packets == 1 and kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
         if checked.returncode == 0 and single and signer in trusted:
             return signer
-        if kinds.count("NEWSIG") > 1:
+        if packets > 1 or kinds.count("NEWSIG") > 1:
             reason = "carries more than one signature"
         elif "BADSIG" in kinds:
             reason = "does not match its signature: it was changed after it was signed"

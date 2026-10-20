@@ -681,11 +681,45 @@ def test_a_forged_certification_vouches_for_nothing(tmp_path, keys):
 
 
 def test_a_good_signature_beside_one_by_an_unknown_key_is_refused(tmp_path, keys):
+    """The other key comes in the release's key file, so gpg can check both signatures and both are
+    good: only the rule of one signature refuses it."""
     sums = sums_of(tmp_path)
     both = keys.sign(keys.release, sums).read_bytes() + keys.sign(keys.other, sums).read_bytes()
     write(tmp_path / "both.sig", both)
-    with pytest.raises(tb.ReleaseError):
+    write(tmp_path / "offered.asc", keys.export(keys.other))
+    with pytest.raises(tb.ReleaseError, match="more than one signature"):
+        tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release), tmp_path / "offered.asc")
+
+
+@pytest.mark.parametrize("order", ["bad first", "good first"])
+def test_a_bad_signature_beside_a_good_one_is_named_as_two(tmp_path, keys, order):
+    """gpg stops reporting at a bad signature by the same key, so the count comes from the file."""
+    sums = sums_of(tmp_path)
+    good = keys.sign(keys.release, sums).read_bytes()
+    write(tmp_path / "other.txt", "something else\n")
+    bad = keys.sign(keys.release, tmp_path / "other.txt").read_bytes()
+    write(tmp_path / "both.sig", bad + good if order == "bad first" else good + bad)
+    with pytest.raises(tb.ReleaseError, match="more than one signature"):
         tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release))
+
+
+def test_a_tampered_certification_vouches_for_nothing(tmp_path, keys):
+    """The release key's real certification of the successor, one byte of its signature changed: it
+    still names the release key as issuer, but no longer checks out."""
+    sums = sums_of(tmp_path)
+    exported = packets(keys.export_binary(keys.successor))
+    uid = next(i for i, (tag, _) in enumerate(exported) if tag == 13)
+    # After the user ID: its self-signature, then the release key's certification.
+    at = [i for i, (tag, _) in enumerate(exported) if tag == 2 and i > uid][1]
+    tag, packet = exported[at]
+    exported[at] = (tag, packet[:-1] + bytes([packet[-1] ^ 0x01]))
+    write(tmp_path / "offered.gpg", b"".join(packet for _, packet in exported))
+    signature = keys.sign(keys.successor, sums)
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), tmp_path / "offered.gpg")
+    # The same file untouched is accepted, so the change is what refuses it.
+    write(tmp_path / "offered.gpg", keys.export_binary(keys.successor))
+    assert tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), tmp_path / "offered.gpg") == keys.successor
 
 
 @pytest.mark.parametrize("revocation_in", ["offered", "installed"])
@@ -858,6 +892,15 @@ def test_a_changed_tarball_under_a_good_signature_is_refused(layout, signed, cap
     with pytest.raises(SystemExit):
         tb.update(layout)
     assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+
+
+def test_a_sha256_with_a_line_that_is_not_a_checksum_changes_nothing(layout, published, capsys):
+    name = f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"
+    checksum = published / f"{name}.sha256"
+    checksum.write_text(checksum.read_text() + "not a checksum line\n")
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "is not a list of checksums; nothing was changed" in capsys.readouterr().err
 
 
 def test_a_release_key_file_too_big_to_be_one_is_refused(layout, signed, capsys):
