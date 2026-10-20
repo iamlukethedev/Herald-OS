@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced by the PKGBUILD's prepare(): checks the release's SHA256SUMS.sig as strictly as
 # herald-os-tarball does. makepkg's own check (validpgpkeys) passes a signature by an expired key or
 # subkey with only a warning; this refuses it (docs/RELEASE-SIGNING.md).
@@ -31,19 +32,19 @@ _herald_os_check_release() {
   signer="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $NF }' <<<"$status")" || true
   local reason=""
   if [[ -z "$usable" ]]; then
-    reason="none of the release keys ($*) is in the release's key file, unrevoked and unexpired"
+    reason="none of the release keys ($*) is in the release's key file, neither revoked nor expired"
   elif [[ "$packets" != 1 || "$(grep -c '^\[GNUPG:\] NEWSIG' <<<"$status" || true)" != 1 ]]; then
-    reason="does not hold exactly one signature"
+    reason="it does not hold exactly one signature"
   elif grep -Eq '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' <<<"$status"; then
-    reason="is by a key or subkey that has expired or been revoked"
+    reason="it was made by a key or subkey that has expired or been revoked"
   elif grep -Eq '^\[GNUPG:\] (BADSIG|ERRSIG|HERALD_OS_FAILED)' <<<"$status" ||
     [[ "$(grep -c '^\[GNUPG:\] GOODSIG' <<<"$status" || true)" != 1 ]]; then
-    reason="does not check out"
+    reason="it does not check out"
   elif [[ -z "$signer" || " $usable " != *" $signer "* ]]; then
-    reason="is not by one of the release keys ($*)"
+    reason="it was not made by one of the release keys ($*)"
   fi
   if [[ -n "$reason" ]]; then
-    echo "herald-os-bin: the release's SHA256SUMS.sig $reason" >&2
+    echo "herald-os-bin: refusing the release's SHA256SUMS.sig: $reason" >&2
     return 1
   fi
   return 0

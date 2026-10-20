@@ -404,6 +404,22 @@ def test_the_arch_check_refuses_what_herald_os_tarball_refuses(tmp_path, keys, c
         assert (done.stdout.strip() == "PASSED") == tarball_accepts == (case == "good"), (case, done.stderr)
 
 
+@pytest.mark.parametrize("case,reason", [
+    ("key file without the key", "none of the release keys ("),
+    ("expired subkey", "it was made by a key or subkey that has expired or been revoked"),
+    ("two signatures", "it does not hold exactly one signature"),
+    ("changed after signing", "it does not check out"),
+    ("another key", "it was not made by one of the release keys ("),
+])
+def test_the_arch_check_says_why_in_a_sentence(tmp_path, keys, case, reason):
+    sums, signature, offered, key, _ = release_case(tmp_path, keys, case)
+    if case == "another key":
+        key = keys.release
+    done = arch_check(sums, signature, offered, key)
+    assert done.stdout.strip() == "REFUSED"
+    assert done.stderr.strip().startswith(f"herald-os-bin: refusing the release's SHA256SUMS.sig: {reason}"), done.stderr
+
+
 def test_the_arch_check_passes_a_good_signature_as_a_plain_command(tmp_path, keys):
     """Not inside an if, where bash would turn errexit off: every command in it must succeed."""
     sums, signature, offered, key, _ = release_case(tmp_path, keys, "good")
