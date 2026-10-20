@@ -44,19 +44,25 @@ export function setupState(): SetupState {
     user: os.userInfo().username,
     name,
     signedIn: fs.existsSync(LOGIN_SCREEN),
-    diskEncrypted: false,
+    diskEncrypted: null,
     newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET)
   }
 }
 
-/** Whether the root filesystem is encrypted, from `herald-os password --disk --status`; unknown counts as not. */
-export async function diskEncrypted(): Promise<boolean> {
+/**
+ * Whether the root filesystem is encrypted, from `herald-os password --disk --status`; null when that
+ * cannot be told (the command failed, or could not list the disks), so setup neither asks for a disk
+ * password nor says the disk is unencrypted.
+ */
+export async function diskEncrypted(): Promise<boolean | null> {
   const result = await run('herald-os', ['password', '--disk', '--status'], 15_000)
 
   try {
-    return result.code === 0 && (JSON.parse(result.stdout) as { encrypted?: unknown }).encrypted === true
+    const encrypted = result.code === 0 ? (JSON.parse(result.stdout) as { encrypted?: unknown }).encrypted : null
+
+    return typeof encrypted === 'boolean' ? encrypted : null
   } catch {
-    return false
+    return null
   }
 }
 

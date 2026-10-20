@@ -1682,7 +1682,9 @@ the installer less of the person's.
   the new passphrase, checks that it opens every LUKS device under the root filesystem (a btrfs over
   two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
   which replaces a slot device by device without a check in between. Signals wait until it is done.
-  If adding fails on one device, the new passphrase comes out of the others again. It runs as root
+  If adding fails on one device, the new passphrase comes out of the others again. The devices come
+  from `lsblk` only: when it cannot list them, nothing changes, because `/etc/crypttab` also names
+  data and USB disks whose other key slots `--new-owner` would remove. It runs as root
   through sudo, asked for before anything else, and takes only printable ASCII: there is no input
   method at start-up, and the keyboard layout there may differ.
 - **A new owner gets a disk password of their own.** After setup "for someone else" or `herald-os

@@ -452,7 +452,7 @@ describe('first-run setup', () => {
 })
 
 describe("first-run setup's disk password", () => {
-  async function toTheStepAfterTheAccount(state: { diskEncrypted: boolean; newOwner: boolean; signedIn?: boolean }): Promise<HTMLElement> {
+  async function toTheStepAfterTheAccount(state: { diskEncrypted: boolean | null; newOwner: boolean; signedIn?: boolean }): Promise<HTMLElement> {
     bridge.setup.state.mockResolvedValue({ needed: true, signedIn: state.signedIn ?? false, ...state })
     const host = await mount('en')
     await click(button(host, t('firstRun.welcome.forMe')))
@@ -468,7 +468,8 @@ describe("first-run setup's disk password", () => {
   it.each([
     [false, false],
     [true, false],
-    [false, true]
+    [false, true],
+    [null, true]
   ])('is not asked for when the disk is encrypted: %s, and the owner is new: %s', async (diskEncrypted, newOwner) => {
     const host = await toTheStepAfterTheAccount({ diskEncrypted, newOwner })
     expect(heading(host)).toBe(t('firstRun.wifi.title'))
@@ -508,7 +509,9 @@ describe("first-run setup's disk password", () => {
 describe('handing the computer over', () => {
   it.each([
     [true, 'firstRun.handOver.textEncrypted', false],
-    [false, 'firstRun.handOver.text', true]
+    [false, 'firstRun.handOver.text', true],
+    // Unknown: neither the disk password to pass on, nor a claim that the disk is unencrypted.
+    [null, 'firstRun.handOver.text', false]
   ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns) => {
     bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted, newOwner: false })
     const host = await mount('en')

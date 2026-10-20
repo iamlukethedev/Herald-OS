@@ -25,7 +25,8 @@ export function FirstRunSetup() {
   const t = useT()
   const [due, setDue] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
-  const [diskEncrypted, setDiskEncrypted] = useState(false)
+  // null: it could not be told, so setup neither asks for a disk password nor says the disk is unencrypted.
+  const [diskEncrypted, setDiskEncrypted] = useState<boolean | null>(null)
   const [newOwner, setNewOwner] = useState(false)
   // The account password from the account step, for sudo when the disk password changes.
   const [accountPassword, setAccountPassword] = useState('')
@@ -69,7 +70,7 @@ export function FirstRunSetup() {
     setDue(false)
   }
 
-  const steps: Step[] = forSomeoneElse ? ['welcome', 'wifi', 'done'] : ['welcome', 'account', ...(diskEncrypted && newOwner ? (['disk'] as const) : []), 'wifi', 'hermes', 'done']
+  const steps: Step[] = forSomeoneElse ? ['welcome', 'wifi', 'done'] : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), 'wifi', 'hermes', 'done']
   const next = () => setStep(steps[Math.min(steps.length - 1, steps.indexOf(step) + 1)] ?? 'done')
 
   return (
@@ -119,9 +120,9 @@ export function FirstRunSetup() {
             <Heading
               icon={forSomeoneElse ? <IconGift size={18} /> : <IconCheck size={18} />}
               title={t(forSomeoneElse ? 'firstRun.handOver.title' : 'firstRun.done.title')}
-              text={t(forSomeoneElse ? (diskEncrypted ? 'firstRun.handOver.textEncrypted' : 'firstRun.handOver.text') : 'firstRun.done.text')}
+              text={t(forSomeoneElse ? (diskEncrypted === true ? 'firstRun.handOver.textEncrypted' : 'firstRun.handOver.text') : 'firstRun.done.text')}
             />
-            {forSomeoneElse && !diskEncrypted && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
+            {forSomeoneElse && diskEncrypted === false && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
             <Footer onNext={() => void finish()} label={t(forSomeoneElse ? 'firstRun.handOver.done' : 'firstRun.done.start')} />
           </div>
         )}

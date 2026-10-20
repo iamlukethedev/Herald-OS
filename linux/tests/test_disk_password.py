@@ -74,20 +74,6 @@ def test_lvm_inside_luks_and_an_older_lsblk():
     assert cli.lsblk_root_luks("not a list", None) == []
 
 
-def test_crypttab_names_its_devices_as_paths():
-    text = "\n".join([
-        "# <name> <device> <password> <options>",
-        "luks-1 UUID=1111-2222 none discard",
-        "luks-2 PARTUUID=aaaa none",
-        "swap /dev/vdb2 /dev/urandom swap",
-        "data LABEL=data none",
-        "",
-        "luks-1 UUID=1111-2222 none",
-        "bad",
-    ])
-    assert cli.crypttab_sources(text) == ["/dev/disk/by-uuid/1111-2222", "/dev/disk/by-partuuid/aaaa", "/dev/vdb2", "/dev/disk/by-label/data"]
-
-
 def test_what_a_new_disk_password_must_be():
     assert cli.disk_password_problem("long enough", "long enough", "the old one") is None
     assert "not the same" in cli.disk_password_problem("long enough", "long enougj", "x")
@@ -107,6 +93,7 @@ def test_the_other_slots_and_the_tokens_left_without_one():
 def test_a_reset_says_what_it_leaves_on_the_disk():
     assert "not a secure erase" in cli.reset_disk_note(False)
     assert "tell it to them" in cli.reset_disk_note(True)
+    assert "could not tell" in cli.reset_disk_note(None) and "not a secure erase" in cli.reset_disk_note(None)
 
 
 def test_the_cli_refuses_wrong_disk_arguments():
@@ -330,7 +317,37 @@ def test_an_unencrypted_disk_says_so(tmp_path):
     assert result.returncode == cli.DISK_NOT_ENCRYPTED
     assert "not encrypted" in result.stderr and "Encrypt my data" in result.stderr
     status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env)
-    assert json.loads(status.stdout) == {"encrypted": False, "devices": [], "newOwner": False}
+    assert json.loads(status.stdout) == {"encrypted": False, "devices": [], "newOwner": False, "error": None}
+
+
+@pytest.mark.parametrize("lsblk", [
+    "echo 'lsblk: unknown column: MOUNTPOINTS' >&2; exit 1",
+    "echo 'not json'",
+    "echo '{\"blockdevices\": \"none\"}'",
+], ids=["fails", "prints something else", "lists no devices"])
+@pytest.mark.parametrize("flags", [["--disk"], ["--disk", "--new-owner"]])
+def test_without_lsblk_it_refuses_rather_than_guess_from_crypttab(tmp_path, lsblk, flags):
+    """/etc/crypttab names data and USB disks as well as the root's; --new-owner would remove their other keys."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    calls = tmp_path / "sudo-calls"
+    (folder / "lsblk").write_text(f"#!/bin/sh\n{lsblk}\n")
+    (folder / "findmnt").write_text("#!/bin/sh\necho fs\n")
+    (folder / "sudo").write_text(f"#!/bin/sh\necho \"$*\" >>{calls}\nexit 0\n")
+    for tool in ("lsblk", "findmnt", "sudo"):
+        (folder / tool).chmod(0o755)
+    env = {**os.environ, "PATH": f"{folder}:{os.environ['PATH']}"}
+    result = subprocess.run([sys.executable, str(CLI), "password", *flags], capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+    assert result.returncode == cli.DISK_UNKNOWN
+    assert "lsblk" in result.stderr and "Nothing was changed" in result.stderr and "another disk" in result.stderr
+    assert not calls.exists(), "nothing ran as root"
+    status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env)
+    state = json.loads(status.stdout)
+    assert status.returncode == 0 and state["encrypted"] is None and state["devices"] == [] and "lsblk" in state["error"]
+
+
+def test_the_cli_never_reads_crypttab():
+    assert "/etc/crypttab\")" not in CLI.read_text() and "crypttab_sources" not in CLI.read_text()
 
 
 def sudo_works() -> bool:

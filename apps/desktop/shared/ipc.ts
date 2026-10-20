@@ -458,8 +458,11 @@ export interface SetupState {
    * account signed in with a password of its own and setup does not ask for one.
    */
   signedIn: boolean
-  /** The root filesystem is on LUKS: the computer asks for a disk password when it starts. */
-  diskEncrypted: boolean
+  /**
+   * The root filesystem is on LUKS: the computer asks for a disk password when it starts. null when
+   * it cannot be told (lsblk failed), which setup treats as neither.
+   */
+  diskEncrypted: boolean | null
   /**
    * The computer was set up for someone else, or reset: this account is a new owner's, who chooses
    * a disk password of their own in setup (the previous one stops working).

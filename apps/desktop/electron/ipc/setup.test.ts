@@ -291,16 +291,20 @@ describe('the disk password', () => {
     expect((host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn).not.toHaveBeenCalled()
   })
 
-  it('reads whether the disk is encrypted from the command, and counts anything else as not', async () => {
-    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "newOwner": false}\n', stderr: '', code: 0 }
+  it('reads whether the disk is encrypted from the command, and anything it cannot tell as unknown', async () => {
+    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "newOwner": false, "error": null}\n', stderr: '', code: 0 }
     await expect(diskEncrypted()).resolves.toBe(true)
     expect(run).toHaveBeenCalledWith('herald-os', ['password', '--disk', '--status'], expect.any(Number))
-    host.run = { stdout: '{"encrypted": false}', stderr: '', code: 0 }
+    host.run = { stdout: '{"encrypted": false, "devices": [], "newOwner": false, "error": null}', stderr: '', code: 0 }
     await expect(diskEncrypted()).resolves.toBe(false)
+    host.run = { stdout: '{"encrypted": null, "devices": [], "newOwner": true, "error": "lsblk could not list the disks"}', stderr: '', code: 0 }
+    await expect(diskEncrypted()).resolves.toBeNull()
     host.run = { stdout: '', stderr: 'herald-os: not found', code: 127 }
-    await expect(diskEncrypted()).resolves.toBe(false)
+    await expect(diskEncrypted()).resolves.toBeNull()
     host.run = { stdout: 'not json', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBe(false)
+    await expect(diskEncrypted()).resolves.toBeNull()
+    host.run = { stdout: '{"encrypted": "yes"}', stderr: '', code: 0 }
+    await expect(diskEncrypted()).resolves.toBeNull()
   })
 })
 

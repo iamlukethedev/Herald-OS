@@ -2703,7 +2703,7 @@ def password() -> int:
 # root side (`password --disk-root`, through sudo) takes them as JSON on stdin and runs cryptsetup.
 DISK_USAGE = "password --disk [--new-owner] | password --disk --status"
 DISK_MIN = 8
-DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY = 3, 4, 5, 6
+DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN = 3, 4, 5, 6, 7
 DISK_NOT_ENCRYPTED_TEXT = (
     "this computer's disk is not encrypted, so there is no disk password to change. Herald OS encrypts "
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
@@ -2760,24 +2760,6 @@ def lsblk_root_luks(tree: list, root_uuid: str | None, mounts: tuple[str, ...] =
     return found
 
 
-def crypttab_sources(text: str) -> list[str]:
-    """The devices /etc/crypttab unlocks at start-up (UUID=, PARTUUID=, LABEL= or a /dev path), as paths (pure; tested)."""
-    tags = (("UUID=", "by-uuid"), ("PARTUUID=", "by-partuuid"), ("LABEL=", "by-label"))
-    found: list[str] = []
-    for line in text.splitlines():
-        fields = line.split()
-        if len(fields) < 2 or fields[0].startswith("#"):
-            continue
-        source = fields[1].strip("\"'")
-        for tag, folder in tags:
-            if source.startswith(tag) and len(source) > len(tag):
-                source = f"/dev/disk/{folder}/{source[len(tag):]}"
-                break
-        if source.startswith("/dev/") and source not in found:
-            found.append(source)
-    return found
-
-
 def disk_root_uuid() -> str | None:
     for mount in DISK_ROOT_MOUNTS:
         try:
@@ -2790,19 +2772,31 @@ def disk_root_uuid() -> str | None:
     return None
 
 
+class DiskUnknown(Exception):
+    """Which devices hold the root filesystem cannot be told; the message says why."""
+
+
 def disk_devices() -> list[str]:
-    """The encrypted devices under the root filesystem: lsblk's view, or /etc/crypttab's where lsblk gives none."""
+    """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
+    (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
+    every other key slot of each device it is given."""
     try:
         listing = subprocess.run(["lsblk", "-J", "-p", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,MOUNTPOINTS"], capture_output=True, text=True, timeout=30)
-        tree = json.loads(listing.stdout).get("blockdevices") if listing.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
-        tree = None
-    if isinstance(tree, list):
-        return lsblk_root_luks(tree, disk_root_uuid())
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DiskUnknown(f"lsblk could not run ({error})") from None
     try:
-        return crypttab_sources(Path("/etc/crypttab").read_text())
-    except OSError:
-        return []
+        tree = json.loads(listing.stdout).get("blockdevices") if listing.returncode == 0 else None
+    except (json.JSONDecodeError, AttributeError):
+        tree = None
+    if not isinstance(tree, list):
+        said = (listing.stderr or "").strip().splitlines()
+        raise DiskUnknown("lsblk could not list the disks" + (f" ({said[-1]})" if said else "") + " (util-linux 2.37 or later is needed)")
+    return lsblk_root_luks(tree, disk_root_uuid())
+
+
+def disk_unknown_text(error: DiskUnknown) -> str:
+    return (f"{error}, so Herald OS cannot tell which encrypted devices hold the root filesystem. Nothing was "
+            "changed: guessing could change the password of another disk.")
 
 
 def disk_password_problem(new: str, again: str, current: str) -> str | None:
@@ -2997,9 +2991,16 @@ def disk_password(args: list[str]) -> int:
     flags = set(args)
     if not flags <= {"--new-owner", "--status"} or len(flags) != len(args) or flags == {"--new-owner", "--status"}:
         die(DISK_USAGE, 2)
-    devices = disk_devices()
+    try:
+        devices = disk_devices()
+    except DiskUnknown as error:
+        if "--status" in flags:
+            # "encrypted" is null: unknown, which is neither a disk password to ask for nor a disk to call unencrypted.
+            print(json.dumps({"encrypted": None, "devices": [], "newOwner": NEW_OWNER_MARK.exists(), "error": str(error)}))
+            return 0
+        die(disk_unknown_text(error), DISK_UNKNOWN)
     if "--status" in flags:
-        print(json.dumps({"encrypted": bool(devices), "devices": devices, "newOwner": NEW_OWNER_MARK.exists()}))
+        print(json.dumps({"encrypted": bool(devices), "devices": devices, "newOwner": NEW_OWNER_MARK.exists(), "error": None}))
         return 0
     if not devices:
         die(DISK_NOT_ENCRYPTED_TEXT, DISK_NOT_ENCRYPTED)
@@ -5128,8 +5129,11 @@ def firmware(args: list[str]) -> int:
 RESET_HELPER = Path("/usr/libexec/herald-os/reset-helper")
 
 
-def reset_disk_note(encrypted: bool) -> str:
-    """What a reset leaves on the disk, said plainly (pure; tested)."""
+def reset_disk_note(encrypted: bool | None) -> str:
+    """What a reset leaves on the disk, said plainly; None when it cannot be told (pure; tested)."""
+    if encrypted is None:
+        return ("Herald OS could not tell whether the disk is encrypted. If it is not, a reset deletes the files "
+                "but is not a secure erase: someone with the disk and recovery tools may get some of them back.")
     if encrypted:
         return ("The disk is encrypted, and its password stays the current one until whoever sets it up next "
                 "chooses their own in setup: tell it to them, as they type it once to start the computer.")
@@ -5146,7 +5150,11 @@ def reset(args: list[str]) -> int:
     user = os.environ.get("USER", "")
     print(f"This erases {user}'s files, apps and settings on this computer, then restarts into setup.")
     print("Herald OS itself stays. Back up anything you want to keep first.")
-    print(reset_disk_note(bool(disk_devices())))
+    try:
+        encrypted: bool | None = bool(disk_devices())
+    except DiskUnknown:
+        encrypted = None
+    print(reset_disk_note(encrypted))
     if input("Type ERASE to continue: ").strip() != "ERASE":
         print("Nothing was changed.")
         return 1

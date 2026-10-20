@@ -371,20 +371,22 @@ another bootc system is different: it gets a login screen and a locked account i
 bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
 
 **The disk password.** `herald-os password --disk` finds the LUKS devices under the root filesystem
-(`/sysroot` on the image; from `lsblk`, or `/etc/crypttab` when `lsblk` fails), asks sudo for
-root first, then the current disk password, which it checks before it asks for the new one twice. It
-adds the new one to every device, checks that it opens each, and only then removes the old one
-(every slot it opens), so an interruption leaves a password that works; while it runs, Ctrl+C and a
-closed terminal wait. If adding it fails on one device, it comes back out of the others. It takes
-printable ASCII only (no input method at start-up), refuses on a disk that is not encrypted, and
-`--status` prints `{"encrypted", "devices", "newOwner"}` without root. After setup "for someone
-else" (`~/.config/herald-os/new-owner`) or a reset (`/var/lib/herald-os/new-owner`, from
-`reset-helper apply`), setup on an encrypted disk asks the new owner for the disk password they
-typed at start-up and one of their own, and runs `herald-os password --disk --new-owner` in a
-terminal of its own with their new account password for sudo: it also removes every other key slot
-and the tokens left with none, so only the new owner's password opens the disk. "Later" skips it.
-`linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device and checks that
-the old password no longer opens them.
+(`/sysroot` on the image) from `lsblk`; when `lsblk` cannot list them it changes nothing and says so
+(exit 7), rather than guess from `/etc/crypttab`, which also names data and USB disks. It asks sudo
+for root first, then the current disk password, which it checks before it asks for the new one
+twice. It adds the new one to every device, checks that it opens each, and only then removes the old
+one (every slot it opens), so an interruption leaves a password that works; while it runs, Ctrl+C
+and a closed terminal wait. If adding it fails on one device, it comes back out of the others. It
+takes printable ASCII only (no input method at start-up), refuses on a disk that is not encrypted,
+and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without root, with `encrypted`
+null when it cannot tell; setup then neither asks for a disk password nor calls the disk
+unencrypted. After setup "for someone else" (`~/.config/herald-os/new-owner`) or a reset
+(`/var/lib/herald-os/new-owner`, from `reset-helper apply`), setup on an encrypted disk asks the new
+owner for the disk password they typed at start-up and one of their own, and runs `herald-os
+password --disk --new-owner` in a terminal of its own with their new account password for sudo: it
+also removes every other key slot and the tokens left with none, so only the new owner's password
+opens the disk. "Later" skips it. `linux/tests/test_disk_password.py` does all of it on LUKS2 images
+and a loop device and checks that the old password no longer opens them.
 
 **Security.**
 
