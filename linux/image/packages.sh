@@ -65,6 +65,12 @@ install -d /usr/share/wayland-sessions
 install -m 0644 "$LINUX/session/herald-os.desktop" /usr/share/wayland-sessions/herald-os.desktop
 install -d /usr/lib/systemd/user
 install -m 0644 "$LINUX/session/herald-os-update-check.service" "$LINUX/session/herald-os-update-check.timer" /usr/lib/systemd/user/
+# The keyring: gnome-keyring's secrets component, started by its socket on first use (D-Bus
+# activation reaches the same daemon through that socket).
+install -Dm0644 "$LINUX/session/gnome-keyring-daemon.conf" /usr/lib/systemd/user/gnome-keyring-daemon.service.d/herald-os.conf
+systemctl --global enable gnome-keyring-daemon.socket
+# Which portal backend answers each interface in the Herald OS session.
+install -Dm0644 "$LINUX/session/heraldos-portals.conf" /usr/share/xdg-desktop-portal/heraldos-portals.conf
 install -d /etc/greetd
 # firstboot.sh fills in the session user.
 install -m 0644 "$LINUX/session/greetd-config.toml" /etc/greetd/config.toml
