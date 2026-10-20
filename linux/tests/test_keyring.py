@@ -506,7 +506,11 @@ def test_a_setup_that_cannot_get_the_lock_gives_up_and_says_why(tmp_path, monkey
         pass
 
 
+needs_flock = pytest.mark.skipif(not shutil.which("flock"), reason="needs flock(1) from util-linux")
+
+
 @real_daemon
+@needs_flock
 def test_a_setup_waits_for_one_already_running(tmp_path):
     # The shell holds the lock as a running setup would; the command must wait for it before it looks.
     result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
@@ -528,6 +532,7 @@ def test_two_setups_at_once_make_one_keyring(tmp_path):
 
 
 @real_daemon
+@needs_flock
 def test_a_keyring_made_while_setup_waited_is_found_under_the_lock(tmp_path):
     result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
                                '{ "$PY" "$CLI" keyring setup --no-password 9>&- & pid=$!; } && sleep 1 && '
@@ -542,6 +547,14 @@ ARCH = ROOT / "packaging" / "arch"
 ARCH_BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "org.freedesktop.secrets"}
 
 
+def gnu_install() -> bool:
+    try:
+        return "GNU coreutils" in subprocess.run(["install", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not gnu_install(), reason="the package script needs GNU install (install -D), as on Arch")
 @pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
 def test_the_arch_package_installs_the_portal_file(tmp_path, flavour):
     # An unpacked build as the tarball has it: the CLIs, session and data under resources.
