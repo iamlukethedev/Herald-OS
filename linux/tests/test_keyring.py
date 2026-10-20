@@ -1,0 +1,651 @@
+"""The keyring (Secret Service) on the image: the packages, the portal configuration, the
+gnome-keyring unit, and `herald-os keyring`."""
+
+import configparser
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+CLI = ROOT / "linux" / "bin" / "herald-os"
+_LOADER = importlib.machinery.SourceFileLoader("herald_os_keyring_cli", str(CLI))
+_SPEC = importlib.util.spec_from_loader("herald_os_keyring_cli", _LOADER)
+cli = importlib.util.module_from_spec(_SPEC)
+_LOADER.exec_module(cli)
+LINUX = ROOT / "linux"
+PACKAGES_SH = (LINUX / "image" / "packages.sh").read_text()
+PORTALS = LINUX / "session" / "heraldos-portals.conf"
+DROP_IN = LINUX / "session" / "gnome-keyring-daemon.conf"
+# The package each portal backend comes from.
+BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "gnome-keyring"}
+INTERFACE = re.compile(r"org\.freedesktop\.impl\.portal\.[A-Z][A-Za-z]+")
+SYSTEM_PORTALS = Path("/usr/share/xdg-desktop-portal/portals")
+
+
+def image_packages() -> list[str]:
+    lines = (LINUX / "image" / "packages.txt").read_text().splitlines()
+    return [line.split("#", 1)[0].strip() for line in lines if line.split("#", 1)[0].strip()]
+
+
+def preferred() -> dict[str, list[str]]:
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str
+    parser.read_string(PORTALS.read_text())
+    assert parser.sections() == ["preferred"]
+    return {key: [name for name in value.split(";") if name] for key, value in parser["preferred"].items()}
+
+
+def test_the_image_ships_a_secret_service_and_the_tools_around_it():
+    packages = image_packages()
+    for package in ("gnome-keyring", "libsecret", "python3-gobject-base", "xdg-desktop-portal", *BACKENDS.values()):
+        assert package in packages, package
+    # Weak dependencies stay out, so a recommended package (niri's gnome-keyring) is not enough.
+    assert "--setopt=install_weak_deps=False" in PACKAGES_SH
+
+
+def test_the_portal_file_is_named_after_the_session_s_desktop():
+    desktop = "HeraldOS"
+    assert f"export XDG_CURRENT_DESKTOP={desktop}" in (LINUX / "session" / "herald-os-compositor").read_text()
+    assert f'XDG_CURRENT_DESKTOP "{desktop}"' in (LINUX / "niri" / "config.kdl").read_text()
+    assert f"DesktopNames={desktop}" in (LINUX / "session" / "herald-os.desktop").read_text()
+    # xdg-desktop-portal looks for <desktop, lowercased>-portals.conf.
+    assert PORTALS.name == f"{desktop.lower()}-portals.conf"
+
+
+def test_the_portal_file_names_only_backends_the_image_ships():
+    packages = image_packages()
+    choices = preferred()
+    for key, names in choices.items():
+        assert key == "default" or INTERFACE.fullmatch(key), key
+        assert names, key
+        for name in names:
+            assert name in BACKENDS, f"{key}: {name}"
+            assert BACKENDS[name] in packages, f"{key}: {name}"
+    # gnome's file chooser is Nautilus (xdg-desktop-portal-gnome 47 and later).
+    if "gnome" in choices["org.freedesktop.impl.portal.FileChooser"]:
+        assert "nautilus" in packages
+
+
+def test_the_portal_file_chooses_the_secret_file_chooser_and_screen_backends():
+    choices = preferred()
+    assert choices["org.freedesktop.impl.portal.Secret"] == ["gnome-keyring"]
+    assert choices["org.freedesktop.impl.portal.FileChooser"] == ["gnome", "gtk"]
+    assert choices["org.freedesktop.impl.portal.Screenshot"] == ["gnome"]
+    assert choices["org.freedesktop.impl.portal.ScreenCast"] == ["gnome"]
+    assert choices["default"] == ["gnome", "gtk"]
+
+
+@pytest.mark.skipif(not SYSTEM_PORTALS.is_dir(), reason="no portal backends installed here")
+def test_each_installed_backend_implements_what_the_file_gives_it():
+    checked = 0
+    for interface, names in preferred().items():
+        if interface == "default":
+            continue
+        for name in names:
+            portal = SYSTEM_PORTALS / f"{name}.portal"
+            if not portal.is_file():
+                continue
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read(portal)
+            assert interface in parser["portal"]["Interfaces"].split(";"), f"{name}: {interface}"
+            checked += 1
+    if not checked:
+        pytest.skip("none of the backends the file names is installed here")
+
+
+def test_the_drop_in_starts_only_the_secrets_component():
+    lines = [line.strip() for line in DROP_IN.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    assert lines[0] == "[Service]"
+    starts = [line.split("=", 1)[1] for line in lines if line.startswith("ExecStart=")]
+    # An empty ExecStart= drops the packaged command; the next one replaces it.
+    assert starts[0] == "" and len(starts) == 2
+    argv = starts[1].split()
+    assert argv[0] == "/usr/bin/gnome-keyring-daemon"
+    assert "--foreground" in argv and "--components=secrets" in argv
+    assert not any(arg.startswith("--components=") and arg != "--components=secrets" for arg in argv)
+    # The packaged socket listens on %t/keyring/control; the daemon must take that socket over.
+    assert "--control-directory=%t/keyring" in argv
+
+
+def test_packages_sh_installs_the_drop_in_the_socket_and_the_portal_file():
+    assert '"$LINUX/session/gnome-keyring-daemon.conf" /usr/lib/systemd/user/gnome-keyring-daemon.service.d/herald-os.conf' in PACKAGES_SH
+    assert "systemctl --global enable gnome-keyring-daemon.socket" in PACKAGES_SH
+    assert '"$LINUX/session/heraldos-portals.conf" /usr/share/xdg-desktop-portal/heraldos-portals.conf' in PACKAGES_SH
+
+
+# ---------------------------------------------------------------------------------------------
+# herald-os keyring.
+SEALED = b"GnomeKeyring\n\r\x00\n\x00\x00"
+PLAIN = b"[keyring]\ndisplay-name=Login\n"
+
+
+def keyrings(tmp_path: Path, files: dict[str, bytes]) -> Path:
+    folder = tmp_path / "keyrings"
+    folder.mkdir()
+    for name, body in files.items():
+        (folder / name).write_bytes(body)
+    return folder
+
+
+@pytest.mark.parametrize("files, state", [
+    ({}, "none"),
+    ({"user.keystore": b"x"}, "none"),
+    ({"login.keyring": PLAIN}, "open"),
+    ({"login.keyring": SEALED}, "password"),
+    ({"default": b"Default_keyring\n", "Default_keyring.keyring": PLAIN}, "open"),
+    ({"default": b"work", "work.keyring": SEALED, "login.keyring": PLAIN}, "password"),
+    # A default that names a keyring that is not there, with others beside it.
+    ({"default": b"gone", "login.keyring": PLAIN}, "other"),
+    ({"default": b"../login", "login.keyring": PLAIN}, "other"),
+    ({"default": b"\xff\xfe"}, "other"),
+    ({"login.keyring": b"something else"}, "other"),
+    ({"default": b"\n", "login.keyring": SEALED}, "password"),
+])
+def test_the_keyring_state_comes_from_gnome_keyring_s_files(tmp_path, files, state):
+    assert cli.keyring_state(keyrings(tmp_path, files)) == state
+
+
+@pytest.mark.parametrize("name, where", [
+    # A keyring outside the folder, which the name would reach.
+    ("../login", lambda folder: folder.parent / "login.keyring"),
+    ("sub/login", lambda folder: folder / "sub" / "login.keyring"),
+    (".hidden", lambda folder: folder / ".hidden.keyring"),
+])
+def test_a_default_name_that_is_not_a_plain_file_name_is_not_followed(tmp_path, name, where):
+    folder = keyrings(tmp_path, {"default": name.encode()})
+    target = where(folder)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(PLAIN)
+    assert cli.keyring_state(folder) == "other"
+
+
+def test_a_missing_folder_is_no_keyring(tmp_path):
+    assert cli.keyring_state(tmp_path / "nowhere") == "none"
+
+
+def test_the_folder_follows_xdg_data_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert cli.keyring_dir() == tmp_path / "data" / "keyrings"
+    monkeypatch.setenv("XDG_DATA_HOME", "relative/data")
+    assert cli.keyring_dir() == cli.HOME / ".local" / "share" / "keyrings"
+    monkeypatch.delenv("XDG_DATA_HOME")
+    assert cli.keyring_dir() == cli.HOME / ".local" / "share" / "keyrings"
+
+
+@pytest.mark.parametrize("password, again, said", [
+    ("correct horse", "correct horse", None),
+    ("correct horse", None, None),
+    ("contraseña-ñ", None, None),
+    ("correct horse", "correct house", "not the same"),
+    ("short", None, "at least 8"),
+    ("two\nlines-here", None, "one line"),
+    ("nul\0inside-it", None, "one line"),
+])
+def test_keyring_password_rules(password, again, said):
+    problem = cli.keyring_password_problem(password, again)
+    assert (problem is None) if said is None else (said in problem and "Nothing was changed" in problem)
+
+
+@pytest.mark.parametrize("stdin, password", [
+    ("correct horse\n", "correct horse"),
+    ("correct horse", "correct horse"),
+    # Spaces are part of a password; only the one newline that ends the line goes.
+    ("  correct horse  \n", "  correct horse  "),
+    ("\tcorrect horse\t\n", "\tcorrect horse\t"),
+])
+def test_a_password_on_stdin_is_taken_as_typed(monkeypatch, stdin, password):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(stdin))
+    assert cli.keyring_password_input() == password
+
+
+@pytest.mark.parametrize("stdin", ["correct horse\n\n", "correct\nhorse\n", "\ncorrect horse\n"])
+def test_more_than_one_line_on_stdin_is_refused(monkeypatch, capsys, stdin):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(stdin))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and "one line" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("encrypted, noted", [(False, True), (True, False), (None, False)])
+def test_the_unencrypted_note_is_only_for_a_keyring_disk_known_to_be_unencrypted(monkeypatch, tmp_path, encrypted, noted):
+    asked = []
+    monkeypatch.setattr(cli, "keyring_encrypted", lambda directory: asked.append(directory) or encrypted)
+    note = cli.keyring_unencrypted_note(tmp_path / "keyrings")
+    assert asked == [tmp_path / "keyrings"]
+    assert (note is not None and "not encrypted" in note) == noted
+
+
+# Where the keyring folder is kept: lsblk's tree and findmnt's list for each kind of machine.
+def disk(path: str, fstype: str | None, mounts=(), uuid: str | None = None, children=(), kind: str = "part") -> dict:
+    return {"name": path, "path": path, "type": kind, "fstype": fstype, "uuid": uuid, "mountpoints": list(mounts) or [None], "children": list(children) or None}
+
+
+def mount(target: str, source: str, uuid: str | None = None, fstype: str | None = None) -> dict:
+    return {"target": target, "source": source, "fstype": fstype, "uuid": uuid}
+
+
+ESP = disk("/dev/nvme0n1p1", "vfat", ["/boot/efi"])
+ROOT_LUKS = disk("/dev/nvme0n1p2", "crypto_LUKS", uuid="L1", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], uuid="B1", kind="crypt")])
+ROOT_PLAIN = disk("/dev/nvme0n1p2", "btrfs", ["/"], uuid="B1")
+HOME_PLAIN = disk("/dev/nvme0n1p3", "ext4", ["/home"], uuid="H1")
+HOME_LUKS = disk("/dev/nvme0n1p3", "crypto_LUKS", uuid="L2", children=[disk("/dev/mapper/luks-L2", "ext4", ["/home"], uuid="H1", kind="crypt")])
+ROOT_MOUNTS = [mount("/", "/dev/mapper/luks-L1", "B1"), mount("/boot/efi", "/dev/nvme0n1p1")]
+PLACE = "/home/ana/.local/share/keyrings"
+
+
+def nvme(*parts: dict) -> list:
+    return [disk("/dev/nvme0n1", None, kind="disk", children=parts)]
+
+
+MACHINES = {
+    "root encrypted, no separate home": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS, PLACE, True),
+    "root encrypted, home on a partition that is not": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home", "/dev/nvme0n1p3", "H1")], PLACE, False),
+    "root encrypted, home encrypted on its own": (nvme(ESP, ROOT_LUKS, HOME_LUKS), ROOT_MOUNTS + [mount("/home", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    "root not encrypted, home encrypted": (nvme(ESP, ROOT_PLAIN, HOME_LUKS), [mount("/", "/dev/nvme0n1p2", "B1"), mount("/home", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    "nothing encrypted": (nvme(ESP, ROOT_PLAIN), [mount("/", "/dev/nvme0n1p2", "B1")], PLACE, False),
+    # The image: / is composefs, /var a bind mount of the encrypted btrfs (findmnt -v leaves out the
+    # [/ostree/deploy/default/var] part, which is also cut here when it is there), /home a link to /var/home.
+    "the image, encrypted": (nvme(ESP, ROOT_LUKS), [mount("/", "composefs"), mount("/sysroot", "/dev/mapper/luks-L1", "B1"),
+                                                    mount("/var", "/dev/mapper/luks-L1[/ostree/deploy/default/var]", "B1")], "/var/home/ana/.local/share/keyrings", True),
+    "the image, not encrypted": (nvme(ESP, ROOT_PLAIN), [mount("/", "composefs"), mount("/sysroot", "/dev/nvme0n1p2", "B1"),
+                                                         mount("/var", "/dev/nvme0n1p2", "B1")], "/var/home/ana/.local/share/keyrings", False),
+    # A disk that is not encrypted, mounted inside the keyring folder of an encrypted home.
+    "a plain disk mounted below the keyring folder": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "ext4", [PLACE + "/usb"])])],
+                                                      ROOT_MOUNTS + [mount(PLACE + "/usb", "/dev/sda1")], PLACE, False),
+    "an encrypted disk mounted below it": (nvme(ESP, ROOT_LUKS, HOME_LUKS), ROOT_MOUNTS + [mount(PLACE + "/more", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    # Not block devices lsblk knows: cannot be told.
+    "home over NFS": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS + [mount("/home", "nas:/export/home")], PLACE, None),
+    "a tmpfs on the keyring folder": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS + [mount(PLACE, "tmpfs")], PLACE, None),
+    "home over NFS and a plain disk below": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home", "nas:/export/home"), mount(PLACE + "/x", "/dev/nvme0n1p3", "H1")], PLACE, False),
+    "no mount holds it": (nvme(ESP, ROOT_LUKS), [mount("/boot/efi", "/dev/nvme0n1p1")], PLACE, None),
+    "no mounts at all": (nvme(ESP, ROOT_LUKS), [], PLACE, None),
+    "no disks at all": ([], ROOT_MOUNTS, PLACE, None),
+    # A home mounted at /home/ana2 holds nothing of /home/ana.
+    "a mount that only shares the prefix": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home/an", "/dev/nvme0n1p3", "H1")], PLACE, True),
+    "a mount beside the keyring folder": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount(PLACE + "-old", "/dev/nvme0n1p3", "H1")], PLACE, True),
+    # Mounted over: the later one is in use.
+    "a plain home mounted over an encrypted one": (nvme(ESP, ROOT_LUKS, HOME_LUKS, disk("/dev/nvme0n1p4", "ext4", ["/home"], uuid="H2")),
+                                                   ROOT_MOUNTS + [mount("/home", "/dev/mapper/luks-L2", "H1"), mount("/home", "/dev/nvme0n1p4", "H2")], PLACE, False),
+    # A btrfs over two disks, one of them not encrypted: the mount names only the first.
+    "btrfs over an encrypted disk and a plain one": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs", uuid="B1")])],
+                                                     ROOT_MOUNTS, PLACE, False),
+    "btrfs over two encrypted disks": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", uuid="L3", children=[disk("/dev/mapper/luks-L3", "btrfs", uuid="B1", kind="crypt")])])],
+                                       ROOT_MOUNTS, PLACE, True),
+    # Without udev's data lsblk knows no UUIDs, so a btrfs's other disks cannot be found: unknown, even
+    # where findmnt has the UUID and a second, plain disk would make it false.
+    "btrfs without lsblk's UUID, over an encrypted disk and a plain one": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], kind="crypt")]))
+        + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs")])],
+        [mount("/", "/dev/mapper/luks-L1", "B1", "btrfs")], PLACE, None),
+    "btrfs without lsblk's UUID, on one encrypted disk": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", "B1", "btrfs")], PLACE, None),
+    "btrfs known only to findmnt, without any UUID": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", None, "btrfs")], PLACE, None),
+    "a filesystem nobody names, without a UUID": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1")], PLACE, None),
+    # lsblk has the UUID and findmnt does not: lsblk's is the one that finds the plain disk.
+    "btrfs with lsblk's UUID only, over an encrypted disk and a plain one": (
+        nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs", uuid="B1")])],
+        [mount("/", "/dev/mapper/luks-L1", None, "btrfs")], PLACE, False),
+    # A filesystem on one disk needs no UUID.
+    "ext4 without a UUID on LUKS": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "ext4", ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", None, "ext4")], PLACE, True),
+    # Encrypted, but not with LUKS (plain dm-crypt has no header): cannot be checked, so not "not encrypted".
+    "home on plain dm-crypt": (nvme(ESP, ROOT_LUKS, disk("/dev/nvme0n1p3", None, children=[disk("/dev/mapper/home", "ext4", ["/home"], uuid="H1", kind="crypt")])),
+                               ROOT_MOUNTS + [mount("/home", "/dev/mapper/home", "H1")], PLACE, None),
+    "LVM on plain dm-crypt": (nvme(ESP, disk("/dev/nvme0n1p2", None, children=[disk("/dev/mapper/plain", "LVM2_member", kind="crypt", children=[
+                                  disk("/dev/mapper/vg-root", "ext4", ["/"], uuid="R1", kind="lvm")])])), [mount("/", "/dev/mapper/vg-root", "R1")], PLACE, None),
+    "plain dm-crypt beside a plain partition": (nvme(ESP, ROOT_LUKS, disk("/dev/nvme0n1p3", None, children=[disk("/dev/mapper/home", "ext4", ["/home"], uuid="H1", kind="crypt")]),
+                                                     disk("/dev/nvme0n1p4", "ext4", uuid="X1")),
+                                                ROOT_MOUNTS + [mount("/home", "/dev/mapper/home", "H1"), mount(PLACE + "/x", "/dev/nvme0n1p4", "X1")], PLACE, False),
+    "LVM inside LUKS": (nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", uuid="L1", children=[disk("/dev/mapper/luks-L1", "LVM2_member", kind="crypt", children=[
+                            disk("/dev/mapper/vg-root", "ext4", ["/"], uuid="R1", kind="lvm")])])), [mount("/", "/dev/mapper/vg-root", "R1")], PLACE, True),
+}
+
+
+@pytest.mark.parametrize("name", MACHINES)
+def test_whether_the_keyring_folder_is_encrypted_comes_from_the_disks_that_hold_it(name):
+    tree, mounts, place, encrypted = MACHINES[name]
+    assert cli.keyring_mounts_encrypted(place, mounts, tree) is encrypted
+
+
+def test_devices_are_compared_as_resolved():
+    # findmnt may name /dev/dm-0 where lsblk says /dev/mapper/luks-L1.
+    tree, _, place, _ = MACHINES["root encrypted, no separate home"]
+    links = {"/dev/mapper/luks-L1": "/dev/dm-0"}
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/dm-0", "B1")], tree, lambda device: links.get(device, device)) is True
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/dm-0", "B1")], tree) is None
+
+
+@pytest.mark.parametrize("values, answer", [
+    ([], True), ([True, True], True), ([True, None], None), ([None, False], False), ([False, True], False), ([None], None),
+])
+def test_keyring_all(values, answer):
+    assert cli.keyring_all(values) is answer
+
+
+def test_a_raid_leg_on_luks_and_one_on_plain_dm_crypt_cannot_be_told():
+    raid = disk("/dev/md0", "ext4", ["/"], uuid="R1", kind="raid1")
+    tree = [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", children=[disk("/dev/mapper/a", "linux_raid_member", kind="crypt", children=[raid])])]),
+            disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", None, children=[disk("/dev/mapper/b", "linux_raid_member", kind="crypt", children=[raid])])])]
+    for order in (tree, tree[::-1]):
+        assert cli.lsblk_on_luks(order)["/dev/md0"] is None
+        assert cli.keyring_mounts_encrypted(PLACE, [mount("/", "/dev/md0", "R1")], order) is None
+
+
+@pytest.mark.parametrize("plain_first", [False, True])
+def test_a_device_under_several_parents_is_on_luks_only_under_each(plain_first):
+    raid = disk("/dev/md0", "ext4", ["/"], uuid="R1", kind="raid1")
+    tree = [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", children=[disk("/dev/mapper/a", "linux_raid_member", kind="crypt", children=[raid])])]),
+            disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", "linux_raid_member", children=[raid])])]
+    tree = tree[::-1] if plain_first else tree
+    assert cli.lsblk_on_luks(tree)["/dev/md0"] is False
+    assert cli.keyring_mounts_encrypted(PLACE, [mount("/", "/dev/md0", "R1")], tree) is False
+
+
+def test_findmnt_is_asked_for_the_filesystem_type(tmp_path):
+    # lsblk cannot name the filesystem (no udev data) and knows no UUID; findmnt's FSTYPE says ext4, which
+    # spans one disk, so the answer is known.
+    tree = nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")]))
+    tools = disk_tools(tmp_path, tree, [mount("/", "/dev/mapper/luks-L1", None, "ext4")])
+    (tools / "findmnt").write_text('#!/bin/sh\ncase "$*" in *TARGET,SOURCE,FSTYPE,UUID*) ;; *) echo "findmnt was not asked for FSTYPE" >&2; exit 1;; esac\n'
+                                   + (tools / "findmnt").read_text().split("\n", 1)[1])
+    result = run_cli(tmp_path, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0 and json.loads(result.stdout)["encrypted"] is True, result.stderr
+
+
+def disk_tools(tmp_path: Path, tree: list | None, mounts: list | None) -> Path:
+    """lsblk and findmnt stand-ins that print `tree` and `mounts`, or fail when given None."""
+    tools = tmp_path / "tools"
+    tools.mkdir(exist_ok=True)
+    for name, key, value in (("lsblk", "blockdevices", tree), ("findmnt", "filesystems", mounts)):
+        body = f"echo {name} failed >&2; exit 1" if value is None else f"cat <<'JSON'\n{json.dumps({key: value})}\nJSON"
+        (tools / name).write_text(f"#!/bin/sh\n{body}\n")
+        (tools / name).chmod(0o755)
+    return tools
+
+
+@pytest.mark.parametrize("name", ["root encrypted, home on a partition that is not", "root encrypted, home encrypted on its own", "home over NFS"])
+def test_status_says_whether_the_keyring_folder_is_encrypted(tmp_path, name):
+    tree, mounts, _, encrypted = MACHINES[name]
+    home = tmp_path / "home" / "ana"
+    home.mkdir(parents=True)
+    # The stand-ins describe a machine whose /home is this test's own folder.
+    mounts = [dict(item, target=str(tmp_path) + item["target"]) if item["target"].startswith("/home") else item for item in mounts]
+    tools = disk_tools(tmp_path, tree, mounts)
+    result = run_cli(home, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["encrypted"] is encrypted
+
+
+def test_status_follows_links_to_the_folder(tmp_path):
+    # As on the image, where /home is a link to /var/home.
+    real = tmp_path / "var" / "home" / "ana"
+    real.mkdir(parents=True)
+    (tmp_path / "home").symlink_to(tmp_path / "var" / "home")
+    tree = nvme(ESP, ROOT_LUKS, HOME_PLAIN)
+    tools = disk_tools(tmp_path, tree, ROOT_MOUNTS + [mount(str(tmp_path / "var"), "/dev/nvme0n1p3", "H1")])
+    result = run_cli(tmp_path / "home" / "ana", "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert json.loads(result.stdout)["encrypted"] is False, result.stderr
+
+
+@pytest.mark.parametrize("tree, mounts", [(None, []), ([], None)])
+def test_status_says_null_when_lsblk_or_findmnt_cannot_say(tmp_path, tree, mounts):
+    tools = disk_tools(tmp_path, tree if tree is None else nvme(ESP, ROOT_LUKS), mounts if mounts is None else ROOT_MOUNTS)
+    result = run_cli(tmp_path, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0 and json.loads(result.stdout)["encrypted"] is None
+
+
+def run_cli(home: Path, *args: str, stdin: str = "", python: str = sys.executable, env: dict | None = None) -> subprocess.CompletedProcess:
+    environment = {key: value for key, value in os.environ.items() if key not in {"XDG_DATA_HOME", "DISPLAY", "WAYLAND_DISPLAY"}}
+    environment.update({"HOME": str(home), **(env or {})})
+    return subprocess.run([python, str(CLI), "keyring", *args], input=stdin, capture_output=True, text=True, env=environment, timeout=60)
+
+
+def test_status_is_json_and_needs_no_daemon(tmp_path):
+    tools = disk_tools(tmp_path, None, None)
+    result = run_cli(tmp_path, "--status", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent", "PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"keyring": "none", "folder": str(tmp_path / ".local" / "share" / "keyrings"), "encrypted": None}
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    folder.mkdir(parents=True)
+    (folder / "login.keyring").write_bytes(SEALED)
+    assert json.loads(run_cli(tmp_path, "--status").stdout)["keyring"] == "password"
+
+
+@pytest.mark.parametrize("body", [PLAIN, SEALED, b"something else"])
+@pytest.mark.parametrize("flag", ["--no-password", "--password"])
+def test_setup_never_replaces_a_keyring(tmp_path, body, flag):
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    folder.mkdir(parents=True)
+    (folder / "login.keyring").write_bytes(body)
+    # No bus at all: the refusal comes before anything talks to a keyring service.
+    result = run_cli(tmp_path, "setup", flag, stdin="correct horse\n", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == cli.KEYRING_EXISTS
+    assert "already has a keyring" in result.stderr and "Nothing was changed" in result.stderr
+    assert (folder / "login.keyring").read_bytes() == body
+
+
+@pytest.mark.parametrize("args", [[], ["setup"], ["setup", "--no-password", "--password"], ["--status", "x"], ["make"]])
+def test_keyring_usage(tmp_path, args):
+    result = run_cli(tmp_path, *args)
+    assert result.returncode == 2 and "keyring --status" in result.stderr
+
+
+def test_a_bad_password_on_stdin_changes_nothing(tmp_path):
+    result = run_cli(tmp_path, "setup", "--password", stdin="short\n", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == 2 and "at least 8" in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+def test_keyring_is_a_command_and_in_the_help():
+    assert "keyring" in cli.COMMANDS
+    for flag in ("--status", "--no-password", "--password"):
+        assert flag in cli.COMMANDS["keyring"]
+    assert "keyring --status" in cli.__doc__
+
+
+# Against a real gnome-keyring-daemon, on a D-Bus session of the test's own.
+def python_with_gi() -> str | None:
+    for python in dict.fromkeys([sys.executable, "/usr/bin/python3"]):
+        if Path(python).exists() and subprocess.run([python, "-c", "from gi.repository import Gio"], capture_output=True).returncode == 0:
+            return python
+    return None
+
+
+GI_PYTHON = python_with_gi()
+real_daemon = pytest.mark.skipif(
+    not (GI_PYTHON and shutil.which("gnome-keyring-daemon") and shutil.which("dbus-run-session") and shutil.which("secret-tool")),
+    reason="needs gnome-keyring-daemon, dbus-run-session, secret-tool and PyGObject",
+)
+LOCKED = """
+from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+def call(path, iface, method, args, reply):
+    return bus.call_sync("org.freedesktop.secrets", path, iface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, 10000).unpack()
+alias = call("/org/freedesktop/secrets", "org.freedesktop.Secret.Service", "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
+locked = call(alias, "org.freedesktop.DBus.Properties", "Get", GLib.Variant("(ss)", ("org.freedesktop.Secret.Collection", "Locked")), "(v)")[0]
+print(alias, locked)
+"""
+
+
+def session(tmp_path: Path, script: str, config: Path | None = None) -> subprocess.CompletedProcess:
+    """A shell script on a fresh session bus, where D-Bus activation starts gnome-keyring-daemon."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    env = {key: value for key, value in os.environ.items() if key not in {"XDG_DATA_HOME", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"}}
+    env.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "PY": GI_PYTHON or "", "CLI": str(CLI), "LOCKED": LOCKED})
+    argv = ["dbus-run-session", *(["--config-file", str(config)] if config else []), "--", "bash", "-c", script]
+    return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
+
+
+@real_daemon
+def test_a_keyring_with_no_password_stores_and_looks_up_without_a_prompt(tmp_path):
+    made = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password && printf s3cret | secret-tool store --label test service herald key test '
+                             '&& secret-tool lookup service herald key test')
+    assert made.returncode == 0, made.stderr
+    assert "with no password of its own" in made.stdout and made.stdout.endswith("s3cret")
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert (folder / "default").read_text().strip() == "login"
+    assert (folder / "login.keyring").read_bytes().startswith(b"[keyring]")
+    assert json.loads(run_cli(tmp_path, "--status").stdout)["keyring"] == "open"
+    # A later login: another daemon opens it with nothing typed.
+    later = session(tmp_path, 'secret-tool lookup service herald key test')
+    assert later.returncode == 0 and later.stdout == "s3cret", later.stderr
+
+
+@real_daemon
+def test_a_keyring_with_a_password_is_locked_at_the_next_login(tmp_path):
+    made = session(tmp_path, 'printf "correct horse\\n" | "$PY" "$CLI" keyring setup --password && printf s3cret | secret-tool store --label test service herald key test')
+    assert made.returncode == 0, made.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert (folder / "login.keyring").read_bytes().startswith(b"GnomeKeyring\n\r\x00\n")
+    assert b"s3cret" not in (folder / "login.keyring").read_bytes()
+    assert json.loads(run_cli(tmp_path, "--status").stdout)["keyring"] == "password"
+    later = session(tmp_path, '"$PY" -c "$LOCKED"')
+    assert later.returncode == 0, later.stderr
+    assert later.stdout.split() == ["/org/freedesktop/secrets/collection/login", "True"]
+
+
+@real_daemon
+def test_a_default_keyring_the_daemon_still_holds_is_not_replaced(tmp_path):
+    # The files are gone but the running daemon still has the keyring.
+    result = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password && rm -rf "$HOME/.local/share/keyrings" && "$PY" "$CLI" keyring setup --password <<< "correct horse"')
+    assert result.returncode == cli.KEYRING_EXISTS, result.stderr
+    assert "already has a default keyring" in result.stderr
+
+
+@real_daemon
+def test_without_a_keyring_service_nothing_is_made(tmp_path):
+    # A session bus that can start nothing.
+    config = tmp_path / "bus.conf"
+    config.write_text('<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" '
+                      '"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">\n'
+                      '<busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen>'
+                      '<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>\n')
+    result = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password', config)
+    assert result.returncode == cli.KEYRING_NO_SERVICE, result.stderr
+    assert "did not answer" in result.stderr and "Nothing was changed" in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+def test_the_lock_lives_in_the_runtime_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert cli.keyring_lock_path() == tmp_path / "herald-os-keyring.lock"
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    assert cli.keyring_lock_path() == cli.CONFIG_DIR / "herald-os-keyring.lock"
+
+
+def test_a_setup_that_cannot_get_the_lock_gives_up_and_says_why(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "KEYRING_LOCK_WAIT", 0.3)
+    with open(tmp_path / "herald-os-keyring.lock", "a") as held:
+        import fcntl
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(SystemExit) as stopped:
+            with cli.keyring_lock():
+                pytest.fail("the lock was taken twice")
+    assert stopped.value.code == 1 and "still running" in capsys.readouterr().err
+    # Free again, it is taken at once.
+    with cli.keyring_lock():
+        pass
+
+
+needs_flock = pytest.mark.skipif(not shutil.which("flock"), reason="needs flock(1) from util-linux")
+
+
+@real_daemon
+@needs_flock
+def test_a_setup_waits_for_one_already_running(tmp_path):
+    # The shell holds the lock as a running setup would; the command must wait for it before it looks.
+    result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
+                               '{ "$PY" "$CLI" keyring setup --no-password 9>&- & pid=$!; } && sleep 1.5 && '
+                               '{ kill -0 "$pid" && [ ! -e "$HOME/.local/share/keyrings/login.keyring" ] && echo waited; }; '
+                               'flock -u 9; wait "$pid"; echo "rc=$?"')
+    assert result.stdout.split()[0] == "waited", result.stdout + result.stderr
+    assert "rc=0" in result.stdout, result.stderr
+
+
+@real_daemon
+def test_two_setups_at_once_make_one_keyring(tmp_path):
+    result = session(tmp_path, 'for flag in --no-password --password; do { printf "correct horse\\n" | "$PY" "$CLI" keyring setup "$flag"; '
+                               'echo "rc=$?" >> "$XDG_RUNTIME_DIR/codes"; } & done; wait; cat "$XDG_RUNTIME_DIR/codes"')
+    assert sorted(re.findall(r"rc=(\d+)", result.stdout)) == ["0", "3"], result.stdout + result.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert sorted(path.name for path in folder.glob("*.keyring")) == ["login.keyring"]
+    assert (folder / "default").read_text().strip() == "login"
+
+
+@real_daemon
+@needs_flock
+def test_a_keyring_made_while_setup_waited_is_found_under_the_lock(tmp_path):
+    result = session(tmp_path, 'exec 9>"$XDG_RUNTIME_DIR/herald-os-keyring.lock" && flock 9 && '
+                               '{ "$PY" "$CLI" keyring setup --no-password 9>&- & pid=$!; } && sleep 1 && '
+                               'mkdir -p "$HOME/.local/share/keyrings" && printf "[keyring]\\ndisplay-name=Login\\n" > "$HOME/.local/share/keyrings/login.keyring"; '
+                               'flock -u 9; wait "$pid"; echo "rc=$?"')
+    assert "rc=3" in result.stdout, result.stdout + result.stderr
+    assert "already has a keyring (with no password of its own)" in result.stderr
+
+
+# The Arch package.
+ARCH = ROOT / "packaging" / "arch"
+ARCH_BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "org.freedesktop.secrets"}
+
+
+def gnu_install() -> bool:
+    try:
+        return "GNU coreutils" in subprocess.run(["install", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not gnu_install(), reason="the package script needs GNU install (install -D), as on Arch")
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_installs_the_portal_file(tmp_path, flavour):
+    # An unpacked build as the tarball has it: the CLIs, session and data under resources.
+    app = tmp_path / "app"
+    linux = app / "resources" / "herald-os-linux"
+    for folder in ("bin", "session", "niri", "omakase", "migrations", "plymouth"):
+        shutil.copytree(LINUX / folder, linux / folder, ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("app.asar", "LICENSE", "NOTICE", "icons/herald-os.png"):
+        (app / "resources" / name).parent.mkdir(parents=True, exist_ok=True)
+        (app / "resources" / name).write_text("")
+    for folder in ("themes", "catalog", "herald-os-bridge"):
+        (app / "resources" / folder).mkdir()
+    (app / "chrome-sandbox").write_text("")
+    pkgdir = tmp_path / "pkg"
+    script = ARCH / flavour / "herald-os-package.sh"
+    result = subprocess.run(["bash", "-c", f'set -e; pkgdir="$1"; pkgname={flavour}; source "$2"; _herald_os_package "$3"', "-", str(pkgdir), str(script), str(app)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    installed = pkgdir / "usr" / "share" / "xdg-desktop-portal" / "heraldos-portals.conf"
+    assert installed.read_bytes() == PORTALS.read_bytes()
+    assert (pkgdir / "usr" / "share" / "wayland-sessions" / "herald-os.desktop").is_file()
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_recommends_every_backend_the_portal_file_names(flavour):
+    listed = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${optdepends[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout
+    recommended = {line.split(":", 1)[0] for line in listed.splitlines()}
+    named = {name for names in preferred().values() for name in names}
+    assert {ARCH_BACKENDS[name] for name in named} <= recommended
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_pins_the_package_script_it_ships(flavour):
+    import hashlib
+    sums = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${sha256sums[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout.split()
+    assert hashlib.sha256((ARCH / flavour / "herald-os-package.sh").read_bytes()).hexdigest() in sums

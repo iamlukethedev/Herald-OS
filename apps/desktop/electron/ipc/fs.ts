@@ -355,11 +355,18 @@ async function patternStores(home: string): Promise<string[]> {
   return found.flat()
 }
 
+/** gnome-keyring's folder where `$XDG_DATA_HOME` moves it from ~/.local/share (an absolute path only, as the XDG specification says). */
+function dataHomeKeyrings(): string[] {
+  const data = process.env.XDG_DATA_HOME ?? ''
+
+  return path.isAbsolute(data) ? [path.join(data, 'keyrings')] : []
+}
+
 async function resolvedPlaces(): Promise<Places> {
   const withReal = async (dirs: string[]) => [...new Set([...dirs, ...(await Promise.all(dirs.map(dir => realpathDeep(dir).catch(() => dir))))])]
   const [homes, hermes, temps] = await Promise.all([withReal([os.homedir()]), withReal(hermesHomes()), withReal([...TEMP_ROOTS, os.tmpdir()])])
   const [keys, patterned] = await Promise.all([Promise.all(hermes.map(hermesKeys)), Promise.all(homes.map(patternStores))])
-  const secrets = await withReal([...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...keys.flat(), ...patterned.flat()])
+  const secrets = await withReal([...homes.flatMap(home => HOME_SECRETS.map(secret => path.join(home, secret))), ...dataHomeKeyrings(), ...keys.flat(), ...patterned.flat()])
 
   return { homes, hermes, temps, secrets }
 }

@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -308,6 +308,97 @@ describe('the disk password', () => {
     await expect(diskEncrypted()).resolves.toBeNull()
     host.run = { stdout: '{"encrypted": "yes"}', stderr: '', code: 0 }
     await expect(diskEncrypted()).resolves.toBeNull()
+  })
+})
+
+describe('the keyring', () => {
+  it('reads the keyring and whether its disk is encrypted from the command, and anything it cannot tell as unknown', async () => {
+    for (const state of ['none', 'open', 'password', 'other'] as const) {
+      for (const encrypted of [true, false, null]) {
+        host.run = { stdout: `{"keyring": "${state}", "folder": "/home/hermes/.local/share/keyrings", "encrypted": ${JSON.stringify(encrypted)}}\n`, stderr: '', code: 0 }
+        await expect(keyringStatus()).resolves.toEqual({ keyring: state, encrypted })
+      }
+    }
+
+    expect(run).toHaveBeenCalledWith('herald-os', ['keyring', '--status'], expect.any(Number))
+
+    for (const result of [
+      { stdout: '', stderr: "herald-os: unknown command 'keyring'", code: 2 },
+      { stdout: '', stderr: 'herald-os: not found', code: 127 },
+      { stdout: 'not json', stderr: '', code: 0 },
+      { stdout: '{"keyring": "locked", "encrypted": "yes"}', stderr: '', code: 0 },
+      { stdout: '{"keyring": null}', stderr: '', code: 0 },
+      { stdout: 'null', stderr: '', code: 0 }
+    ]) {
+      host.run = result
+      await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null })
+    }
+
+    // A herald-os from before the keyring's disk was looked at: the keyring, and its disk unknown.
+    host.run = { stdout: '{"keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}', stderr: '', code: 0 }
+    await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null })
+  })
+
+  it('makes one with no password of its own, or with the password on stdin and never in the arguments', async () => {
+    host.run = { stdout: 'The keyring is ready.\n', stderr: '', code: 0 }
+    await expect(makeKeyring('')).resolves.toEqual({ ok: true })
+    expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--no-password'], expect.any(Number))
+    await expect(makeKeyring('correct horse')).resolves.toEqual({ ok: true })
+    expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--password'], expect.any(Number), 'correct horse\n')
+  })
+
+  it('says why from the exit code, and logs only the command’s own last line', async () => {
+    const reasons: [number, string][] = [
+      [3, 'keyringExists'],
+      [4, 'noKeyringService'],
+      [1, 'failed'],
+      [2, 'failed'],
+      [127, 'failed']
+    ]
+
+    for (const [code, reason] of reasons) {
+      host.run = { stdout: '', stderr: 'herald-os: something\nherald-os: the last line\n', code }
+      await expect(makeKeyring('correct horse')).resolves.toEqual({ ok: false, reason })
+    }
+
+    expect(log).toHaveBeenLastCalledWith('setup', 'herald-os keyring setup exited 127: herald-os: the last line')
+    expect(vi.mocked(log).mock.calls.flat().join(' ')).not.toContain('correct horse')
+  })
+
+  it('turns down a short or multi-line password before running anything', async () => {
+    registerSetupIpc()
+    const handler = host.handlers.get(IPC.setupKeyring)
+    vi.mocked(run).mockClear()
+
+    expect(await handler?.({}, { password: 'short' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(await handler?.({}, { password: 'two\nlines here' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(run).not.toHaveBeenCalled()
+    host.run = { stdout: '', stderr: '', code: 0 }
+    expect(await handler?.({}, { password: '' })).toEqual({ ok: true })
+    expect(await handler?.({}, {})).toEqual({ ok: true })
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--no-password'], expect.any(Number))
+  })
+
+  it('is part of the state setup starts from, next to the disk', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+
+    try {
+      vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done')
+      vi.mocked(run).mockImplementation(async (_command, args) =>
+        args[0] === 'keyring' ? { stdout: '{"keyring": "none", "encrypted": false}', stderr: '', code: 0 } : { stdout: '{"encrypted": true}', stderr: '', code: 0 }
+      )
+      registerSetupIpc()
+      // The root is encrypted, the keyring's disk is not: each answer stays its own.
+      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ needed: true, diskEncrypted: true, keyring: 'none', keyringEncrypted: false })
+    } finally {
+      vi.mocked(run).mockImplementation(async () => host.run)
+
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
   })
 })
 
