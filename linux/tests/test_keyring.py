@@ -229,8 +229,8 @@ def disk(path: str, fstype: str | None, mounts=(), uuid: str | None = None, chil
     return {"name": path, "path": path, "type": kind, "fstype": fstype, "uuid": uuid, "mountpoints": list(mounts) or [None], "children": list(children) or None}
 
 
-def mount(target: str, source: str, uuid: str | None = None) -> dict:
-    return {"target": target, "source": source, "uuid": uuid}
+def mount(target: str, source: str, uuid: str | None = None, fstype: str | None = None) -> dict:
+    return {"target": target, "source": source, "fstype": fstype, "uuid": uuid}
 
 
 ESP = disk("/dev/nvme0n1p1", "vfat", ["/boot/efi"])
@@ -280,6 +280,37 @@ MACHINES = {
                                                      ROOT_MOUNTS, PLACE, False),
     "btrfs over two encrypted disks": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", uuid="L3", children=[disk("/dev/mapper/luks-L3", "btrfs", uuid="B1", kind="crypt")])])],
                                        ROOT_MOUNTS, PLACE, True),
+    # Without udev's data lsblk knows no UUIDs, so a btrfs's other disks cannot be found: unknown, even
+    # where findmnt has the UUID and a second, plain disk would make it false.
+    "btrfs without lsblk's UUID, over an encrypted disk and a plain one": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], kind="crypt")]))
+        + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs")])],
+        [mount("/", "/dev/mapper/luks-L1", "B1", "btrfs")], PLACE, None),
+    "btrfs without lsblk's UUID, on one encrypted disk": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", "B1", "btrfs")], PLACE, None),
+    "btrfs known only to findmnt, without any UUID": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", None, "btrfs")], PLACE, None),
+    "a filesystem nobody names, without a UUID": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1")], PLACE, None),
+    # lsblk has the UUID and findmnt does not: lsblk's is the one that finds the plain disk.
+    "btrfs with lsblk's UUID only, over an encrypted disk and a plain one": (
+        nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs", uuid="B1")])],
+        [mount("/", "/dev/mapper/luks-L1", None, "btrfs")], PLACE, False),
+    # A filesystem on one disk needs no UUID.
+    "ext4 without a UUID on LUKS": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", "ext4", ["/"], kind="crypt")])),
+        [mount("/", "/dev/mapper/luks-L1", None, "ext4")], PLACE, True),
+    # Encrypted, but not with LUKS (plain dm-crypt has no header): cannot be checked, so not "not encrypted".
+    "home on plain dm-crypt": (nvme(ESP, ROOT_LUKS, disk("/dev/nvme0n1p3", None, children=[disk("/dev/mapper/home", "ext4", ["/home"], uuid="H1", kind="crypt")])),
+                               ROOT_MOUNTS + [mount("/home", "/dev/mapper/home", "H1")], PLACE, None),
+    "LVM on plain dm-crypt": (nvme(ESP, disk("/dev/nvme0n1p2", None, children=[disk("/dev/mapper/plain", "LVM2_member", kind="crypt", children=[
+                                  disk("/dev/mapper/vg-root", "ext4", ["/"], uuid="R1", kind="lvm")])])), [mount("/", "/dev/mapper/vg-root", "R1")], PLACE, None),
+    "plain dm-crypt beside a plain partition": (nvme(ESP, ROOT_LUKS, disk("/dev/nvme0n1p3", None, children=[disk("/dev/mapper/home", "ext4", ["/home"], uuid="H1", kind="crypt")]),
+                                                     disk("/dev/nvme0n1p4", "ext4", uuid="X1")),
+                                                ROOT_MOUNTS + [mount("/home", "/dev/mapper/home", "H1"), mount(PLACE + "/x", "/dev/nvme0n1p4", "X1")], PLACE, False),
     "LVM inside LUKS": (nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", uuid="L1", children=[disk("/dev/mapper/luks-L1", "LVM2_member", kind="crypt", children=[
                             disk("/dev/mapper/vg-root", "ext4", ["/"], uuid="R1", kind="lvm")])])), [mount("/", "/dev/mapper/vg-root", "R1")], PLACE, True),
 }
@@ -299,6 +330,22 @@ def test_devices_are_compared_as_resolved():
     assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/dm-0", "B1")], tree) is None
 
 
+@pytest.mark.parametrize("values, answer", [
+    ([], True), ([True, True], True), ([True, None], None), ([None, False], False), ([False, True], False), ([None], None),
+])
+def test_keyring_all(values, answer):
+    assert cli.keyring_all(values) is answer
+
+
+def test_a_raid_leg_on_luks_and_one_on_plain_dm_crypt_cannot_be_told():
+    raid = disk("/dev/md0", "ext4", ["/"], uuid="R1", kind="raid1")
+    tree = [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", children=[disk("/dev/mapper/a", "linux_raid_member", kind="crypt", children=[raid])])]),
+            disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", None, children=[disk("/dev/mapper/b", "linux_raid_member", kind="crypt", children=[raid])])])]
+    for order in (tree, tree[::-1]):
+        assert cli.lsblk_on_luks(order)["/dev/md0"] is None
+        assert cli.keyring_mounts_encrypted(PLACE, [mount("/", "/dev/md0", "R1")], order) is None
+
+
 @pytest.mark.parametrize("plain_first", [False, True])
 def test_a_device_under_several_parents_is_on_luks_only_under_each(plain_first):
     raid = disk("/dev/md0", "ext4", ["/"], uuid="R1", kind="raid1")
@@ -307,6 +354,17 @@ def test_a_device_under_several_parents_is_on_luks_only_under_each(plain_first):
     tree = tree[::-1] if plain_first else tree
     assert cli.lsblk_on_luks(tree)["/dev/md0"] is False
     assert cli.keyring_mounts_encrypted(PLACE, [mount("/", "/dev/md0", "R1")], tree) is False
+
+
+def test_findmnt_is_asked_for_the_filesystem_type(tmp_path):
+    # lsblk cannot name the filesystem (no udev data) and knows no UUID; findmnt's FSTYPE says ext4, which
+    # spans one disk, so the answer is known.
+    tree = nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", children=[disk("/dev/mapper/luks-L1", None, ["/"], kind="crypt")]))
+    tools = disk_tools(tmp_path, tree, [mount("/", "/dev/mapper/luks-L1", None, "ext4")])
+    (tools / "findmnt").write_text('#!/bin/sh\ncase "$*" in *TARGET,SOURCE,FSTYPE,UUID*) ;; *) echo "findmnt was not asked for FSTYPE" >&2; exit 1;; esac\n'
+                                   + (tools / "findmnt").read_text().split("\n", 1)[1])
+    result = run_cli(tmp_path, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0 and json.loads(result.stdout)["encrypted"] is True, result.stderr
 
 
 def disk_tools(tmp_path: Path, tree: list | None, mounts: list | None) -> Path:

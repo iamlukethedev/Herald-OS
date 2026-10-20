@@ -3239,16 +3239,27 @@ def keyring_dir() -> Path:
     return (Path(data) if data and os.path.isabs(data) else HOME / ".local" / "share") / "keyrings"
 
 
-def lsblk_on_luks(tree: list) -> dict[str, bool]:
-    """Each block device's path, and whether it sits on LUKS: a crypto_LUKS device above it (pure). A device
-    lsblk shows under several parents (RAID) sits on LUKS only if it does under each."""
-    found: dict[str, bool] = {}
+def keyring_all(values) -> bool | None:
+    """True when every value is True, False when one is False, None otherwise (pure)."""
+    values = list(values)
+    if any(value is False for value in values):
+        return False
+    return None if any(value is None for value in values) else True
 
-    def walk(node: dict, on_luks: bool) -> None:
+
+def lsblk_on_luks(tree: list) -> dict[str, bool | None]:
+    """Each block device's path, and whether it sits on LUKS: a crypto_LUKS device above it (pure). A crypt
+    mapping with no LUKS above it (plain dm-crypt, or one opened without a LUKS header) is None: encrypted,
+    but not in a way this can check. A device lsblk shows under several parents (RAID) counts as each
+    of them together."""
+    found: dict[str, bool | None] = {}
+
+    def walk(node: dict, above: bool | None) -> None:
         path = node.get("path") or node.get("name")
+        own = above if above is True or node.get("type") != "crypt" else None
         if isinstance(path, str) and path:
-            found[path] = found.get(path, True) and on_luks
-        below = on_luks or node.get("fstype") == "crypto_LUKS"
+            found[path] = keyring_all([found[path], own]) if path in found else own
+        below = True if node.get("fstype") == "crypto_LUKS" else own
         for child in lsblk_children(node):
             walk(child, below)
 
@@ -3260,17 +3271,23 @@ def lsblk_on_luks(tree: list) -> dict[str, bool]:
 
 def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambda device: device) -> bool | None:
     """Whether the filesystems that hold the keyring folder `place` all sit on LUKS (pure; tested): the
-    mount it is in (or would be in, before it exists), and every mount below it. `mounts` is `findmnt -J -l -v -o TARGET,SOURCE,UUID`'s list;
-    a btrfs over several disks counts each disk lsblk shows with its UUID. False when one of them is a
-    block device not on LUKS; None when one is not a block device lsblk knows (tmpfs, NFS, a FUSE folder)
-    or nothing holds `place`, since that cannot be told."""
+    mount it is in (or would be in, before it exists), and every mount below it. `mounts` is
+    `findmnt -J -l -v -o TARGET,SOURCE,FSTYPE,UUID`'s list. A btrfs over several disks counts each disk
+    lsblk shows with its UUID. False when one of them is a block device not on LUKS; None when one is
+    not a block device lsblk knows (tmpfs, NFS, a FUSE folder), is encrypted some other way, is a btrfs
+    (or a filesystem nobody names) whose UUID lsblk does not know, or nothing holds `place`, since that
+    cannot be told."""
     devices = {resolve(path): on_luks for path, on_luks in lsblk_on_luks(tree).items()}
     by_uuid: dict[str, list[str]] = {}
+    filesystems: dict[str, tuple[str | None, str | None]] = {}
 
     def gather(node: dict) -> None:
-        path, uuid = node.get("path") or node.get("name"), node.get("uuid")
-        if isinstance(path, str) and isinstance(uuid, str) and uuid and node.get("fstype") != "crypto_LUKS":
-            by_uuid.setdefault(uuid, []).append(resolve(path))
+        path, uuid, fstype = node.get("path") or node.get("name"), node.get("uuid"), node.get("fstype")
+        uuid = uuid if isinstance(uuid, str) and uuid else None
+        if isinstance(path, str) and fstype != "crypto_LUKS":
+            filesystems.setdefault(resolve(path), (fstype if isinstance(fstype, str) and fstype else None, uuid))
+            if uuid:
+                by_uuid.setdefault(uuid, []).append(resolve(path))
         for child in lsblk_children(node):
             gather(child)
 
@@ -3300,19 +3317,22 @@ def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambd
         if source not in devices:
             answers.append(None)
             continue
-        uuid = mount.get("uuid")
-        disks = {source, *(by_uuid.get(uuid, []) if isinstance(uuid, str) and uuid else [])}
-        answers.append(all(devices.get(disk, False) for disk in disks))
-    if False in answers:
-        return False
-    return None if None in answers else True
+        fstype, uuid = filesystems.get(source, (None, None))
+        fstype = mount.get("fstype") or fstype
+        # The other disks of a btrfs are found by lsblk's UUID for it, which it lacks without udev's data.
+        if fstype in ("btrfs", None) and not uuid:
+            answers.append(None)
+            continue
+        disks = {source, *by_uuid.get(uuid, [])} if uuid else {source}
+        answers.append(keyring_all(devices.get(disk, False) for disk in disks))
+    return keyring_all(answers)
 
 
 def keyring_encrypted(directory: Path) -> bool | None:
     """keyring_mounts_encrypted for this machine, from lsblk and findmnt; None when either cannot say."""
     try:
         tree = lsblk_tree()
-        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,UUID"], capture_output=True, text=True, timeout=30)
+        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,FSTYPE,UUID"], capture_output=True, text=True, timeout=30)
         mounts = json.loads(listing.stdout).get("filesystems") if listing.returncode == 0 else None
     except (DiskUnknown, OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
         return None
