@@ -104,6 +104,13 @@ def policy_path() -> Path:
     return data_dir() / "permissions.yaml"
 
 
+def _data_home_keyrings() -> tuple[str, ...]:
+    """gnome-keyring's folder where $XDG_DATA_HOME moves it from ~/.local/share (an absolute path only,
+    as the XDG specification says)."""
+    data = os.environ.get("XDG_DATA_HOME", "")
+    return (os.path.join(data, "keyrings"),) if os.path.isabs(data) else ()
+
+
 def _expand_protected(raw: Iterable[str]) -> tuple[Path, ...]:
     home = str(hermes_home())
     out: list[Path] = []
@@ -132,7 +139,7 @@ def parse_policy(data: Any) -> Policy:
         raw_protected = data.get("protected_paths")
         if isinstance(raw_protected, list):
             extra = [str(p) for p in raw_protected if p]
-    return Policy(tiers=tiers, protected=_expand_protected((*BUILTIN_PROTECTED, *extra)))
+    return Policy(tiers=tiers, protected=_expand_protected((*BUILTIN_PROTECTED, *_data_home_keyrings(), *extra)))
 
 
 _cache: tuple[float, Policy] | None = None
