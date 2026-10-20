@@ -403,10 +403,12 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   two can come before anything changed as well as part-way; nothing is removed before the new
   password opens every device, so the current one or the new one (or both) opens each, and after a
   killed root side the command looks and says which.
-- **A new key slot that cannot be told.** On a cryptsetup that names no slot and where no slot
-  opens on its own, `--new-owner` cannot tell which slot is the new one, so it leaves the other
-  slots and says so (exit 6). Running it again would stop at the same point (exit 12), so the
-  message says how to remove the slots by hand (`cryptsetup luksDump`, then `luksKillSlot`).
+- **A key slot that cannot be told.** On a cryptsetup that names no slot and where no slot opens on
+  its own, the change cannot tell which slot is the new one, or which one the old password is in.
+  `--new-owner` then leaves the other slots, and a plain change leaves the old password's slot; both
+  say so (exit 6). Running it again would stop at the same point (exit 12), so with or without
+  `--new-owner` the message says how to finish by hand (`cryptsetup luksDump`, `open
+  --test-passphrase --key-slot`, `luksKillSlot`, never on a slot a token uses).
 - **Signals.** While it runs, Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits
   for the root side to finish or put things back, continues it if it stops after a Ctrl+Z, and says
   how it ended. It says that it waits only once the root side has begun adding the new password (it

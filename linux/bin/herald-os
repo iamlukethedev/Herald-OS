@@ -3148,10 +3148,13 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     disk_say("The new disk password opens the disk. Removing the old one…")
 
     problems: list[str] = []
+    # A slot that cannot be told (cryptsetup names none, and none opens on its own): a rerun would ask
+    # the same cryptsetup and stop at exit 12, so the advice is how to finish by hand instead.
     untellable = False
     for device in devices:
-        if new_owner and new_slots[device] < 0:
+        if new_slots[device] < 0:
             untellable = True
+        if new_owner and new_slots[device] < 0:
             # Which slot is the new one cannot be told, so of the others only the old password's goes.
             problems.append(f"which key slot of {device} the new disk password opens could not be told, so its other key slots were left")
         if new_owner and new_slots[device] >= 0:
@@ -3174,6 +3177,9 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             except (RuntimeError, json.JSONDecodeError) as error:
                 problems.append(str(error))
                 continue
+            if not opened and luks_slot(device, current) is not None:
+                untellable = True
+                problems.append(f"which key slot of {device} the old disk password opens could not be told, so it was left")
             for slot, kinds in sorted(bound.items()):
                 problems.append(f"the old disk password also opens key slot {slot} of {device}, which {token_words(kinds)} uses to unlock it, so that slot was left")
             problems += luks_kill_slots(device, [slot for slot in opened if slot not in bound and slot != new_slots[device]], new)
@@ -3185,10 +3191,12 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
         for problem in problems:
             disk_say(f"herald-os: {problem}", file=sys.stderr)
         if untellable:
-            # A rerun would ask the same cryptsetup, which cannot tell the new slot either (exit 12).
-            disk_say("herald-os: the new disk password was added, but not everything above went as planned. A rerun cannot "
-                     "tell the new password's key slot either; remove the other slots by hand: `sudo cryptsetup luksDump "
-                     "<device>` lists them, `sudo cryptsetup luksKillSlot <device> <slot>` removes one.", file=sys.stderr)
+            disk_say("herald-os: the new disk password was added, but not everything above went as planned. Running this "
+                     "again would ask the same cryptsetup, which cannot tell these key slots either, so finish by hand: "
+                     "`sudo cryptsetup luksDump <device>` lists the slots and the tokens that use them; `sudo cryptsetup open "
+                     "--test-passphrase --key-slot <slot> <device>` tells which slot a password opens; and `sudo cryptsetup "
+                     "luksKillSlot <device> <slot>` removes one. Remove only slots the old password opens, never one a token "
+                     "uses, and check that the new password still opens the disk before you restart.", file=sys.stderr)
         else:
             disk_say("herald-os: the new disk password was added, but not everything above went as planned. Run "
                      "`herald-os password --disk` again with the new password as the current one.", file=sys.stderr)

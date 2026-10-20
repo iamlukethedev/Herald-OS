@@ -821,7 +821,8 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
     unlocked"), on one device whose slots hold `keyslots`. With named_by_slot False, trying a slot on its
     own (--key-slot) never opens either, so the slot cannot be told at all; `hidden` does that for the
     slots of those passphrases only. `on_add(header)` runs when a key is added."""
-    header = {"keyslots": dict(keyslots), "tokens": dict(tokens or {})}
+    header = {"keyslots": dict(keyslots), "tokens": dict(tokens or {}), "named_by_slot": named_by_slot,
+              "hidden": set(hidden), "kill_fails": False}
     tried: list[int] = []
 
     def run(args, key=None, new=None):
@@ -832,7 +833,7 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
             if "--key-slot" in args:
                 slot = int(args[args.index("--key-slot") + 1])
                 tried.append(slot)
-                return ok if named_by_slot and key not in hidden and slots.get(slot) == key else no
+                return ok if header["named_by_slot"] and key not in header["hidden"] and slots.get(slot) == key else no
             return ok if key in slots.values() else no
         if args[0] == "luksDump":
             return subprocess.CompletedProcess(args, 0, json.dumps({"keyslots": {str(n): {} for n in slots}, "tokens": header["tokens"]}).encode(), b"")
@@ -848,6 +849,8 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
             del slots[slot]
             return ok
         if args[0] == "luksKillSlot":
+            if header["kill_fails"]:
+                return subprocess.CompletedProcess(args, 1, b"", b"Device is busy.")
             slots.pop(int(args[2]), None)
             return ok
         if args[0] == "token":
@@ -902,7 +905,8 @@ def test_a_new_owner_s_slot_that_cannot_be_told_leaves_the_others_and_says_so(mo
     said = capsys.readouterr().err
     assert "could not be told, so its other key slots were left" in said
     # A rerun would ask the same cryptsetup and stop at exit 12; the advice is to remove the slots by hand.
-    assert "A rerun cannot tell the new password's key slot either" in said and "luksKillSlot <device> <slot>" in said
+    assert "Running this again would ask the same cryptsetup, which cannot tell these key slots either" in said
+    assert "luksKillSlot <device> <slot>" in said and "never one a token uses" in said
     assert "again with the new password as the current one" not in said
     assert sorted(header["keyslots"].values()) == sorted(["someone else's", NEW])
 
@@ -932,6 +936,54 @@ def test_a_leftover_whose_slots_cannot_be_read_is_refused(monkeypatch, capsys):
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
     assert "cannot read the key slots of /dev/vda3: Device is busy. Nothing was changed." in capsys.readouterr().err
     assert header["keyslots"] == {0: OLD, 1: NEW}
+
+
+def test_without_new_owner_an_untellable_slot_gives_how_to_finish_by_hand(monkeypatch, capsys):
+    """After the add, no slot opens on its own any more: the old password's slot cannot be told, so it
+    is left (exit 6). Running it again with the new password as the current one would stop at exit 12,
+    so that is not what it advises."""
+    def no_slot_opens_on_its_own(header):
+        header["named_by_slot"] = False
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD}, on_add=no_slot_opens_on_its_own)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    said = capsys.readouterr().err
+    assert "which key slot of /dev/vda3 the old disk password opens could not be told, so it was left" in said
+    assert "again with the new password as the current one" not in said
+    assert "Running this again would ask the same cryptsetup" in said and "--test-passphrase --key-slot <slot> <device>" in said
+    assert sorted(header["keyslots"].values()) == sorted([OLD, NEW])
+    # Why: the rerun it no longer advises stops at exit 12.
+    assert root_side_here(monkeypatch, "check", {"devices": ["/dev/vda3"], "current": NEW}) == cli.DISK_OTHER_SLOT
+
+
+def test_without_new_owner_the_old_password_s_untellable_slot_gives_how_to_finish_by_hand(monkeypatch, capsys):
+    def old_slot_no_longer_opens_on_its_own(header):
+        header["hidden"].add(OLD)
+    quiet_cryptsetup(monkeypatch, {0: OLD}, on_add=old_slot_no_longer_opens_on_its_own)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    said = capsys.readouterr().err
+    assert "the old disk password opens could not be told" in said and "Running this again would ask the same cryptsetup" in said
+    assert "again with the new password as the current one" not in said
+
+
+def test_without_new_owner_an_untellable_new_slot_gives_how_to_finish_by_hand(monkeypatch, capsys):
+    """The new password's slot cannot be told, and the old one's removal fails: running it again with the
+    new password as the current one would stop at exit 12, so the advice is by hand."""
+    def removals_fail(header):
+        header["kill_fails"] = True
+    quiet_cryptsetup(monkeypatch, {0: OLD}, hidden=(NEW,), on_add=removals_fail)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    said = capsys.readouterr().err
+    assert "could not be removed: Device is busy." in said and "Running this again would ask the same cryptsetup" in said
+    assert "again with the new password as the current one" not in said
+
+
+def test_a_tellable_failure_still_advises_running_it_again(monkeypatch, capsys):
+    def removals_fail(header):
+        header["kill_fails"] = True
+    quiet_cryptsetup(monkeypatch, {0: OLD}, on_add=removals_fail)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    said = capsys.readouterr().err
+    assert "again with the new password as the current one" in said and "Running this again would ask" not in said
 
 
 def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monkeypatch, capsys):
