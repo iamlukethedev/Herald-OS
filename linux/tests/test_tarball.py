@@ -744,6 +744,18 @@ def test_a_certification_the_release_key_revoked_does_not_count(tmp_path, keys):
         tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc")
 
 
+@pytest.mark.parametrize("order", ["good first", "attacker first"])
+def test_two_signatures_are_refused_whichever_comes_first(tmp_path, keys, order):
+    """The attacker's key is in the release's key file, so gpg knows both signers."""
+    sums = sums_of(tmp_path)
+    good = keys.sign(keys.release, sums).read_bytes()
+    attacker = keys.sign(keys.unvouched, sums).read_bytes()
+    write(tmp_path / "both.sig", good + attacker if order == "good first" else attacker + good)
+    write(tmp_path / "offered.asc", keys.export(keys.unvouched))
+    with pytest.raises(tb.ReleaseError, match="more than one signature"):
+        tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release), tmp_path / "offered.asc")
+
+
 def test_a_certified_key_does_not_vouch_for_a_third(tmp_path, keys):
     sums = sums_of(tmp_path)
     third = keys.make("Herald OS releases three")

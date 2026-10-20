@@ -426,15 +426,21 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
             ):
                 trusted.add(fingerprint)
         checked = run("--status-fd", "1", "--verify", str(signature), str(sums))
-        status = {fields[1]: fields[2:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"}
-        signer = status["VALIDSIG"][9] if len(status.get("VALIDSIG", [])) > 9 else ""
-        if checked.returncode == 0 and "GOODSIG" in status and signer in trusted:
+        status = [fields[1:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"]
+        kinds = [fields[0] for fields in status]
+        valid = [fields for fields in status if fields[0] == "VALIDSIG"]
+        signer = valid[0][10] if len(valid) == 1 and len(valid[0]) > 10 else ""
+        # One signature only: with several, which of gpg's lines belong to which is not ours to guess.
+        single = kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
+        if checked.returncode == 0 and single and signer in trusted:
             return signer
-        if "BADSIG" in status:
+        if kinds.count("NEWSIG") > 1:
+            reason = "carries more than one signature"
+        elif "BADSIG" in kinds:
             reason = "does not match its signature: it was changed after it was signed"
-        elif "EXPKEYSIG" in status or "REVKEYSIG" in status:
-            reason = f"is signed with a release key that has {'expired' if 'EXPKEYSIG' in status else 'been revoked'}"
-        elif "NO_PUBKEY" in status or "ERRSIG" in status or (signer and signer not in trusted):
+        elif "EXPKEYSIG" in kinds or "REVKEYSIG" in kinds:
+            reason = f"is signed with a release key that has {'expired' if 'EXPKEYSIG' in kinds else 'been revoked'}"
+        elif "NO_PUBKEY" in kinds or "ERRSIG" in kinds or (signer and signer not in trusted):
             reason = "is signed with a key this version does not trust"
         else:
             reason = "has no signature that gpg can check"
