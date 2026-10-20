@@ -904,8 +904,8 @@ saying on stderr which they passed over. Without the key, as in every version fr
 releases, releases are chosen and checked as they always were: by the tarball's `.sha256`, which
 proves the download is the file the release published, not who published it, so a release is
 trusted as far as GitHub is. [docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md) has the key, how it
-changes, why a revocation stops updates, and the limits (an older signed release can still be
-installed by version).
+changes, what a revocation does, and the limits (an older signed release can still be installed by
+version, and a revocation is not remembered between checks).
 `herald-os update` also updates the system's packages as before (`dnf upgrade` on Fedora).
 
 ## Inside Hyprland and Omarchy (app mode)

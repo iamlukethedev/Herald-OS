@@ -169,23 +169,34 @@ versions read the new date from the release's `herald-os-release-key.asc`.
   revoke the old key with the revocation certificate, and tell people to install the tarball again
   by hand after checking it. A lost key with its revocation certificate safe can still be revoked.
 
-## A revocation stops updates, on purpose
+## What a revocation does, and what it does not
 
 `herald-os update` reads revocations and expiry dates from the key file it carries and from the
-release's `herald-os-release-key.asc`. A trusted key revoked or expired in either one no longer signs
-or vouches for another key, and a certification its own key has revoked no longer counts. So once a
-release's key file carries the revocation of the key an install trusts, that install fails closed: it
-refuses that release and every later one, saying that its keys are revoked or expired, until a
-release is signed with a key it can still check (another trusted key, or one such a key certified),
-or the person installs a newer tarball by hand. That is intended: after a revocation, nothing the
-revoked key signed or certified is trusted, even if its stolen secret made it after the revocation.
+release's `herald-os-release-key.asc`, each time it checks a release. A trusted key revoked or
+expired in either one no longer signs or vouches for another key, and a certification its own key
+has revoked no longer counts. So a release whose key file carries the revocation of the key an
+install trusts is refused there, saying that its keys are revoked or expired, and so is a release
+signed with a key that revoked key certified. That is intended: once a revocation is seen, nothing
+the revoked key signed or certified is trusted, even if its stolen secret made it after the
+revocation. An install that trusts no other key that is still good then stays where it is until the
+person installs a newer tarball by hand.
+
+Nothing is remembered between checks. A later release whose key file leaves the revocation out is
+judged as if there had been none, so an install whose own key file predates the revocation trusts
+the revoked key again for that release. A revocation sticks only once it is in the install's own key
+file: ship it in `linux/keys/herald-os-release.asc`, and every version built from then on refuses the
+revoked key whatever a release's key file says.
 
 ## Limits
 
 - **No downgrade guard.** `herald-os update <version>` installs any older release that is signed and
   checks out, so whoever controls the releases can offer an older signed version with known bugs.
   It refuses releases from before signing, since they have no signature.
-- **A revocation must reach the install.** An install learns of a revoked subkey only from a key file
-  it reads: its own, or a release's. A release whose key file leaves the revocation out, signed with a
-  stolen subkey, is accepted by installs whose own key file predates the revocation. Releases must
-  keep carrying the revocation, and the subkeys expire after two years, which bounds the window.
+- **No memory of revocations.** As above, a revocation seen in one release's key file is not kept:
+  until the install's own key file carries it, a later release that leaves it out is checked as if
+  the key were still good.
+- **A revocation must reach the install.** For the same reason, an install learns of a revoked subkey
+  only from a key file it reads: its own, or a release's. A release whose key file leaves the
+  revocation out, signed with a stolen subkey, is accepted by installs whose own key file predates
+  the revocation. Releases must keep carrying the revocation, and the subkeys expire after two years,
+  which bounds the window.
