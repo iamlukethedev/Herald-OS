@@ -151,7 +151,7 @@ COMMANDS: dict[str, str] = {
     "branding": "branding [show] | set [--logo <image>] [--lock <image>] [--name <text>] | reset [all|logo|lock|name]: About's logo and name, and the lock-screen picture",
     "lock": "Lock the session (needs an account password; see `herald-os password`)",
     "password": "Set the login password the lock screen asks for | password --disk [--new-owner]: change the disk password typed at start-up (asks for the current one; --new-owner also removes every other key) | password --disk --status: whether the disk is encrypted, as JSON",
-    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other), as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
+    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other) and whether the disk that holds it is encrypted, as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
     "suspend": "Suspend the machine",
     "power": "Power menu (sleep, restart, shut down, log out)",
     "webapp-open": "Internal: open a web app window: webapp-open <url> <name>",
@@ -2784,10 +2784,8 @@ class DiskUnknown(Exception):
     """Which devices hold the root filesystem cannot be told; the message says why."""
 
 
-def disk_devices() -> list[str]:
-    """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
-    (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
-    every other key slot of each device it is given."""
+def lsblk_tree() -> list:
+    """lsblk's view of the block devices; DiskUnknown when there is none."""
     try:
         listing = subprocess.run(["lsblk", "-J", "-p", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,MOUNTPOINTS"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -2799,7 +2797,14 @@ def disk_devices() -> list[str]:
     if not isinstance(tree, list):
         said = (listing.stderr or "").strip().splitlines()
         raise DiskUnknown("lsblk could not list the disks" + (f" ({said[-1]})" if said else "") + " (util-linux 2.37 or later is needed)")
-    return lsblk_root_luks(tree, disk_root_uuid())
+    return tree
+
+
+def disk_devices() -> list[str]:
+    """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
+    (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
+    every other key slot of each device it is given."""
+    return lsblk_root_luks(lsblk_tree(), disk_root_uuid())
 
 
 def disk_unknown_text(error: DiskUnknown) -> str:
@@ -3234,6 +3239,93 @@ def keyring_dir() -> Path:
     return (Path(data) if data and os.path.isabs(data) else HOME / ".local" / "share") / "keyrings"
 
 
+def lsblk_on_luks(tree: list) -> dict[str, bool]:
+    """Each block device's path, and whether it sits on LUKS: a crypto_LUKS device above it (pure). A device
+    lsblk shows under several parents (RAID) sits on LUKS only if it does under each."""
+    found: dict[str, bool] = {}
+
+    def walk(node: dict, on_luks: bool) -> None:
+        path = node.get("path") or node.get("name")
+        if isinstance(path, str) and path:
+            found[path] = found.get(path, True) and on_luks
+        below = on_luks or node.get("fstype") == "crypto_LUKS"
+        for child in lsblk_children(node):
+            walk(child, below)
+
+    for node in tree if isinstance(tree, list) else []:
+        if isinstance(node, dict):
+            walk(node, False)
+    return found
+
+
+def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambda device: device) -> bool | None:
+    """Whether the filesystems that hold the keyring folder `place` all sit on LUKS (pure; tested): the
+    mount it is in (or would be in, before it exists), and every mount below it. `mounts` is `findmnt -J -l -v -o TARGET,SOURCE,UUID`'s list;
+    a btrfs over several disks counts each disk lsblk shows with its UUID. False when one of them is a
+    block device not on LUKS; None when one is not a block device lsblk knows (tmpfs, NFS, a FUSE folder)
+    or nothing holds `place`, since that cannot be told."""
+    devices = {resolve(path): on_luks for path, on_luks in lsblk_on_luks(tree).items()}
+    by_uuid: dict[str, list[str]] = {}
+
+    def gather(node: dict) -> None:
+        path, uuid = node.get("path") or node.get("name"), node.get("uuid")
+        if isinstance(path, str) and isinstance(uuid, str) and uuid and node.get("fstype") != "crypto_LUKS":
+            by_uuid.setdefault(uuid, []).append(resolve(path))
+        for child in lsblk_children(node):
+            gather(child)
+
+    for node in tree if isinstance(tree, list) else []:
+        if isinstance(node, dict):
+            gather(node)
+
+    def target(mount) -> str | None:
+        value = mount.get("target") if isinstance(mount, dict) else None
+        return value if isinstance(value, str) and value.startswith("/") else None
+
+    def within(path: str, folder: str) -> bool:
+        return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+    holding = None
+    for mount in mounts if isinstance(mounts, list) else []:
+        # The last one mounted over the same place is the one in use.
+        if target(mount) and within(place, target(mount)) and (holding is None or len(target(mount)) >= len(target(holding))):
+            holding = mount
+    if holding is None:
+        return None
+    relevant = [holding] + [mount for mount in mounts if target(mount) and target(mount) != place and within(target(mount), place)]
+    answers = []
+    for mount in relevant:
+        source = mount.get("source")
+        source = resolve(source.split("[", 1)[0]) if isinstance(source, str) else ""
+        if source not in devices:
+            answers.append(None)
+            continue
+        uuid = mount.get("uuid")
+        disks = {source, *(by_uuid.get(uuid, []) if isinstance(uuid, str) and uuid else [])}
+        answers.append(all(devices.get(disk, False) for disk in disks))
+    if False in answers:
+        return False
+    return None if None in answers else True
+
+
+def keyring_encrypted(directory: Path) -> bool | None:
+    """keyring_mounts_encrypted for this machine, from lsblk and findmnt; None when either cannot say."""
+    try:
+        tree = lsblk_tree()
+        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,UUID"], capture_output=True, text=True, timeout=30)
+        mounts = json.loads(listing.stdout).get("filesystems") if listing.returncode == 0 else None
+    except (DiskUnknown, OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(mounts, list):
+        return None
+
+    def resolve(device: str) -> str:
+        return os.path.realpath(device) if device.startswith("/dev/") else device
+
+    # Links resolved (the image's /home is a link to /var/home); a part that does not exist yet stays as written.
+    return keyring_mounts_encrypted(os.path.realpath(directory), mounts, tree, resolve)
+
+
 def keyring_state(directory: Path) -> str:
     """The default keyring, read from gnome-keyring's files so no daemon is needed (pure; tested): none
     (there is no keyring yet), open (no password of its own), password, or other (keyrings, but no
@@ -3332,15 +3424,12 @@ def keyring_create(password: str) -> str:
     return collection
 
 
-def keyring_unencrypted_note() -> str | None:
-    """What a keyring with no password of its own gives away where the disk is not encrypted; nothing
-    when the disk is encrypted or that cannot be told."""
-    try:
-        if disk_devices():
-            return None
-    except DiskUnknown:
+def keyring_unencrypted_note(directory: Path) -> str | None:
+    """What a keyring with no password of its own gives away where the disk that holds it is not
+    encrypted; nothing when it is, or that cannot be told."""
+    if keyring_encrypted(directory) is not False:
         return None
-    return "note: this disk is not encrypted, so anyone with the disk can read what apps keep in this keyring."
+    return "note: the disk that holds the keyring is not encrypted, so anyone with the disk can read what apps keep in it."
 
 
 def keyring_lock_path() -> Path:
@@ -3379,7 +3468,7 @@ def keyring_cmd(args: list[str]) -> int:
     when there is none. An existing keyring is never replaced: it holds what apps saved."""
     directory = keyring_dir()
     if args == ["--status"]:
-        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory)}))
+        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory), "encrypted": keyring_encrypted(directory)}))
         return 0
     if args not in (["setup", "--no-password"], ["setup", "--password"]):
         die(KEYRING_USAGE, 2)
@@ -3393,7 +3482,7 @@ def keyring_cmd(args: list[str]) -> int:
         print("The keyring is ready. After each start, the first app that needs it asks for its password.")
         return 0
     print("The keyring is ready, with no password of its own.")
-    note = keyring_unencrypted_note()
+    note = keyring_unencrypted_note(directory)
     if note:
         print(note, file=sys.stderr)
     return 0

@@ -215,16 +215,140 @@ def test_more_than_one_line_on_stdin_is_refused(monkeypatch, capsys, stdin):
     assert stopped.value.code == 2 and "one line" in capsys.readouterr().err
 
 
-def test_the_unencrypted_note_is_only_for_a_disk_known_to_be_unencrypted(monkeypatch):
-    monkeypatch.setattr(cli, "disk_devices", lambda: [])
-    assert "not encrypted" in cli.keyring_unencrypted_note()
-    monkeypatch.setattr(cli, "disk_devices", lambda: ["/dev/nvme0n1p3"])
-    assert cli.keyring_unencrypted_note() is None
+@pytest.mark.parametrize("encrypted, noted", [(False, True), (True, False), (None, False)])
+def test_the_unencrypted_note_is_only_for_a_keyring_disk_known_to_be_unencrypted(monkeypatch, tmp_path, encrypted, noted):
+    asked = []
+    monkeypatch.setattr(cli, "keyring_encrypted", lambda directory: asked.append(directory) or encrypted)
+    note = cli.keyring_unencrypted_note(tmp_path / "keyrings")
+    assert asked == [tmp_path / "keyrings"]
+    assert (note is not None and "not encrypted" in note) == noted
 
-    def unknown():
-        raise cli.DiskUnknown("lsblk could not run")
-    monkeypatch.setattr(cli, "disk_devices", unknown)
-    assert cli.keyring_unencrypted_note() is None
+
+# Where the keyring folder is kept: lsblk's tree and findmnt's list for each kind of machine.
+def disk(path: str, fstype: str | None, mounts=(), uuid: str | None = None, children=(), kind: str = "part") -> dict:
+    return {"name": path, "path": path, "type": kind, "fstype": fstype, "uuid": uuid, "mountpoints": list(mounts) or [None], "children": list(children) or None}
+
+
+def mount(target: str, source: str, uuid: str | None = None) -> dict:
+    return {"target": target, "source": source, "uuid": uuid}
+
+
+ESP = disk("/dev/nvme0n1p1", "vfat", ["/boot/efi"])
+ROOT_LUKS = disk("/dev/nvme0n1p2", "crypto_LUKS", uuid="L1", children=[disk("/dev/mapper/luks-L1", "btrfs", ["/"], uuid="B1", kind="crypt")])
+ROOT_PLAIN = disk("/dev/nvme0n1p2", "btrfs", ["/"], uuid="B1")
+HOME_PLAIN = disk("/dev/nvme0n1p3", "ext4", ["/home"], uuid="H1")
+HOME_LUKS = disk("/dev/nvme0n1p3", "crypto_LUKS", uuid="L2", children=[disk("/dev/mapper/luks-L2", "ext4", ["/home"], uuid="H1", kind="crypt")])
+ROOT_MOUNTS = [mount("/", "/dev/mapper/luks-L1", "B1"), mount("/boot/efi", "/dev/nvme0n1p1")]
+PLACE = "/home/ana/.local/share/keyrings"
+
+
+def nvme(*parts: dict) -> list:
+    return [disk("/dev/nvme0n1", None, kind="disk", children=parts)]
+
+
+MACHINES = {
+    "root encrypted, no separate home": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS, PLACE, True),
+    "root encrypted, home on a partition that is not": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home", "/dev/nvme0n1p3", "H1")], PLACE, False),
+    "root encrypted, home encrypted on its own": (nvme(ESP, ROOT_LUKS, HOME_LUKS), ROOT_MOUNTS + [mount("/home", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    "root not encrypted, home encrypted": (nvme(ESP, ROOT_PLAIN, HOME_LUKS), [mount("/", "/dev/nvme0n1p2", "B1"), mount("/home", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    "nothing encrypted": (nvme(ESP, ROOT_PLAIN), [mount("/", "/dev/nvme0n1p2", "B1")], PLACE, False),
+    # The image: / is composefs, /var a bind mount of the encrypted btrfs (findmnt -v leaves out the
+    # [/ostree/deploy/default/var] part, which is also cut here when it is there), /home a link to /var/home.
+    "the image, encrypted": (nvme(ESP, ROOT_LUKS), [mount("/", "composefs"), mount("/sysroot", "/dev/mapper/luks-L1", "B1"),
+                                                    mount("/var", "/dev/mapper/luks-L1[/ostree/deploy/default/var]", "B1")], "/var/home/ana/.local/share/keyrings", True),
+    "the image, not encrypted": (nvme(ESP, ROOT_PLAIN), [mount("/", "composefs"), mount("/sysroot", "/dev/nvme0n1p2", "B1"),
+                                                         mount("/var", "/dev/nvme0n1p2", "B1")], "/var/home/ana/.local/share/keyrings", False),
+    # A disk that is not encrypted, mounted inside the keyring folder of an encrypted home.
+    "a plain disk mounted below the keyring folder": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "ext4", [PLACE + "/usb"])])],
+                                                      ROOT_MOUNTS + [mount(PLACE + "/usb", "/dev/sda1")], PLACE, False),
+    "an encrypted disk mounted below it": (nvme(ESP, ROOT_LUKS, HOME_LUKS), ROOT_MOUNTS + [mount(PLACE + "/more", "/dev/mapper/luks-L2", "H1")], PLACE, True),
+    # Not block devices lsblk knows: cannot be told.
+    "home over NFS": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS + [mount("/home", "nas:/export/home")], PLACE, None),
+    "a tmpfs on the keyring folder": (nvme(ESP, ROOT_LUKS), ROOT_MOUNTS + [mount(PLACE, "tmpfs")], PLACE, None),
+    "home over NFS and a plain disk below": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home", "nas:/export/home"), mount(PLACE + "/x", "/dev/nvme0n1p3", "H1")], PLACE, False),
+    "no mount holds it": (nvme(ESP, ROOT_LUKS), [mount("/boot/efi", "/dev/nvme0n1p1")], PLACE, None),
+    "no mounts at all": (nvme(ESP, ROOT_LUKS), [], PLACE, None),
+    "no disks at all": ([], ROOT_MOUNTS, PLACE, None),
+    # A home mounted at /home/ana2 holds nothing of /home/ana.
+    "a mount that only shares the prefix": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount("/home/an", "/dev/nvme0n1p3", "H1")], PLACE, True),
+    "a mount beside the keyring folder": (nvme(ESP, ROOT_LUKS, HOME_PLAIN), ROOT_MOUNTS + [mount(PLACE + "-old", "/dev/nvme0n1p3", "H1")], PLACE, True),
+    # Mounted over: the later one is in use.
+    "a plain home mounted over an encrypted one": (nvme(ESP, ROOT_LUKS, HOME_LUKS, disk("/dev/nvme0n1p4", "ext4", ["/home"], uuid="H2")),
+                                                   ROOT_MOUNTS + [mount("/home", "/dev/mapper/luks-L2", "H1"), mount("/home", "/dev/nvme0n1p4", "H2")], PLACE, False),
+    # A btrfs over two disks, one of them not encrypted: the mount names only the first.
+    "btrfs over an encrypted disk and a plain one": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "btrfs", uuid="B1")])],
+                                                     ROOT_MOUNTS, PLACE, False),
+    "btrfs over two encrypted disks": (nvme(ESP, ROOT_LUKS) + [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", uuid="L3", children=[disk("/dev/mapper/luks-L3", "btrfs", uuid="B1", kind="crypt")])])],
+                                       ROOT_MOUNTS, PLACE, True),
+    "LVM inside LUKS": (nvme(ESP, disk("/dev/nvme0n1p2", "crypto_LUKS", uuid="L1", children=[disk("/dev/mapper/luks-L1", "LVM2_member", kind="crypt", children=[
+                            disk("/dev/mapper/vg-root", "ext4", ["/"], uuid="R1", kind="lvm")])])), [mount("/", "/dev/mapper/vg-root", "R1")], PLACE, True),
+}
+
+
+@pytest.mark.parametrize("name", MACHINES)
+def test_whether_the_keyring_folder_is_encrypted_comes_from_the_disks_that_hold_it(name):
+    tree, mounts, place, encrypted = MACHINES[name]
+    assert cli.keyring_mounts_encrypted(place, mounts, tree) is encrypted
+
+
+def test_devices_are_compared_as_resolved():
+    # findmnt may name /dev/dm-0 where lsblk says /dev/mapper/luks-L1.
+    tree, _, place, _ = MACHINES["root encrypted, no separate home"]
+    links = {"/dev/mapper/luks-L1": "/dev/dm-0"}
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/dm-0", "B1")], tree, lambda device: links.get(device, device)) is True
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/dm-0", "B1")], tree) is None
+
+
+@pytest.mark.parametrize("plain_first", [False, True])
+def test_a_device_under_several_parents_is_on_luks_only_under_each(plain_first):
+    raid = disk("/dev/md0", "ext4", ["/"], uuid="R1", kind="raid1")
+    tree = [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "crypto_LUKS", children=[disk("/dev/mapper/a", "linux_raid_member", kind="crypt", children=[raid])])]),
+            disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", "linux_raid_member", children=[raid])])]
+    tree = tree[::-1] if plain_first else tree
+    assert cli.lsblk_on_luks(tree)["/dev/md0"] is False
+    assert cli.keyring_mounts_encrypted(PLACE, [mount("/", "/dev/md0", "R1")], tree) is False
+
+
+def disk_tools(tmp_path: Path, tree: list | None, mounts: list | None) -> Path:
+    """lsblk and findmnt stand-ins that print `tree` and `mounts`, or fail when given None."""
+    tools = tmp_path / "tools"
+    tools.mkdir(exist_ok=True)
+    for name, key, value in (("lsblk", "blockdevices", tree), ("findmnt", "filesystems", mounts)):
+        body = f"echo {name} failed >&2; exit 1" if value is None else f"cat <<'JSON'\n{json.dumps({key: value})}\nJSON"
+        (tools / name).write_text(f"#!/bin/sh\n{body}\n")
+        (tools / name).chmod(0o755)
+    return tools
+
+
+@pytest.mark.parametrize("name", ["root encrypted, home on a partition that is not", "root encrypted, home encrypted on its own", "home over NFS"])
+def test_status_says_whether_the_keyring_folder_is_encrypted(tmp_path, name):
+    tree, mounts, _, encrypted = MACHINES[name]
+    home = tmp_path / "home" / "ana"
+    home.mkdir(parents=True)
+    # The stand-ins describe a machine whose /home is this test's own folder.
+    mounts = [dict(item, target=str(tmp_path) + item["target"]) if item["target"].startswith("/home") else item for item in mounts]
+    tools = disk_tools(tmp_path, tree, mounts)
+    result = run_cli(home, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["encrypted"] is encrypted
+
+
+def test_status_follows_links_to_the_folder(tmp_path):
+    # As on the image, where /home is a link to /var/home.
+    real = tmp_path / "var" / "home" / "ana"
+    real.mkdir(parents=True)
+    (tmp_path / "home").symlink_to(tmp_path / "var" / "home")
+    tree = nvme(ESP, ROOT_LUKS, HOME_PLAIN)
+    tools = disk_tools(tmp_path, tree, ROOT_MOUNTS + [mount(str(tmp_path / "var"), "/dev/nvme0n1p3", "H1")])
+    result = run_cli(tmp_path / "home" / "ana", "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert json.loads(result.stdout)["encrypted"] is False, result.stderr
+
+
+@pytest.mark.parametrize("tree, mounts", [(None, []), ([], None)])
+def test_status_says_null_when_lsblk_or_findmnt_cannot_say(tmp_path, tree, mounts):
+    tools = disk_tools(tmp_path, tree if tree is None else nvme(ESP, ROOT_LUKS), mounts if mounts is None else ROOT_MOUNTS)
+    result = run_cli(tmp_path, "--status", env={"PATH": f"{tools}:{os.environ['PATH']}"})
+    assert result.returncode == 0 and json.loads(result.stdout)["encrypted"] is None
 
 
 def run_cli(home: Path, *args: str, stdin: str = "", python: str = sys.executable, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -234,9 +358,10 @@ def run_cli(home: Path, *args: str, stdin: str = "", python: str = sys.executabl
 
 
 def test_status_is_json_and_needs_no_daemon(tmp_path):
-    result = run_cli(tmp_path, "--status", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    tools = disk_tools(tmp_path, None, None)
+    result = run_cli(tmp_path, "--status", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent", "PATH": f"{tools}:{os.environ['PATH']}"})
     assert result.returncode == 0
-    assert json.loads(result.stdout) == {"keyring": "none", "folder": str(tmp_path / ".local" / "share" / "keyrings")}
+    assert json.loads(result.stdout) == {"keyring": "none", "folder": str(tmp_path / ".local" / "share" / "keyrings"), "encrypted": None}
     folder = tmp_path / ".local" / "share" / "keyrings"
     folder.mkdir(parents=True)
     (folder / "login.keyring").write_bytes(SEALED)
