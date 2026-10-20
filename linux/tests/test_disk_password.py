@@ -251,10 +251,13 @@ def fake_tools(folder: Path, disk: Path) -> dict:
 
 
 def converse(argv: list[str], env: dict, answers: list[tuple[str, str]], timeout: float = 600) -> tuple[int, str]:
-    """Run argv on a terminal of its own and answer each prompt as it comes."""
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execvpe(argv[0], argv, env)
+    """Run argv on a terminal of its own and answer each prompt as it comes. `setsid -c` makes the
+    terminal the command's own (getpass and sudo read /dev/tty), without forking the test process."""
+    if not shutil.which("setsid"):
+        pytest.skip("needs setsid (util-linux)")
+    fd, child_end = pty.openpty()
+    process = subprocess.Popen(["setsid", "-c", *argv], stdin=child_end, stdout=child_end, stderr=child_end, env=env, close_fds=True)
+    os.close(child_end)
     screen, pending, deadline = "", list(answers), time.monotonic() + timeout
     while time.monotonic() < deadline:
         ready, _, _ = select.select([fd], [], [], 1)
@@ -268,9 +271,9 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str]], timeout
             screen += data.decode(errors="replace")
             if pending and screen.rstrip().endswith(pending[0][0]):
                 os.write(fd, f"{pending.pop(0)[1]}\n".encode())
-    _, status = os.waitpid(pid, 0)
+    code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
     os.close(fd)
-    return os.waitstatus_to_exitcode(status), screen
+    return code, screen
 
 
 @needs_cryptsetup
