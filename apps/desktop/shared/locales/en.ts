@@ -656,6 +656,8 @@ export const en = {
   'firstRun.handOver.text': 'The next time it starts, it asks its new owner for a name, a password and their Hermes sign-in.',
   'firstRun.handOver.textEncrypted': 'The next time it starts, it asks for the disk password chosen when it was installed: tell it to its new owner. Setup then asks them for a name, a password, a disk password of their own and their Hermes sign-in.',
   'firstRun.handOver.notEncrypted': 'This disk is not encrypted: anyone who has it can read its files, and a reset deletes them but is not a secure erase.',
+  'firstRun.handOver.encryptionUnknown':
+    'Herald OS could not tell whether this disk is encrypted. If the computer asks for a disk password when it starts, tell the new owner the one chosen when it was installed; if it does not, anyone who has the disk can read its files, and a reset is not a secure erase.',
   'firstRun.handOver.done': 'Done',
   // The disk password unlocks the encrypted disk when the computer starts, before Herald OS does.
   'firstRun.disk.title': 'Your disk password',

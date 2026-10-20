@@ -513,11 +513,11 @@ describe("first-run setup's disk password", () => {
 
 describe('handing the computer over', () => {
   it.each([
-    [true, 'firstRun.handOver.textEncrypted', false],
-    [false, 'firstRun.handOver.text', true],
-    // Unknown: neither the disk password to pass on, nor a claim that the disk is unencrypted.
-    [null, 'firstRun.handOver.text', false]
-  ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns) => {
+    [true, 'firstRun.handOver.textEncrypted', false, false],
+    [false, 'firstRun.handOver.text', true, false],
+    // Unknown: neither the disk password to pass on nor a claim that the disk is unencrypted, but it says it could not tell.
+    [null, 'firstRun.handOver.text', false, true]
+  ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns, unknown) => {
     bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted, newOwner: false })
     const host = await mount('en')
     await click(button(host, t('firstRun.welcome.forSomeoneElse')))
@@ -525,6 +525,7 @@ describe('handing the computer over', () => {
     expect(heading(host)).toBe(t('firstRun.handOver.title'))
     expect(host.textContent).toContain(t(text))
     expect(host.textContent?.includes(t('firstRun.handOver.notEncrypted'))).toBe(warns)
+    expect(host.textContent?.includes(t('firstRun.handOver.encryptionUnknown'))).toBe(unknown)
   })
 })
 
@@ -561,6 +562,21 @@ describe('a refused current disk password', () => {
       }
       expect(texts[1], language).toContain('TPM')
       expect(texts[2], language).toContain('FIDO2')
+    }
+  })
+})
+
+describe('handing over a computer whose encryption could not be told', () => {
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says so in %s', async language => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: null, newOwner: false })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forSomeoneElse')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.handOver.title'))
+    expect(host.textContent).toContain(t('firstRun.handOver.encryptionUnknown'))
+    expect(host.textContent).not.toContain(t('firstRun.handOver.notEncrypted'))
+    if (language !== 'en') {
+      expect(t('firstRun.handOver.encryptionUnknown')).not.toBe(en['firstRun.handOver.encryptionUnknown'])
     }
   })
 })

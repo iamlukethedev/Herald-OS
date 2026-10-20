@@ -623,6 +623,7 @@ export const zhCN: Translation = {
   'firstRun.handOver.text': '下次启动时，它会请新主人设置名字和密码，并登录 Hermes 账户。',
   'firstRun.handOver.textEncrypted': '下次启动时，它会要求输入安装时设置的磁盘密码：请把这个密码告诉新主人。之后，设置会请对方设置名字、密码和自己的磁盘密码，并登录 Hermes 账户。',
   'firstRun.handOver.notEncrypted': '这块磁盘没有加密：拿到它的人都能读取其中的文件；重置会删除这些文件，但不是安全擦除。',
+  'firstRun.handOver.encryptionUnknown': 'Herald OS 无法判断这块磁盘是否已加密。如果电脑开机时要求输入磁盘密码，请把安装时设置的密码告诉新主人；如果不要求，任何拿到磁盘的人都能读取其中的文件，重置也不是安全擦除。',
   'firstRun.handOver.done': '完成',
   'firstRun.disk.title': '你的磁盘密码',
   'firstRun.disk.text': '这台电脑的磁盘已加密，开机时要求输入的密码是之前设置这台电脑的人选的。请设置你自己的密码：它将成为打开磁盘的唯一方式。旧密码会失效，之前为打开磁盘设置的其他一切也会失效，包括其他密码、恢复密钥，以及用安全密钥或 TPM 解锁。',

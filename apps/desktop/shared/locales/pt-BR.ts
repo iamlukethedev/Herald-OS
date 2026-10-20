@@ -642,6 +642,8 @@ export const ptBR: Translation = {
   'firstRun.handOver.textEncrypted':
     'Na próxima vez que o computador for ligado, ele vai pedir a senha do disco escolhida na instalação: passe essa senha ao novo dono. Depois, a configuração pede que ele escolha um nome, uma senha e uma senha do disco própria e entre na conta dele no Hermes.',
   'firstRun.handOver.notEncrypted': 'Este disco não é criptografado: quem estiver com ele consegue ler os arquivos, e uma redefinição apaga esses arquivos, mas não faz um apagamento seguro.',
+  'firstRun.handOver.encryptionUnknown':
+    'O Herald OS não conseguiu saber se este disco é criptografado. Se o computador pedir uma senha do disco ao ligar, passe ao novo dono a senha escolhida na instalação; se não pedir, qualquer pessoa com o disco consegue ler os arquivos, e uma redefinição não faz um apagamento seguro.',
   'firstRun.handOver.done': 'Concluir',
   'firstRun.disk.title': 'Sua senha do disco',
   'firstRun.disk.text':

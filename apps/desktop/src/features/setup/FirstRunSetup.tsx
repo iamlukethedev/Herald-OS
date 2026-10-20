@@ -123,6 +123,7 @@ export function FirstRunSetup() {
               text={t(forSomeoneElse ? (diskEncrypted === true ? 'firstRun.handOver.textEncrypted' : 'firstRun.handOver.text') : 'firstRun.done.text')}
             />
             {forSomeoneElse && diskEncrypted === false && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
+            {forSomeoneElse && diskEncrypted === null && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.encryptionUnknown')}</p>}
             <Footer onNext={() => void finish()} label={t(forSomeoneElse ? 'firstRun.handOver.done' : 'firstRun.done.start')} />
           </div>
         )}
