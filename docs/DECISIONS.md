@@ -1652,3 +1652,44 @@ or a scanner, use it up and lock the owner out.
   machine that never turns SSH on has neither the table nor the unit.
 - **firewalld required by default.** Without firewalld running, `setup ssh` refuses unless
   `--no-firewall`, which warns, and still loads the limit when `nft` is there.
+
+## ADR-031: Release files are signed with an OpenPGP key over one SHA256SUMS
+
+**Status: Accepted.** From #41.
+
+A release's files (the installer ISO, the VM disks, the Linux tarballs, the Mac downloads) had only a
+`.sha256` each, which proves a download is the file the release published, not who published it.
+Each release now gets one `SHA256SUMS` over all of them, signed with a detached OpenPGP signature,
+`SHA256SUMS.sig`, by the release workflows.
+
+- **OpenPGP, not cosign.** `gpg` is already on Arch (pacman needs it) and, by default, on Fedora,
+  Debian and Ubuntu desktops, so `herald-os update` and people checking a download need nothing new
+  on Linux; cosign is on none of them. `makepkg` checks OpenPGP signatures itself through `validpgpkeys`,
+  and could only run cosign from `prepare()`, with cosign installed. OpenPGP also has key rotation
+  built in: a primary key that only certifies, signing subkeys under it, and certifications from an
+  old primary key to a new one. Reusing the images' cosign key (ADR-018, #18) would mean one key for
+  everything, but a bare key pair with no subkeys or certifications, whose replacement breaks every
+  install's trust at once. So there are two keys: cosign for images, which bootc and podman check
+  natively, and OpenPGP for files. macOS and Windows need GnuPG or Gpg4win to check by hand either
+  way.
+- **One signed list, not a signature per file.** One signature covers every file, the parts of a
+  split ISO or disk are checked through their joined file's line, and `sha256sum -c` works on it
+  directly. Both release workflows write it from every `.sha256` on the release, one at a time
+  (a concurrency group per tag), so the one that finishes last lists everything.
+- **The primary key stays offline.** CI holds a signing subkey that expires after two years. Installs
+  trust the primary key's fingerprint, so a new or renewed subkey reaches them in the release's
+  `herald-os-release-key.asc` without a change on their side. That file is never trusted by itself:
+  it only adds subkeys and dates to keys an install already trusts, or a new primary key that one of
+  them has certified, judged by the certifier's full fingerprint and not passed on further.
+- **Installs start refusing once they carry the key, not at a version.** The versions already out
+  cannot learn a cutoff, and a cutoff in new versions would say the same as the key being there. So
+  `herald-os update` checks signatures exactly when the version in use has
+  `resources/herald-os-linux/keys/herald-os-release.asc`, and the `.sha256` as before otherwise.
+  Every install keeps updating through the change, and from the first version with the key on, a
+  release without a good signature is refused with nothing changed, downgrades to unsigned releases
+  included. The workflows fail a release without the secret once the key is committed, rather than
+  publish one those installs would refuse.
+- **Nothing is signed until a maintainer turns it on.** Without the secret the release is unsigned,
+  with a notice. The key is made offline and committed only after a signed release checks out
+  (docs/RELEASE-SIGNING.md), and tests keep its fingerprint in SECURITY.md, the README and the
+  PKGBUILD in step with it.

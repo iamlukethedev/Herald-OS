@@ -137,6 +137,20 @@ Herald.
    ```
 
    On Windows: `copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso`.
+
+   Signed releases also have `SHA256SUMS`, `SHA256SUMS.sig` and `herald-os-release-key.asc`. Before
+   writing the ISO, check it was signed with the Herald OS release key (gpg comes with Linux; on a
+   Mac `brew install gnupg`, on Windows [Gpg4win](https://www.gpg4win.org);
+   [SECURITY.md](SECURITY.md#release-signatures) has the Windows commands):
+
+   ```bash
+   gpg --show-keys herald-os-release-key.asc   # must show the fingerprint below
+   gpg --import herald-os-release-key.asc
+   gpg --verify SHA256SUMS.sig SHA256SUMS      # Good signature, Primary key fingerprint below
+   grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
+   ```
+
+   Release key fingerprint: not set yet (the first signed release sets it here)
 2. Write the ISO to a USB stick of 8 GB or more with
    [Fedora Media Writer](https://fedoraproject.org/workstation/download) or
    [balenaEtcher](https://etcher.balena.io).
@@ -201,7 +215,9 @@ herald-os-app          # Herald OS as an app inside your desktop
 
 `herald-os-tarball install` puts the `herald-os` commands in `/usr/local/bin` and Herald OS in your
 application menu, and, if niri is installed, on your login screen; `sudo herald-os-tarball remove`
-takes them out again. `herald-os update` installs a new release once its checksum matches, and
+takes them out again. `herald-os update` installs a new release once its checksum matches, and once
+the version you run carries the release key, only a release whose `SHA256SUMS` is signed with it
+([SECURITY.md](SECURITY.md#release-signatures) checks a download by hand the same way).
 `herald-os rollback` goes back to the version before.
 
 The full session needs niri and the tools its menu bar and panels use (Fedora's package names are
@@ -710,7 +726,8 @@ CI runs all of these on Ubuntu and macOS. [CONTRIBUTING.md](CONTRIBUTING.md) has
   Hermes itself, whenever you like.
 - **Arch and Omarchy:** run `git pull` and `makepkg -si` again in `packaging/arch/herald-os-bin`.
 - **The tarball on another Linux:** `herald-os update` downloads the newest release for your
-  architecture, checks it against its `.sha256` and swaps it into `/opt/herald-os`, keeping the
+  architecture, checks it against its `.sha256` (or, once the version you run carries the release
+  key, its signed `SHA256SUMS`) and swaps it into `/opt/herald-os`, keeping the
   version before in `/opt/herald-os.previous` for `herald-os rollback`. Log out and back in to use it.
 - **From source on macOS:** `git pull`, then `npm run bootstrap`.
 - **The development VM:** `git pull` on the Mac, then `bash linux/dev/push.sh`.

@@ -37,6 +37,11 @@ and check the parts before joining them, so a bad download shows which part to f
 shasum -a 256 -c "herald-os-$VERSION-x86_64.iso.sha256sums"    # sha256sum -c on Linux
 ```
 
+Signed releases also have `SHA256SUMS`, `SHA256SUMS.sig` and `herald-os-release-key.asc`, which show
+the ISO was published with the Herald OS release key, not only that it arrived whole. Download them
+too and check the joined ISO before writing it; [SECURITY.md](../../SECURITY.md#release-signatures)
+has the fingerprint and the commands for macOS, Linux and Windows.
+
 On Windows, in a Command Prompt, join the parts, then compare the hash `certutil` prints with the one
 in the `.sha256`:
 

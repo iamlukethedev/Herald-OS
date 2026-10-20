@@ -476,6 +476,9 @@ switched from another bootc system is different: it gets a login screen and a lo
   5. Only then commit `cosign.pub` as `linux/image/cosign.pub`. From then on the image workflow fails
      if `COSIGN_PRIVATE_KEY` is missing or does not match it, and CI fails if `SIGNING_ENABLED` is
      not `true`.
+- **Release files:** the ISO, the VM disks and the tarballs are listed in each release's `SHA256SUMS`,
+  signed with the OpenPGP release key (ADR-031), not the images' cosign key. Turning it on is a
+  maintainer step too: [docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md).
 - **SELinux** stays permissive for now (ADR-012).
 
 ### The NVIDIA image
@@ -812,6 +815,12 @@ herald-os setup        # once per user: Hermes Agent and the bridge plugin
 `HERALD_OS_TARBALL_URL=file:///path/to/herald-os-<version>-linux-x64.tar.gz makepkg -si --skipchecksums`
 packages a tarball you built yourself instead.
 
+Once the PKGBUILD's `_release_keys` holds the release key's fingerprint (empty until the first
+signed release), `makepkg` also downloads the release's `SHA256SUMS` and checks `SHA256SUMS.sig`
+against that key (`validpgpkeys`), and `prepare()` checks the tarball against `SHA256SUMS`. gpg needs
+the key once: `gpg --import ../../../linux/keys/herald-os-release.asc`. A tarball of your own also
+needs `--skippgpcheck`.
+
 The session needs niri (and a login screen such as greetd); the optional dependencies list what
 each panel and feature uses. `.github/workflows/arch.yml` builds the package from a fresh tarball in
 an Arch container, lints it with namcap, installs it and runs the CLIs.
@@ -820,7 +829,9 @@ an Arch container, lints it with namcap, installs it and runs the CLIs.
 
 Every release has `herald-os-<version>-linux-x64.tar.gz` and `-linux-arm64.tar.gz`, each with a
 `.sha256`: the app, and under `resources/` the `herald-os` commands, the session scripts, the niri
-template, themes, the install catalog and the bridge plugin. It goes in `/opt/herald-os`:
+template, themes, the install catalog, the bridge plugin and, once signing is on, the release key.
+Signed releases also have `SHA256SUMS` and `SHA256SUMS.sig`; [SECURITY.md](../SECURITY.md#release-signatures)
+checks a tarball against them. It goes in `/opt/herald-os`:
 
 ```bash
 sha256sum -c herald-os-<version>-linux-x64.tar.gz.sha256
@@ -873,8 +884,17 @@ second fails. The version before stays in `/opt/herald-os.previous`, and `herald
 back the same way; both take effect at the next login, or the next start of `herald-os-app`. If a
 step fails anyway, the message says which version is in which folder. Replacing `/opt/herald-os`
 needs sudo: in a terminal it asks for your password,
-while Update in the menu bar can only use sudo without one. The checksum proves the download is the
-file the release published, not who published it, so a release is trusted as far as GitHub is.
+while Update in the menu bar can only use sudo without one. A version that carries the release key
+(`resources/herald-os-linux/keys/herald-os-release.asc`) first downloads the release's `SHA256SUMS`,
+`SHA256SUMS.sig` and `herald-os-release-key.asc`, and checks the signature with gpg in a keyring of
+its own (no agent, no key server, deleted afterwards) against the keys it carries, or a key one of
+them has certified. Only then does it download the tarball and check it against its line in
+`SHA256SUMS`. A release with no signature, a signature by any other key, an expired or revoked one,
+or a changed `SHA256SUMS` is refused, and nothing changes; so is going back to a release from before
+signing with `herald-os update <version>` (`herald-os rollback` still works). Without the key, as in
+every version from before signed releases, the `.sha256` proves the download is the file the release
+published, not who published it, so a release is trusted as far as GitHub is.
+[docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md) has the key and how it changes.
 `herald-os update` also updates the system's packages as before (`dnf upgrade` on Fedora).
 
 ## Inside Hyprland and Omarchy (app mode)

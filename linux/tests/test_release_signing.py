@@ -5,6 +5,8 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import os
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -254,3 +256,70 @@ def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build):
     unset.mkdir()
     sums.write_text(f"{'0' * 64}  herald-os-{version}-linux-{build}.tar.gz\n")
     assert sourced(pkgbuild(unset), "prepare", env).returncode == 0
+
+
+# The fingerprint: the key file, SECURITY.md, the README and the PKGBUILD agree, so the key cannot be
+# committed with the docs still unset, or the docs and package name a key installs do not have.
+
+KEY_FILE = ROOT / "linux" / "keys" / "herald-os-release.asc"
+FINGERPRINT_LINE = re.compile(r"^\s*Release key fingerprint: (.+)$", re.M)
+NOT_SET = "not set yet"
+
+
+def key_file_fingerprints(path: Path, home: Path) -> list[str]:
+    home.mkdir(mode=0o700, exist_ok=True)
+    shown = subprocess.run(["gpg", "--batch", "--no-options", "--no-autostart", "--homedir", str(home), "--with-colons", "--import-options", "show-only", "--import", str(path)], capture_output=True, text=True, timeout=60)
+    return list(tb.primary_keys(shown.stdout))
+
+
+def mismatches(key_file: Path, docs: list[Path], pkgbuild_file: Path, home: Path) -> list[str]:
+    problems = []
+    keys = key_file_fingerprints(key_file, home) if key_file.exists() else []
+    if key_file.exists() and not keys:
+        problems.append(f"{key_file.name} holds no key")
+    for doc in docs:
+        lines = FINGERPRINT_LINE.findall(doc.read_text())
+        if len(lines) != 1:
+            problems.append(f"{doc.name} has {len(lines)} 'Release key fingerprint:' lines")
+            continue
+        listed = re.findall(r"`([0-9A-F]{40})`", lines[0])
+        if keys and (NOT_SET in lines[0] or sorted(listed) != sorted(keys)):
+            problems.append(f"{doc.name} gives {listed or lines[0]!r}, the key file holds {keys}")
+        if not keys and (listed or not lines[0].startswith(NOT_SET)):
+            problems.append(f"{doc.name} gives {lines[0]!r} but no release key is committed")
+    sourced_keys = subprocess.run(["bash", "-c", 'source "$1" && printf "%s\\n" "${_release_keys[@]}"', "pkgbuild", str(pkgbuild_file)], capture_output=True, text=True, timeout=60)
+    if sorted(sourced_keys.stdout.split()) != sorted(keys):
+        problems.append(f"{pkgbuild_file.name}'s _release_keys are {sourced_keys.stdout.split()}, the key file holds {keys}")
+    return problems
+
+
+def test_the_release_key_is_published_the_same_everywhere(tmp_path):
+    if KEY_FILE.exists() and shutil.which("gpg") is None:
+        pytest.skip("needs gpg to read the release key")
+    assert mismatches(KEY_FILE, [ROOT / "SECURITY.md", ROOT / "README.md"], PKGBUILD, tmp_path / "gpg") == []
+
+
+def test_the_check_catches_a_key_committed_without_the_rest(tmp_path, keys):
+    security, readme = tmp_path / "SECURITY.md", tmp_path / "README.md"
+    for doc, source in ((security, ROOT / "SECURITY.md"), (readme, ROOT / "README.md")):
+        doc.write_text(source.read_text())
+    key_file = tmp_path / "herald-os-release.asc"
+    (tmp_path / "unset").mkdir()
+    unset = pkgbuild(tmp_path / "unset")
+    home = tmp_path / "gpg"
+    # As shipped today: no key, nothing set.
+    assert mismatches(key_file, [security, readme], unset, home) == []
+    # The key committed alone.
+    key_file.write_bytes(keys.export(keys.release))
+    assert len(mismatches(key_file, [security, readme], unset, home)) == 3
+    # Everything set: the fingerprint in backticks, and the PKGBUILD's keys.
+    for doc in (security, readme):
+        doc.write_text(FINGERPRINT_LINE.sub(lambda match: match.group(0).replace(match.group(1), f"`{keys.release}`"), doc.read_text()))
+    (tmp_path / "set").mkdir()
+    assert mismatches(key_file, [security, readme], pkgbuild(tmp_path / "set", keys.release), home) == []
+    # A second key in the file (a rotation) must be listed too.
+    key_file.write_bytes(keys.export(keys.release, keys.successor))
+    assert len(mismatches(key_file, [security, readme], pkgbuild(tmp_path / "set", keys.release), home)) == 3
+    # The docs and package naming a key with none committed.
+    key_file.unlink()
+    assert len(mismatches(key_file, [security, readme], pkgbuild(tmp_path / "set", keys.release), home)) == 3
