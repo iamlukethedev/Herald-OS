@@ -15,7 +15,9 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -50,8 +52,9 @@ def write(path: Path, data, mode: int = 0o644) -> None:
     path.chmod(mode)
 
 
-def make_app(app: Path, version: str, tools=("herald-os", "herald-os-app", "herald-os-update", "herald-os-tarball")) -> Path:
-    """An unpacked release tarball: the Electron binary, app.asar and the Linux resources."""
+def make_app(app: Path, version: str, tools=("herald-os", "herald-os-app", "herald-os-update", "herald-os-tarball"), keys: bytes | None = None) -> Path:
+    """An unpacked release tarball: the Electron binary, app.asar and the Linux resources, with the
+    release keys when given."""
     write(app / "herald-os", "#!/bin/sh\n", 0o755)
     write(app / "chrome-sandbox", "", 0o755)
     write(app / "resources" / "app.asar", asar({"name": "@herald-os/desktop", "version": version}))
@@ -66,6 +69,8 @@ def make_app(app: Path, version: str, tools=("herald-os", "herald-os-app", "hera
     shutil.copytree(ROOT / "linux" / "niri", linux / "niri")
     shutil.copytree(ROOT / "linux" / "catalog", app / "resources" / "catalog")
     shutil.copytree(ROOT / "linux" / "themes", app / "resources" / "themes")
+    if keys is not None:
+        write(linux / "keys" / "herald-os-release.asc", keys)
     return app
 
 
@@ -94,13 +99,16 @@ def test_versions_sort_the_way_semver_does():
     assert tb.is_newer("0.1.0", None) and not tb.is_newer("nightly", None)
 
 
-def release(tag, assets=("x64", "arm64"), prerelease=False, draft=False, checksums=True):
+def release(tag, assets=("x64", "arm64"), prerelease=False, draft=False, checksums=True, signed=()):
+    """A release in GitHub's API; `signed` names the signing files it carries (SHA256SUMS and the rest)."""
     files = []
     for arch in assets:
         name = f"herald-os-{tag[1:]}-linux-{arch}.tar.gz"
         files.append({"name": name, "size": 1000, "browser_download_url": f"https://example.com/{tag}/{name}"})
         if checksums:
             files.append({"name": f"{name}.sha256", "browser_download_url": f"https://example.com/{tag}/{name}.sha256"})
+    for name in signed:
+        files.append({"name": name, "browser_download_url": f"https://example.com/{tag}/{name}"})
     return {"tag_name": tag, "prerelease": prerelease, "draft": draft, "assets": files}
 
 
@@ -546,3 +554,409 @@ def test_a_rollback_that_cannot_put_things_back_says_where_they_are(updated, mon
     assert versions(updated, parked) == [None, "0.1.0", "0.2.0"]
     error = capsys.readouterr().err
     assert f"0.2.0 is in {parked}" in error and f"sudo mv {updated.previous} {updated.app}" in error
+
+
+# ---------------------------------------------------------------------------------------------
+# Signed releases: SHA256SUMS and its OpenPGP signature, checked with the release keys of the version
+# in use (docs/RELEASE-SIGNING.md). The keys are made here with gpg, as the maintainer would.
+
+GPG = shutil.which("gpg")
+
+
+class Keys:
+    """A GnuPG home holding the secret keys: the maintainer's offline machine and CI in one."""
+
+    def __init__(self, home: Path):
+        self.home = home
+
+    def gpg(self, *args: str, faked: str | None = None) -> subprocess.CompletedProcess:
+        clock = ["--faked-system-time", faked] if faked else []
+        done = subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--pinentry-mode", "loopback", "--passphrase", "", *clock, *args], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        return done
+
+    def make(self, name: str, expires: str = "0", faked: str | None = None) -> str:
+        """A certify-only primary key with a signing subkey, as docs/RELEASE-SIGNING.md makes it."""
+        uid = f"{name} <{name.lower().replace(' ', '-')}@example.com>"
+        before = set(self.primaries())
+        self.gpg("--yes", "--quick-generate-key", uid, "ed25519", "cert", "0", faked=faked)
+        (fingerprint,) = set(self.primaries()) - before
+        self.gpg("--quick-add-key", fingerprint, "ed25519", "sign", expires, faked=faked)
+        return fingerprint
+
+    def primaries(self) -> list[str]:
+        listing = subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--with-colons", "--fixed-list-mode", "--list-keys"], capture_output=True, text=True, timeout=120).stdout
+        return list(tb.primary_keys(listing))
+
+    def fingerprints(self, key: str) -> list[str]:
+        """The primary key's fingerprint, then its subkeys'."""
+        listing = self.gpg("--with-colons", "--fixed-list-mode", "--list-keys", key).stdout
+        return [line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")]
+
+    def export(self, *fingerprints: str) -> bytes:
+        return self.gpg("--armor", "--export", *fingerprints).stdout.encode()
+
+    def export_binary(self, fingerprint: str) -> bytes:
+        return subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--export", fingerprint], capture_output=True, timeout=120, check=True).stdout
+
+    def sign(self, key: str, path: Path, faked: str | None = None) -> Path:
+        signature = path.with_name(f"{path.name}.sig")
+        signature.unlink(missing_ok=True)
+        self.gpg("--local-user", key, "--detach-sign", "--output", str(signature), str(path), faked=faked)
+        return signature
+
+    def certify(self, by: str, key: str) -> None:
+        self.gpg("--local-user", by, "--quick-sign-key", key)
+
+
+@pytest.fixture(scope="session")
+def keys():
+    if GPG is None:
+        pytest.skip("needs gpg (GnuPG)")
+    # Short and outside the test folders: gpg-agent's socket path has a length limit.
+    home = Path(tempfile.mkdtemp(prefix="hos-gpg-", dir="/tmp" if Path("/tmp").is_dir() else None))
+    found = Keys(home)
+    found.release = found.make("Herald OS releases")
+    found.other = found.make("Someone else")
+    found.successor = found.make("Herald OS releases two")
+    found.certify(found.release, found.successor)
+    found.unvouched = found.make("Herald OS releases unvouched")
+    found.vouched_by_other = found.make("Herald OS releases elsewhere")
+    found.certify(found.other, found.vouched_by_other)
+    found.expired = found.make("Herald OS releases expired", expires="1y", faked="20200101T000000")
+    yield found
+    subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "all"], capture_output=True, check=False)
+    shutil.rmtree(home, ignore_errors=True)
+
+
+def sums_of(folder: Path) -> Path:
+    """SHA256SUMS for the tarballs in `folder`, as scripts/release-sums.sh writes it."""
+    lines = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}" for path in sorted(folder.glob("*.tar.gz"))]
+    (folder / tb.SUMS).write_text("\n".join(lines) + "\n")
+    return folder / tb.SUMS
+
+
+def pinned(tmp_path: Path, keys: Keys, *fingerprints: str) -> Path:
+    path = tmp_path / "pinned" / "herald-os-release.asc"
+    write(path, keys.export(*fingerprints))
+    return path
+
+
+def test_a_good_signature_names_the_release_key(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    assert tb.verify_signature(sums, keys.sign(keys.release, sums), pinned(tmp_path, keys, keys.release)) == keys.release
+
+
+def test_a_signature_by_another_key_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, keys.sign(keys.other, sums), pinned(tmp_path, keys, keys.release))
+
+
+def test_a_sha256sums_changed_after_signing_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    signature = keys.sign(keys.release, sums)
+    sums.write_text(f"{'0' * 64}  herald-os-0.2.0-linux-x64.tar.gz\n")
+    with pytest.raises(tb.ReleaseError, match="changed after it was signed"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release))
+
+
+def test_a_signature_that_is_not_one_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    (tmp_path / "SHA256SUMS.sig").write_bytes(b"not a signature")
+    with pytest.raises(tb.ReleaseError, match="no signature that gpg can check"):
+        tb.verify_signature(sums, tmp_path / "SHA256SUMS.sig", pinned(tmp_path, keys, keys.release))
+
+
+def test_a_signature_by_an_expired_subkey_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    signature = keys.sign(keys.expired, sums, faked="20200601T000000")
+    with pytest.raises(tb.ReleaseError, match="expired"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.expired))
+
+
+def test_without_gpg_or_with_no_key_nothing_is_trusted(tmp_path, keys, monkeypatch):
+    sums = sums_of(tmp_path)
+    signature = keys.sign(keys.release, sums)
+    write(tmp_path / "empty.asc", "")
+    with pytest.raises(tb.ReleaseError, match="holds no key|cannot be read"):
+        tb.verify_signature(sums, signature, tmp_path / "empty.asc")
+    monkeypatch.setattr(tb.shutil, "which", lambda name: None)
+    with pytest.raises(tb.ReleaseError, match="needs gpg"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release))
+
+
+def test_a_new_key_certified_by_the_release_key_takes_over(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    signature = keys.sign(keys.successor, sums)
+    trusted = pinned(tmp_path, keys, keys.release)
+    write(tmp_path / "offered.asc", keys.export(keys.successor))
+    assert tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc") == keys.successor
+    # Without the release's key file, the new key is unknown.
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, trusted)
+
+
+@pytest.mark.parametrize("which", ["unvouched", "vouched_by_other"])
+def test_a_new_key_no_release_key_certified_is_refused(tmp_path, keys, which):
+    sums = sums_of(tmp_path)
+    key = getattr(keys, which)
+    signature = keys.sign(key, sums)
+    # The release's key file may carry anything, the pinned key included; only a certification counts.
+    write(tmp_path / "offered.asc", keys.export(key, keys.other, keys.release))
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), tmp_path / "offered.asc")
+
+
+def packets(data: bytes) -> list[tuple[int, bytes]]:
+    """OpenPGP packets as (tag, whole packet), in either header format (RFC 4880, 4.2), without the
+    partial lengths an export never uses."""
+    found, at = [], 0
+    while at < len(data):
+        header = data[at]
+        assert header & 0x80, "not an OpenPGP packet"
+        if not header & 0x40:
+            size = (1, 2, 4)[header & 3]
+            tag, start = (header >> 2) & 0x0F, at + 1 + size
+            length = int.from_bytes(data[at + 1:start], "big")
+            found.append((tag, data[at:start + length]))
+            at = start + length
+            continue
+        tag, first, start = header & 0x3F, data[at + 1], at + 2
+        if first < 192:
+            length = first
+        elif first < 224:
+            length, start = ((first - 192) << 8) + data[at + 2] + 192, at + 3
+        else:
+            assert first == 255, "a partial-length packet"
+            length, start = struct.unpack(">I", data[at + 2:at + 6])[0], at + 6
+        found.append((tag, data[at:start + length]))
+        at = start + length
+    return found
+
+
+def test_a_forged_certification_vouches_for_nothing(tmp_path, keys):
+    """The release key's real certification of one key, moved onto another with the same user ID: it
+    names the right issuer, but its signature does not cover the key it now sits on."""
+    sums = sums_of(tmp_path)
+    impostor = keys.make("Herald OS releases two")
+    genuine, forged = packets(keys.export_binary(keys.successor)), packets(keys.export_binary(impostor))
+    # Tag 13 is the user ID, tag 2 a signature: the certification is the one after the self-signature.
+    certification = [packet for tag, packet in genuine[genuine.index(next(p for p in genuine if p[0] == 13)) + 1:] if tag == 2][1]
+    uid = next(i for i, (tag, _) in enumerate(forged) if tag == 13)
+    offered = b"".join(packet for _, packet in forged[:uid + 2]) + certification + b"".join(packet for _, packet in forged[uid + 2:])
+    write(tmp_path / "offered.gpg", offered)
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, keys.sign(impostor, sums), pinned(tmp_path, keys, keys.release), tmp_path / "offered.gpg")
+
+
+def test_a_good_signature_beside_one_by_an_unknown_key_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    both = keys.sign(keys.release, sums).read_bytes() + keys.sign(keys.other, sums).read_bytes()
+    write(tmp_path / "both.sig", both)
+    with pytest.raises(tb.ReleaseError):
+        tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release))
+
+
+def test_a_certified_key_does_not_vouch_for_a_third(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    third = keys.make("Herald OS releases three")
+    keys.certify(keys.successor, third)
+    write(tmp_path / "offered.asc", keys.export(keys.successor, third))
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, keys.sign(third, sums), pinned(tmp_path, keys, keys.release), tmp_path / "offered.asc")
+
+
+def test_a_new_signing_subkey_arrives_with_the_release(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    primary = keys.make("Herald OS releases rotating")
+    trusted = pinned(tmp_path, keys, primary)
+    keys.gpg("--quick-add-key", primary, "ed25519", "sign", "1y")
+    newest = keys.fingerprints(primary)[-1]
+    signature = keys.sign(f"{newest}!", sums)
+    write(tmp_path / "offered.asc", keys.export(primary))
+    assert tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc") == primary
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, trusted)
+
+
+def test_sha256sums_must_name_the_tarball_once(tmp_path):
+    name = "herald-os-0.2.0-linux-x64.tar.gz"
+    sums = tmp_path / tb.SUMS
+    sums.write_text(f"{'a' * 64}  herald-os-0.2.0-x86_64.iso\n{'b' * 64}  {name}\n")
+    assert tb.listed_checksum(sums, name) == "b" * 64
+    for text in (f"{'a' * 64}  other\n", f"{'a' * 64}  {name}\n{'b' * 64}  {name}\n", f"{'a' * 64}  {name}\nnot a checksum line\n"):
+        sums.write_text(text)
+        with pytest.raises(tb.ReleaseError):
+            tb.listed_checksum(sums, name)
+
+
+def test_a_release_with_only_sha256sums_is_a_candidate():
+    listing = [release("v0.3.0", checksums=False, signed=(tb.SUMS, tb.SUMS_SIG)), release("v0.2.0", checksums=False)]
+    picked = tb.pick_release(listing, "x64")
+    assert picked["version"] == "0.3.0" and picked["checksum_url"] == picked["sums_url"] and picked["sig_url"].endswith("/SHA256SUMS.sig")
+    assert picked["key_url"] == ""
+    assert tb.pick_release(listing[1:], "x64") is None
+
+
+@pytest.fixture
+def signed(layout, published, monkeypatch, keys):
+    """0.1.0 with the release key in /opt/herald-os, and 0.2.0 signed with it on the stand-in for GitHub.
+    `fetched` lists every download in order."""
+    # The layout fixture's stand-in for which() finds only niri.
+    monkeypatch.setattr(tb.shutil, "which", lambda name: GPG if name == "gpg" else f"/usr/bin/{name}" if name == "niri" else None)
+    write(layout.release_keys, keys.export(keys.release))
+    keys.sign(keys.release, sums_of(published))
+    (published / tb.KEY_ASSET).write_bytes(keys.export(keys.release))
+    fetched: list[str] = []
+    files = [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET]
+    monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0", signed=tuple(files))])
+    monkeypatch.setattr(tb, "download", lambda url, target: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
+    return types.SimpleNamespace(served=published, fetched=fetched, files=files)
+
+
+def unchanged(layout) -> bool:
+    return tb.read_version(layout.app) == "0.1.0" and not layout.previous.exists() and not list(layout.app.parent.glob(".herald-os-update-*"))
+
+
+def test_a_signed_release_installs_once_its_signature_checks_out(layout, signed, keys, capsys):
+    assert tb.update(layout) == 0
+    assert tb.read_version(layout.app) == "0.2.0" and tb.read_version(layout.previous) == "0.1.0"
+    assert f"signed with the release key {tb.spaced(keys.release)}" in capsys.readouterr().out
+    # The signature first, and the tarball only once it checks out.
+    assert signed.fetched[:3] == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET] and signed.fetched[3].endswith(".tar.gz")
+
+
+@pytest.mark.parametrize("missing", [tb.SUMS_SIG, tb.SUMS])
+def test_with_the_release_key_an_unsigned_release_is_refused(layout, signed, capsys, missing):
+    signed.files.remove(missing)
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout)
+    assert f"is not signed (the release has no {missing})" in capsys.readouterr().err
+    assert not any(name.endswith(".tar.gz") for name in signed.fetched)
+
+
+def test_a_release_signed_with_another_key_is_refused(layout, signed, keys, capsys):
+    keys.sign(keys.other, signed.served / tb.SUMS)
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "does not trust" in capsys.readouterr().err
+    assert not any(name.endswith(".tar.gz") for name in signed.fetched)
+
+
+def test_a_changed_sha256sums_is_refused(layout, signed, capsys):
+    (signed.served / tb.SUMS).write_text(f"{'0' * 64}  herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz\n")
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "changed after it was signed" in capsys.readouterr().err
+
+
+def test_a_changed_tarball_under_a_good_signature_is_refused(layout, signed, capsys):
+    (signed.served / f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz").write_bytes(b"something else")
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+
+
+def test_a_release_key_file_too_big_to_be_one_is_refused(layout, signed, capsys):
+    (signed.served / tb.KEY_ASSET).write_bytes(b"x" * (tb.KEY_ASSET_LIMIT + 1))
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "too big" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("signed_release", [False, True])
+def test_before_the_release_key_an_update_checks_the_sha256_as_before(layout, published, monkeypatch, keys, signed_release):
+    """The versions from before signed releases carry no key: they keep updating, signed release or not."""
+    assert not layout.release_keys.exists()
+    fetched: list[str] = []
+    files = ()
+    if signed_release:
+        keys.sign(keys.release, sums_of(published))
+        files = (tb.SUMS, tb.SUMS_SIG)
+    monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0", signed=files)])
+    monkeypatch.setattr(tb, "download", lambda url, target: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
+    assert tb.update(layout) == 0 and tb.read_version(layout.app) == "0.2.0"
+    assert sorted(fetched) == sorted([f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz", f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz.sha256"])
+
+
+def test_before_the_release_key_a_tarball_that_does_not_match_is_still_refused(layout, published):
+    (published / f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz").write_bytes(b"something else")
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout)
+
+
+# The whole update in a process of its own: curl over HTTPS from a local server, gpg, tar, the swap.
+
+UPDATE = """
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("herald_os_tarball", sys.argv[1])
+module = importlib.util.module_from_spec(importlib.util.spec_from_loader("herald_os_tarball", loader))
+loader.exec_module(module)
+module.RELEASES_API = sys.argv[2]
+sys.exit(module.main(["update"]))
+"""
+
+
+@pytest.fixture
+def release_server(tmp_path, monkeypatch):
+    """An HTTPS server for the files in the folder it returns, with a certificate curl trusts through
+    CURL_CA_BUNDLE."""
+    if not (shutil.which("openssl") and shutil.which("curl")):
+        pytest.skip("needs openssl and curl")
+    key, cert = tmp_path / "key.pem", tmp_path / "cert.pem"
+    made = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], capture_output=True)
+    if made.returncode != 0:
+        pytest.skip("openssl could not make a test certificate")
+    folder = tmp_path / "release"
+    folder.mkdir()
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(folder), **kwargs)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("CURL_CA_BUNDLE", str(cert))
+    (folder / "probe").write_text("probe")
+    base = f"https://127.0.0.1:{server.server_port}"
+    if subprocess.run(["curl", "-fsS", "-o", os.devnull, f"{base}/probe"], capture_output=True).returncode != 0:
+        pytest.skip("this curl does not read its CA bundle from CURL_CA_BUNDLE")
+    yield base, folder
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_update_command_checks_the_signature_end_to_end(tmp_path, keys, release_server):
+    base, served = release_server
+    arch = tb.machine_arch() or pytest.skip("not an architecture Herald OS releases are built for")
+    trusted = keys.export(keys.release)
+    app = make_app(tmp_path / "root" / "opt" / "herald-os", "0.1.0", keys=trusted)
+    name = tarball_of(make_app(tmp_path / "build" / "app", "0.2.0", keys=trusted), "0.2.0", arch, served)[0].name
+    keys.sign(keys.release, sums_of(served))
+    (served / tb.KEY_ASSET).write_bytes(trusted)
+    assets = [{"name": item, "size": (served / item).stat().st_size, "browser_download_url": f"{base}/{item}"} for item in (name, f"{name}.sha256", tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET)]
+    (served / "releases").write_text(json.dumps([{"tag_name": "v0.2.0", "prerelease": False, "draft": False, "assets": assets}]))
+    tool = app / "resources" / "herald-os-linux" / "bin" / "herald-os-tarball"
+    env = {**os.environ, "HERALD_OS_DESTDIR": str(tmp_path / "root")}
+    run = lambda: subprocess.run([sys.executable, "-c", UPDATE, str(tool), f"{base}/releases"], env=env, capture_output=True, text=True, timeout=300)
+
+    good = (served / tb.SUMS_SIG).read_bytes()
+    keys.sign(keys.other, served / tb.SUMS)
+    refused = run()
+    assert refused.returncode != 0 and "does not trust" in refused.stderr, refused.stderr
+    assert tb.read_version(app) == "0.1.0" and not (tmp_path / "root" / "opt" / "herald-os.previous").exists()
+
+    (served / tb.SUMS_SIG).write_bytes(good)
+    done = run()
+    assert done.returncode == 0, done.stderr
+    assert "signed with the release key" in done.stdout
+    assert tb.read_version(app) == "0.2.0" and (app / "resources" / "herald-os-linux" / "keys" / "herald-os-release.asc").read_bytes() == trusted
