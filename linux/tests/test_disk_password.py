@@ -186,7 +186,9 @@ def test_cryptsetup_running_out_of_time_says_which_passwords_may_work(monkeypatc
     errors = __import__("io").StringIO()
     monkeypatch.setattr(sys, "stderr", errors)
     assert cli.disk_root(["change"]) == cli.DISK_PARTLY
-    assert "did not finish in 300 s (luksAddKey)" in errors.getvalue() and "at least one of the two opens the disk" in errors.getvalue()
+    said = errors.getvalue()
+    assert "did not finish in 300 s (luksAddKey)" in said and "part-way on /dev/vda3" in said
+    assert "the current one or the new one (or both) opens each" in said and "was added before" not in said
 
 
 # ----- real LUKS2 images
@@ -713,7 +715,8 @@ def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeyp
 def test_when_even_looking_fails_it_says_what_is_sure(monkeypatch, capsys):
     monkeypatch.setattr(cli, "disk_root_argv", lambda op: ["sh", "-c", "kill -9 $$"] if op == "change" else ["false"])
     assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
-    assert "at least one of the two opens each device" in capsys.readouterr().err
+    said = capsys.readouterr().err
+    assert "may have ended before anything changed, or part-way" in said and "the current one or the new one (or both) opens each" in said
 
 
 CTRL_Z_DRIVER = """
@@ -825,7 +828,11 @@ def test_a_new_owner_s_slot_that_cannot_be_told_leaves_the_others_and_says_so(mo
     real = cli.luks_which_slot
     monkeypatch.setattr(cli, "luks_which_slot", lambda device, passphrase: -1 if passphrase == NEW and cli.luks_slot(device, passphrase) is not None else real(device, passphrase))
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW, "newOwner": True}) == cli.DISK_PARTLY
-    assert "could not be told, so its other key slots were left" in capsys.readouterr().err
+    said = capsys.readouterr().err
+    assert "could not be told, so its other key slots were left" in said
+    # A rerun would ask the same cryptsetup and stop at exit 12; the advice is to remove the slots by hand.
+    assert "A rerun cannot tell the new password's key slot either" in said and "luksKillSlot <device> <slot>" in said
+    assert "again with the new password as the current one" not in said
     assert sorted(header["keyslots"].values()) == sorted(["someone else's", NEW])
 
 

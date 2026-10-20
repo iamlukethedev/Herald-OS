@@ -3055,9 +3055,10 @@ def disk_root_op(args: list[str]) -> int:
         try:
             return disk_change(devices, current, new, new_owner, old_slots)
         except subprocess.TimeoutExpired as error:
-            disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped. "
-                  "The new password was added before anything was removed, so at least one of the two opens the disk: "
-                  "try the new one first at the next start, then run `herald-os password --disk` again.", file=sys.stderr)
+            disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped, "
+                     f"so the change may have stopped part-way on {' and '.join(devices)}. Nothing is removed before the new password "
+                     "opens every device, so the current one or the new one (or both) opens each: try the new one first at the next "
+                     "start, then run `herald-os password --disk` again.", file=sys.stderr)
             return DISK_PARTLY
 
 
@@ -3139,8 +3140,10 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     disk_say("The new disk password opens the disk. Removing the old one…")
 
     problems: list[str] = []
+    untellable = False
     for device in devices:
         if new_owner and new_slots[device] < 0:
+            untellable = True
             # Which slot is the new one cannot be told, so of the others only the old password's goes.
             problems.append(f"which key slot of {device} the new disk password opens could not be told, so its other key slots were left")
         if new_owner and new_slots[device] >= 0:
@@ -3173,8 +3176,14 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     if problems:
         for problem in problems:
             disk_say(f"herald-os: {problem}", file=sys.stderr)
-        disk_say("herald-os: the new disk password was added, but not everything above went as planned. Run "
-              "`herald-os password --disk` again with the new password as the current one.", file=sys.stderr)
+        if untellable:
+            # A rerun would ask the same cryptsetup, which cannot tell the new slot either (exit 12).
+            disk_say("herald-os: the new disk password was added, but not everything above went as planned. A rerun cannot "
+                     "tell the new password's key slot either; remove the other slots by hand: `sudo cryptsetup luksDump "
+                     "<device>` lists them, `sudo cryptsetup luksKillSlot <device> <slot>` removes one.", file=sys.stderr)
+        else:
+            disk_say("herald-os: the new disk password was added, but not everything above went as planned. Run "
+                     "`herald-os password --disk` again with the new password as the current one.", file=sys.stderr)
         return DISK_PARTLY
     if new_owner:
         with contextlib.suppress(OSError):
@@ -3267,8 +3276,9 @@ def disk_report_end(request: dict, code: int) -> int:
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         state = None
     if not isinstance(state, dict):
-        disk_say("herald-os: that could not be checked. The new password was added before anything was removed, so at "
-                 "least one of the two opens each device: at the next start, try the new one first, then the current one.", file=sys.stderr)
+        disk_say("herald-os: that could not be checked. It may have ended before anything changed, or part-way; nothing is "
+                 "removed before the new password opens every device, so the current one or the new one (or both) opens each: "
+                 "at the next start, try the new one first, then the current one.", file=sys.stderr)
         return DISK_PARTLY
     for line in disk_end_lines(state):
         disk_say(f"herald-os:   {line}", file=sys.stderr)
