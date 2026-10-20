@@ -92,8 +92,8 @@ export const en = {
   // {size} is a size in binary units, such as “1 MiB”.
   'terminal.pasteTooLargeBody': 'The clipboard holds more than {size} of text, more than the Terminal pastes at once.',
   'terminal.dropTooLargeBody': 'The dropped text is more than {size}, more than the Terminal pastes at once.',
-  'terminal.dropNotText': 'Only text can be dropped here',
-  'terminal.dropNotTextBody': 'The Terminal pastes text dropped on it. Files, links and pictures are left out.',
+  'terminal.dropNotText': 'That can’t be dropped here',
+  'terminal.dropNotTextBody': 'Only text is pasted. A link or picture dragged from a browser pastes as its address; files can’t be dropped.',
   'terminal.copyTooLarge': 'Too much to copy',
   'terminal.copyTooLargeBody': 'The selection is more than {size}, more than the Terminal copies at once.',
   'terminal.pasteUnfocused': 'The Terminal is not in front',

@@ -113,7 +113,7 @@ vi.mock('../../store/terminal.ts', async () => {
 vi.mock('../../shell/surfaces/shell-utils.ts', () => ({ useShellCommands() {} }))
 
 const { $env, $prefs } = await import('../../store/backend.ts')
-const { $notifications } = await import('../../store/notifications.ts')
+const { $notifications, $toasts } = await import('../../store/notifications.ts')
 const { TerminalSurface } = await import('./TerminalSurface.tsx')
 const { editCommands } = await import('../../commands/edit.ts')
 const { defineCommands, resetCommands, runCommand } = await import('../../store/os-commands.ts')
@@ -217,6 +217,7 @@ beforeEach(async () => {
   bridge.readClipboard.mockReset().mockResolvedValue({ text: 'echo pasted' })
   bridge.writeClipboard.mockReset().mockResolvedValue(undefined)
   $notifications.set([])
+  $toasts.set([])
   $prefs.set({ ...PREFS, language: 'en' })
   $env.set({ hermesHome: '/h/.hermes', homeDir: '/h', version: '0.0.0', isDev: false, platform: 'linux' } as never)
   Object.assign(window, {
@@ -336,6 +337,20 @@ describe('the Terminal keys', () => {
     expect($notifications.get().map(n => n.title)).toEqual(['Could not copy the selection'])
   })
 
+  it('says nothing when the clipboard fails after the tab closed', async () => {
+    let reject!: (error: Error) => void
+    bridge.readClipboard.mockImplementation(() => new Promise((_done, fail) => (reject = fail)))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    xterm.terminal.press('V', { ctrlKey: true, shiftKey: true })
+    act(() => root.unmount())
+    reject(new Error('no clipboard'))
+    await new Promise(done => setTimeout(done, 0))
+    root = createRoot(container)
+
+    expect($notifications.get()).toEqual([])
+  })
+
   it('drops a paste that arrives after the tab closed', async () => {
     let resolve!: (clipboard: { text: string }) => void
     bridge.readClipboard.mockImplementation(() => new Promise<{ text: string }>(done => (resolve = done)))
@@ -411,6 +426,24 @@ describe('a spoken or Hermes "paste" into the Terminal', () => {
     expect(result).toMatchObject({ ok: true, summary: 'Pasted into the terminal' })
     expect(fresh.paste).toHaveBeenCalledExactlyOnceWith('echo fresh')
     expect(old.paste).not.toHaveBeenCalled()
+  })
+
+  it('pastes nothing, and does not say it pasted, when the Terminal is unmounted while the clipboard is read', async () => {
+    let resolve!: (clipboard: { text: string }) => void
+    bridge.readClipboard.mockImplementation(() => new Promise<{ text: string }>(done => (resolve = done)))
+    const terminal = xterm.terminal
+    const pending = runCommand('edit.paste', {}, { source: 'voice' })
+    await settle()
+    act(() => root.unmount())
+    resolve({ text: 'echo too late\r' })
+    const result = await pending
+    root = createRoot(container)
+
+    expect(bridge.readClipboard).toHaveBeenCalledOnce()
+    expect(terminal.paste).not.toHaveBeenCalled()
+    expect(bridge.write).not.toHaveBeenCalled()
+    expect(result.ok).toBe(false)
+    expect(result.summary).not.toMatch(/^Pasted/)
   })
 
   it('does not take a spoken paste into a Terminal that cannot have the keyboard, such as a hidden tab', async () => {
@@ -518,7 +551,8 @@ describe('a drop on the Terminal', () => {
   it.each([
     ['a file', { Files: '' }],
     ['a picture', { Files: '', 'image/png': '' }],
-    ['a link with no text', { 'text/uri-list': 'file:///etc/passwd' }]
+    ['a file:// link with no text', { 'text/uri-list': 'file:///etc/passwd' }],
+    ['a link from an app that sends only text/x-moz-url', { 'text/x-moz-url': 'https://example.com/\nExample' }]
   ])('accepts %s while it is dragged over, then refuses it on the drop, pasting nothing and saying so', async (_label, data) => {
     const { over, drop } = dragAndDrop(data)
     await settle()
@@ -529,8 +563,142 @@ describe('a drop on the Terminal', () => {
     expect(bridge.write).not.toHaveBeenCalled()
     expect(xterm.terminal.paste).not.toHaveBeenCalled()
     expect($notifications.get().map(n => [n.title, n.body])).toEqual([
-      ['Only text can be dropped here', 'The Terminal pastes text dropped on it. Files, links and pictures are left out.']
+      ['That can’t be dropped here', 'Only text is pasted. A link or picture dragged from a browser pastes as its address; files can’t be dropped.']
     ])
+  })
+
+  it('says only text can be dropped once in five seconds, not once a drop', async () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+
+    const first = dragAndDrop({ Files: '' })
+    now += 1000
+    const second = dragAndDrop({ Files: '', 'image/png': '' })
+    await settle()
+
+    expect(raised).toEqual(['That can’t be dropped here'])
+    expect(first.drop?.defaultPrevented).toBe(true)
+    expect(second.drop?.defaultPrevented).toBe(true)
+
+    now += 5000
+    dragAndDrop({ Files: '' })
+    await settle()
+    stop()
+
+    expect(raised).toEqual(['That can’t be dropped here', 'That can’t be dropped here'])
+    expect(bridge.write).not.toHaveBeenCalled()
+  })
+
+  it('does not let the drop notice and a paste refusal hold each other back', async () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    try {
+      dragAndDrop({ Files: '' })
+      now += 100
+      nativePaste('echo hello\r')
+      now += 100
+      dragAndDrop({ Files: '' })
+      nativePaste('echo hello\r')
+      await settle()
+
+      expect(raised).toEqual(['That can’t be dropped here', 'The Terminal is not in front'])
+    } finally {
+      focus.mockRestore()
+      stop()
+    }
+  })
+
+  it.each([
+    ['the drop notice', () => dragAndDrop({ Files: '' }), 'That can’t be dropped here'],
+    ['a paste refusal', () => nativePaste('echo hello\r'), 'The Terminal is not in front']
+  ])('holds %s back for exactly five seconds', async (_label, raise, title) => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    const raised: string[] = []
+    const stop = $notifications.listen(list => raised.push(list[0]?.title ?? ''))
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+
+    try {
+      raise()
+      now += 4999
+      raise()
+      await settle()
+      expect(raised).toEqual([title])
+
+      now += 1
+      raise()
+      await settle()
+
+      expect(raised).toEqual([title, title])
+    } finally {
+      focus.mockRestore()
+      stop()
+    }
+  })
+
+  it('shows the notice its full six seconds when a drop raises it again after five', () => {
+    let now = Date.now()
+    clock.mockImplementation(() => now)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    try {
+      const shown = () => $toasts.get().map(toast => toast.title)
+      const wait = (ms: number) => {
+        now += ms
+        vi.advanceTimersByTime(ms)
+      }
+
+      dragAndDrop({ Files: '' })
+      wait(5000)
+      dragAndDrop({ Files: '' })
+
+      wait(1500)
+      expect(shown()).toEqual(['That can’t be dropped here'])
+      wait(4400)
+      expect(shown()).toEqual(['That can’t be dropped here'])
+      wait(100)
+      expect(shown()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pastes a picture dragged from a browser as its address, bracketed, with no notice', async () => {
+    const url = 'https://example.com/images/cat.png'
+    const { drop } = dragAndDrop({ 'text/uri-list': url, 'text/html': `<img src="${url}">`, 'text/plain': url })
+    await settle()
+
+    expect(drop?.defaultPrevented).toBe(true)
+    expect(shell()).toBe(`\x1b[200~${url}\x1b[201~`)
+    expect($notifications.get()).toEqual([])
+  })
+
+  it('pastes a link dragged from a browser as its address, bracketed, with no notice', async () => {
+    const url = 'https://example.com/docs?page=2'
+    const { over, drop } = dragAndDrop({ 'text/uri-list': url, 'text/plain': url })
+    await settle()
+
+    expect(over.dataTransfer?.dropEffect).toBe('copy')
+    expect(drop?.defaultPrevented).toBe(true)
+    expect(shell()).toBe(`\x1b[200~${url}\x1b[201~`)
+    expect($notifications.get()).toEqual([])
+  })
+
+  it.each([
+    ['pt-BR', 'Não dá para soltar isso aqui', 'O Terminal cola só texto. Um link ou uma imagem arrastados do navegador entram como endereço; já arquivos não podem ser soltos aqui.'],
+    ['zh-CN', '无法拖入此内容', '终端只粘贴文本。从浏览器拖入的链接或图片会粘贴成链接地址；文件无法拖入。']
+  ] as const)('says the same in %s', async (language, title, body) => {
+    act(() => $prefs.set({ ...PREFS, language }))
+    dragAndDrop({ Files: '' })
+    await settle()
+
+    expect($notifications.get().map(n => [n.title, n.body])).toEqual([[title, body]])
   })
 
   it('does not accept a drag that carries nothing', async () => {

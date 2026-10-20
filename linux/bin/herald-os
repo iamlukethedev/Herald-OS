@@ -3751,13 +3751,16 @@ def ssh_alive(tree: dict) -> list[int]:
     the gap to bite, the whole id must empty and a pid wrap onto its leader within it; the cost would be
     ending one stray process, never leaving SSH open, so the simple drop is kept over a start-time guard,
     which wrongly skipped the command's own orphans. Reach is bounded too. A recorded process is always
-    found, by pid and start time, even if it moves group or session. Moving group alone does not escape
-    when the command has its own session (sudo with use_pty, the default since sudo 1.9.14): the session
-    is recorded and still catches it. As root, or with !use_pty, the command shares this process's
-    session, which ssh_tree drops as ours, so a process the record does not hold escapes by changing
-    group (setpgid) as well as by setsid: for example one forked after the record that then regroups, or
-    one orphaned before the record (never held) that then regroups. Those are in no id the tree holds,
-    are not found, reaped or warned about; catching them needs a cgroup or a transient systemd scope, a
+    found, by pid and start time, even if it moves group or session. A process the record does not hold
+    is caught only through the command's group or session. (`sudo -n` only means sudo never prompts; the
+    terminal stays.) With a controlling terminal and use_pty (sudo's default since 1.9.14), the command
+    gets its own recorded session, so a group change (setpgid) alone is caught and only setsid escapes,
+    leaving that session too. As root, with !use_pty, or with no controlling terminal, the command shares
+    this process's session, which ssh_tree drops as ours, so a group change escapes too: for example one
+    forked after the record that regroups, or one orphaned before the record (never held) that regroups.
+    Those that escape are in no id the tree holds, are not found, reaped or warned about, and SSH is not
+    necessarily left closed: an escaped root command could run a firewall-cmd add after the reap and the
+    final rule check, reopening SSH. Catching them needs a cgroup or a transient systemd scope, a
     follow-up."""
     processes = ssh_processes()
     tree["groups"] &= {group for _, group, _, _, _ in processes.values()}
@@ -4837,6 +4840,12 @@ SSH_STOPS = (signal.SIGTERM, signal.SIGHUP)
 # is not relied on. A signal that arrives after another has been handled is ignored.
 SSH_STOP: dict = {"by": None}
 
+# True when herald-os runs as its own process (set where it starts), not imported. A signal that stops
+# `on` then decides the process's exit code, so INT, TERM and HUP stay blocked from the end of `on`
+# until the process has exited: the handlers put back there (SIGTERM's default ends the process at once)
+# would otherwise let a later signal replace that code in the moments before the exit.
+SSH_OWN_PROCESS = False
+
 
 def ssh_ignored(signum: int, frame) -> None:
     """INT, TERM and HUP while `on` is stopping: nothing. A Python handler that does nothing rather
@@ -4979,6 +4988,8 @@ def ssh_on(opts: dict) -> int:
                 ssh_signals(ignored)
             raise
     finally:
+        if SSH_OWN_PROCESS and SSH_STOP["by"] is not None:
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, *SSH_STOPS})
         ssh_signals(stops)
         SSH_STOP["by"] = None
     count = len(authorized(updated))
@@ -5900,4 +5911,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    SSH_OWN_PROCESS = True
     sys.exit(main(sys.argv[1:]))

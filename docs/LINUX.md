@@ -456,14 +456,16 @@ the old password no longer opens them.
   reach) is noted, process tree, groups and sessions, and the rollback ends it as root (`kill`, TERM
   then KILL) and waits until none of it is left before it looks at the firewall for the last time;
   one it cannot see end makes the rollback incomplete, with the exact `firewall-cmd` commands that
-  remove the rule. A recorded process is still found if it moves, by its pid. Moving group alone
-  does not escape when the command has its own session (sudo with use_pty, the default since sudo
-  1.9.14): the session is recorded and still catches it. As root, or with !use_pty, the command
-  shares this process's session, which is dropped as ours, so a process the record does not hold
-  escapes by changing group (`setpgid`) as well as by `setsid`: one forked after the record that
-  then regroups, or one orphaned before the record (never held) that then regroups. Those are in no
-  id the record holds, so they are not found, reaped or warned about. Catching them needs a cgroup
-  or a transient scope, not pgid and sid; a follow-up.
+  remove the rule. A recorded process is still found if it moves, by its pid. A process the record
+  does not hold is caught only through the command's group or session. (`sudo -n` only means sudo
+  never prompts; the terminal stays.) With a controlling terminal and use_pty (sudo's default since
+  1.9.14), the command gets its own recorded session, so a group change (`setpgid`) alone is caught
+  and only `setsid` escapes. As root, with `!use_pty`, or with no controlling terminal, the command
+  shares this process's session, which is dropped as ours, so a group change escapes too: one forked
+  after the record that regroups, or one orphaned before the record (never held) that regroups.
+  Those that escape are not found, reaped or warned about, and SSH is not necessarily left closed: an
+  escaped root command could run a firewall-cmd add after the reap, reopening SSH. Catching them
+  needs a cgroup or a transient scope, not pgid and sid; a follow-up.
   If any step after the checks fails, or anything else stops it (Ctrl+C, SIGTERM,
   SIGHUP, a file error, a command that times out), `on` puts back what it changed (files, units, the
   table, which it loads again with `nft -f` when one was there, the firewall rule, the keys it

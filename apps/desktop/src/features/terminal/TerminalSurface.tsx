@@ -363,7 +363,7 @@ function TerminalView({ id, active }: { id: string; active: boolean }) {
       if (text) {
         sayPasteOutcome(pasteText(terminal, text), 'drop')
         terminal.focus()
-      } else {
+      } else if (!saidRecently('not-text')) {
         notify({ title: t('terminal.dropNotText'), body: t('terminal.dropNotTextBody'), level: 'info', key: 'terminal.clipboard' })
       }
     }
@@ -549,7 +549,20 @@ function pasteProblem(outcome: PasteOutcome): string | null {
 
 /** Keys held down, or pastes refused over and over, hear about it once in this long, not every time. */
 const QUIET_MS = 5000
-const saidAt = new Map<PasteOutcome, number>()
+const saidAt = new Map<PasteOutcome | 'not-text', number>()
+
+/** Whether this kind of notice was said less than QUIET_MS ago; if not, it counts as said now. */
+function saidRecently(kind: PasteOutcome | 'not-text'): boolean {
+  const now = Date.now()
+
+  if (now - (saidAt.get(kind) ?? -Infinity) < QUIET_MS) {
+    return true
+  }
+
+  saidAt.set(kind, now)
+
+  return false
+}
 
 /**
  * A notice for a paste that did not go in, from the clipboard or from a drop. Each kind of
@@ -572,13 +585,9 @@ function sayPasteOutcome(outcome: PasteOutcome, from: 'clipboard' | 'drop' = 'cl
     return
   }
 
-  const now = Date.now()
-
-  if (now - (saidAt.get(outcome) ?? -Infinity) < QUIET_MS) {
+  if (saidRecently(outcome)) {
     return
   }
-
-  saidAt.set(outcome, now)
 
   if (outcome === 'rate-limited') {
     notify({ title: t('terminal.pasteTooFast'), body: t('terminal.pasteTooFastBody'), level: 'info', key: 'terminal.clipboard' })

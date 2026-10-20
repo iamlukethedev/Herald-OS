@@ -83,6 +83,11 @@ export interface NotifyInput {
 /** Categorized alerts raised before the prefs loaded, by notification id. */
 const held = new Map<string, { toast: boolean; native: boolean }>()
 
+/** How long a toast shows. */
+const TOAST_MS = 6000
+/** Each toast's pending removal, by notification id. */
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
 export function notify(input: NotifyInput): HermesNotification {
   const existing = input.key ? $notifications.get().find(n => n.key === input.key) : undefined
   const item: HermesNotification = {
@@ -126,7 +131,15 @@ function raiseAlert(item: HermesNotification, how: { toast: boolean; native: boo
 
   if (how.toast) {
     $toasts.set([item, ...$toasts.get().filter(t => t.id !== item.id)].slice(0, 3))
-    setTimeout(() => $toasts.set($toasts.get().filter(t => t.id !== item.id)), 6000)
+    // A notice raised again under its id (a key) stays its full time from now, not from the first raise.
+    clearTimeout(toastTimers.get(item.id))
+    toastTimers.set(
+      item.id,
+      setTimeout(() => {
+        toastTimers.delete(item.id)
+        $toasts.set($toasts.get().filter(t => t.id !== item.id))
+      }, TOAST_MS)
+    )
   }
 
   if (how.native && prefs.notify.nativeWhenUnfocused && !$windowState.get().focused) {
@@ -201,6 +214,8 @@ export function bindNotificationHistory(): () => void {
 }
 
 export function dismissToast(id: string): void {
+  clearTimeout(toastTimers.get(id))
+  toastTimers.delete(id)
   $toasts.set($toasts.get().filter(t => t.id !== id))
 }
 
