@@ -171,6 +171,7 @@ screensaver](manual/lock-and-idle.md), [dictation and emoji](manual/dictation-an
   through the GNOME interfaces niri implements; gtk for access dialogs and notifications, and for
   anything gnome lacks. Without that file
   xdg-desktop-portal falls back to gtk alone, which has no Secret, Screenshot or ScreenCast portal.
+  The Arch package installs the same file and recommends the two portal backends.
 - **The lock.** The `hermes` VM user has no password by default, so `herald-os lock` refuses until
   you run `herald-os password` in a terminal; a lock nobody can undo would leave the compositor's
   session lock engaged.
@@ -409,13 +410,17 @@ the old password no longer opens them.
 Service or the Secret portal): VS Code and Signal their sign-ins and database keys, `gh` its token,
 which it otherwise writes to a plain-text file. The session signs in through greetd with no password
 typed, so PAM has nothing to unlock a keyring with at login. What setup does depends on the disk
-(ADR-032):
+that holds the keyring folder, not on the root's (ADR-032). `herald-os keyring --status` says
+`"encrypted": true` only when the mount the folder is in (links resolved, so the image's `/home` finds
+`/var/home`) and every mount below it sit on LUKS, per `findmnt` and `lsblk`, a btrfs over several
+disks counting each of them. A `/home` or anything under the folder on a plain partition makes it
+`false`; NFS, tmpfs, FUSE, or `lsblk` and `findmnt` failing make it `null`.
 
-- **Encrypted disk:** setup makes the default keyring, named `login`, with no password of its own,
-  and says so on its last step. Apps open it without a prompt; the disk password typed at start-up
-  is what protects it, since gnome-keyring keeps such a keyring as a plain-text file in
+- **That disk encrypted (`true`):** setup makes the default keyring, named `login`, with no password
+  of its own, and says so on its last step. Apps open it without a prompt; the disk password typed at
+  start-up is what protects it, since gnome-keyring keeps such a keyring as a plain-text file in
   `~/.local/share/keyrings`.
-- **Disk not encrypted, or setup cannot tell:** a "Saved passwords" step asks. With a keyring
+- **Not encrypted, or setup cannot tell (`false` or `null`):** a "Saved passwords" step asks. With a keyring
   password, gnome-keyring encrypts the file with it, and after each start the first app that needs
   the keyring asks for it in a window of its own (gcr's prompter); forgetting it loses what was
   saved. With no keyring password, apps never ask, and anyone who has the disk can read what they
@@ -423,15 +428,24 @@ typed, so PAM has nothing to unlock a keyring with at login. What setup does dep
   password.
 
 Setup never replaces a keyring the account already has. `herald-os keyring --status` prints
-`{"keyring", "folder"}`, where `keyring` is `none`, `open`, `password` or `other`, read from the files
-without the daemon. `herald-os keyring setup --no-password` or `--password` (asked twice in a
-terminal, or one line on stdin) makes the default keyring later. Both refuse when there is one
-already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
-rather than gnome-keyring (exit 3); 4 means no keyring service answered. The password goes through
-gnome-keyring's own master-password interface, as the Secret Service's `CreateCollection` always
-asks in a window. The bridge never reads or touches `~/.local/share/keyrings`
-([SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#protected-paths)). Hermes keeps its own credentials in
-`~/.hermes`, apart from the keyring. `linux/tests/test_keyring.py` makes both kinds of keyring with a
+`{"keyring", "folder", "encrypted"}`, where `keyring` is `none`, `open`, `password` or `other`, read
+from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
+twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
+one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
+rather than gnome-keyring (exit 3); 4 means no keyring service answered. Making it holds
+`herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
+and `login_1`: the second waits (25 s at most), then finds the first one's and exits 3. The password
+goes through gnome-keyring's own master-password interface, as the Secret Service's
+`CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
+is an absolute path.
+
+What protects the keyring's contents is narrower than it may look. The bridge's file tools and the
+shell's own file reading refuse the keyring folder, in either place
+([SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#protected-paths)), but a shell command the person approves for
+Hermes runs as them and can read it. While they are signed in, an unlocked keyring (one with no
+password always is) gives any secret to any process of theirs that asks over D-Bus. The disk's
+encryption protects a keyring with no password against someone who has the disk, not against what
+runs in the session. Hermes keeps its own credentials in `~/.hermes`, apart from the keyring. `linux/tests/test_keyring.py` makes both kinds of keyring with a
 real gnome-keyring-daemon on a session bus of its own, stores and looks up with `secret-tool`, and
 checks that a keyring with a password is locked at the next login.
 

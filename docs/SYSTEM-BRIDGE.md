@@ -321,7 +321,8 @@ What stays: the `cli` toolset list remains an explicit saved list, and the plugi
 Operations that would read or modify these locations are refused before any approval prompt:
 
 - secrets: `~/.ssh`, `~/.gnupg`, `~/Library/Keychains`, `~/Library/Cookies`, the Linux keyrings in
-  `~/.local/share/keyrings`, `$HERMES_HOME/.env`, `$HERMES_HOME/auth.json`;
+  `~/.local/share/keyrings` (and `$XDG_DATA_HOME/keyrings` when that is set to an absolute path),
+  `$HERMES_HOME/.env`, `$HERMES_HOME/auth.json`;
 - system folders: `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/etc`, `/private/etc`,
   `/var/db`, `/private/var/db`, and on Linux `/boot`, `/lib`, `/lib64`, `/var/lib`, `/proc`, `/sys`.
 
