@@ -789,12 +789,14 @@ def test_sha256sums_must_name_the_tarball_once(tmp_path):
             tb.listed_checksum(sums, name)
 
 
-def test_a_release_with_only_sha256sums_is_a_candidate():
+def test_a_release_with_only_sha256sums_is_a_candidate_only_with_the_release_key():
+    """Without the key, a release needs the tarball's .sha256, as it always has."""
     listing = [release("v0.3.0", checksums=False, signed=(tb.SUMS, tb.SUMS_SIG)), release("v0.2.0", checksums=False)]
-    picked = tb.pick_release(listing, "x64")
-    assert picked["version"] == "0.3.0" and picked["checksum_url"] == picked["sums_url"] and picked["sig_url"].endswith("/SHA256SUMS.sig")
-    assert picked["key_url"] == ""
-    assert tb.pick_release(listing[1:], "x64") is None
+    assert tb.pick_release(listing, "x64") is None
+    picked = tb.pick_release(listing, "x64", signed=True)
+    assert picked["version"] == "0.3.0" and picked["sums_url"].endswith("/SHA256SUMS") and picked["sig_url"].endswith("/SHA256SUMS.sig")
+    assert picked["key_url"] == "" and picked["checksum_url"] == ""
+    assert [found["version"] for found in tb.candidates(listing, "x64", signed=True)] == ["0.3.0", "0.2.0"]
 
 
 @pytest.fixture
@@ -821,8 +823,9 @@ def test_a_signed_release_installs_once_its_signature_checks_out(layout, signed,
     assert tb.update(layout) == 0
     assert tb.read_version(layout.app) == "0.2.0" and tb.read_version(layout.previous) == "0.1.0"
     assert f"signed with the release key {tb.spaced(keys.release)}" in capsys.readouterr().out
-    # The signature first, and the tarball only once it checks out.
-    assert signed.fetched[:3] == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET] and signed.fetched[3].endswith(".tar.gz")
+    # The signature first (checked to pick the release, then again on the files kept), and the
+    # tarball only once it checks out.
+    assert signed.fetched == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET] * 2 + [f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"]
 
 
 @pytest.mark.parametrize("missing", [tb.SUMS_SIG, tb.SUMS])
@@ -862,6 +865,40 @@ def test_a_release_key_file_too_big_to_be_one_is_refused(layout, signed, capsys)
     with pytest.raises(SystemExit):
         tb.update(layout)
     assert unchanged(layout) and "too big" in capsys.readouterr().err
+
+
+def test_with_the_release_key_check_offers_the_newest_release_it_could_install(layout, signed, monkeypatch, capsys, keys):
+    """A newer release without a signature is passed over, so the update the background check starts
+    with the version it prints succeeds."""
+    monkeypatch.setattr(tb, "releases", lambda: [release("v0.3.0"), release("v0.2.0", signed=tuple(signed.files))])
+    assert tb.check(layout, "stable") == 0
+    shown = capsys.readouterr()
+    assert shown.out.strip() == "0.2.0" and "passed over 0.3.0: Herald OS 0.3.0 is not signed" in shown.err
+    assert not any(name.endswith(".tar.gz") for name in signed.fetched)
+    assert tb.update(layout) == 0 and tb.read_version(layout.app) == "0.2.0"
+    # Once that is installed, carrying the key as signed releases do, nothing newer can be checked.
+    write(layout.release_keys, keys.export(keys.release))
+    assert tb.check(layout, "stable") == 1
+    with pytest.raises(SystemExit):
+        tb.update(layout, "0.3.0")
+    assert tb.read_version(layout.app) == "0.2.0"
+
+
+def test_with_the_release_key_and_nothing_it_could_install_check_offers_nothing(layout, signed, monkeypatch, capsys):
+    signed.files.remove(tb.SUMS_SIG)
+    assert tb.check(layout, "stable") == 1 and capsys.readouterr().out == ""
+    monkeypatch.setattr(tb.shutil, "which", lambda name: None)
+    assert tb.check(layout, "stable") == 3 and "needs gpg" in capsys.readouterr().err
+
+
+def test_without_the_release_key_a_release_with_only_sha256sums_is_passed_over(layout, published, monkeypatch, keys):
+    """As before signed releases: the tarball's own .sha256 or nothing."""
+    keys.sign(keys.release, sums_of(published))
+    monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0", checksums=False, signed=(tb.SUMS, tb.SUMS_SIG))])
+    assert tb.check(layout, "stable") == 1
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout)
 
 
 @pytest.mark.parametrize("signed_release", [False, True])

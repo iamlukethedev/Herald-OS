@@ -293,11 +293,12 @@ def releases() -> list[dict]:
     return listing
 
 
-def pick_release(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None) -> dict | None:
-    """The release to install: `version` exactly, or the newest with a tarball and checksum for `arch`
-    (pre-releases only on the edge channel). Whether it is signed is for `update` to judge, so that a
-    release without a signature is refused by name rather than passed over."""
-    best: dict | None = None
+def candidates(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None, signed: bool = False) -> list[dict]:
+    """The releases that could be installed, newest first: `version` exactly, or any with a tarball for
+    `arch` (pre-releases only on the edge channel). Without the release key a release also needs the
+    tarball's .sha256, as it always has; with it, whether a release is signed is judged by checking
+    its signature (`verified`), so a release without one is refused by name rather than passed over."""
+    found: list[dict] = []
     for release in listing:
         tag = str(release.get("tag_name") or "")
         number = tag[1:] if tag.startswith("v") else tag
@@ -309,22 +310,45 @@ def pick_release(listing: list[dict], arch: str, channel: str = "stable", versio
             continue
         name = f"herald-os-{number}-linux-{arch}.tar.gz"
         assets = {asset.get("name"): asset for asset in release.get("assets") or [] if isinstance(asset, dict)}
-        if name not in assets or (f"{name}.sha256" not in assets and SUMS not in assets):
+        if name not in assets or (not signed and f"{name}.sha256" not in assets):
             continue
         url = lambda asset: str(assets[asset].get("browser_download_url") or "") if asset in assets else ""
-        candidate = {
+        found.append({
             "version": number,
             "name": name,
             "url": url(name),
-            "checksum_url": url(f"{name}.sha256") or url(SUMS),
+            "checksum_url": url(f"{name}.sha256"),
             "sums_url": url(SUMS),
             "sig_url": url(SUMS_SIG),
             "key_url": url(KEY_ASSET),
             "size": int(assets[name].get("size") or 0),
-        }
-        if best is None or version_key(number) > version_key(best["version"]):
-            best = candidate
-    return best
+        })
+    return sorted(found, key=lambda release: version_key(release["version"]), reverse=True)
+
+
+def pick_release(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None, signed: bool = False) -> dict | None:
+    """The newest of `candidates`, unchecked."""
+    found = candidates(listing, arch, channel, version, signed)
+    return found[0] if found else None
+
+
+def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[dict | None, list[str]]:
+    """The newest release in `found` newer than `installed` whose SHA256SUMS is signed with a key the
+    version in use trusts and lists its tarball, and why each newer one before it was passed over. Only
+    the small signing files are downloaded, into a folder that is deleted."""
+    skipped: list[str] = []
+    for release in found:
+        if not is_newer(release["version"], installed):
+            break
+        with tempfile.TemporaryDirectory(prefix="herald-os-check-") as folder:
+            try:
+                checked_signature(layout, release, Path(folder), Path(folder) / SUMS, quiet=True)
+                listed_checksum(Path(folder) / SUMS, release["name"])
+            except ReleaseError as exc:
+                skipped.append(f"{release['version']}: {exc}")
+                continue
+        return release, skipped
+    return None, skipped
 
 
 def download(url: str, target: Path) -> None:
@@ -541,18 +565,30 @@ def check(layout: Layout, channel: str) -> int:
     if not arch:
         print(f"herald-os-tarball: Herald OS releases are built for x86_64 and aarch64, not {platform.machine()}", file=sys.stderr)
         return 3
+    signed = layout.release_keys.is_file()
+    if signed and not shutil.which("gpg"):
+        print("herald-os-tarball: checking release signatures needs gpg (the gnupg package; gpg on Debian and Ubuntu)", file=sys.stderr)
+        return 3
     try:
-        release = pick_release(releases(), arch, channel)
+        found = candidates(releases(), arch, channel, signed=signed)
     except ReleaseError as exc:
         print(f"herald-os-tarball: could not ask GitHub for releases: {exc}", file=sys.stderr)
         return 3
-    if release and is_newer(release["version"], read_version(layout.app)):
+    installed = read_version(layout.app)
+    if signed:
+        # The newest release this version would install, so the update that follows can succeed.
+        release, skipped = verified(layout, found, installed)
+        for note in skipped:
+            print(f"herald-os-tarball: passed over {note}", file=sys.stderr)
+    else:
+        release = found[0] if found else None
+    if release and is_newer(release["version"], installed):
         print(release["version"])
         return 0
     return 1
 
 
-def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path) -> None:
+def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False) -> None:
     """Download the release's SHA256SUMS into `sums` and check its signature, before anything else of
     the release is trusted or downloaded."""
     if not release["sums_url"] or not release["sig_url"]:
@@ -568,20 +604,29 @@ def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path) 
         if offered.stat().st_size > KEY_ASSET_LIMIT:
             raise ReleaseError(f"the release's {KEY_ASSET} is too big to be a key file; nothing was changed")
     signer = verify_signature(sums, signature, layout.release_keys, offered)
-    print(f"  {SUMS} is signed with the release key {spaced(signer)}")
+    if not quiet:
+        print(f"  {SUMS} is signed with the release key {spaced(signer)}")
 
 
 def update(layout: Layout, version: str | None = None) -> int:
     arch = machine_arch()
     if not arch:
         die(f"Herald OS releases are built for x86_64 and aarch64, not {platform.machine()}")
+    signed = layout.release_keys.is_file()
     try:
-        release = pick_release(releases(), arch, version=version)
+        found = candidates(releases(), arch, version=version, signed=signed)
     except ReleaseError as exc:
         die(f"could not ask GitHub for releases: {exc}")
-    if not release:
+    if not found:
         die(f"no release {'v' + version if version else ''} has a tarball and checksum for {arch}")
+    release = found[0]
     installed = read_version(layout.app)
+    if signed and version is None and is_newer(release["version"], installed):
+        # The newest release whose signature checks out, not merely the newest; it is checked again
+        # below, on the files this update keeps.
+        release, skipped = verified(layout, found, installed)
+        if release is None:
+            die("no newer release could be checked against the release key, so nothing was changed:\n  " + "\n  ".join(skipped))
     if version is None and not is_newer(release["version"], installed):
         print(f"Herald OS {installed} is up to date")
         return 0
