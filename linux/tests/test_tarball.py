@@ -15,7 +15,6 @@ import struct
 import subprocess
 import sys
 import tarfile
-import tempfile
 import threading
 import types
 from pathlib import Path
@@ -558,76 +557,7 @@ def test_a_rollback_that_cannot_put_things_back_says_where_they_are(updated, mon
 
 # ---------------------------------------------------------------------------------------------
 # Signed releases: SHA256SUMS and its OpenPGP signature, checked with the release keys of the version
-# in use (docs/RELEASE-SIGNING.md). The keys are made here with gpg, as the maintainer would.
-
-GPG = shutil.which("gpg")
-
-
-class Keys:
-    """A GnuPG home holding the secret keys: the maintainer's offline machine and CI in one."""
-
-    def __init__(self, home: Path):
-        self.home = home
-
-    def gpg(self, *args: str, faked: str | None = None) -> subprocess.CompletedProcess:
-        clock = ["--faked-system-time", faked] if faked else []
-        done = subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--pinentry-mode", "loopback", "--passphrase", "", *clock, *args], capture_output=True, text=True, timeout=120)
-        assert done.returncode == 0, done.stderr
-        return done
-
-    def make(self, name: str, expires: str = "0", faked: str | None = None) -> str:
-        """A certify-only primary key with a signing subkey, as docs/RELEASE-SIGNING.md makes it."""
-        uid = f"{name} <{name.lower().replace(' ', '-')}@example.com>"
-        before = set(self.primaries())
-        self.gpg("--yes", "--quick-generate-key", uid, "ed25519", "cert", "0", faked=faked)
-        (fingerprint,) = set(self.primaries()) - before
-        self.gpg("--quick-add-key", fingerprint, "ed25519", "sign", expires, faked=faked)
-        return fingerprint
-
-    def primaries(self) -> list[str]:
-        listing = subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--with-colons", "--fixed-list-mode", "--list-keys"], capture_output=True, text=True, timeout=120).stdout
-        return list(tb.primary_keys(listing))
-
-    def fingerprints(self, key: str) -> list[str]:
-        """The primary key's fingerprint, then its subkeys'."""
-        listing = self.gpg("--with-colons", "--fixed-list-mode", "--list-keys", key).stdout
-        return [line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:")]
-
-    def export(self, *fingerprints: str) -> bytes:
-        return self.gpg("--armor", "--export", *fingerprints).stdout.encode()
-
-    def export_binary(self, fingerprint: str) -> bytes:
-        return subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--export", fingerprint], capture_output=True, timeout=120, check=True).stdout
-
-    def sign(self, key: str, path: Path, faked: str | None = None) -> Path:
-        signature = path.with_name(f"{path.name}.sig")
-        signature.unlink(missing_ok=True)
-        self.gpg("--local-user", key, "--detach-sign", "--output", str(signature), str(path), faked=faked)
-        return signature
-
-    def certify(self, by: str, key: str) -> None:
-        self.gpg("--local-user", by, "--quick-sign-key", key)
-
-
-@pytest.fixture(scope="session")
-def keys():
-    if GPG is None:
-        pytest.skip("needs gpg (GnuPG)")
-    # Short and outside the test folders: gpg-agent's socket path has a length limit.
-    home = Path(tempfile.mkdtemp(prefix="hos-gpg-", dir="/tmp" if Path("/tmp").is_dir() else None))
-    found = Keys(home)
-    found.release = found.make("Herald OS releases")
-    found.other = found.make("Someone else")
-    found.successor = found.make("Herald OS releases two")
-    found.certify(found.release, found.successor)
-    found.unvouched = found.make("Herald OS releases unvouched")
-    found.vouched_by_other = found.make("Herald OS releases elsewhere")
-    found.certify(found.other, found.vouched_by_other)
-    found.expired = found.make("Herald OS releases expired", expires="1y", faked="20200101T000000")
-    yield found
-    subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "all"], capture_output=True, check=False)
-    shutil.rmtree(home, ignore_errors=True)
-
+# in use (docs/RELEASE-SIGNING.md), with keys made by gpg as the maintainer would (conftest.py).
 
 def sums_of(folder: Path) -> Path:
     """SHA256SUMS for the tarballs in `folder`, as scripts/release-sums.sh writes it."""
@@ -636,7 +566,7 @@ def sums_of(folder: Path) -> Path:
     return folder / tb.SUMS
 
 
-def pinned(tmp_path: Path, keys: Keys, *fingerprints: str) -> Path:
+def pinned(tmp_path: Path, keys, *fingerprints: str) -> Path:
     path = tmp_path / "pinned" / "herald-os-release.asc"
     write(path, keys.export(*fingerprints))
     return path
@@ -804,7 +734,7 @@ def signed(layout, published, monkeypatch, keys):
     """0.1.0 with the release key in /opt/herald-os, and 0.2.0 signed with it on the stand-in for GitHub.
     `fetched` lists every download in order."""
     # The layout fixture's stand-in for which() finds only niri.
-    monkeypatch.setattr(tb.shutil, "which", lambda name: GPG if name == "gpg" else f"/usr/bin/{name}" if name == "niri" else None)
+    monkeypatch.setattr(tb.shutil, "which", lambda name: keys.gpg_path if name == "gpg" else f"/usr/bin/{name}" if name == "niri" else None)
     write(layout.release_keys, keys.export(keys.release))
     keys.sign(keys.release, sums_of(published))
     (published / tb.KEY_ASSET).write_bytes(keys.export(keys.release))
