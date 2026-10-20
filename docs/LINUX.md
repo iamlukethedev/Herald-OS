@@ -162,6 +162,15 @@ screensaver](manual/lock-and-idle.md), [dictation and emoji](manual/dictation-an
   "stay awake" stops the unit). Night light is `wlsunset` as the `herald-os-nightlight` unit.
 - **Notifications** from other apps arrive through the shell's own
   `org.freedesktop.Notifications` daemon.
+- **The keyring and the portals.** gnome-keyring's secrets component is the Secret Service
+  (`org.freedesktop.secrets`): its user socket is enabled for everyone, and a drop-in
+  (`linux/session/gnome-keyring-daemon.conf`) keeps Fedora's unit from also starting its PKCS#11
+  component. `/usr/share/xdg-desktop-portal/heraldos-portals.conf` (`linux/session/`) names the
+  portal backends for `XDG_CURRENT_DESKTOP=HeraldOS`: gnome-keyring for Secret, which Flatpak apps
+  use; gnome for the file chooser (Nautilus, with gtk's as the fallback), screenshots and screencasts,
+  through the GNOME interfaces niri implements; gtk for access dialogs and notifications, and for
+  anything gnome lacks. Without that file
+  xdg-desktop-portal falls back to gtk alone, which has no Secret, Screenshot or ScreenCast portal.
 - **The lock.** The `hermes` VM user has no password by default, so `herald-os lock` refuses until
   you run `herald-os password` in a terminal; a lock nobody can undo would leave the compositor's
   session lock engaged.
@@ -395,6 +404,36 @@ their new account password for sudo: it also removes every other key slot and th
 none, so only the new owner's password opens the disk. "Later" skips it.
 `linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device and checks that
 the old password no longer opens them.
+
+**The keyring.** Apps keep passwords and sign-ins in the keyring (gnome-keyring, through the Secret
+Service or the Secret portal): VS Code and Signal their sign-ins and database keys, `gh` its token,
+which it otherwise writes to a plain-text file. The session signs in through greetd with no password
+typed, so PAM has nothing to unlock a keyring with at login. What setup does depends on the disk
+(ADR-032):
+
+- **Encrypted disk:** setup makes the default keyring, named `login`, with no password of its own,
+  and says so on its last step. Apps open it without a prompt; the disk password typed at start-up
+  is what protects it, since gnome-keyring keeps such a keyring as a plain-text file in
+  `~/.local/share/keyrings`.
+- **Disk not encrypted, or setup cannot tell:** a "Saved passwords" step asks. With a keyring
+  password, gnome-keyring encrypts the file with it, and after each start the first app that needs
+  the keyring asks for it in a window of its own (gcr's prompter); forgetting it loses what was
+  saved. With no keyring password, apps never ask, and anyone who has the disk can read what they
+  saved. "Later" makes nothing; the first app that saves a password then asks for a new keyring's
+  password.
+
+Setup never replaces a keyring the account already has. `herald-os keyring --status` prints
+`{"keyring", "folder"}`, where `keyring` is `none`, `open`, `password` or `other`, read from the files
+without the daemon. `herald-os keyring setup --no-password` or `--password` (asked twice in a
+terminal, or one line on stdin) makes the default keyring later. Both refuse when there is one
+already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
+rather than gnome-keyring (exit 3); 4 means no keyring service answered. The password goes through
+gnome-keyring's own master-password interface, as the Secret Service's `CreateCollection` always
+asks in a window. The bridge never reads or touches `~/.local/share/keyrings`
+([SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#protected-paths)). Hermes keeps its own credentials in
+`~/.hermes`, apart from the keyring. `linux/tests/test_keyring.py` makes both kinds of keyring with a
+real gnome-keyring-daemon on a session bus of its own, stores and looks up with `secret-tool`, and
+checks that a keyring with a password is locked at the next login.
 
 **Security.**
 
@@ -990,6 +1029,12 @@ computer's files, so it says so instead.
 - Under the `HERALD_OS_COMPOSITOR=cage` kiosk, a launched app (Firefox, Nautilus) covers the shell
   fullscreen and returns to it when closed; there is no switching between other apps' windows.
 - SELinux is permissive on the VM.
+- Chromium-based apps outside a sandbox choose their keyring from the desktop's name, and `HeraldOS`
+  is not one they know, so they keep their keys in plain text (`basic_text`) unless started with
+  `--password-store=gnome-libsecret` (for VS Code, `"password-store": "gnome-libsecret"` in
+  `~/.vscode/argv.json`). In a Flatpak, newer Electron asks the Secret portal instead.
+- A keyring password is asked by the first app that needs it after each start, not at the lock
+  screen: swaylock's PAM stack does not unlock gnome-keyring.
 - Apple Silicon Macs cannot boot this natively (no Asahi support for M4/M5); the VM is the target.
   On x86_64 PCs it installs from the ISO above, which has been tested in a KVM virtual machine
   (`installer-test.yml`) but not yet on real PC hardware.

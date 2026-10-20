@@ -1699,3 +1699,29 @@ the installer less of the person's.
 - **Not here: TPM unlocking.** The base image has `clevis-pin-tpm2`, so the disk could unlock by
   itself on the machine it was installed on. That trades the password at start-up for trust in the
   firmware, and stays a separate decision.
+
+## ADR-032: The keyring is gnome-keyring, and its password follows the disk's encryption
+
+**Status: Accepted.** From #38.
+
+Apps keep passwords and sign-ins in a Secret Service, and without one they warn, fall back to weaker
+storage or fail to sign in. The session signs in through greetd with no password typed, so PAM
+cannot unlock a keyring at login, and the keyring's protection has to come from somewhere else.
+
+- **gnome-keyring, secrets only.** Fedora 44 packages it; oo7's daemon and portal, the lighter
+  choice niri's documentation names, are not among its binary packages. Its socket is enabled for
+  every user and a drop-in starts only the secrets component, since nothing in the session uses its
+  PKCS#11 or SSH parts. `heraldos-portals.conf` names it for the Secret portal, so Flatpak apps get
+  it too.
+- **On an encrypted disk, no keyring password.** As Omarchy does, setup makes the default keyring
+  with no password of its own: apps open it without a prompt at every start, and the disk password
+  protects it as it protects every other file. gnome-keyring keeps such a keyring as plain text, so
+  the bridge never touches its folder.
+- **Elsewhere, the person chooses, told plainly.** A keyring password (asked by the first app that
+  needs it after each start; forgetting it loses what was saved), or none (anyone who has the disk
+  can read it). When setup cannot tell whether the disk is encrypted, it asks rather than assume.
+  An existing keyring is never replaced.
+- **Not here: unlocking at the lock screen.** pam_gnome_keyring in swaylock's stack could unlock a
+  keyring whose password is the account's, but that ties the two passwords together and needs
+  `herald-os password` to change both. Nor does Herald OS tell Chromium-based apps which keyring to
+  use (`--password-store`); see the known limits in `docs/LINUX.md`.
