@@ -2874,6 +2874,14 @@ def luks_extra(metadata: dict, keep: int) -> tuple[list[int], list[int]]:
 @contextlib.contextmanager
 def disk_signals_held():
     """Ctrl+C, a closed terminal or a stop request wait until the change is done (cryptsetup inherits it)."""
+    # SIG_IGN on purpose, not a Python handler: an ignored signal stays ignored across exec, so the
+    # cryptsetup children (and what sudo passes on to them) cannot be stopped between writing a key slot
+    # and the header that records it. That is bounded: each cryptsetup call has CRYPTSETUP_TIMEOUT
+    # (300 s), after which subprocess kills it with SIGKILL, which cannot be ignored, and SIGKILL still
+    # stops this process. setup ssh does it the other way round: its rollback keeps Python handlers that
+    # do nothing (ssh_ignored), which exec resets to the default, because its commands may be stopped
+    # (each runs in a process group of its own and is ended when its time is up), and a signal
+    # arriving there must not raise in the middle of the rollback.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, signal.SIG_IGN) for held_signal in held}
     try:
