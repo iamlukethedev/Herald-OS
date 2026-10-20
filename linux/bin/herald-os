@@ -52,6 +52,7 @@ call the tools directly.
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
                 password | password --disk [--new-owner]: the login password, or the disk password asked at start-up
+                keyring --status | keyring setup --no-password|--password: where apps keep passwords and sign-ins
                 panel wifi|bluetooth|audio|display|power|clock: the menu bar's quick panels
                 restart wifi|bluetooth|sound|touchpad: bring one back when it stopped working
                 toggle nightlight|dnd|idle|screensaver [on|off] | screensaver | idle show|set ...
@@ -149,6 +150,7 @@ COMMANDS: dict[str, str] = {
     "branding": "branding [show] | set [--logo <image>] [--lock <image>] [--name <text>] | reset [all|logo|lock|name]: About's logo and name, and the lock-screen picture",
     "lock": "Lock the session (needs an account password; see `herald-os password`)",
     "password": "Set the login password the lock screen asks for | password --disk [--new-owner]: change the disk password typed at start-up (asks for the current one; --new-owner also removes every other key) | password --disk --status: whether the disk is encrypted, as JSON",
+    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other), as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
     "suspend": "Suspend the machine",
     "power": "Power menu (sleep, restart, shut down, log out)",
     "webapp-open": "Internal: open a web app window: webapp-open <url> <name>",
@@ -3197,6 +3199,171 @@ def disk_password(args: list[str]) -> int:
     return disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
 
 
+# ---------------------------------------------------------------------------------------------
+# The keyring: where apps keep passwords and sign-ins (the Secret Service; gnome-keyring on the image).
+# The session signs in without a password, so nothing unlocks a keyring at login. On an encrypted disk
+# setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
+# keyring password, which the first app that needs the keyring asks for after each start.
+KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
+KEYRING_EXISTS, KEYRING_NO_SERVICE = 3, 4
+KEYRING_MIN = 8
+# gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
+KEYRING_SEALED = b"GnomeKeyring\n\r\x00\n"
+KEYRING_PLAIN = b"[keyring]"
+KEYRING_STATES = {
+    "open": "with no password of its own",
+    "password": "with a password",
+    "other": "one Herald OS did not make",
+}
+SECRETS = "org.freedesktop.secrets"
+SECRETS_PATH = "/org/freedesktop/secrets"
+SECRET_SERVICE = "org.freedesktop.Secret.Service"
+# gnome-keyring's own interface, which takes a keyring's password without a prompt. The Secret
+# Service's CreateCollection always asks for it in a window. The interface has kept its methods since
+# gnome-keyring 3.0.
+KEYRING_INTERNAL = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"
+KEYRING_TIMEOUT_MS = 20_000
+
+
+def keyring_dir() -> Path:
+    """Where gnome-keyring keeps keyrings: $XDG_DATA_HOME/keyrings, ~/.local/share/keyrings by default."""
+    data = os.environ.get("XDG_DATA_HOME")
+    return (Path(data) if data and os.path.isabs(data) else HOME / ".local" / "share") / "keyrings"
+
+
+def keyring_state(directory: Path) -> str:
+    """The default keyring, read from gnome-keyring's files so no daemon is needed (pure; tested): none
+    (there is no keyring yet), open (no password of its own), password, or other (keyrings, but no
+    default one this can read)."""
+    try:
+        name = (directory / "default").read_text(encoding="utf-8").strip() or "login"
+    except FileNotFoundError:
+        name = "login"
+    except (OSError, UnicodeDecodeError):
+        return "other"
+    if "/" in name or name.startswith("."):
+        return "other"
+    try:
+        with open(directory / f"{name}.keyring", "rb") as handle:
+            head = handle.read(len(KEYRING_SEALED))
+    except FileNotFoundError:
+        try:
+            return "other" if any(directory.glob("*.keyring")) else "none"
+        except OSError:
+            return "other"
+    except OSError:
+        return "other"
+    if head == KEYRING_SEALED:
+        return "password"
+    return "open" if head.startswith(KEYRING_PLAIN) else "other"
+
+
+def keyring_password_problem(password: str, again: str | None = None) -> str | None:
+    """Why a keyring password will not do, or None (pure; tested)."""
+    if again is not None and password != again:
+        return "the two keyring passwords are not the same. Nothing was changed."
+    if len(password) < KEYRING_MIN:
+        return f"use at least {KEYRING_MIN} characters for the keyring password. Nothing was changed."
+    if any(char in password for char in "\r\n\0"):
+        return "a keyring password is one line. Nothing was changed."
+    return None
+
+
+def keyring_password_input() -> str:
+    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way)."""
+    if sys.stdin.isatty():
+        try:
+            password = getpass.getpass("Keyring password: ")
+            again = getpass.getpass("Keyring password again: ")
+        except (KeyboardInterrupt, EOFError):
+            print(file=sys.stderr)
+            die("stopped. Nothing was changed.", 130)
+        except UnicodeDecodeError:
+            die("the terminal sent something that is not text. Nothing was changed.", 2)
+    else:
+        password = sys.stdin.read()
+        password = password[:-1] if password.endswith("\n") else password
+        again = None
+    problem = keyring_password_problem(password, again)
+    if problem:
+        die(problem, 2)
+    return password
+
+
+def keyring_create(password: str) -> str:
+    """The login keyring, made the default one; with no password of its own when password is empty.
+    Returns its D-Bus path."""
+    try:
+        from gi.repository import Gio, GLib
+    except ImportError:
+        die("herald-os keyring needs PyGObject (python3-gobject-base). Nothing was changed.", KEYRING_NO_SERVICE)
+
+    def call(bus, path: str, interface: str, method: str, args, reply: str):
+        return bus.call_sync(SECRETS, path, interface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, KEYRING_TIMEOUT_MS).unpack()
+
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        default = call(bus, SECRETS_PATH, SECRET_SERVICE, "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
+        # A plain session: the password goes over the session bus to a daemon of the same account.
+        session = call(bus, SECRETS_PATH, SECRET_SERVICE, "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
+    except GLib.Error as error:
+        die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
+    # The files are not the whole story: another Secret Service (KeePassXC, KWallet) keeps its own, and
+    # gnome-keyring keeps a keyring whose file was deleted while it runs.
+    if default != "/":
+        die(f"the keyring service already has a default keyring ({default}). Nothing was changed.", KEYRING_EXISTS)
+    try:
+        # gnome-keyring names a keyring after its label: "login" gives the usual login keyring, which
+        # some apps (gh, through go-keyring) look for by name before the default alias.
+        label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", "login")}
+        secret = (session, b"", password.encode("utf-8"), "text/plain")
+        collection = call(bus, SECRETS_PATH, KEYRING_INTERNAL, "CreateWithMasterPassword", GLib.Variant("(a{sv}(oayays))", (label, secret)), "(o)")[0]
+    except GLib.Error as error:
+        die(f"the keyring service could not make the keyring ({error.message}). Herald OS makes it with gnome-keyring. Nothing was changed.", 1)
+    try:
+        call(bus, SECRETS_PATH, SECRET_SERVICE, "SetAlias", GLib.Variant("(so)", ("default", collection)), "()")
+        call(bus, collection, "org.freedesktop.DBus.Properties", "Set", GLib.Variant("(ssv)", ("org.freedesktop.Secret.Collection", "Label", GLib.Variant("s", "Login"))), "()")
+        call(bus, session, "org.freedesktop.Secret.Session", "Close", None, "()")
+    except GLib.Error as error:
+        die(f"made the keyring {collection} but could not make it the default one ({error.message}).", 1)
+    return collection
+
+
+def keyring_unencrypted_note() -> str | None:
+    """What a keyring with no password of its own gives away where the disk is not encrypted; nothing
+    when the disk is encrypted or that cannot be told."""
+    try:
+        if disk_devices():
+            return None
+    except DiskUnknown:
+        return None
+    return "note: this disk is not encrypted, so anyone with the disk can read what apps keep in this keyring."
+
+
+def keyring_cmd(args: list[str]) -> int:
+    """`keyring --status` as JSON; `keyring setup --no-password | --password` makes the default keyring
+    when there is none. An existing keyring is never replaced: it holds what apps saved."""
+    directory = keyring_dir()
+    if args == ["--status"]:
+        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory)}))
+        return 0
+    if args not in (["setup", "--no-password"], ["setup", "--password"]):
+        die(KEYRING_USAGE, 2)
+    state = keyring_state(directory)
+    if state != "none":
+        die(f"this account already has a keyring ({KEYRING_STATES[state]}) in {directory}. Nothing was changed.", KEYRING_EXISTS)
+    password = keyring_password_input() if args[1] == "--password" else ""
+    keyring_create(password)
+    if password:
+        print("The keyring is ready. After each start, the first app that needs it asks for its password.")
+        return 0
+    print("The keyring is ready, with no password of its own.")
+    note = keyring_unencrypted_note()
+    if note:
+        print(note, file=sys.stderr)
+    return 0
+
+
 def suspend() -> int:
     lock()
     return subprocess.call(["systemctl", "suspend"])
@@ -5898,6 +6065,8 @@ def main(argv: list[str]) -> int:
         if args:
             die(f"password | {DISK_USAGE}", 2)
         return password()
+    if cmd == "keyring":
+        return keyring_cmd(args)
     if cmd == "suspend":
         return suspend()
     if cmd == "wm":
