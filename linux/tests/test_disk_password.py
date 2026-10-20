@@ -725,7 +725,11 @@ def slow_root_side(tmp_path: Path, disk: Path, op: str, stop_root_after: float |
     return env
 
 
+NO_SUDO_AS_ROOT = pytest.mark.skipif(os.geteuid() == 0, reason="as root the root side runs without sudo, where the stand-in steps in")
+
+
 @needs_cryptsetup
+@NO_SUDO_AS_ROOT
 @pytest.mark.skipif(not shutil.which("pkill"), reason="needs pkill")
 @pytest.mark.parametrize("op", ["check", "change"], ids=["during the check", "just before the change"])
 def test_only_the_root_side_stopped_before_the_change_says_so_once(tmp_path, op):
@@ -742,6 +746,7 @@ def test_only_the_root_side_stopped_before_the_change_says_so_once(tmp_path, op)
 
 
 @needs_cryptsetup
+@NO_SUDO_AS_ROOT
 def test_ctrl_c_before_the_change_begins_does_not_say_it_is_still_changing(tmp_path):
     """Ctrl+C reaches both sides while the root side, already started for the change, still checks:
     nothing has begun, so "stopped. Nothing was changed." alone, not "still changing" just before it."""
