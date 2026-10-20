@@ -385,21 +385,32 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   as well as a plain slot of its own: exit 9 for the recovery key, 10 TPM, 11 FIDO2, 12 another
   token's, or a slot that cannot be told. Removing that slot would leave the owner's password
   working or the token pointing at nothing. A new password that already opens a token's slot, or
-  one that cannot be told: exit 13. Exit 2 is for a new password that will not do as typed (too
-  short, not ASCII, the two differ, the same as the current one).
+  one that cannot be told: exit 13. The messages name the way of unlocking in plain words (the
+  recovery key, the TPM, a security key), not its token type. Exit 2 is for a new password that will
+  not do as typed (too short, not ASCII, the two differ, the same as the current one); setup checks
+  all of those itself first, so it never meets exit 2.
 - **A leftover new password.** A plain slot the new password already opens counts as left by an
   earlier run that stopped part-way. It cannot be told apart from a plain slot someone gave that
   password on purpose: if this run fails and takes the new password back, that slot goes too. The
   current password still opens its own slot on that device.
 - **When it fails part-way.** If adding fails on one device, the new password comes back out of the
   others. A device it cannot be taken back out of (cryptsetup fails, the slot is a token's, or it
-  still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means the change may
-  be part-way: the new password was added but an old one could not be removed, cryptsetup ran out
-  of time, or the root side was killed; the message says which, and what opens each device.
+  still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means the change
+  ended without finishing: an old password could not be removed after the new one went in,
+  cryptsetup ran out of time (the message names the devices), or the root side was killed. The last
+  two can come before anything changed as well as part-way; nothing is removed before the new
+  password opens every device, so the current one or the new one (or both) opens each, and after a
+  killed root side the command looks and says which.
+- **A new key slot that cannot be told.** On a cryptsetup that names no slot and where no slot
+  opens on its own, `--new-owner` cannot tell which slot is the new one, so it leaves the other
+  slots and says so (exit 6). Running it again would stop at the same point (exit 12), so the
+  message says how to remove the slots by hand (`cryptsetup luksDump`, then `luksKillSlot`).
 - **Signals.** While it runs, Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits
   for the root side to finish or put things back, continues it if it stops after a Ctrl+Z, and says
-  how it ended. Ctrl+C at a prompt, or during the current password's check, stops with nothing
-  changed, said once (exit 130).
+  how it ended. It says that it waits only once the root side has begun adding the new password (it
+  passes the root side's output on and watches for that). Ctrl+C at a prompt, during the current
+  password's check, or before the change begins stops with nothing changed, said once (exit 130),
+  also when only the root side was stopped.
 - **The rest.** Printable ASCII only (no input method at start-up). It refuses on a disk that is not
   encrypted (exit 4), and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without
   root, with `encrypted` null when it cannot tell; setup then neither asks for a disk password nor
