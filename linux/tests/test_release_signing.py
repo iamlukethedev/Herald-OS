@@ -334,6 +334,10 @@ def release_case(tmp_path: Path, keys, case: str):
         signature = tmp_path / "two.sig"
         signature.write_bytes(keys.sign(keys.release, sums).read_bytes() + keys.sign(keys.other, write_other).read_bytes())
         offered_keys = keys.export(keys.release, keys.other)
+    elif case == "junk after the signature":
+        # gpg checks the signature, reports it good, then fails on what follows it.
+        signature = tmp_path / "junk.sig"
+        signature.write_bytes(keys.sign(keys.release, sums).read_bytes() + b"JUNKJUNKJUNK")
     elif case == "changed after signing":
         signature = keys.sign(keys.release, sums)
         sums.write_text(f"{'b' * 64}  herald-os-0.2.0-linux-x64.tar.gz\n")
@@ -348,7 +352,7 @@ def release_case(tmp_path: Path, keys, case: str):
     return sums, signature, offered, key, trusted
 
 
-ARCH_CASES = ["good", "expired subkey", "revoked subkey", "revoked key", "expired key", "another key", "two signatures", "bad then good", "good then bad", "changed after signing", "key file without the key"]
+ARCH_CASES = ["good", "expired subkey", "revoked subkey", "revoked key", "expired key", "another key", "two signatures", "bad then good", "good then bad", "junk after the signature", "changed after signing", "key file without the key"]
 
 
 @pytest.mark.parametrize("case", ARCH_CASES)
@@ -472,7 +476,7 @@ def test_the_readme_and_security_md_give_the_same_check():
     assert documented_check(ROOT / "README.md") == documented_check(ROOT / "SECURITY.md")
 
 
-MANUAL_CASES = ["good", "expired subkey", "revoked subkey", "another key", "two signatures", "bad then good", "good then bad", "changed after signing"]
+MANUAL_CASES = ["good", "expired subkey", "revoked subkey", "another key", "two signatures", "bad then good", "good then bad", "junk after the signature", "changed after signing"]
 
 
 @pytest.mark.parametrize("case", MANUAL_CASES)

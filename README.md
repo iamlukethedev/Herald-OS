@@ -149,7 +149,7 @@ Herald.
    fpr=<the fingerprint below, without spaces>
    gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null |
      awk -v fpr="$fpr" '$2 == "NEWSIG" { n++ } $2 == "GOODSIG" { g++ } $2 == "VALIDSIG" { v++; k = $NF }
-       $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)$/ { bad++ }
+       $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|FAILURE|NODATA|UNEXPECTED|ERROR)$/ { bad++ }
        END { if (n == 1 && g == 1 && v == 1 && !bad && k == fpr) print "signed with the release key"; else { print "NOT signed with a good release key"; exit 1 } }'
    grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
    ```

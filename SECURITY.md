@@ -86,7 +86,7 @@ gpg --import herald-os-release-key.asc
 fpr=<the fingerprint above, without spaces>
 gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null |
   awk -v fpr="$fpr" '$2 == "NEWSIG" { n++ } $2 == "GOODSIG" { g++ } $2 == "VALIDSIG" { v++; k = $NF }
-    $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)$/ { bad++ }
+    $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|FAILURE|NODATA|UNEXPECTED|ERROR)$/ { bad++ }
     END { if (n == 1 && g == 1 && v == 1 && !bad && k == fpr) print "signed with the release key"; else { print "NOT signed with a good release key"; exit 1 } }'
 grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
 ```
@@ -96,21 +96,22 @@ exits 0 even when the subkey that signed has expired or been revoked, adding onl
 key has expired!" or "WARNING: This subkey has been revoked by its owner!". In gpg's status lines
 (`--status-fd 1`) those cases are `EXPKEYSIG` or `REVKEYSIG` instead of `GOODSIG`, which is what the
 check above looks for; it also requires exactly one signature, made under the release key's
-fingerprint (the last field of `VALIDSIG`), and no bad one beside it (`BADSIG`, `ERRSIG`). gpg's warning that the key "is not certified with a
+fingerprint (the last field of `VALIDSIG`), no bad one beside it (`BADSIG`, `ERRSIG`), and nothing
+gpg could not read in the file (`NODATA`, `UNEXPECTED`, `FAILURE`, `ERROR`). gpg's warning that the key "is not certified with a
 trusted signature" is about your own keyring's trust settings; the fingerprint check is what counts.
 On Windows, with [Gpg4win](https://www.gpg4win.org), in PowerShell:
 
 ```powershell
 gpg --show-keys herald-os-release-key.asc
 gpg --import herald-os-release-key.asc
-gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>$null | Select-String 'NEWSIG|GOODSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG|VALIDSIG'
+gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>$null | Select-String 'NEWSIG|GOODSIG|VALIDSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG|FAILURE|NODATA|UNEXPECTED|ERROR'
 (Get-FileHash herald-os-<version>-x86_64.iso -Algorithm SHA256).Hash.ToLower()
 Select-String -Path SHA256SUMS -Pattern 'herald-os-<version>-x86_64.iso$'   # the same hash
 ```
 
 Trust it only if that shows exactly one `NEWSIG`, one `GOODSIG` and one `VALIDSIG` line, the
 `VALIDSIG` ending in the fingerprint above, and nothing else it lists (`EXPSIG`, `EXPKEYSIG`,
-`REVKEYSIG`, `BADSIG` or `ERRSIG`).
+`REVKEYSIG`, `BADSIG`, `ERRSIG`, `FAILURE`, `NODATA`, `UNEXPECTED` or `ERROR`).
 
 When a release's key file carries the revocation of the key an install trusts, `herald-os update`
 there refuses that release, and anything the revoked key signed or certified: that is intended.
