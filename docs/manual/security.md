@@ -80,10 +80,16 @@ Omarchy they run Omarchy's own setup instead.
 
 ## Disk encryption
 
-The installer encrypts the disk when you tick "Encrypt my data" on its disk screen. With it on,
+The installer encrypts the disk unless you untick "Encrypt my data" on its disk screen. With it on,
 someone who takes the computer or its disk cannot read your files without the disk password. It
 cannot be turned on afterwards without installing again, so decide at install time; see
-[Installing on a PC](install-pc.md).
+[Installing on a PC](install-pc.md). The disk password is typed before Bluetooth starts, so keep a
+wired keyboard (or one with a 2.4 GHz receiver) for it.
+
+`herald-os password --disk` changes the disk password; it asks for the current one first. When the
+computer passes to someone else, setup asks the new owner for their own, and the previous one stops
+working ([Setting it up for someone else, and reset](setup-and-reset.md)). The disk password cannot
+be recovered: without it, the files are gone.
 
 ## Secure Boot
 

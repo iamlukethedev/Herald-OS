@@ -13,7 +13,9 @@ After the installer and the first start (which installs Hermes Agent), Herald OS
   the sign-in card comes back the first time Hermes needs a model.
 - **For someone else:** only Wi-Fi, so you can check the computer works. Setup does not finish: at
   the next start it waits for the new owner, who chooses "It is for me" and picks their own name and
-  password.
+  password. On an encrypted disk (the installer's default), tell them the disk password you chose
+  when installing: they type it once to start the computer, and setup then asks them for a disk
+  password of their own, which replaces yours. Yours stops working.
 
 The password is the one for the lock screen and for administrator tasks. Until there is one, the
 lock screen refuses to lock (an unlockable lock would shut you out), so set one in setup or later
@@ -32,9 +34,28 @@ The computer restarts, erases the account, every Flatpak app and every saved net
 again (Hermes Agent included), and greets the next owner with setup. Reset is only on the Herald OS
 image; on Arch, Omarchy or the tarball, remove the account the way that system does.
 
+What stays on the disk depends on its encryption:
+
+- **Encrypted** (the installer's default): the disk password stays yours until the next owner
+  chooses theirs in setup. Tell it to them; they type it once to start the computer. Setup then
+  asks for it and a new one, and only the new one opens the disk afterwards (any other passwords or
+  keys added to it go too).
+- **Not encrypted:** reset deletes the files, but it is not a secure erase. Someone with the disk and
+  recovery tools may get some of them back, and `herald-os reset` says so before it asks you to
+  confirm.
+
+## The disk password
+
+To change it yourself, run `herald-os password --disk` in a terminal. It asks for your account
+password (for `sudo`), the current disk password, then the new one twice. It adds the new one and
+checks it before it removes the old one, so the disk always has a password that opens it; keep the
+computer on until it says it is done. If the new owner chose "Later" in setup, `herald-os password
+--disk --new-owner` does what setup would have done.
+
 ## Handing over a computer
 
 1. Install Herald OS, choose **For someone else**, and join Wi-Fi.
 2. Install the apps they will want from Settings > Software, if you like; they stay.
-3. Restart or shut down. The new owner turns it on, chooses **It is for me**, and signs Hermes in
-   with their own account.
+3. Restart or shut down, and give the new owner the disk password with it. They turn it on, type
+   that disk password, choose **It is for me**, set their own password and disk password, and sign
+   Hermes in with their own account.

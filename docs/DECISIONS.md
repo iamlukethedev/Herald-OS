@@ -298,8 +298,8 @@ an aarch64 qcow2 that boots straight into Herald OS.
 - **Software on an image.** `/usr` is read-only, so apps come from Flatpak, command-line tools go
   into `~/.local` (npm, mise) or a toolbox container, and `dnf install` stays a development-VM tool.
 - **The installer asks little.** Anaconda with a kickstart that leaves the storage screen to the
-  person, who can encrypt the disk (Anaconda's "Encrypt my data", off by default) and install
-  beside Windows; a kickstart passed with `inst.ks=` installs unattended. The
+  person, who can install beside Windows, and whose disk is encrypted unless they untick
+  Anaconda's "Encrypt my data" (ADR-031); a kickstart passed with `inst.ks=` installs unattended. The
   first-boot setup in the shell (name, password, Wi-Fi, Hermes sign-in) also covers handing a machine
   to a new owner, which `herald-os reset` returns to.
 - **Secure by default on release images.** firewalld with only LocalSend and mDNS open, SSH off,
@@ -1652,3 +1652,45 @@ or a scanner, use it up and lock the owner out.
   machine that never turns SSH on has neither the table nor the unit.
 - **firewalld required by default.** Without firewalld running, `setup ssh` refuses unless
   `--no-firewall`, which warns, and still loads the limit when `nft` is there.
+
+## ADR-031: The disk is encrypted unless the person says otherwise, and its password follows its owner
+
+**Status: Accepted.** From #37.
+
+A computer that is lost or handed on is the first way files leak, and an unencrypted disk can be
+read by anyone who takes it out. Omarchy encrypts by default; Herald OS now does too, without making
+the installer less of the person's.
+
+- **A kickstart line, not a second boot entry.** Anaconda has no configuration setting for the
+  "Encrypt my data" box: its storage screen (the GTK one; the bootc `anaconda-iso` does not ship the
+  web interface) ticks it when the kickstart's automatic partitioning is encrypted. So `iso.toml`'s
+  kickstart has `autopart --type=btrfs --encrypted`, with no passphrase, which Anaconda then asks for
+  in a window of its own once the disks are read, and no `clearpart`, `zerombr` or `ignoredisk`,
+  so nothing is erased unless the person chooses it and every disk stays on the screen. Unticking
+  the box installs without encryption. Two boot entries ("Install Herald OS" and "Install without
+  encryption") would have needed the same line for the encrypted one, plus a second kickstart and
+  GRUB menus rewritten inside the ISO after bootc-image-builder made it, which every builder update
+  could break.
+- **What the line changes.** With partitioning in the kickstart, Anaconda applies it as the disks
+  are read: until the person opens the storage screen, the layout is automatic, into free space, on
+  every disk it may use. An install into free space next to another system therefore encrypts only
+  Herald OS's own partitions, and a full disk shows an error until the person picks what to do.
+  Anaconda starts a kickstart install by itself once every screen is complete, but the Root Account
+  screen stays incomplete here (no `rootpw`, no account), so the person still has to open it, which
+  also stops that.
+- **A disk password change never leaves the disk without one.** `herald-os password --disk` adds
+  the new passphrase, checks that it opens every LUKS device under the root filesystem (a btrfs over
+  two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
+  which replaces a slot device by device without a check in between. Signals wait until it is done.
+  If adding fails on one device, the new passphrase comes out of the others again. It runs as root
+  through sudo, asked for before anything else, and takes only printable ASCII: there is no input
+  method at start-up, and the keyboard layout there may differ.
+- **A new owner gets a disk password of their own.** After setup "for someone else" or `herald-os
+  reset`, the new owner unlocks the disk at the next start with the password they were given, which
+  they therefore know; setup then asks for it and a new one, and `--new-owner` removes every other
+  key slot and any token left without one, so neither the old password nor a key someone else added
+  opens the disk afterwards. No key is kept on the disk for this. On a disk that is not encrypted,
+  setup and `herald-os reset` say plainly that a reset deletes files and is not a secure erase.
+- **Not here: TPM unlocking.** The base image has `clevis-pin-tpm2`, so the disk could unlock by
+  itself on the machine it was installed on. That trades the password at start-up for trust in the
+  firmware, and stays a separate decision.

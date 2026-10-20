@@ -141,7 +141,9 @@ Herald.
    [Fedora Media Writer](https://fedoraproject.org/workstation/download) or
    [balenaEtcher](https://etcher.balena.io).
 3. Start the PC from the stick and follow the installer. Its disk screen lets you erase the disk or
-   install next to Windows, and encrypt it. Secure Boot can stay on.
+   install next to Windows, and encrypts it unless you untick "Encrypt my data". The disk password
+   is typed at every start, before Bluetooth is up, so use a wired keyboard or one with a 2.4 GHz
+   receiver for it; `herald-os password --disk` changes it later. Secure Boot can stay on.
 4. The first start sets up Hermes Agent, then Herald OS asks for your name, a password and Wi-Fi.
 
 Updates come as a whole new version of the system: `herald-os update` installs one, and

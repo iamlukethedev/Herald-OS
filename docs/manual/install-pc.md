@@ -64,8 +64,13 @@ power-on; the PC's manual says which). Pick the USB stick.
 - **Secure Boot can stay on.** Herald OS starts through Fedora's signed shim.
 - **The disk screen is yours to decide.** Erase the whole disk, or keep Windows and install next to
   it (see [Dual boot](#dual-boot) below).
-- **Encryption:** tick "Encrypt my data" on the disk screen to encrypt the disk. It is off unless you
-  tick it. You then type the disk password at every start, before Herald OS loads.
+- **Encryption is on.** "Encrypt my data" is already ticked on the disk screen, and the installer
+  asks for the disk password in a window of its own. You then type it at every start, before Herald
+  OS loads, so use a wired keyboard for it (see [below](#the-disk-password-and-your-keyboard)).
+  Untick the box to install without encryption: anyone who takes the computer or its disk out can
+  then read your files, and a [reset](setup-and-reset.md#reset) deletes them without a secure erase.
+  Next to Windows, only Herald OS's own part of the disk is encrypted. `herald-os password --disk`
+  changes the disk password later.
 
 ## 4. The first start
 
@@ -125,8 +130,10 @@ Afterwards `nvidia-smi` lists the card, and `modinfo -F signer nvidia` says `ubl
 
 With encryption on, the disk password is asked for on the boot splash, before Herald OS (and its
 drivers for Bluetooth and some USB hubs) has started. A Bluetooth keyboard cannot type there, and a
-keyboard behind a dock or hub may not either, so keep a wired keyboard, or the laptop's own, at hand
-for that prompt.
+keyboard behind a dock or hub may not either, so keep a wired keyboard, the laptop's own, or a
+wireless one with its own 2.4 GHz USB receiver at hand for that prompt. The keyboard layout there
+may not be yours, which is why the disk password takes only letters, digits, spaces and the symbols
+on the keyboard.
 
 ## Next
 

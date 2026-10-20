@@ -279,10 +279,16 @@ builds it for x86_64 and aarch64 on matching runners, pushes it to the repositor
 switching to it, and changing its packages, Flatpaks and branding.
 
 - **an x86_64 installer ISO** (bootc-image-builder `anaconda-iso`, `linux/image/iso.toml`): the
-  storage screen stays interactive, so it can install next to another system and encrypt the disk
-  (btrfs) if you tick "Encrypt my data". Boot it with `inst.ks=<url>` and a kickstart like
-  `linux/image/unattended.ks` for an unattended install: its `%pre` picks one disk (`DISK=` set
-  in it, or else the only internal disk) and writes `ignoredisk --only-use` and
+  storage screen stays interactive, so it can install next to another system, and the disk is
+  encrypted (LUKS2 under btrfs) unless the person unticks "Encrypt my data" (ADR-031). Anaconda has
+  no setting for that box; its kickstart's `autopart --type=btrfs --encrypted`, with no passphrase
+  and nothing that erases or hides a disk, makes the storage screen start with it ticked and ask for
+  the passphrase. Until someone opens that screen the layout is automatic, into free space, so an
+  install next to another system encrypts only Herald OS's partitions. The disk password is typed
+  on the boot splash, before Bluetooth is up: a wired keyboard, a laptop's own or a 2.4 GHz
+  receiver works there, a Bluetooth keyboard does not. Boot it with `inst.ks=<url>` and a
+  kickstart like `linux/image/unattended.ks` for an unattended install: its `%pre` picks one disk
+  (`DISK=` set in it, or else the only internal disk) and writes `ignoredisk --only-use` and
   `clearpart --drives` for it, so other disks are left alone. `DISK=` must be one name (no spaces,
   commas or options), resolve (`readlink -f`) to a writable `lsblk` `TYPE` `disk`, and not be a
   disk under the installer's mounts, which `lsblk -s` traces through partitions, LVM and RAID, nor
@@ -331,7 +337,13 @@ The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] 
 `package-disk.sh` deletes the builder's `disk.qcow2` and the VHDX once they are converted, and the
 workflow removes the images after the builder, so the runner has room for every output.
 `.github/workflows/installer-test.yml` installs a release's ISO into a KVM machine (with an
-unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start. Its
+unattended disk layout added to the ISO's kickstart), boots it and screenshots its first start. It
+does so twice. The encrypted run fails unless the ISO's kickstart pre-selects encryption; it then
+installs with a passphrase, checks that the installed disk is LUKS and opens with it (from a loop
+device on the runner), and types it at boot over the serial console, with the boot splash off for
+that run. The unencrypted run states the layout without `--encrypted`, as unticking the box would,
+and checks there is no LUKS. A kickstart cannot click the box itself, so the default is checked in
+the ISO's kickstart, not on the screen. Its
 optional `account` input (empty by default, so a run without it is unchanged) also appends the
 account `%pre` of `unattended.ks` with that name and a throwaway key
 (`linux/vm/account-kickstart.sh` fills it in), forwards port 2222 to the machine's SSH, and fails
@@ -351,11 +363,28 @@ image starts on the next restart and the previous one stays in the boot menu; `h
 
 **Setup and reset.** The first boot makes the account and installs Hermes; then the shell's setup
 asks who the computer is for. For yourself: a name, a password (set with `passwd` as you, so the
-setup never needs root), Wi-Fi and Hermes's sign-in. For someone else: just Wi-Fi, and setup waits
-for them at the next start. `herald-os reset` (type ERASE, then your password) erases the account,
-its apps and saved networks on the next restart and runs setup again; the system stays. A system
-switched from another bootc system is different: it gets a login screen and a locked account instead
-([Switching a bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
+account step never needs root), Wi-Fi and Hermes's sign-in. For someone else: just Wi-Fi, and setup
+waits for them at the next start. `herald-os reset` (type ERASE, then your password) erases the
+account, its apps and saved networks on the next restart and runs setup again; the system stays. On
+an unencrypted disk, it says first that this is deletion, not a secure erase. A system switched from
+another bootc system is different: it gets a login screen and a locked account instead ([Switching a
+bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
+
+**The disk password.** `herald-os password --disk` finds the LUKS devices under the root filesystem
+(`/sysroot` on the image; from `lsblk`, or `/etc/crypttab` when `lsblk` fails), asks sudo for
+root first, then the current disk password, which it checks before it asks for the new one twice. It
+adds the new one to every device, checks that it opens each, and only then removes the old one
+(every slot it opens), so an interruption leaves a password that works; while it runs, Ctrl+C and a
+closed terminal wait. If adding it fails on one device, it comes back out of the others. It takes
+printable ASCII only (no input method at start-up), refuses on a disk that is not encrypted, and
+`--status` prints `{"encrypted", "devices", "newOwner"}` without root. After setup "for someone
+else" (`~/.config/herald-os/new-owner`) or a reset (`/var/lib/herald-os/new-owner`, from
+`reset-helper apply`), setup on an encrypted disk asks the new owner for the disk password they
+typed at start-up and one of their own, and runs `herald-os password --disk --new-owner` in a
+terminal of its own with their new account password for sudo: it also removes every other key slot
+and the tokens left with none, so only the new owner's password opens the disk. "Later" skips it.
+`linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device and checks that
+the old password no longer opens them.
 
 **Security.**
 
