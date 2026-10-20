@@ -87,7 +87,7 @@ describe('the desktop pet going away with approvals queued', () => {
     expect($petHeldApproval.get()).toBeNull()
     expect(cards()).toEqual(['r1'])
     expect(pet()).toBeNull()
-    expect(host.textContent).toContain('2 more waiting')
+    expect(host.textContent).toContain('2 more requests waiting')
     expect(host.textContent).not.toContain('approvals waiting')
   })
 
@@ -96,7 +96,7 @@ describe('the desktop pet going away with approvals queued', () => {
 
     expect($petHeldApproval.get()).toBeNull()
     expect(cards()).toEqual(['r1'])
-    expect(host.textContent).toContain('2 more waiting')
+    expect(host.textContent).toContain('2 more requests waiting')
   })
 
   it('takes them again when it comes back', () => {
@@ -119,7 +119,7 @@ describe('the desktop pet going away with approvals queued', () => {
       expect(pet()).not.toBeNull()
       expect($petHeldApproval.get()).toBeNull()
       expect(cards()).toEqual(['r1'])
-      expect(host.textContent).toContain('2 more waiting')
+      expect(host.textContent).toContain('2 more requests waiting')
       expect(host.textContent).not.toContain('approvals waiting')
 
       const deny = [...host.querySelectorAll<HTMLButtonElement>('[data-request-card="r1"] button')].find(button => button.textContent === 'Deny')!

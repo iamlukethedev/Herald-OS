@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestCommands, resetRequestFocus } from '../commands/requests.ts'
 import { PetApprovalCard } from '../features/pet/PetView.tsx'
 import { $petHeldApproval } from '../features/pet/transport.ts'
+import { $prefs } from '../store/backend.ts'
 import { $pendingRequests, type PendingRequest } from '../store/requests.ts'
 import { ApprovalCard, RequestHost } from './RequestHost.tsx'
 
@@ -531,5 +532,34 @@ describe('password and secret cards', () => {
     act(() => continueAnswer().click())
 
     expect(respond.mock.calls[0]).toStrictEqual([{ value: ' secret ' }])
+  })
+})
+
+describe('the count of requests behind the card', () => {
+  const waitingLabel = () => [...host.querySelectorAll('div')].find(element => element.className.includes('self-end'))?.textContent ?? null
+
+  it.each([
+    ['en', 2, '1 more request waiting'],
+    ['en', 4, '3 more requests waiting'],
+    ['pt-BR', 2, 'Mais 1 pedido aguardando'],
+    ['pt-BR', 4, 'Mais 3 pedidos aguardando'],
+    ['zh-CN', 2, '还有 1 个请求在等待'],
+    ['zh-CN', 4, '还有 3 个请求在等待']
+  ] as const)('in %s, with %i requests waiting, reads "%s"', (language, total, text) => {
+    act(() => $prefs.set({ ...$prefs.get(), language }))
+
+    try {
+      act(() => $pendingRequests.set(Array.from({ length: total }, (_, index) => asking(`r${index + 1}`, `Request ${index + 1}`).entry)))
+
+      expect(waitingLabel()).toBe(text)
+    } finally {
+      act(() => $prefs.set({ ...$prefs.get(), language: 'en' }))
+    }
+  })
+
+  it('shows no count for a request alone', () => {
+    arrive(asking('r1', 'Request 1').entry)
+
+    expect(waitingLabel()).toBeNull()
   })
 })

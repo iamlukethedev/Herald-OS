@@ -26,6 +26,7 @@ import { $voiceActive, $voiceSessionId } from '../store/voice.ts'
 export function RequestHost() {
   const all = useStore($pendingRequests)
   const held = useStore($petHeldApproval)
+  const t = useT()
   const announcement = useArrivalAnnouncement(all)
   const [current, ...rest] = all.filter(entry => entry.request.id !== held && !(held !== null && entry.kind === 'approval'))
 
@@ -36,7 +37,7 @@ export function RequestHost() {
       </div>
       {current && (
         <div className="pointer-events-none absolute right-5 bottom-[92px] z-(--z-request) flex w-[420px] flex-col items-stretch gap-2">
-          {rest.length > 0 && <div className="pointer-events-auto self-end text-[11px] text-fg-3">{rest.length} more waiting</div>}
+          {rest.length > 0 && <div className="pointer-events-auto self-end text-[11px] text-fg-3">{t('requests.moreWaiting', { count: rest.length })}</div>}
           <RequestFrame key={current.request.id} entry={current} />
         </div>
       )}

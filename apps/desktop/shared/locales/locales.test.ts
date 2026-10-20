@@ -167,11 +167,14 @@ describe('the copied-English check', () => {
   })
 })
 
-describe("the pet's count of approvals waiting", () => {
+describe('the counts of requests waiting', () => {
   const catalogs: Record<Language, Translation> = { en, ...TRANSLATIONS }
+  // The pet's card counts the approvals behind it; the request host's the requests behind its card.
+  const COUNTS = ['requests.approvalsWaiting', 'requests.moreWaiting'] as const
+  const cases = COUNTS.flatMap(key => (Object.keys(catalogs) as Language[]).map(language => [key, language] as const))
 
-  it.each(Object.keys(catalogs) as Language[])('is translated in %s, with every plural form the language uses', language => {
-    const message = catalogs[language]['requests.approvalsWaiting']
+  it.each(cases)('%s is translated in %s, with every plural form the language uses', (key, language) => {
+    const message = catalogs[language][key]
 
     expect(message, language).toBeDefined()
     expect(typeof message, language).toBe('object')
@@ -185,8 +188,12 @@ describe("the pet's count of approvals waiting", () => {
     }
 
     if (language !== 'en') {
-      expect(Object.values(forms), language).not.toContain(en['requests.approvalsWaiting'].one)
-      expect(Object.values(forms), language).not.toContain(en['requests.approvalsWaiting'].other)
+      expect(Object.values(forms), language).not.toContain(en[key].one)
+      expect(Object.values(forms), language).not.toContain(en[key].other)
     }
+  })
+
+  it.each(COUNTS)('%s reads differently for one and for several in English', key => {
+    expect(en[key].one).not.toBe(en[key].other)
   })
 })

@@ -160,6 +160,6 @@ describe('two queued requests', () => {
 
     expect([...document.querySelectorAll('[data-request-card]')].map(card => card.getAttribute('data-request-card'))).toEqual(['r1'])
     expect(document.body.textContent).toContain('2 more approvals waiting')
-    expect(document.body.textContent).not.toMatch(/\d more waiting/)
+    expect(document.body.textContent).not.toMatch(/\d more requests? waiting/)
   })
 })
