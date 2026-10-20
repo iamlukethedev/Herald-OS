@@ -38,6 +38,9 @@ case "${1:-}" in
     # still open (sshd.socket, or one that got in another way) is ended here.
     rm -f /etc/herald-os/ssh-keys /etc/herald-os/install.conf
     herald-os setup ssh --off --end-sessions >/dev/null || echo "WARNING: SSH could not be turned off; run herald-os setup ssh --off --end-sessions" >&2
+    # The next account is someone new's: on an encrypted disk, setup asks them for a disk password of
+    # their own and takes the old one out (herald-os password --disk --new-owner removes this mark).
+    date -Is >"$STATE/new-owner"
     rm -f "$STATE/firstboot-done" "$STATE/firstboot-apps-done" "$STATE/hermes-pending" "$PENDING"
     ;;
   *) echo "usage: $0 schedule <user> | apply" >&2; exit 2 ;;
