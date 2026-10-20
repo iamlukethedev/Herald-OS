@@ -171,6 +171,8 @@ def test_cryptsetup_running_out_of_time_says_which_passwords_may_work(monkeypatc
     def timeout(args, key=None, new=None):
         if args[0] == "luksAddKey":
             raise subprocess.TimeoutExpired(["cryptsetup", "luksAddKey"], 300)
+        if args[0] == "luksDump":
+            return subprocess.CompletedProcess(args, 0, b'{"keyslots": {"0": {}}, "tokens": {}}', b"")
         return subprocess.CompletedProcess(args, 0, b"", b"")
     monkeypatch.setattr(cli, "cryptsetup", timeout)
     monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: 0 if passphrase == OLD else None)
@@ -416,7 +418,9 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
     fd, child_end = pty.openpty()
     process = subprocess.Popen(["setsid", "-c", *argv], stdin=child_end, stdout=child_end, stderr=child_end, env=env, close_fds=True)
     os.close(child_end)
-    screen, pending, deadline = "", list(answers), time.monotonic() + timeout
+    # As root the command asks sudo nothing, so there is no sudo prompt to wait for.
+    pending = [answer for answer in answers if not (os.geteuid() == 0 and answer[0].startswith("[sudo]"))]
+    screen, deadline = "", time.monotonic() + timeout
     while time.monotonic() < deadline:
         ready, _, _ = select.select([fd], [], [], 1)
         if ready:
@@ -457,12 +461,13 @@ def test_the_command_asks_sudo_then_both_passwords(tmp_path):
 def test_the_command_stops_at_a_wrong_password_or_a_mismatch(tmp_path):
     disk = make_image(tmp_path / "disk.img", OLD)
     env = fake_tools(tmp_path / "bin", disk)
-    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("for tester:", "account-pass"), ("Current disk password:", "wrong one!")])
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("[sudo] password for tester:", "account-pass"), ("Current disk password:", "wrong one!")])
     assert code == cli.DISK_WRONG and "not the disk password" in screen
-    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("for tester:", "account-pass"), ("Current disk password:", OLD), ("New disk password:", NEW), ("again:", NEW + "x")])
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("[sudo] password for tester:", "account-pass"), ("Current disk password:", OLD), ("New disk password:", NEW), ("again:", NEW + "x")])
     assert code == 2 and "not the same" in screen
-    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("for tester:", "not it")])
-    assert code == cli.DISK_NO_ROOT
+    if os.geteuid() != 0:
+        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("for tester:", "not it")])
+        assert code == cli.DISK_NO_ROOT
     assert opens(disk, OLD) and not opens(disk, NEW)
 
 
