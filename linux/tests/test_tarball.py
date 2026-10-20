@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -214,7 +215,7 @@ def published(layout, tmp_path, monkeypatch):
     monkeypatch.setattr(tb, "machine_arch", lambda: arch)
     tarball_of(make_app(tmp_path / "build" / "app", "0.2.0"), "0.2.0", arch, served)
     monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0")])
-    monkeypatch.setattr(tb, "download", lambda url, target: shutil.copy(served / url.rsplit("/", 1)[1], target))
+    monkeypatch.setattr(tb, "download", lambda url, target, **kwargs: shutil.copy(served / url.rsplit("/", 1)[1], target))
     tb.install(layout)
     return served
 
@@ -337,6 +338,172 @@ def test_every_request_to_github_is_https_only(tmp_path, monkeypatch):
     with pytest.raises(tb.ReleaseError):
         tb.download("http://example.com/x.tar.gz", tmp_path / "y")
     assert len(ran) == 2
+
+
+def flag(argv: list, name: str) -> str | None:
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def test_every_request_has_an_end(tmp_path, monkeypatch):
+    """A server that stalls cannot hold check or update: every request has a connect timeout and a
+    total one, the signing files a size cap, and the tarball is cut off when it stalls."""
+    ran: list[list[str]] = []
+    totals: list = []
+    size = {"bytes": 100}
+
+    def curl(argv, **kwargs):
+        ran.append(argv)
+        totals.append(kwargs.get("timeout"))
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"x" * size["bytes"])
+        return 0
+
+    def listing_curl(argv, **kwargs):
+        ran.append(argv)
+        totals.append(kwargs.get("timeout"))
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+
+    monkeypatch.setattr(tb.subprocess, "call", curl)
+    monkeypatch.setattr(tb.subprocess, "run", listing_curl)
+    tb.releases()
+    tb.download("https://example.com/SHA256SUMS", tmp_path / "SHA256SUMS", small=True)
+    tb.download("https://example.com/x.tar.gz", tmp_path / "x.tar.gz")
+    listing, small, tarball = ran
+    for argv in ran:
+        assert flag(argv, "--connect-timeout") == "15", argv
+        assert flag(argv, "--max-time") is not None, argv
+    # Each limit is a total, retries included: curl starts no retry after it, and the process is ended at it.
+    assert flag(listing, "--max-time") == flag(listing, "--retry-max-time") == str(tb.API_TIME) == "60"
+    assert flag(small, "--max-time") == flag(small, "--retry-max-time") == str(tb.SMALL_TIME) == "60"
+    assert flag(small, "--max-filesize") == str(tb.SMALL_LIMIT) == str(1 << 20)
+    assert flag(tarball, "--max-time") == str(tb.TARBALL_TIME) and flag(tarball, "--max-filesize") is None
+    assert flag(tarball, "--speed-limit") == "1024" and flag(tarball, "--speed-time") == flag(tarball, "--retry-max-time") == str(tb.STALL_TIME) == "60"
+    assert totals == [tb.API_TIME, tb.SMALL_TIME, tb.TARBALL_TIME]
+    # The time left before a deadline bounds a small download, and none starts once it has passed.
+    ran.clear()
+    tb.download("https://example.com/SHA256SUMS.sig", tmp_path / "sig", small=True, deadline=tb.time.monotonic() + 20.5)
+    assert 1 <= int(flag(ran[0], "--max-time")) <= 20 and flag(ran[0], "--retry-max-time") == flag(ran[0], "--max-time")
+    assert totals[-1] == int(flag(ran[0], "--max-time"))
+    with pytest.raises(tb.ReleaseError, match="ran out of time"):
+        tb.download("https://example.com/SHA256SUMS.sig", tmp_path / "sig", small=True, deadline=tb.time.monotonic() - 1)
+    assert len(ran) == 1
+    # A signing file that came without its size and ran past the cap is refused afterwards.
+    size["bytes"] = tb.SMALL_LIMIT + 1
+    with pytest.raises(tb.ReleaseError, match="too big to be a signing file"):
+        tb.download("https://example.com/herald-os-release-key.asc", tmp_path / "key", small=True)
+
+
+def test_the_lookback_s_budget_bounds_each_request(layout, monkeypatch):
+    deadlines: list = []
+    monkeypatch.setattr(tb, "download", lambda url, target, small=False, deadline=None: deadlines.append(deadline) or (_ for _ in ()).throw(tb.ReleaseError("stand-in")))
+    found = tb.candidates([release("v0.2.0", signed=(tb.SUMS, tb.SUMS_SIG))], "x64", signed=True)
+    before = tb.time.monotonic()
+    tb.verified(layout, found, "0.1.0")
+    assert len(deadlines) == 1 and before + tb.VERIFY_BUDGET <= deadlines[0] <= tb.time.monotonic() + tb.VERIFY_BUDGET
+
+
+def test_gpg_gets_no_more_than_the_time_that_is_left(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    signature = keys.sign(keys.release, sums)
+    with pytest.raises(tb.ReleaseError, match="ran out of time"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), deadline=tb.time.monotonic() - 1)
+    assert tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), deadline=tb.time.monotonic() + 60) == keys.release
+
+
+STALLED_DOWNLOAD = """
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("herald_os_tarball", sys.argv[1])
+module = importlib.util.module_from_spec(importlib.util.spec_from_loader("herald_os_tarball", loader))
+loader.exec_module(module)
+module.API_TIME = module.SMALL_TIME = module.STALL_TIME = 3
+try:
+    if sys.argv[4] == "listing":
+        module.RELEASES_API = sys.argv[2]
+        module.releases()
+    else:
+        module.download(sys.argv[2], module.Path(sys.argv[3]), small=sys.argv[4] == "small")
+except module.ReleaseError as exc:
+    print(exc)
+    sys.exit(1)
+"""
+
+
+@pytest.fixture
+def stalling_server(tmp_path, monkeypatch):
+    """An HTTPS server that never answers /silent, and sends /trickle's headers and a few bytes, then
+    nothing; with a certificate curl trusts through CURL_CA_BUNDLE."""
+    if not (shutil.which("openssl") and shutil.which("curl")):
+        pytest.skip("needs openssl and curl")
+    key, cert = tmp_path / "key.pem", tmp_path / "cert.pem"
+    made = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], capture_output=True)
+    if made.returncode != 0:
+        pytest.skip("openssl could not make a test certificate")
+    release_all = threading.Event()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/ok":
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            if self.path == "/trickle":
+                self.send_response(200)
+                self.send_header("Content-Length", str(1 << 20))
+                self.end_headers()
+                self.wfile.write(b"x" * 16)
+                self.wfile.flush()
+            release_all.wait(120)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("CURL_CA_BUNDLE", str(cert))
+    base = f"https://127.0.0.1:{server.server_port}"
+    if subprocess.run(["curl", "-fsS", "--max-time", "10", "-o", os.devnull, f"{base}/ok"], capture_output=True).returncode != 0:
+        pytest.skip("this curl does not read its CA bundle from CURL_CA_BUNDLE")
+    yield base
+    release_all.set()
+    server.shutdown()
+    server.server_close()
+
+
+def run_stalled(base: str, path: str, kind: str, tmp_path: Path, env: dict | None = None) -> tuple[subprocess.CompletedProcess, float]:
+    started = time.monotonic()
+    try:
+        done = subprocess.run([sys.executable, "-c", STALLED_DOWNLOAD, str(BIN / "herald-os-tarball"), base + path, str(tmp_path / "out"), kind], capture_output=True, text=True, timeout=60, env=env)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the download hung on a server that stalled")
+    return done, time.monotonic() - started
+
+
+@pytest.mark.parametrize("path,kind", [("/silent", "listing"), ("/trickle", "listing"), ("/silent", "small"), ("/trickle", "small"), ("/trickle", "tarball")])
+def test_a_stalled_server_ends_the_request_at_its_limit(stalling_server, tmp_path, path, kind):
+    """With real curl, every limit cut to 3 s: each request ends at about its limit, retries included.
+    Three attempts with curl's pauses between them would take over 10 s."""
+    done, took = run_stalled(stalling_server, path, kind, tmp_path)
+    assert done.returncode == 1, done.stdout + done.stderr
+    # The listing passes on curl's own words, or says GitHub did not answer in time.
+    assert done.stdout.strip() if kind == "listing" else "could not download" in done.stdout, done.stdout
+    assert took < 8, f"{kind} {path} took {took:.1f} s"
+
+
+def test_a_curl_that_ignores_its_limits_is_ended_at_the_total(tmp_path):
+    """The process itself is ended at the limit, whatever curl does: here a curl that only sleeps."""
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    # One process, as curl is: exec, so ending it leaves nothing holding the output open.
+    write(stand_in / "curl", "#!/bin/sh\nexec sleep 50\n", 0o755)
+    env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}"}
+    for kind in ("listing", "small"):
+        done, took = run_stalled("https://example.com", "/x", kind, tmp_path, env)
+        assert done.returncode == 1 and took < 8, (kind, took, done.stdout + done.stderr)
 
 
 @pytest.fixture
@@ -681,11 +848,45 @@ def test_a_forged_certification_vouches_for_nothing(tmp_path, keys):
 
 
 def test_a_good_signature_beside_one_by_an_unknown_key_is_refused(tmp_path, keys):
+    """The other key comes in the release's key file, so gpg can check both signatures and both are
+    good: only the rule of one signature refuses it."""
     sums = sums_of(tmp_path)
     both = keys.sign(keys.release, sums).read_bytes() + keys.sign(keys.other, sums).read_bytes()
     write(tmp_path / "both.sig", both)
-    with pytest.raises(tb.ReleaseError):
+    write(tmp_path / "offered.asc", keys.export(keys.other))
+    with pytest.raises(tb.ReleaseError, match="more than one signature"):
+        tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release), tmp_path / "offered.asc")
+
+
+@pytest.mark.parametrize("order", ["bad first", "good first"])
+def test_a_bad_signature_beside_a_good_one_is_named_as_two(tmp_path, keys, order):
+    """gpg stops reporting at a bad signature by the same key, so the count comes from the file."""
+    sums = sums_of(tmp_path)
+    good = keys.sign(keys.release, sums).read_bytes()
+    write(tmp_path / "other.txt", "something else\n")
+    bad = keys.sign(keys.release, tmp_path / "other.txt").read_bytes()
+    write(tmp_path / "both.sig", bad + good if order == "bad first" else good + bad)
+    with pytest.raises(tb.ReleaseError, match="more than one signature"):
         tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release))
+
+
+def test_a_tampered_certification_vouches_for_nothing(tmp_path, keys):
+    """The release key's real certification of the successor, one byte of its signature changed: it
+    still names the release key as issuer, but no longer checks out."""
+    sums = sums_of(tmp_path)
+    exported = packets(keys.export_binary(keys.successor))
+    uid = next(i for i, (tag, _) in enumerate(exported) if tag == 13)
+    # After the user ID: its self-signature, then the release key's certification.
+    at = [i for i, (tag, _) in enumerate(exported) if tag == 2 and i > uid][1]
+    tag, packet = exported[at]
+    exported[at] = (tag, packet[:-1] + bytes([packet[-1] ^ 0x01]))
+    write(tmp_path / "offered.gpg", b"".join(packet for _, packet in exported))
+    signature = keys.sign(keys.successor, sums)
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), tmp_path / "offered.gpg")
+    # The same file untouched is accepted, so the change is what refuses it.
+    write(tmp_path / "offered.gpg", keys.export_binary(keys.successor))
+    assert tb.verify_signature(sums, signature, pinned(tmp_path, keys, keys.release), tmp_path / "offered.gpg") == keys.successor
 
 
 @pytest.mark.parametrize("revocation_in", ["offered", "installed"])
@@ -778,6 +979,27 @@ def test_a_new_signing_subkey_arrives_with_the_release(tmp_path, keys):
         tb.verify_signature(sums, signature, trusted)
 
 
+def test_the_whole_sha256_is_compared(tmp_path):
+    tarball = tmp_path / "herald-os-0.2.0-linux-x64.tar.gz"
+    tarball.write_bytes(b"data")
+    digest = hashlib.sha256(b"data").hexdigest()
+    checksum = tmp_path / "herald-os-0.2.0-linux-x64.tar.gz.sha256"
+    for wrong in (digest[:8] + "0" * 56, digest[:-1] + ("0" if digest[-1] != "0" else "1")):
+        checksum.write_text(f"{wrong}  {tarball.name}\n")
+        with pytest.raises(tb.ReleaseError, match="does not match"):
+            tb.verify(tarball, checksum)
+    checksum.write_text(f"{digest}  {tarball.name}\n")
+    tb.verify(tarball, checksum)
+
+
+@pytest.mark.parametrize("listed", ["old-herald-os-0.2.0-linux-x64.tar.gz", "x/herald-os-0.2.0-linux-x64.tar.gz", "herald-os-0.2.0-linux-x64.tar.gz.part0"])
+def test_a_line_counts_only_for_the_exact_name(tmp_path, listed):
+    sums = tmp_path / tb.SUMS
+    sums.write_text(f"{'a' * 64}  {listed}\n")
+    with pytest.raises(tb.ReleaseError, match="does not give one checksum"):
+        tb.listed_checksum(sums, "herald-os-0.2.0-linux-x64.tar.gz")
+
+
 def test_sha256sums_must_name_the_tarball_once(tmp_path):
     name = "herald-os-0.2.0-linux-x64.tar.gz"
     sums = tmp_path / tb.SUMS
@@ -811,7 +1033,7 @@ def signed(layout, published, monkeypatch, keys):
     fetched: list[str] = []
     files = [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET]
     monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0", signed=tuple(files))])
-    monkeypatch.setattr(tb, "download", lambda url, target: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
+    monkeypatch.setattr(tb, "download", lambda url, target, **kwargs: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
     return types.SimpleNamespace(served=published, fetched=fetched, files=files)
 
 
@@ -823,9 +1045,9 @@ def test_a_signed_release_installs_once_its_signature_checks_out(layout, signed,
     assert tb.update(layout) == 0
     assert tb.read_version(layout.app) == "0.2.0" and tb.read_version(layout.previous) == "0.1.0"
     assert f"signed with the release key {tb.spaced(keys.release)}" in capsys.readouterr().out
-    # The signature first (checked to pick the release, then again on the files kept), and the
-    # tarball only once it checks out.
-    assert signed.fetched == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET] * 2 + [f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"]
+    # The signing files once, checked to pick the release and then used as they are, and the tarball
+    # only once they check out.
+    assert signed.fetched == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET, f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"]
 
 
 @pytest.mark.parametrize("missing", [tb.SUMS_SIG, tb.SUMS])
@@ -858,6 +1080,140 @@ def test_a_changed_tarball_under_a_good_signature_is_refused(layout, signed, cap
     with pytest.raises(SystemExit):
         tb.update(layout)
     assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+
+
+def test_the_update_installs_against_the_sha256sums_it_checked(layout, signed, keys, tmp_path, monkeypatch, capsys):
+    """Asked for the signing files a second time, the server sends another SHA256SUMS, also signed with
+    the release key, for another tarball that also holds 0.2.0. The update never asks again, so that
+    tarball does not match what was checked."""
+    other = tmp_path / "other"
+    other.mkdir()
+    app = make_app(tmp_path / "build-other" / "app", "0.2.0")
+    write(app / "resources" / "planted", "not in the release that was checked")
+    tarball_of(app, "0.2.0", tb.machine_arch(), other)
+    keys.sign(keys.release, sums_of(other))
+    asked: dict[str, int] = {}
+
+    def download(url, target, **kwargs):
+        name = url.rsplit("/", 1)[1]
+        asked[name] = asked.get(name, 0) + 1
+        second = name.endswith(".tar.gz") or asked[name] > 1
+        shutil.copy((other if second else signed.served) / name, target)
+
+    monkeypatch.setattr(tb, "download", download)
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+    assert asked[tb.SUMS] == asked[tb.SUMS_SIG] == 1
+
+
+def test_check_tries_a_bounded_number_of_releases(layout, monkeypatch):
+    tried: list[str] = []
+
+    def refuse(layout, release, *args, **kwargs):
+        tried.append(release["version"])
+        raise tb.ReleaseError("not signed")
+
+    monkeypatch.setattr(tb, "checked_signature", refuse)
+    found = tb.candidates([release(f"v0.{n}.0") for n in range(2, 10)], "x64", signed=True)
+    picked, skipped = tb.verified(layout, found, "0.1.0")
+    assert picked is None and tried == ["0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0"]
+    assert skipped[-1].startswith("did not try 3 more newer releases (at most 5, within 180 s)")
+    # And none is started once the time is up, however few were tried: the clock reads 0 at the
+    # start, then 100 s and 200 s later, past the budget.
+    clock = iter(range(0, 10_000, 100))
+    monkeypatch.setattr(tb.time, "monotonic", lambda: next(clock))
+    tried.clear()
+    picked, skipped = tb.verified(layout, found, "0.1.0")
+    assert picked is None and tried == ["0.9.0"] and skipped[-1].startswith("did not try 7 more newer releases")
+    # One left over is one release.
+    monkeypatch.setattr(tb.time, "monotonic", lambda: 0)
+    tried.clear()
+    found = tb.candidates([release(f"v0.{n}.0") for n in range(2, 8)], "x64", signed=True)
+    assert tb.verified(layout, found, "0.1.0")[1][-1].startswith("did not try 1 more newer release (at most")
+
+
+def test_a_sha256_with_a_line_that_is_not_a_checksum_changes_nothing(layout, published, capsys):
+    name = f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"
+    checksum = published / f"{name}.sha256"
+    checksum.write_text(checksum.read_text() + "not a checksum line\n")
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "is not a list of checksums; nothing was changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("problem", ["unsigned", "another key"])
+def test_update_to_a_given_version_checks_its_signature_too(layout, signed, keys, capsys, problem):
+    """The version named on the command line, as the background updater passes it, goes through the
+    same check: an unsigned release, or one signed with another key, is refused though its .sha256
+    matches."""
+    if problem == "unsigned":
+        signed.files.clear()
+    else:
+        keys.sign(keys.other, signed.served / tb.SUMS)
+    with pytest.raises(SystemExit):
+        tb.update(layout, "0.2.0")
+    assert unchanged(layout)
+    assert ("is not signed" if problem == "unsigned" else "does not trust") in capsys.readouterr().err
+    assert not any(name.endswith(".tar.gz") for name in signed.fetched)
+
+
+def test_every_signing_file_and_the_old_checksum_get_the_small_file_limits(layout, signed, published, monkeypatch):
+    """SHA256SUMS, its signature and the key file, whichever way update reaches them, and the .sha256
+    of an install without the key; only the tarball is downloaded as a big file."""
+    kinds: list[tuple[str, bool, bool]] = []
+
+    def download(url, target, small=False, deadline=None):
+        name = url.rsplit("/", 1)[1]
+        kinds.append((name, small, deadline is not None))
+        shutil.copy(published / name, target)
+
+    monkeypatch.setattr(tb, "download", download)
+    tarball = f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"
+    assert tb.update(layout) == 0
+    # Picked by the lookback, so within its time budget.
+    assert kinds == [(tb.SUMS, True, True), (tb.SUMS_SIG, True, True), (tb.KEY_ASSET, True, True), (tarball, False, False)]
+    tb.rollback(layout)
+    kinds.clear()
+    shutil.rmtree(layout.previous)
+    assert tb.update(layout, "0.2.0") == 0
+    assert kinds == [(tb.SUMS, True, False), (tb.SUMS_SIG, True, False), (tb.KEY_ASSET, True, False), (tarball, False, False)]
+    tb.rollback(layout)
+    kinds.clear()
+    shutil.rmtree(layout.previous)
+    layout.release_keys.unlink()
+    assert tb.update(layout) == 0
+    assert kinds == [(f"{tarball}.sha256", True, False), (tarball, False, False)]
+
+
+def test_a_download_with_less_than_a_second_left_does_not_start(tmp_path, monkeypatch):
+    """--max-time 0 would mean no limit at all, so under a second left is out of time."""
+    ran: list = []
+
+    def curl(argv, **kwargs):
+        ran.append(argv)
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"x")
+        return 0
+
+    monkeypatch.setattr(tb.subprocess, "call", curl)
+    with pytest.raises(tb.ReleaseError, match="ran out of time"):
+        tb.download("https://example.com/SHA256SUMS", tmp_path / "s", small=True, deadline=tb.time.monotonic() + 0.9)
+    assert not ran
+    tb.download("https://example.com/SHA256SUMS", tmp_path / "s", small=True, deadline=tb.time.monotonic() + 1.9)
+    assert flag(ran[0], "--max-time") == "1"
+
+
+def test_gpg_that_does_not_finish_is_ended(tmp_path, keys, monkeypatch):
+    """A gpg that hangs is ended at GPG_TIMEOUT, cut to 1 s here; without it the check would wait."""
+    stand_in = tmp_path / "bin"
+    write(stand_in / "gpg", "#!/bin/sh\nexec sleep 30\n", 0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(tb, "GPG_TIMEOUT", 1)
+    sums = sums_of(tmp_path)
+    started = time.monotonic()
+    with pytest.raises(tb.ReleaseError, match="gpg did not finish in 1 s"):
+        tb.verify_signature(sums, tmp_path / "SHA256SUMS.sig", pinned(tmp_path, keys, keys.release))
+    assert time.monotonic() - started < 10
 
 
 def test_a_release_key_file_too_big_to_be_one_is_refused(layout, signed, capsys):
@@ -911,7 +1267,7 @@ def test_before_the_release_key_an_update_checks_the_sha256_as_before(layout, pu
         keys.sign(keys.release, sums_of(published))
         files = (tb.SUMS, tb.SUMS_SIG)
     monkeypatch.setattr(tb, "releases", lambda: [release("v0.2.0", signed=files)])
-    monkeypatch.setattr(tb, "download", lambda url, target: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
+    monkeypatch.setattr(tb, "download", lambda url, target, **kwargs: fetched.append(url.rsplit("/", 1)[1]) or shutil.copy(published / url.rsplit("/", 1)[1], target))
     assert tb.update(layout) == 0 and tb.read_version(layout.app) == "0.2.0"
     assert sorted(fetched) == sorted([f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz", f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz.sha256"])
 

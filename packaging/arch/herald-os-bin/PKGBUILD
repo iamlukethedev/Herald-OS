@@ -53,19 +53,27 @@ sha256sums_aarch64=('SKIP')
 
 # The release keys' fingerprints, those of linux/keys/herald-os-release.asc; empty until the first
 # signed release (docs/RELEASE-SIGNING.md), which _version must then be at least. With them, makepkg
-# checks the release's SHA256SUMS.sig, and prepare() the tarball against SHA256SUMS. Import the key
-# once first: gpg --import ../../../linux/keys/herald-os-release.asc
+# checks the release's SHA256SUMS.sig, and prepare() checks it again as strictly as herald-os-tarball
+# (herald-os-release-check.sh: makepkg only warns about an expired key) and then the tarball against
+# SHA256SUMS. Import the key once first: gpg --import ../../../linux/keys/herald-os-release.asc
+# The key file is saved as .key: makepkg takes any source named .asc, .sig or .sign for a detached
+# signature of the source named without it, and would stop on the missing one.
 _release_keys=()
 if (( ${#_release_keys[@]} )); then
   validpgpkeys=("${_release_keys[@]}")
-  source+=("SHA256SUMS-${_version}::$url/releases/download/v${_version}/SHA256SUMS"
-           "SHA256SUMS-${_version}.sig::$url/releases/download/v${_version}/SHA256SUMS.sig")
-  sha256sums+=('SKIP' 'SKIP')
+  source+=('herald-os-release-check.sh'
+           "SHA256SUMS-${_version}::$url/releases/download/v${_version}/SHA256SUMS"
+           "SHA256SUMS-${_version}.sig::$url/releases/download/v${_version}/SHA256SUMS.sig"
+           "herald-os-release-key-${_version}.key::$url/releases/download/v${_version}/herald-os-release-key.asc")
+  sha256sums+=('01060379f69346e2bbe91949c5889e96d5c1d00ed8237db0e6b03e88b0fd0b9e' 'SKIP' 'SKIP' 'SKIP')
 fi
 
 prepare() {
   # A tarball of your own is not in the release's SHA256SUMS.
   (( ${#_release_keys[@]} )) && [[ -z ${HERALD_OS_TARBALL_URL:-} ]] || return 0
+  source "$srcdir/herald-os-release-check.sh"
+  _herald_os_check_release "$srcdir/SHA256SUMS-${_version}" "$srcdir/SHA256SUMS-${_version}.sig" \
+    "$srcdir/herald-os-release-key-${_version}.key" "${_release_keys[@]}" || return 1
   local build=x64 expected actual
   [[ $CARCH == aarch64 ]] && build=arm64
   expected="$(awk -v name="herald-os-${_version}-linux-$build.tar.gz" '$2 == name || $2 == "*" name { print $1 }' "$srcdir/SHA256SUMS-${_version}")"

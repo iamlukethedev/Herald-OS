@@ -146,13 +146,16 @@ Herald.
    ```bash
    gpg --show-keys herald-os-release-key.asc   # must show the fingerprint below
    gpg --import herald-os-release-key.asc
-   gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null | grep -E 'GOODSIG|EXPKEYSIG|REVKEYSIG|VALIDSIG'
+   fpr=<the fingerprint below, without spaces>
+   gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null |
+     awk -v fpr="$fpr" '$2 == "NEWSIG" { n++ } $2 == "GOODSIG" { g++ } $2 == "VALIDSIG" { v++; k = $NF }
+       $2 ~ /^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|FAILURE|NODATA|UNEXPECTED|ERROR)$/ { bad++ }
+       END { if (n == 1 && g == 1 && v == 1 && !bad && k == fpr) print "signed with the release key"; else { print "NOT signed with a good release key"; exit 1 } }'
    grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
    ```
 
-   Trust it only with one `GOODSIG` line (`EXPKEYSIG` or `REVKEYSIG` mean an expired or revoked key,
-   though plain `gpg --verify` still says "Good signature") and a `VALIDSIG` line ending in the
-   fingerprint below. SECURITY.md has a check that fails by itself in those cases.
+   It fails unless there is exactly one signature, good, by the release key, with nothing bad beside
+   it. Plain `gpg --verify` is not enough: it says "Good signature" for an expired or revoked key too.
 
    Release key fingerprint: not set yet (the first signed release sets it here)
 2. Write the ISO to a USB stick of 8 GB or more with

@@ -1691,9 +1691,10 @@ Each release now gets one `SHA256SUMS` over all of them, signed with a detached 
   publish one those installs would refuse.
 - **A revocation fails closed.** Revocations and expiry dates count from the installed key file and
   the release's alike, and a revoked or expired key neither signs nor vouches, since gpg still marks
-  a revoked key's certifications good. An install whose keys are all revoked refuses every release
-  until it gets a key it can check, rather than trust anything the revoked key made. A signature
-  file must hold exactly one signature.
+  a revoked key's certifications good. A release whose key file revokes the key an install trusts is
+  refused there, rather than trust anything the revoked key made. Nothing is remembered between
+  checks, so a revocation sticks only once the install's own key file carries it (a limit, in
+  docs/RELEASE-SIGNING.md). A signature file must hold exactly one signature.
 - **Nothing is signed until a maintainer turns it on.** Without the secret the release is unsigned,
   with a notice. The key is made offline and committed only after a signed release checks out
   (docs/RELEASE-SIGNING.md), and tests keep its fingerprint in SECURITY.md, the README and the
