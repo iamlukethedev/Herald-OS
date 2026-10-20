@@ -39,14 +39,19 @@ and say in a notice that it is unsigned, and nothing fails.
 
 ## The `release-signing` environment and its secrets
 
-Both release jobs run in a GitHub environment named `release-signing`. Create it before the secrets,
-as for [macOS signing](MACOS-SIGNING.md): if a workflow references it first, GitHub creates it with
-no rules.
+Both release jobs run in a GitHub environment named `release-signing`. Create it, with its
+protection rules, before any tag is pushed after this change lands: the first run of a job that
+names an environment that does not exist yet makes GitHub create it with no protection at all (any
+ref may deploy, no one approves), and secrets added to it later would be open to every run until
+the rules are set. As for [macOS signing](MACOS-SIGNING.md):
 
 1. Settings > Environments > New environment, named exactly `release-signing`.
 2. Under Deployment branches and tags, choose **Selected branches and tags** and add a tag rule for
    `v*`. The release jobs only run for tags.
-3. Add the two environment secrets once the key exists (step 3 below):
+3. Under Required reviewers, add the people who publish releases, so each signing job waits for one
+   of them to approve it, and keep **Prevent self-review** off only if a single person publishes.
+4. Add the two environment secrets once the key exists (step 3 below), as environment secrets, never
+   as repository secrets, which every job could read:
 
 | Secret | What it holds |
 | --- | --- |
@@ -148,15 +153,39 @@ versions read the new date from the release's `herald-os-release-key.asc`.
   the new subkey. Nothing changes for installs: the fingerprint is the primary key's, and the new
   subkey arrives in each release's key file. A revocation reaches an install with the release's key
   file, so until then a leaked subkey together with write access to the releases could still sign a
-  release they accept; rotate the GitHub credentials too.
+  release they accept; rotate the GitHub credentials too. An install that never receives the
+  revocation (every key file it reads predates it) keeps accepting that subkey: see the limits below.
 - **A new primary key** (planned): make it as in step 1, then certify it with the old one
   (`gpg --local-user "$OLD" --quick-sign-key "$NEW"`), and commit both keys' public exports in
   `linux/keys/herald-os-release.asc` (`gpg --armor --export "$OLD" "$NEW"`), with both fingerprints
   on the four lines. Switch `RELEASE_SIGNING_KEY` to the new subkey. Installs that only know the old
   key accept the new one through that certification, which they find in the release's key file; a
   key the new one certifies in turn is not accepted. Once installs have moved past the versions
-  with only the old key, drop it.
+  with only the old key, drop it. Do not revoke the old key while installs may still rely on it:
+  once it is revoked its certification counts for nothing, so those installs refuse every release
+  until they are updated by hand.
 - **The primary key compromised or lost.** A certification by a compromised key proves nothing, so
   installs need a new key file another way: publish the new fingerprint everywhere the old one was,
   revoke the old key with the revocation certificate, and tell people to install the tarball again
   by hand after checking it. A lost key with its revocation certificate safe can still be revoked.
+
+## A revocation stops updates, on purpose
+
+`herald-os update` reads revocations and expiry dates from the key file it carries and from the
+release's `herald-os-release-key.asc`. A trusted key revoked or expired in either one no longer signs
+or vouches for another key, and a certification its own key has revoked no longer counts. So once a
+release's key file carries the revocation of the key an install trusts, that install fails closed: it
+refuses that release and every later one, saying that its keys are revoked or expired, until a
+release is signed with a key it can still check (another trusted key, or one such a key certified),
+or the person installs a newer tarball by hand. That is intended: after a revocation, nothing the
+revoked key signed or certified is trusted, even if its stolen secret made it after the revocation.
+
+## Limits
+
+- **No downgrade guard.** `herald-os update <version>` installs any older release that is signed and
+  checks out, so whoever controls the releases can offer an older signed version with known bugs.
+  It refuses releases from before signing, since they have no signature.
+- **A revocation must reach the install.** An install learns of a revoked subkey only from a key file
+  it reads: its own, or a release's. A release whose key file leaves the revocation out, signed with a
+  stolen subkey, is accepted by installs whose own key file predates the revocation. Releases must
+  keep carrying the revocation, and the subkeys expire after two years, which bounds the window.

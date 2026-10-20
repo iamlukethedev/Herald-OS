@@ -146,9 +146,13 @@ Herald.
    ```bash
    gpg --show-keys herald-os-release-key.asc   # must show the fingerprint below
    gpg --import herald-os-release-key.asc
-   gpg --verify SHA256SUMS.sig SHA256SUMS      # Good signature, Primary key fingerprint below
+   gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null | grep -E 'GOODSIG|EXPKEYSIG|REVKEYSIG|VALIDSIG'
    grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
    ```
+
+   Trust it only with one `GOODSIG` line (`EXPKEYSIG` or `REVKEYSIG` mean an expired or revoked key,
+   though plain `gpg --verify` still says "Good signature") and a `VALIDSIG` line ending in the
+   fingerprint below. SECURITY.md has a check that fails by itself in those cases.
 
    Release key fingerprint: not set yet (the first signed release sets it here)
 2. Write the ISO to a USB stick of 8 GB or more with

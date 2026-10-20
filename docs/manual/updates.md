@@ -104,7 +104,8 @@ Herald OS from source updates with `git pull` and `npm run bootstrap`.
   and swaps it into `/opt/herald-os`, keeping the version before in `/opt/herald-os.previous`;
   `herald-os rollback` swaps back. Both take effect when you next log in. Once the version you run
   carries the release key, it first checks that the release's `SHA256SUMS` is signed with it, and
-  refuses a release that is not, changing nothing. It needs gpg (`gnupg`, or `gpg` on Debian and
+  refuses a release that is not, changing nothing; the daily check then offers the newest release
+  that is signed, passing over newer ones that are not. It needs gpg (`gnupg`, or `gpg` on Debian and
   Ubuntu).
 
 See [Arch and other Linux](other-linux.md).

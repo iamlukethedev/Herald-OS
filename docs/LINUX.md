@@ -888,13 +888,19 @@ while Update in the menu bar can only use sudo without one. A version that carri
 (`resources/herald-os-linux/keys/herald-os-release.asc`) first downloads the release's `SHA256SUMS`,
 `SHA256SUMS.sig` and `herald-os-release-key.asc`, and checks the signature with gpg in a keyring of
 its own (no agent, no key server, deleted afterwards) against the keys it carries, or a key one of
-them has certified. Only then does it download the tarball and check it against its line in
-`SHA256SUMS`. A release with no signature, a signature by any other key, an expired or revoked one,
-or a changed `SHA256SUMS` is refused, and nothing changes; so is going back to a release from before
-signing with `herald-os update <version>` (`herald-os rollback` still works). Without the key, as in
-every version from before signed releases, the `.sha256` proves the download is the file the release
-published, not who published it, so a release is trusted as far as GitHub is.
-[docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md) has the key and how it changes.
+them has certified while still usable and has not revoked that certification. Revocations and
+expiry dates count from either key file. Only then does it download the tarball and check it against
+its line in `SHA256SUMS`. A release with no signature, more than one, a signature by any other key, by
+an expired or revoked one, or a changed `SHA256SUMS` is refused, and nothing changes; so is going
+back to a release from before signing with `herald-os update <version>` (`herald-os rollback` still
+works). `herald-os-tarball check`, which the menu bar's daily check runs, and `herald-os update`
+without a version pass over newer releases that do not check out and take the newest one that does,
+saying on stderr which they passed over. Without the key, as in every version from before signed
+releases, releases are chosen and checked as they always were: by the tarball's `.sha256`, which
+proves the download is the file the release published, not who published it, so a release is
+trusted as far as GitHub is. [docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md) has the key, how it
+changes, why a revocation stops updates, and the limits (an older signed release can still be
+installed by version).
 `herald-os update` also updates the system's packages as before (`dnf upgrade` on Fedora).
 
 ## Inside Hyprland and Omarchy (app mode)
