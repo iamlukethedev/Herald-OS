@@ -413,8 +413,10 @@ typed, so PAM has nothing to unlock a keyring with at login. What setup does dep
 that holds the keyring folder, not on the root's (ADR-032). `herald-os keyring --status` says
 `"encrypted": true` only when the mount the folder is in (links resolved, so the image's `/home` finds
 `/var/home`) and every mount below it sit on LUKS, per `findmnt` and `lsblk`, a btrfs over several
-disks counting each of them. A `/home` or anything under the folder on a plain partition makes it
-`false`; NFS, tmpfs, FUSE, or `lsblk` and `findmnt` failing make it `null`.
+disks counting each disk `lsblk` shows with its UUID. A `/home` or anything under the folder on a
+plain partition makes it `false`. It is `null` for NFS, tmpfs or FUSE; for encryption other than
+LUKS, such as plain dm-crypt, which has no header to check; for a btrfs whose UUID `lsblk` does not
+know (without udev's data), as its other disks cannot be found; and when `lsblk` or `findmnt` fails.
 
 - **That disk encrypted (`true`):** setup makes the default keyring, named `login`, with no password
   of its own, and says so on its last step. Apps open it without a prompt; the disk password typed at
@@ -434,7 +436,8 @@ twice in a terminal, or one line on stdin) makes the default keyring later. Both
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
 rather than gnome-keyring (exit 3); 4 means no keyring service answered. Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
-and `login_1`: the second waits (25 s at most), then finds the first one's and exits 3. The password
+and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
+after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made. The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.

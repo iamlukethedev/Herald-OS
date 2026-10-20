@@ -98,7 +98,8 @@ signs you in without a password at start-up, so the keyring cannot open with you
 
 - **When the disk that holds it is encrypted**, setup gives the keyring no password of its own, and
   apps never ask. The disk password protects it: without it, nobody can read the disk. That is the
-  disk your home folder is on, which may not be the system disk.
+  disk that holds the keyring folder (`$XDG_DATA_HOME/keyrings`, usually `~/.local/share/keyrings` in
+  your home folder), which may not be the system disk.
 - **When that disk is not encrypted**, or Herald OS cannot tell, setup asks. With a keyring
   password, the first app that needs a saved password after each start asks for it; if you forget
   it, what apps saved is lost and you sign in to them again. Without one, apps never ask, but anyone
