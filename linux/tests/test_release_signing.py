@@ -222,21 +222,28 @@ def test_with_the_release_key_makepkg_checks_the_signed_sha256sums(tmp_path):
     lines = done.stdout.splitlines()
     version = lines[-1]
     base = f"https://github.com/iamlukethedev/Herald-OS/releases/download/v{version}"
+    check = hashlib.sha256((PKGBUILD.parent / "herald-os-release-check.sh").read_bytes()).hexdigest()
     assert lines[:-1] == [
         FINGERPRINT,
         "herald-os-package.sh",
+        "herald-os-release-check.sh",
         f"SHA256SUMS-{version}::{base}/SHA256SUMS",
         f"SHA256SUMS-{version}.sig::{base}/SHA256SUMS.sig",
-        lines[4], "SKIP", "SKIP",
+        f"herald-os-release-key-{version}.asc::{base}/herald-os-release-key.asc",
+        lines[6], check, "SKIP", "SKIP", "SKIP",
     ]
+    # makepkg checks the local files' hashes, which the Arch workflow skips (--skipchecksums).
+    assert lines[6] == hashlib.sha256((PKGBUILD.parent / "herald-os-package.sh").read_bytes()).hexdigest()
 
 
 @pytest.mark.parametrize("carch,build", [("x86_64", "x64"), ("aarch64", "arm64")])
-def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build):
-    path = pkgbuild(tmp_path, FINGERPRINT)
+def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build, keys):
+    path = pkgbuild(tmp_path, keys.release)
     version = sourced(path, 'echo "$_version"').stdout.strip()
     srcdir = tmp_path / "src"
     srcdir.mkdir()
+    shutil.copy(PKGBUILD.parent / "herald-os-release-check.sh", srcdir)
+    (srcdir / f"herald-os-release-key-{version}.asc").write_bytes(keys.export(keys.release))
     tarball = srcdir / f"herald-os-{version}-{build}.tar.gz"
     tarball.write_bytes(b"the release tarball")
     good = hashlib.sha256(b"the release tarball").hexdigest()
@@ -253,14 +260,125 @@ def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build):
         (f"{good}  herald-os-{version}-linux-{build}.tar.gz\n{good}  herald-os-{version}-linux-{build}.tar.gz\n", False),
     ):
         sums.write_text(listed)
-        done = sourced(path, "prepare", env)
+        keys.sign(keys.release, sums)
+        # As makepkg runs it: errexit and an ERR trap, so any command that fails stops it.
+        done = sourced(path, "set -eE; trap 'exit 3' ERR; prepare", env)
         assert (done.returncode == 0) == ok, (listed, done.stderr)
+    # A good tarball under a signature makepkg would pass with a warning: an expired subkey's.
+    sums.write_text(f"{good}  herald-os-{version}-linux-{build}.tar.gz\n")
+    (tmp_path / "expired").mkdir()
+    expired = pkgbuild(tmp_path / "expired", keys.expired)
+    keys.sign(keys.expired, sums, faked="20200601T000000")
+    (srcdir / f"herald-os-release-key-{version}.asc").write_bytes(keys.export(keys.expired))
+    done = sourced(expired, "set -eE; trap 'exit 3' ERR; prepare", env)
+    assert done.returncode != 0 and "expired or been revoked" in done.stderr, done.stderr
     # A tarball of your own is checked by nothing here, as before.
     assert sourced(path, "prepare", {**env, "HERALD_OS_TARBALL_URL": f"file://{tarball}"}).returncode == 0
     unset = tmp_path / "unset"
     unset.mkdir()
     sums.write_text(f"{'0' * 64}  herald-os-{version}-linux-{build}.tar.gz\n")
     assert sourced(pkgbuild(unset), "prepare", env).returncode == 0
+
+
+# The Arch package's own check of SHA256SUMS.sig, against the same cases as herald-os-tarball's.
+
+RELEASE_CHECK = PKGBUILD.parent / "herald-os-release-check.sh"
+
+
+def arch_check(sums: Path, signature: Path, offered: Path, *fingerprints: str) -> subprocess.CompletedProcess:
+    """The check as prepare() calls it, under errexit and an ERR trap as in makepkg: it prints PASSED
+    or REFUSED, and anything else means a command failed where it must not."""
+    script = 'set -eE; trap "echo ERR-TRAP; exit 3" ERR; source "$1"; shift; if _herald_os_check_release "$@"; then echo PASSED; else echo REFUSED; fi'
+    return subprocess.run([BASH, "-c", script, "check", str(RELEASE_CHECK), str(sums), str(signature), str(offered), *fingerprints], capture_output=True, text=True, timeout=120)
+
+
+def release_case(tmp_path: Path, keys, case: str):
+    """SHA256SUMS, its signature, the release's key file, and the fingerprints the PKGBUILD names, for
+    one case; and what herald-os-tarball's check is given for it (the keys it carries, and the key file)."""
+    sums = tmp_path / "SHA256SUMS"
+    sums.write_text(f"{'a' * 64}  herald-os-0.2.0-linux-x64.tar.gz\n")
+    offered = tmp_path / "herald-os-release-key.asc"
+    key, signer, offered_keys = keys.release, keys.release, None
+    if case == "expired subkey":
+        key = signer = keys.expired
+        signature = keys.sign(keys.expired, sums, faked="20200601T000000")
+    elif case == "revoked subkey":
+        key = signer = keys.make("Herald OS releases subkey revoked")
+        signature = keys.sign(key, sums)
+        offered_keys = keys.revoke_subkey(key)
+    elif case == "revoked key":
+        key = signer = keys.make("Herald OS releases key revoked")
+        signature = keys.sign(key, sums)
+        offered_keys = keys.revoked(key)
+    elif case == "expired key":
+        key = signer = keys.make("Herald OS releases key lapsed", faked="20200101T000000", primary_expires="1y")
+        signature = keys.sign(key, sums, faked="20200601T000000")
+    elif case == "another key":
+        signer = keys.other
+        signature = keys.sign(keys.other, sums)
+        offered_keys = keys.export(keys.release, keys.other)
+    elif case == "two signatures":
+        signature = tmp_path / "two.sig"
+        signature.write_bytes(keys.sign(keys.release, sums).read_bytes() + keys.sign(keys.other, sums).read_bytes())
+        offered_keys = keys.export(keys.release, keys.other)
+    elif case == "bad then good":
+        write_other = tmp_path / "other.txt"
+        write_other.write_text("something else\n")
+        bad = keys.sign(keys.release, write_other).read_bytes()
+        signature = tmp_path / "two.sig"
+        signature.write_bytes(bad + keys.sign(keys.release, sums).read_bytes())
+    elif case == "changed after signing":
+        signature = keys.sign(keys.release, sums)
+        sums.write_text(f"{'b' * 64}  herald-os-0.2.0-linux-x64.tar.gz\n")
+    elif case == "key file without the key":
+        signature = keys.sign(keys.release, sums)
+        offered_keys = keys.export(keys.other)
+    else:
+        signature = keys.sign(keys.release, sums)
+    offered.write_bytes(offered_keys if offered_keys is not None else keys.export(key))
+    trusted = tmp_path / "trusted.asc"
+    trusted.write_bytes(keys.export(key))
+    return sums, signature, offered, key, trusted
+
+
+ARCH_CASES = ["good", "expired subkey", "revoked subkey", "revoked key", "expired key", "another key", "two signatures", "bad then good", "changed after signing", "key file without the key"]
+
+
+@pytest.mark.parametrize("case", ARCH_CASES)
+def test_the_arch_check_refuses_what_herald_os_tarball_refuses(tmp_path, keys, case):
+    sums, signature, offered, key, trusted = release_case(tmp_path, keys, case)
+    done = arch_check(sums, signature, offered, key)
+    assert done.stdout.strip() in ("PASSED", "REFUSED"), done.stdout + done.stderr
+    try:
+        tb.verify_signature(sums, signature, trusted, offered)
+        tarball_accepts = True
+    except tb.ReleaseError:
+        tarball_accepts = False
+    if case == "key file without the key":
+        # herald-os-tarball carries the key itself; the package has only the release's key file.
+        assert tarball_accepts and done.stdout.strip() == "REFUSED", done.stderr
+    else:
+        assert (done.stdout.strip() == "PASSED") == tarball_accepts == (case == "good"), (case, done.stderr)
+
+
+def test_the_arch_check_passes_a_good_signature_as_a_plain_command(tmp_path, keys):
+    """Not inside an if, where bash would turn errexit off: every command in it must succeed."""
+    sums, signature, offered, key, _ = release_case(tmp_path, keys, "good")
+    script = 'set -eE; trap "echo ERR-TRAP; exit 3" ERR; source "$1"; shift; _herald_os_check_release "$@"; echo PASSED'
+    done = subprocess.run([BASH, "-c", script, "check", str(RELEASE_CHECK), str(sums), str(signature), str(offered), key], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0 and done.stdout.strip() == "PASSED", done.stdout + done.stderr
+
+
+def test_the_arch_check_accepts_no_key_outside_the_pkgbuild_s_even_certified(tmp_path, keys):
+    """A successor the release key certified is accepted by herald-os-tarball, which only knows the old
+    key; the PKGBUILD names its own version's keys, so it must name the successor."""
+    sums = tmp_path / "SHA256SUMS"
+    sums.write_text(f"{'a' * 64}  herald-os-0.2.0-linux-x64.tar.gz\n")
+    signature = keys.sign(keys.successor, sums)
+    offered = tmp_path / "herald-os-release-key.asc"
+    offered.write_bytes(keys.export(keys.release, keys.successor))
+    assert arch_check(sums, signature, offered, keys.release).stdout.strip() == "REFUSED"
+    assert arch_check(sums, signature, offered, keys.release, keys.successor).stdout.strip() == "PASSED"
 
 
 # The fingerprint: the key file, SECURITY.md, the README and the PKGBUILD agree, so the key cannot be

@@ -60,6 +60,13 @@ class Keys:
     def certify(self, by: str, key: str, faked: str | None = None) -> None:
         self.gpg("--local-user", by, "--quick-sign-key", key, faked=faked)
 
+    def revoke_subkey(self, fingerprint: str) -> bytes:
+        """Revoke the key's first subkey here, and return the public key with that revocation."""
+        script = "key 1\nrevkey\ny\n0\n\ny\nsave\n"
+        done = subprocess.run([GPG, "--batch", "--homedir", str(self.home), "--pinentry-mode", "loopback", "--passphrase", "", "--command-fd", "0", "--edit-key", fingerprint], input=script, capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        return self.export(fingerprint)
+
     def revoked(self, fingerprint: str) -> bytes:
         """The public key with the revocation certificate gpg made with it applied, as the maintainer
         would publish it; this home keeps the key unrevoked, as a thief's copy would be."""

@@ -816,10 +816,15 @@ herald-os setup        # once per user: Hermes Agent and the bridge plugin
 packages a tarball you built yourself instead.
 
 Once the PKGBUILD's `_release_keys` holds the release key's fingerprint (empty until the first
-signed release), `makepkg` also downloads the release's `SHA256SUMS` and checks `SHA256SUMS.sig`
-against that key (`validpgpkeys`), and `prepare()` checks the tarball against `SHA256SUMS`. gpg needs
-the key once: `gpg --import ../../../linux/keys/herald-os-release.asc`. A tarball of your own also
-needs `--skippgpcheck`.
+signed release), `makepkg` also downloads the release's `SHA256SUMS`, `SHA256SUMS.sig` and
+`herald-os-release-key.asc` and checks the signature against that key (`validpgpkeys`). makepkg only
+warns about a signature by an expired key, so `prepare()` checks it again, as strictly as
+`herald-os update` does (`herald-os-release-check.sh`, in a keyring of its own): exactly one good
+signature, by one of `_release_keys`, the key and subkey neither revoked nor expired in the release's
+key file. Unlike `herald-os update`, it takes no key that one of them certified: the PKGBUILD names
+the keys of its own version. Then `prepare()` checks the tarball against `SHA256SUMS`. gpg needs the
+key once: `gpg --import ../../../linux/keys/herald-os-release.asc`. A tarball of your own also needs
+`--skippgpcheck`.
 
 The session needs niri (and a login screen such as greetd); the optional dependencies list what
 each panel and feature uses. `.github/workflows/arch.yml` builds the package from a fresh tarball in
