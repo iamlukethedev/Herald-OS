@@ -3026,24 +3026,49 @@ def disk_root_op(args: list[str]) -> int:
 def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old_slots: dict[str, int]) -> int:
     added: list[str] = []
     new_slots: dict[str, int] = {}
+    # Devices the new password opens already, left by an earlier run that stopped part-way. A take back
+    # removes it from these too, which is safe: the current password opens a slot of its own on each.
+    # It must not be a slot a token uses (the recovery key's), or that take back would remove that.
+    leftover: list[str] = []
+    for device in devices:
+        slot = luks_which_slot(device, new)
+        if slot is None:
+            continue
+        try:
+            kinds = luks_slot_tokens(luks_metadata(device), slot) if slot >= 0 else []
+        except (RuntimeError, json.JSONDecodeError) as error:
+            disk_say(f"herald-os: {error}. Nothing was changed.", file=sys.stderr)
+            return 1
+        if slot < 0 or kinds:
+            through = f"a key slot {' and '.join(kinds)} unlocking uses" if kinds else "a key slot that cannot be told apart"
+            disk_say(f"herald-os: the new disk password already opens {device}, through {through}: choose another one. "
+                     "Nothing was changed.", file=sys.stderr)
+            return 2
+        leftover.append(device)
 
     def take_back(why: str) -> int:
         # Back to the old password alone: the new one goes again from the devices it went into, and
         # only a device it no longer opens counts as taken back.
         disk_say(f"herald-os: {why}", file=sys.stderr)
         left: list[str] = []
-        for device in added:
+        for device in [*added, *leftover]:
             try:
-                result = cryptsetup(["luksRemoveKey", device], new)
-                gone = luks_slot(device, new) is None
+                for _ in range(LUKS_SLOTS):
+                    result = cryptsetup(["luksRemoveKey", device], new)
+                    gone = luks_slot(device, new) is None
+                    if gone or result.returncode != 0:
+                        break
             except (OSError, subprocess.TimeoutExpired) as error:
                 result, gone = subprocess.CompletedProcess([], 1, b"", str(error).encode()), False
             if not gone:
                 left.append(device)
                 disk_say(f"herald-os: the new disk password could not be taken back out of {device} "
                       f"({cryptsetup_said(result) if result.returncode else 'it still opens it'}).", file=sys.stderr)
+            elif device in leftover:
+                disk_say(f"herald-os: the new disk password was also on {device} from an earlier run; it was taken out of it too.", file=sys.stderr)
         if not left:
-            disk_say("herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
+            disk_say("herald-os: the current disk password alone opens the disk again." if leftover else
+                     "herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
             return 1
         disk_say(f"herald-os: the current disk password still opens every device, but the new one may open {' and '.join(left)} "
               "too. To take it out: " + "; ".join(f"sudo cryptsetup luksRemoveKey {shlex.quote(device)}" for device in left)

@@ -408,6 +408,49 @@ def test_a_rollback_that_fails_on_a_real_disk_leaves_both_passwords_there_and_sa
     assert opens(second, OLD) and not opens(second, NEW)
 
 
+def add_key(tmp_path: Path, disk: Path, secret: str) -> None:
+    old, key = tmp_path / f"{disk.name}.current", tmp_path / f"{disk.name}.added"
+    old.write_text(OLD)
+    key.write_text(secret)
+    subprocess.run([CRYPTSETUP, "luksAddKey", "--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", "--key-file", str(old), str(disk), str(key)], env=C_ENV, check=True)
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes to a read-only file")
+def test_a_take_back_also_removes_the_new_password_an_earlier_run_left(tmp_path):
+    """An earlier run left the new password on the first device. This one fails on the second, and the
+    take back removes it from the first as well: the current password alone opens both again."""
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    add_key(tmp_path, first, NEW)
+    second.chmod(0o444)
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    assert result.returncode == 1, result.stderr
+    assert f"was also on {first} from an earlier run; it was taken out of it too" in result.stderr
+    assert "the current disk password alone opens the disk again" in result.stderr and "nothing was changed" not in result.stderr
+    assert opens(first, OLD) and not opens(first, NEW) and slots(first) == ["0"]
+    assert opens(second, OLD) and not opens(second, NEW)
+
+
+@needs_cryptsetup
+def test_a_run_over_a_leftover_new_password_finishes(tmp_path):
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    add_key(tmp_path, first, NEW)
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    assert result.returncode == 0, result.stderr
+    assert all(opens(disk, NEW) and not opens(disk, OLD) and len(slots(disk)) == 1 for disk in (first, second))
+
+
+@needs_cryptsetup
+def test_a_new_password_that_already_opens_a_token_s_slot_is_refused_before_anything_changes(tmp_path):
+    """Otherwise a take back would remove the recovery key's slot as a leftover."""
+    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), RECOVERY, "systemd-recovery")
+    second = make_image(tmp_path / "b.img", OLD)
+    before = {disk: dump(disk) for disk in (first, second)}
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": RECOVERY})
+    assert result.returncode == 2 and f"already opens {first}, through a key slot systemd-recovery unlocking uses" in result.stderr
+    assert {disk: dump(disk) for disk in (first, second)} == before
+
+
 def fake_tools(folder: Path, disk: Path, *more: Path) -> dict:
     """sudo that runs the command (and asks once, like sudo -v), and lsblk and findmnt that show the images
     as the root's LUKS devices (one btrfs over all of them, mounted from the first)."""
