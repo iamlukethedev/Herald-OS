@@ -312,11 +312,24 @@ jobs:
     name: Attach to the draft release
     needs: disks
     if: startsWith(github.ref, 'refs/tags/v')
-    # The only job that writes to the repository: it creates the draft release and uploads the disks.
+    # The only job that writes to the repository: it creates the draft release, uploads the disks and
+    # signs SHA256SUMS with the release key from this environment (docs/RELEASE-SIGNING.md).
+    environment: release-signing
+    # One SHA256SUMS covers these disks and the release workflow's files. Each writes it from every
+    # .sha256 on the release, one at a time, so the one that finishes second lists them all.
+    concurrency:
+      group: release-sums-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            linux/keys
       - uses: actions/download-artifact@v4
         with:
           pattern: herald-os-*
@@ -330,3 +343,22 @@ jobs:
           ls -l disks
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
           gh release upload "$GITHUB_REF_NAME" disks/* --clobber
+      - name: Write and sign SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_PASSPHRASE }}
+          RELEASE_FORK: ${{ github.event.repository.fork }}
+        # Unsigned, the release keeps no signature or key file from an earlier run of this job.
+        run: |
+          mkdir -p sums signed
+          gh release download "$GITHUB_REF_NAME" --pattern '*.sha256' --dir sums --clobber
+          bash scripts/release-sums.sh sums signed
+          gh release upload "$GITHUB_REF_NAME" signed/* --clobber
+          attached="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          for stale in SHA256SUMS.sig herald-os-release-key.asc; do
+            if [[ ! -f "signed/$stale" ]] && grep -qx "$stale" <<<"$attached"; then
+              gh release delete-asset "$GITHUB_REF_NAME" "$stale" --yes
+            fi
+          done

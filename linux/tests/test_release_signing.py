@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "release-sums.sh"
@@ -145,3 +146,45 @@ def test_a_secret_with_the_primary_key_in_it_signs_but_warns(tmp_path, keys):
     assert done.returncode == 0 and "::warning::RELEASE_SIGNING_KEY holds the primary key" in done.stdout
     quiet = run(tmp_path, {"RELEASE_KEYS": str(committed(tmp_path, keys, keys.release)), "RELEASE_SIGNING_KEY": keys.export_signing_subkeys(keys.release)})
     assert "::warning::" not in quiet.stdout
+
+
+# The workflows: both release jobs sign the same way, one at a time, after their own upload.
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+
+
+def release_job(workflow: str) -> dict:
+    return yaml.safe_load((WORKFLOWS / workflow).read_text())["jobs"]["release"]
+
+
+def step(job: dict, name: str) -> dict:
+    return next(item for item in job["steps"] if item.get("name") == name)
+
+
+def test_both_release_jobs_write_and_sign_sha256sums_alike():
+    jobs = {workflow: release_job(workflow) for workflow in ("image.yml", "release.yml")}
+    signing = [step(job, "Write and sign SHA256SUMS") for job in jobs.values()]
+    assert signing[0] == signing[1]
+    env = signing[0]["env"]
+    assert env["RELEASE_SIGNING_KEY"] == "${{ secrets.RELEASE_SIGNING_KEY }}"
+    assert env["RELEASE_SIGNING_PASSPHRASE"] == "${{ secrets.RELEASE_SIGNING_PASSPHRASE }}"
+    assert env["RELEASE_FORK"] == "${{ github.event.repository.fork }}"
+    assert "bash scripts/release-sums.sh sums signed" in signing[0]["run"]
+    assert "--pattern '*.sha256'" in signing[0]["run"]
+    for workflow, job in jobs.items():
+        assert job["environment"] == "release-signing", workflow
+        assert job["concurrency"] == {"group": "release-sums-${{ github.ref }}", "cancel-in-progress": False}, workflow
+        assert job["permissions"] == {"contents": "write"}, workflow
+        checkout = job["steps"][0]
+        assert checkout["uses"].startswith("actions/checkout@") and checkout["with"]["persist-credentials"] is False
+        assert set(checkout["with"]["sparse-checkout"].split()) == {"scripts", "linux/keys"}
+        names = [item.get("name") for item in job["steps"]]
+        assert names[-1] == "Write and sign SHA256SUMS", workflow
+        assert job["steps"][-2]["run"].rstrip().endswith("--clobber"), workflow
+
+
+def test_the_mac_downloads_get_a_sha256_for_sha256sums():
+    job = release_job("release.yml")
+    assert "sha256sum" in step(job, "Checksum the Mac downloads")["run"]
+    upload = step(job, "Upload to the draft release")["run"]
+    assert "dist/*.dmg.sha256" in upload and "dist/*.zip.sha256" in upload
