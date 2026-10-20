@@ -15,6 +15,8 @@ optdepends=(
   'niri: the full Herald OS session (menu bar, dock, tiling)'
   'greetd: a login screen that starts the session'
   'org.freedesktop.secrets: a keyring apps keep passwords and sign-ins in (gnome-keyring, KeePassXC, KWallet or oo7)'
+  'xdg-desktop-portal-gnome: screenshots, screencasts and the file chooser (with nautilus) for apps in the session'
+  'xdg-desktop-portal-gtk: the portals the gnome one lacks in the session'
   'swaybg: the wallpaper in the session'
   'swaylock: locking the session'
   'swayidle: locking and screens off when idle'
@@ -43,7 +45,7 @@ conflicts=('herald-os' 'herald-os-bin')
 options=('!strip' '!debug')
 install=herald-os.install
 source=("herald-os::git+${HERALD_OS_GIT_URL:-$url.git}" 'herald-os-package.sh')
-sha256sums=('SKIP' '120a3b0922a8677c6790af4a93b04109030b5d7201bc85125b62031b152c247c')
+sha256sums=('SKIP' 'd07e4dcc4a6f96f2e69923952a4042ea7a858574c4b0f79d5b0221b725120e56')
 
 pkgver() {
   cd herald-os

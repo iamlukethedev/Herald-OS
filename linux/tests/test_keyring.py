@@ -535,3 +535,46 @@ def test_a_keyring_made_while_setup_waited_is_found_under_the_lock(tmp_path):
                                'flock -u 9; wait "$pid"; echo "rc=$?"')
     assert "rc=3" in result.stdout, result.stdout + result.stderr
     assert "already has a keyring (with no password of its own)" in result.stderr
+
+
+# The Arch package.
+ARCH = ROOT / "packaging" / "arch"
+ARCH_BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "org.freedesktop.secrets"}
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_installs_the_portal_file(tmp_path, flavour):
+    # An unpacked build as the tarball has it: the CLIs, session and data under resources.
+    app = tmp_path / "app"
+    linux = app / "resources" / "herald-os-linux"
+    for folder in ("bin", "session", "niri", "omakase", "migrations", "plymouth"):
+        shutil.copytree(LINUX / folder, linux / folder, ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("app.asar", "LICENSE", "NOTICE", "icons/herald-os.png"):
+        (app / "resources" / name).parent.mkdir(parents=True, exist_ok=True)
+        (app / "resources" / name).write_text("")
+    for folder in ("themes", "catalog", "herald-os-bridge"):
+        (app / "resources" / folder).mkdir()
+    (app / "chrome-sandbox").write_text("")
+    pkgdir = tmp_path / "pkg"
+    script = ARCH / flavour / "herald-os-package.sh"
+    result = subprocess.run(["bash", "-c", f'set -e; pkgdir="$1"; pkgname={flavour}; source "$2"; _herald_os_package "$3"', "-", str(pkgdir), str(script), str(app)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    installed = pkgdir / "usr" / "share" / "xdg-desktop-portal" / "heraldos-portals.conf"
+    assert installed.read_bytes() == PORTALS.read_bytes()
+    assert (pkgdir / "usr" / "share" / "wayland-sessions" / "herald-os.desktop").is_file()
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_recommends_every_backend_the_portal_file_names(flavour):
+    listed = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${optdepends[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout
+    recommended = {line.split(":", 1)[0] for line in listed.splitlines()}
+    named = {name for names in preferred().values() for name in names}
+    assert {ARCH_BACKENDS[name] for name in named} <= recommended
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_pins_the_package_script_it_ships(flavour):
+    import hashlib
+    sums = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${sha256sums[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout.split()
+    assert hashlib.sha256((ARCH / flavour / "herald-os-package.sh").read_bytes()).hexdigest() in sums

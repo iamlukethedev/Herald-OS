@@ -78,7 +78,8 @@ jobs:
           namcap "$pkg"
           files="$(pacman -Qlp "$pkg")"
           for path in /opt/herald-os/herald-os /opt/herald-os/resources/app.asar /usr/bin/herald-os /usr/bin/herald-os-app /usr/bin/herald-os-catalog \
-            /usr/bin/herald-os-session /usr/share/wayland-sessions/herald-os.desktop /usr/share/applications/herald-os.desktop /usr/share/herald-os/catalog; do
+            /usr/bin/herald-os-session /usr/share/wayland-sessions/herald-os.desktop /usr/share/xdg-desktop-portal/heraldos-portals.conf /usr/share/applications/herald-os.desktop \
+            /usr/share/herald-os/catalog; do
             grep -q " $path$" <<<"$files" || { echo "::error::$path is not in the package"; exit 1; }
           done
           pacman -U --noconfirm "$pkg"
