@@ -3300,7 +3300,7 @@ def test_signals_are_handled_only_while_on_changes_things(machine, capsys):
 
 
 DRIVER = """
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, {tests!r})
 import pytest
@@ -3311,6 +3311,19 @@ machine.hang = [["systemctl", "restart", "herald-os-ssh-limit.service"]]
 os.environ["HANG_MARK"] = {mark!r}
 # A process of its own, as the herald-os command is.
 test_ssh.cli.SSH_OWN_PROCESS = True
+
+if {gate}:
+    # The rollback leaves a rolling-back file when it starts (INT, TERM and HUP are ignored by then)
+    # and waits for a go file from the test, so a signal can be sent while it is under way.
+    rollback, mark = test_ssh.cli.ssh_rollback, Path({mark!r})
+    def gated(*args, **kwargs):
+        mark.with_name("rolling-back").touch()
+        for _ in range(200):
+            if mark.with_name("go").exists():
+                break
+            time.sleep(0.05)
+        return rollback(*args, **kwargs)
+    test_ssh.cli.ssh_rollback = gated
 
 def state():
     files, ssh, units, table, rules = test_ssh.snapshot(machine)
@@ -3339,7 +3352,7 @@ def test_setup_ssh_killed_while_a_command_hangs_puts_everything_back(tmp_path, s
     mark, work = tmp_path / "hanging", tmp_path / "machine"
     work.mkdir()
     script = tmp_path / "driver.py"
-    script.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False))
+    script.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False, gate=False))
     child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         for _ in range(200):
@@ -3862,13 +3875,22 @@ import signal, subprocess, sys, time
 from pathlib import Path
 work, mark = Path({work!r}), Path({mark!r})
 child = subprocess.Popen([sys.executable, {driver!r}], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-for _ in range(200):
-    if mark.exists() or child.poll() is not None:
-        break
-    time.sleep(0.05)
+
+def wait_for(path):
+    for _ in range(200):
+        if path.exists() or child.poll() is not None:
+            break
+        time.sleep(0.05)
+    if not path.exists():
+        child.kill()
+        sys.exit(f"{{path.name}} never appeared: {{child.communicate(timeout=10)}}")
+
+wait_for(mark)
 child.send_signal({first})
-time.sleep({gap})
+if {apart}:
+    wait_for(mark.with_name("rolling-back"))
 child.send_signal({second})
+mark.with_name("go").touch()
 out, err = child.communicate(timeout=60)
 print(child.returncode)
 sys.stderr.write(err)
@@ -3876,21 +3898,22 @@ sys.stderr.write(err)
 
 
 @pytest.mark.parametrize("first, second", [(signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM), (signal.SIGHUP, signal.SIGTERM)])
-@pytest.mark.parametrize("gap", [0.0, 0.2])
-def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tmp_path, first, second, gap):
+@pytest.mark.parametrize("apart", [False, True])
+def test_setup_ssh_sent_two_signals_quickly_is_clean_and_keeps_the_first_code(tmp_path, first, second, apart):
     import sys
     work, mark = tmp_path / "machine", tmp_path / "hanging"
     work.mkdir()
     driver = tmp_path / "driver.py"
-    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False))
+    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=False, gate=apart))
     sender = tmp_path / "send.py"
-    sender.write_text(TWO_SIGNALS.format(work=str(work), mark=str(mark), driver=str(driver), first=int(first), second=int(second), gap=gap))
+    sender.write_text(TWO_SIGNALS.format(work=str(work), mark=str(mark), driver=str(driver), first=int(first), second=int(second), apart=apart))
     done = subprocess.run([sys.executable, str(sender)], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
     code, err = int(done.stdout.strip().splitlines()[-1]), done.stderr
     assert "Exception ignored" not in err and "Traceback" not in err and "race condition" not in err
     assert err.count("SSH is as it was before this run") == 1
-    if gap:
-        # Given time, the first has been handled before the second arrives: its code is kept.
+    if apart:
+        # The second is sent once the rollback is under way, so the first has been handled: its code is kept.
         assert code == 128 + first
     else:
         # Sent back to back, the kernel may hand them over in either order; one of the two decides.
@@ -3906,7 +3929,7 @@ def test_setup_ssh_signalled_again_after_the_rollback_still_exits_with_the_first
     work, mark = tmp_path / "machine", tmp_path / "hanging"
     work.mkdir()
     driver = tmp_path / "driver.py"
-    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=True))
+    driver.write_text(DRIVER.format(tests=str(Path(__file__).parent), tmp=str(work), mark=str(mark), hold=True, gate=False))
     child = subprocess.Popen([sys.executable, str(driver)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         for _ in range(200):
