@@ -3302,13 +3302,31 @@ def disk_wait(process: subprocess.Popen, stops: list[int], relay=None) -> int:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=0.5)
         code = process.poll()
-        if code is not None and (out is None or not ready):
+        if code is not None:
             if out is not None:
-                out.close()
+                disk_drain(out, relay)
             return code
         if signal.SIGTSTP in stops and disk_stopped(process.pid):
             with contextlib.suppress(OSError):
                 os.kill(process.pid, signal.SIGCONT)
+
+
+def disk_drain(out, relay=None, wait: float = 2.0) -> None:
+    """Pass on what is left in the root side's output once it has ended, to the end of the pipe; for
+    `wait` seconds at most, should something it started still hold the pipe open."""
+    deadline = time.monotonic() + wait
+    try:
+        while (left := deadline - time.monotonic()) > 0:
+            ready, _, _ = select.select([out], [], [], left)
+            if not ready:
+                break
+            chunk = os.read(out.fileno(), 65536)
+            if not chunk:
+                break
+            if relay:
+                relay(chunk)
+    finally:
+        out.close()
 
 
 def disk_end_lines(state: dict) -> list[str]:

@@ -158,7 +158,7 @@ def test_a_rollback_that_works_says_nothing_was_changed(monkeypatch, capsys):
 @pytest.mark.parametrize("remove", [
     lambda device: 1,
     lambda device: (_ for _ in ()).throw(subprocess.TimeoutExpired(["cryptsetup"], 300)),
-], ids=["luksRemoveKey fails", "luksRemoveKey times out"])
+], ids=["luksKillSlot fails", "luksKillSlot times out"])
 def test_a_rollback_that_fails_says_the_new_password_may_still_open_that_device(monkeypatch, capsys, remove):
     opened = stand_in_disks(monkeypatch, remove)
     assert cli.disk_change(["/dev/vda3", "/dev/vdb1"], OLD, NEW, False, {"/dev/vda3": 0, "/dev/vdb1": 0}) == cli.DISK_NOT_TAKEN_BACK
@@ -871,12 +871,6 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
                 on_add(header)
             # As cryptsetup does when Ctrl+C reaches it: the slot is written, then it exits 1 without a word.
             return subprocess.CompletedProcess(args, 1, b"", b"") if header.get("add") == "interrupted" else ok
-        if args[0] == "luksRemoveKey":
-            slot = next((n for n, value in sorted(slots.items()) if value == key), None)
-            if slot is None:
-                return no
-            del slots[slot]
-            return ok
         if args[0] == "luksKillSlot":
             if header["kill_fails"]:
                 return subprocess.CompletedProcess(args, 1, b"", b"Device is busy.")
@@ -1081,6 +1075,31 @@ def test_a_stop_before_the_change_begins_is_told_once_it_has_begun():
     result = subprocess.run([sys.executable, "-c", EARLY_STOP_DRIVER, str(CLI)], capture_output=True, text=True, timeout=30)
     assert "code 0" in result.stdout and "Done" in result.stdout, result
     assert result.stderr.count("still changing") == 1, result.stderr
+
+
+DRAIN_DRIVER = """
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+# The root side ends at once; something it left behind still writes to its output a moment later.
+cli.disk_root_argv = lambda op: ["sh", "-c", "cat >/dev/null; (sleep 0.6; echo late-line) & exit 0"]
+print("code", cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": "x", "new": "y"}), flush=True)
+"""
+
+
+def test_the_root_side_s_output_is_passed_on_to_the_end():
+    result = subprocess.run([sys.executable, "-c", DRAIN_DRIVER, str(CLI)], capture_output=True, text=True, timeout=30)
+    assert "late-line" in result.stdout and "code 0" in result.stdout, result
+
+
+def test_draining_stops_when_the_pipe_stays_open(tmp_path):
+    """Something that keeps the pipe open without writing does not hold the command for good."""
+    read, write = os.pipe()
+    started = time.monotonic()
+    cli.disk_drain(os.fdopen(read, "rb"), None, wait=0.3)
+    os.close(write)
+    assert time.monotonic() - started < 2
 
 
 def test_the_end_state_in_words():
