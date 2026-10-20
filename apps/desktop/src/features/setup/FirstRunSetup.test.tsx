@@ -21,6 +21,7 @@ const bridge = vi.hoisted(() => {
     name: vi.fn(async () => undefined),
     password: vi.fn(async (): Promise<SetupResult> => ({ ok: true })),
     diskPassword: vi.fn(async (_request: { current: string; password: string; account: string }): Promise<SetupResult> => ({ ok: true })),
+    keyring: vi.fn(async (_request: { password: string }): Promise<SetupResult> => ({ ok: true })),
     finish: vi.fn(async () => undefined)
   }
   const rest = vi.fn(async (_request: { path: string }): Promise<unknown> => null)
@@ -43,11 +44,11 @@ const SIGNED_OUT_AUTH = $hermesAuth.get()
 
 // What may read the same in every language: product names, and the keyboard shortcuts, commands
 // and units that stay as they are (en.ts says which). The longer command goes first.
-const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz', 'TPM']
+const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os keyring setup --password', 'herald-os password', 'API', 'GHz', 'TPM', 'VS Code', 'Signal', 'GitHub CLI']
 
 // Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal",
-// "teclado Bluetooth").
-const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['Bluetooth', 'for', 'menu', 'terminal', 'use', 'Use'], 'zh-CN': [] }
+// "teclado Bluetooth", "os apps").
+const NATIVE: Record<Exclude<Language, 'en'>, string[]> = { 'pt-BR': ['Bluetooth', 'for', 'menu', 'terminal', 'use', 'Use', 'app', 'apps', 'Apps'], 'zh-CN': [] }
 
 let root: Root | null = null
 let container: HTMLElement | null = null
@@ -139,6 +140,13 @@ const DISK_FAILURES = [
   ['tooShort', 'firstRun.account.tooShort'],
   ['notAscii', 'firstRun.disk.notAscii'],
   ['failed', 'firstRun.disk.failed']
+] as const
+
+// Each way making the keyring can fail and setup stays on the step, and what it says.
+const KEYRING_FAILURES = [
+  ['noKeyringService', 'firstRun.keyring.noService'],
+  ['tooShort', 'firstRun.account.tooShort'],
+  ['failed', 'firstRun.keyring.failed']
 ] as const
 
 /** Every step on one way through setup, each with what it shows, checked to have its own heading. */
@@ -255,8 +263,38 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
   }
 
   await click(button(host, t('firstRun.next')))
+
+  if (path === 'mine') {
+    // The disk is not encrypted and there is no keyring yet.
+    at('keyring', 'firstRun.keyring.title')
+    expect(host.textContent).toContain(t('firstRun.keyring.text'))
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await click(button(host, t('firstRun.keyring.password')))
+    const [password, again, ...more] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(more).toHaveLength(0)
+    await type(password, 'keyring pass')
+    await type(again, 'keyring pasz')
+    at('keyring passwords differ', 'firstRun.keyring.title')
+    says(t('firstRun.keyring.mismatch'))
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(again, 'keyring pass')
+    for (const [reason, key] of KEYRING_FAILURES) {
+      bridge.setup.keyring.mockResolvedValueOnce({ ok: false, reason })
+      await click(button(host, t('firstRun.next')))
+      at(`keyring ${reason}`, 'firstRun.keyring.title')
+      says(t(key))
+    }
+    bridge.setup.keyring.mockRejectedValueOnce(new Error('No handler registered for herald-os:setup:keyring'))
+    await click(button(host, t('firstRun.next')))
+    says(t('firstRun.keyring.failed'))
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: 'keyring pass' })
+  }
+
   at('wifi', 'firstRun.wifi.title')
   if (path === 'new owner') {
+    // An encrypted disk: the keyring is made with no password of its own, without asking.
+    expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: '' })
     expect(bridge.setup.diskPassword).toHaveBeenLastCalledWith({ current: 'given at start-up', password: 'my own disk pass', account: 'correct horse' })
   }
   await click(button(host, t('firstRun.next')))
@@ -273,6 +311,7 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
   }
 
   at('done', 'firstRun.done.title')
+  expect(host.textContent?.includes(t('firstRun.keyring.encrypted')), 'the note on the keyring').toBe(path === 'new owner')
   await click(button(host, t('firstRun.done.start')))
   expect(bridge.setup.finish).toHaveBeenLastCalledWith({ later: false })
 
@@ -287,7 +326,13 @@ function unmount() {
 }
 
 function given(path: Path) {
-  bridge.setup.state.mockResolvedValue({ needed: true, signedIn: path === 'signed in' || path === 'someone else', diskEncrypted: path === 'new owner', newOwner: path === 'new owner' })
+  bridge.setup.state.mockResolvedValue({
+    needed: true,
+    signedIn: path === 'signed in' || path === 'someone else',
+    diskEncrypted: path === 'new owner',
+    newOwner: path === 'new owner',
+    keyring: path === 'mine' || path === 'new owner' ? 'none' : 'open'
+  })
   bridge.rest.mockImplementation(async ({ path: url }) => {
     if (path !== 'signed in') {
       return null
@@ -505,6 +550,130 @@ describe("first-run setup's disk password", () => {
     await click(button(host, t('firstRun.next')))
     expect(bridge.setup.diskPassword).toHaveBeenLastCalledWith({ current: 'given at start-up', password: 'my own disk pass', account: 'my account pass' })
     expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+})
+
+describe("first-run setup's keyring", () => {
+  async function afterTheAccount(state: Partial<SetupState>, language: Language = 'en'): Promise<HTMLElement> {
+    bridge.setup.keyring.mockClear()
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: true, newOwner: false, ...state })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    await click(button(host, t('firstRun.next')))
+
+    return host
+  }
+
+  it.each([
+    [true, 'open'],
+    [true, 'password'],
+    [false, 'open'],
+    [false, 'password'],
+    [false, 'other'],
+    [null, 'other'],
+    [false, null],
+    [false, undefined]
+  ] as const)('leaves a keyring alone, and asks nothing, when the disk is encrypted: %s and the keyring is %s', async (diskEncrypted, keyring) => {
+    const host = await afterTheAccount({ diskEncrypted, keyring })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    expect(bridge.setup.keyring).not.toHaveBeenCalled()
+  })
+
+  it('makes one with no password of its own on an encrypted disk, without asking, and says so at the end', async () => {
+    const host = await afterTheAccount({ diskEncrypted: true, keyring: 'none' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    expect(bridge.setup.keyring).toHaveBeenCalledExactlyOnceWith({ password: '' })
+    await click(button(host, t('firstRun.next')))
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.done.title'))
+    expect(host.textContent).toContain(t('firstRun.keyring.encrypted'))
+  })
+
+  it('says nothing about a keyring it could not make on an encrypted disk', async () => {
+    bridge.setup.keyring.mockResolvedValueOnce({ ok: false, reason: 'noKeyringService' })
+    const host = await afterTheAccount({ diskEncrypted: true, keyring: 'none' })
+    await click(button(host, t('firstRun.next')))
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.done.title'))
+    expect(host.textContent).not.toContain(t('firstRun.keyring.encrypted'))
+  })
+
+  it.each([
+    [false, 'firstRun.keyring.text'],
+    // Unknown: setup asks, without saying the disk is unencrypted.
+    [null, 'firstRun.keyring.textUnknown']
+  ] as const)('asks how to protect it when the disk is encrypted: %s, saying %s', async (diskEncrypted, text) => {
+    const host = await afterTheAccount({ diskEncrypted, keyring: 'none' })
+    expect(heading(host)).toBe(t('firstRun.keyring.title'))
+    expect(host.textContent).toContain(t(text))
+    expect(host.textContent).not.toContain(t(diskEncrypted === false ? 'firstRun.keyring.textUnknown' : 'firstRun.keyring.text'))
+    expect(bridge.setup.keyring).not.toHaveBeenCalled()
+  })
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s what each choice means', async language => {
+    const host = await afterTheAccount({ diskEncrypted: false, keyring: 'none' }, language)
+    for (const key of ['firstRun.keyring.password', 'firstRun.keyring.passwordHint', 'firstRun.keyring.open', 'firstRun.keyring.openHint', 'firstRun.keyring.laterHint'] as const) {
+      expect(host.textContent, key).toContain(t(key))
+    }
+    const words = {
+      en: ['anyone who has this disk can read them', 'If you forget it'],
+      'pt-BR': ['quem estiver com este disco consegue ler', 'Se você esquecer'],
+      'zh-CN': ['拿到这块磁盘的人都能读取', '如果忘记了']
+    }[language]
+    for (const word of words) {
+      expect(host.textContent, word).toContain(word)
+    }
+  })
+
+  it('makes one with no password of its own when chosen, and asks for none', async () => {
+    const host = await afterTheAccount({ diskEncrypted: false, keyring: 'none' })
+    await click(button(host, t('firstRun.keyring.open')))
+    expect(host.querySelectorAll('input[type="password"]')).toHaveLength(0)
+    expect(button(host, t('firstRun.keyring.open'))?.getAttribute('aria-pressed')).toBe('true')
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenCalledExactlyOnceWith({ password: '' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+
+  it('needs 8 characters typed the same twice for a keyring password', async () => {
+    const host = await afterTheAccount({ diskEncrypted: false, keyring: 'none' })
+    await click(button(host, t('firstRun.keyring.password')))
+    const [password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    await type(password, 'short')
+    await type(again, 'short')
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(password, 'senha do coração')
+    await type(again, 'senha do coração')
+    expect(host.textContent).toContain(t('firstRun.keyring.sameAsAccount'))
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenCalledExactlyOnceWith({ password: 'senha do coração' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+
+  it('can wait, without making anything', async () => {
+    const host = await afterTheAccount({ diskEncrypted: false, keyring: 'none' })
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    expect(bridge.setup.keyring).not.toHaveBeenCalled()
+  })
+
+  it('moves on when the account has a keyring by then, which stays as it is', async () => {
+    bridge.setup.keyring.mockResolvedValueOnce({ ok: false, reason: 'keyringExists' })
+    const host = await afterTheAccount({ diskEncrypted: false, keyring: 'none' })
+    await click(button(host, t('firstRun.keyring.open')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+
+  it('is not asked for someone else', async () => {
+    bridge.setup.keyring.mockClear()
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: false, newOwner: false, keyring: 'none' })
+    const host = await mount('en')
+    await click(button(host, t('firstRun.welcome.forSomeoneElse')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.handOver.title'))
+    expect(bridge.setup.keyring).not.toHaveBeenCalled()
   })
 })
 

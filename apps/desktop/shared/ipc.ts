@@ -468,7 +468,17 @@ export interface SetupState {
    * a disk password of their own in setup (the previous one stops working).
    */
   newOwner: boolean
+  /**
+   * The keyring apps keep passwords and sign-ins in, from `herald-os keyring --status`: none yet,
+   * open (no password of its own), password, or other. null when it cannot be told.
+   */
+  keyring: KeyringState | null
 }
+
+export type KeyringState = 'none' | 'open' | 'password' | 'other'
+
+/** Why no keyring was made: `keyringExists`, the account has one already; `noKeyringService`, nothing answered on D-Bus. */
+export type KeyringFailure = 'tooShort' | 'keyringExists' | 'noKeyringService' | 'failed'
 
 /** Why the password was not set; the renderer says it in the person's language. */
 export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' | 'failed'
@@ -485,7 +495,7 @@ export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'no
 
 export interface SetupResult {
   ok: boolean
-  reason?: PasswordFailure | DiskPasswordFailure
+  reason?: PasswordFailure | DiskPasswordFailure | KeyringFailure
   /** pwquality's own reason for a refusal, in English (passwd runs under LANG=C), without control characters and at most 200 characters. */
   detail?: string
 }
@@ -983,6 +993,7 @@ export const IPC = {
   setupName: 'herald-os:setup:name',
   setupPassword: 'herald-os:setup:password',
   setupDiskPassword: 'herald-os:setup:disk-password',
+  setupKeyring: 'herald-os:setup:keyring',
   setupFinish: 'herald-os:setup:finish',
 
   /** The events main emitted lately (`HeraldEvent[]`, newest first), for Settings and the agent. */

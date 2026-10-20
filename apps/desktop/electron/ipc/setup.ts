@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { type DiskPasswordFailure, IPC, type SetupResult, type SetupState } from '../../shared/ipc.ts'
+import { type DiskPasswordFailure, IPC, type KeyringFailure, type KeyringState, type SetupResult, type SetupState } from '../../shared/ipc.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { loadPty } from './terminal.ts'
@@ -16,6 +16,8 @@ import { loadPty } from './terminal.ts'
  * the account has a password already and setup asks only for the name.
  * The one step with root is a new owner's disk password, on an encrypted disk: `herald-os password
  * --disk --new-owner` asks sudo, which takes the account password they have just set.
+ * The session signs in with no password typed, so nothing unlocks a keyring at login: on an
+ * encrypted disk setup makes one with no password of its own, and otherwise offers a keyring password.
  */
 
 const FIRSTBOOT_DONE = '/var/lib/herald-os/firstboot-done'
@@ -45,8 +47,49 @@ export function setupState(): SetupState {
     name,
     signedIn: fs.existsSync(LOGIN_SCREEN),
     diskEncrypted: null,
-    newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET)
+    newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET),
+    keyring: null
   }
+}
+
+const KEYRING_STATES: readonly KeyringState[] = ['none', 'open', 'password', 'other']
+
+/** The default keyring, from `herald-os keyring --status`; null when that cannot be told, so setup leaves the keyring alone. */
+export async function keyringState(): Promise<KeyringState | null> {
+  const result = await run('herald-os', ['keyring', '--status'], 15_000)
+
+  try {
+    const keyring = result.code === 0 ? (JSON.parse(result.stdout) as { keyring?: unknown }).keyring : null
+
+    return KEYRING_STATES.find(state => state === keyring) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). */
+const KEYRING_EXITS: Record<number, KeyringFailure> = { 3: 'keyringExists', 4: 'noKeyringService' }
+// Starting gnome-keyring through D-Bus activation and writing the keyring take well under a second.
+const KEYRING_TIMEOUT_MS = 30_000
+
+export function keyringPasswordProblem(password: string): KeyringFailure | null {
+  return password.length < 8 || /[\r\n\0]/.test(password) ? 'tooShort' : null
+}
+
+/** `herald-os keyring setup`: with the password on stdin, never on the command line; with none, `--no-password`. */
+export async function makeKeyring(password: string): Promise<SetupResult> {
+  const result = password
+    ? await run('herald-os', ['keyring', 'setup', '--password'], KEYRING_TIMEOUT_MS, `${password}\n`)
+    : await run('herald-os', ['keyring', 'setup', '--no-password'], KEYRING_TIMEOUT_MS)
+
+  if (result.code === 0) {
+    return { ok: true }
+  }
+
+  const last = result.stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
+  log('setup', `herald-os keyring setup exited ${result.code}: ${last}`)
+
+  return { ok: false, reason: KEYRING_EXITS[result.code] ?? 'failed' }
 }
 
 /**
@@ -258,7 +301,13 @@ export function registerSetupIpc(): void {
   ipcMain.handle(IPC.setupState, async () => {
     const state = setupState()
 
-    return state.needed ? { ...state, diskEncrypted: await diskEncrypted() } : state
+    if (!state.needed) {
+      return state
+    }
+
+    const [encrypted, keyring] = await Promise.all([diskEncrypted(), keyringState()])
+
+    return { ...state, diskEncrypted: encrypted, keyring }
   })
   ipcMain.handle(IPC.setupName, (_event, name: string) => {
     const clean = String(name ?? '').replace(/[\r\n:]/g, ' ').trim().slice(0, 64)
@@ -289,6 +338,12 @@ export function registerSetupIpc(): void {
     }
 
     return changeDiskPassword(secrets)
+  })
+  ipcMain.handle(IPC.setupKeyring, (_event, request: { password?: string } = {}) => {
+    const password = String(request.password ?? '')
+    const problem = password ? keyringPasswordProblem(password) : null
+
+    return problem ? ({ ok: false, reason: problem } satisfies SetupResult) : makeKeyring(password)
   })
   // `later`: set up for someone else; setup shows again for them at the next start, as a new owner.
   ipcMain.handle(IPC.setupFinish, (_event, options: { later?: boolean } = {}) => {
