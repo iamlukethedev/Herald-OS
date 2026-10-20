@@ -688,6 +688,62 @@ def test_a_good_signature_beside_one_by_an_unknown_key_is_refused(tmp_path, keys
         tb.verify_signature(sums, tmp_path / "both.sig", pinned(tmp_path, keys, keys.release))
 
 
+@pytest.mark.parametrize("revocation_in", ["offered", "installed"])
+def test_a_certification_made_with_a_revoked_key_s_stolen_secret_is_refused(tmp_path, keys, revocation_in):
+    """The release key is revoked and its secret stolen: the thief certifies a key of their own and
+    signs with it. gpg still marks the certification good, so the revocation must decide, wherever
+    it is: in the release's key file, or already in the version in use."""
+    sums = sums_of(tmp_path)
+    stolen = keys.make("Herald OS releases stolen")
+    evil = keys.make("Herald OS releases evil")
+    keys.certify(stolen, evil)
+    signature = keys.sign(evil, sums)
+    if revocation_in == "offered":
+        trusted = pinned(tmp_path, keys, stolen)
+        write(tmp_path / "offered.asc", keys.revoked(stolen) + keys.export(evil))
+    else:
+        trusted = tmp_path / "pinned.asc"
+        write(trusted, keys.revoked(stolen))
+        write(tmp_path / "offered.asc", keys.export(stolen, evil))
+    with pytest.raises(tb.ReleaseError, match="revoked or has expired"):
+        tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc")
+    # Nor does the revoked key sign by itself.
+    with pytest.raises(tb.ReleaseError):
+        tb.verify_signature(sums, keys.sign(stolen, sums), trusted, tmp_path / "offered.asc")
+    # Beside a key that is still good, the certification still counts for nothing.
+    write(trusted, trusted.read_bytes() + keys.export(keys.release))
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, keys.sign(evil, sums), trusted, tmp_path / "offered.asc")
+    assert tb.verify_signature(sums, keys.sign(keys.release, sums), trusted, tmp_path / "offered.asc") == keys.release
+
+
+def test_a_certification_by_an_expired_key_is_refused(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    lapsed = keys.make("Herald OS releases lapsed", faked="20200101T000000", primary_expires="1y")
+    vouched = keys.make("Herald OS releases vouched by lapsed", faked="20200101T000000")
+    keys.certify(lapsed, vouched, faked="20200601T000000")
+    write(tmp_path / "offered.asc", keys.export(vouched))
+    signature = keys.sign(vouched, sums)
+    with pytest.raises(tb.ReleaseError, match="revoked or has expired"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, lapsed), tmp_path / "offered.asc")
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, pinned(tmp_path, keys, lapsed, keys.release), tmp_path / "offered.asc")
+
+
+def test_a_certification_the_release_key_revoked_does_not_count(tmp_path, keys):
+    sums = sums_of(tmp_path)
+    withdrawn = keys.make("Herald OS releases withdrawn")
+    keys.certify(keys.release, withdrawn)
+    signature = keys.sign(withdrawn, sums)
+    trusted = pinned(tmp_path, keys, keys.release)
+    write(tmp_path / "offered.asc", keys.export(withdrawn))
+    assert tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc") == withdrawn
+    keys.gpg("--quick-revoke-sig", withdrawn, keys.release)
+    write(tmp_path / "offered.asc", keys.export(withdrawn))
+    with pytest.raises(tb.ReleaseError, match="does not trust"):
+        tb.verify_signature(sums, signature, trusted, tmp_path / "offered.asc")
+
+
 def test_a_certified_key_does_not_vouch_for_a_third(tmp_path, keys):
     sums = sums_of(tmp_path)
     third = keys.make("Herald OS releases three")

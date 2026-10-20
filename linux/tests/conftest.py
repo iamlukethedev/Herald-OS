@@ -23,11 +23,11 @@ class Keys:
         assert done.returncode == 0, done.stderr
         return done
 
-    def make(self, name: str, expires: str = "0", faked: str | None = None, passphrase: str = "") -> str:
+    def make(self, name: str, expires: str = "0", faked: str | None = None, passphrase: str = "", primary_expires: str = "0") -> str:
         """A certify-only primary key with a signing subkey, as docs/RELEASE-SIGNING.md makes it."""
         uid = f"{name} <{name.lower().replace(' ', '-')}@example.com>"
         before = set(self.primaries())
-        self.gpg("--yes", "--quick-generate-key", uid, "ed25519", "cert", "0", faked=faked, passphrase=passphrase)
+        self.gpg("--yes", "--quick-generate-key", uid, "ed25519", "cert", primary_expires, faked=faked, passphrase=passphrase)
         (fingerprint,) = set(self.primaries()) - before
         self.gpg("--quick-add-key", fingerprint, "ed25519", "sign", expires, faked=faked, passphrase=passphrase)
         return fingerprint
@@ -57,8 +57,21 @@ class Keys:
         self.gpg("--local-user", key, "--detach-sign", "--output", str(signature), str(path), faked=faked)
         return signature
 
-    def certify(self, by: str, key: str) -> None:
-        self.gpg("--local-user", by, "--quick-sign-key", key)
+    def certify(self, by: str, key: str, faked: str | None = None) -> None:
+        self.gpg("--local-user", by, "--quick-sign-key", key, faked=faked)
+
+    def revoked(self, fingerprint: str) -> bytes:
+        """The public key with the revocation certificate gpg made with it applied, as the maintainer
+        would publish it; this home keeps the key unrevoked, as a thief's copy would be."""
+        certificate = (self.home / "openpgp-revocs.d" / f"{fingerprint}.rev").read_text().replace(":-----BEGIN", "-----BEGIN")
+        scratch = Path(tempfile.mkdtemp(prefix="hos-rev-", dir="/tmp" if Path("/tmp").is_dir() else None))
+        try:
+            base = [GPG, "--batch", "--no-autostart", "--homedir", str(scratch)]
+            subprocess.run([*base, "--import"], input=self.export(fingerprint), capture_output=True, timeout=120, check=True)
+            subprocess.run([*base, "--import"], input=certificate.encode(), capture_output=True, timeout=120, check=True)
+            return subprocess.run([*base, "--armor", "--export", fingerprint], capture_output=True, timeout=120, check=True).stdout
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

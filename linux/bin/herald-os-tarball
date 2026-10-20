@@ -62,6 +62,8 @@ KEY_ASSET_LIMIT = 1 << 20
 GPG_TIMEOUT = 60
 # OpenPGP certification classes (0x10 to 0x13): a key vouching for another key's user ID.
 CERTIFICATION = re.compile(r"^1[0-3]x$")
+# A key's validity in gpg's listing: revoked, expired, invalid or disabled.
+UNUSABLE = frozenset("reid")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 # Every request goes over HTTPS, redirects included: GitHub sends release files on to its CDN, and
 # a redirect to plain http would let anyone on the way swap the tarball and its checksum together.
@@ -398,26 +400,31 @@ def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | 
     try:
         if run("--import", str(pinned)).returncode != 0:
             raise ReleaseError(f"the release keys in {pinned} cannot be read; nothing was changed")
-        trusted = set(primary_keys(run("--with-colons", "--fixed-list-mode", "--list-keys").stdout))
-        if not trusted:
+        pinned_keys = frozenset(primary_keys(run("--with-colons", "--fixed-list-mode", "--list-keys").stdout))
+        if not pinned_keys:
             raise ReleaseError(f"{pinned} holds no key; nothing was changed")
         if offered is not None:
-            # Whatever does not import cleanly is simply not there for the checks below. Only a pinned
-            # key vouches: a key it certified does not pass that on to further keys.
-            pinned_keys = frozenset(trusted)
+            # Whatever does not import cleanly is simply not there for the checks below.
             run("--import", str(offered))
-            listing = run("--with-colons", "--fixed-list-mode", "--check-signatures").stdout
-            for fingerprint, block in primary_keys(listing).items():
-                if fingerprint in trusted or block[0][1] in ("r", "e", "i", "d"):
-                    continue
-                # By the issuer's full fingerprint: a 64-bit key ID in a key file anyone can write could
-                # belong to a key made to collide with one of ours.
-                vouched = any(
-                    fields[0] == "sig" and fields[1] == "!" and len(fields) > 12 and CERTIFICATION.match(fields[10]) and fields[12] in pinned_keys
-                    for fields in block
-                )
-                if vouched:
-                    trusted.add(fingerprint)
+        # Judged after both files are in: a revocation or expiry in either one counts.
+        keys = primary_keys(run("--with-colons", "--fixed-list-mode", "--check-signatures").stdout)
+        usable = frozenset(key for key in pinned_keys if key in keys and keys[key][0][1] not in UNUSABLE)
+        if not usable:
+            raise ReleaseError("every release key this version trusts has been revoked or has expired, so it installs nothing until a release brings a new key it can check; nothing was changed")
+        trusted = set(usable)
+        for fingerprint, block in keys.items():
+            if fingerprint in pinned_keys or block[0][1] in UNUSABLE:
+                continue
+            # Only a usable pinned key vouches, by its full fingerprint (a 64-bit key ID in a key file
+            # anyone can write could belong to a key made to collide with one of ours), and not once
+            # it has revoked that certification. A key it certified does not pass that on.
+            revoked = {fields[12] for fields in block if fields[0] == "rev" and fields[1] == "!" and len(fields) > 12 and fields[10].startswith("30")}
+            if any(
+                fields[0] == "sig" and fields[1] == "!" and len(fields) > 12 and CERTIFICATION.match(fields[10])
+                and fields[12] in usable and fields[12] not in revoked
+                for fields in block
+            ):
+                trusted.add(fingerprint)
         checked = run("--status-fd", "1", "--verify", str(signature), str(sums))
         status = {fields[1]: fields[2:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"}
         signer = status["VALIDSIG"][9] if len(status.get("VALIDSIG", [])) > 9 else ""
