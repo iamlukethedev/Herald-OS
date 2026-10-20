@@ -944,6 +944,21 @@ def test_an_unnamed_leftover_slot_of_the_new_password_is_refused(monkeypatch, ca
     assert header["keyslots"] == before
 
 
+@pytest.mark.parametrize("op", ["check", "change"])
+def test_the_current_password_check_refuses_a_header_it_cannot_read(monkeypatch, capsys, op):
+    """The current password opens the device, but the header cannot be read to tell its key slots and
+    whose they are: refused before anything changes (exit 1)."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+
+    def unreadable(device, passphrase):
+        raise RuntimeError(f"cannot read the key slots of {device}: Device is busy.")
+
+    monkeypatch.setattr(cli, "luks_opened_slots", unreadable)
+    assert root_side_here(monkeypatch, op, {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
+    assert "cannot read the key slots of /dev/vda3: Device is busy. Nothing was changed." in capsys.readouterr().err
+    assert header["keyslots"] == {0: OLD}
+
+
 def test_a_leftover_whose_slots_cannot_be_read_is_refused(monkeypatch, capsys):
     """The new password opens the device, but the header cannot be read to tell whose slot that is:
     nothing changes."""
