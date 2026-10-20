@@ -812,6 +812,27 @@ def test_a_new_signing_subkey_arrives_with_the_release(tmp_path, keys):
         tb.verify_signature(sums, signature, trusted)
 
 
+def test_the_whole_sha256_is_compared(tmp_path):
+    tarball = tmp_path / "herald-os-0.2.0-linux-x64.tar.gz"
+    tarball.write_bytes(b"data")
+    digest = hashlib.sha256(b"data").hexdigest()
+    checksum = tmp_path / "herald-os-0.2.0-linux-x64.tar.gz.sha256"
+    for wrong in (digest[:8] + "0" * 56, digest[:-1] + ("0" if digest[-1] != "0" else "1")):
+        checksum.write_text(f"{wrong}  {tarball.name}\n")
+        with pytest.raises(tb.ReleaseError, match="does not match"):
+            tb.verify(tarball, checksum)
+    checksum.write_text(f"{digest}  {tarball.name}\n")
+    tb.verify(tarball, checksum)
+
+
+@pytest.mark.parametrize("listed", ["old-herald-os-0.2.0-linux-x64.tar.gz", "x/herald-os-0.2.0-linux-x64.tar.gz", "herald-os-0.2.0-linux-x64.tar.gz.part0"])
+def test_a_line_counts_only_for_the_exact_name(tmp_path, listed):
+    sums = tmp_path / tb.SUMS
+    sums.write_text(f"{'a' * 64}  {listed}\n")
+    with pytest.raises(tb.ReleaseError, match="does not give one checksum"):
+        tb.listed_checksum(sums, "herald-os-0.2.0-linux-x64.tar.gz")
+
+
 def test_sha256sums_must_name_the_tarball_once(tmp_path):
     name = "herald-os-0.2.0-linux-x64.tar.gz"
     sums = tmp_path / tb.SUMS

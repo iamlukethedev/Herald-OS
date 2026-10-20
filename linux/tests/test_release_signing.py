@@ -247,6 +247,9 @@ def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build):
         (f"{good} *herald-os-{version}-linux-{build}.tar.gz\n", True),
         (f"{'0' * 64}  herald-os-{version}-linux-{build}.tar.gz\n", False),
         (f"{good}  herald-os-{version}-linux-other.tar.gz\n", False),
+        (f"{good}  old-herald-os-{version}-linux-{build}.tar.gz\n", False),
+        (f"{good[:-1]}{'0' if good[-1] != '0' else '1'}  herald-os-{version}-linux-{build}.tar.gz\n", False),
+        (f"{good[:8]}{'0' * 56}  herald-os-{version}-linux-{build}.tar.gz\n", False),
         (f"{good}  herald-os-{version}-linux-{build}.tar.gz\n{good}  herald-os-{version}-linux-{build}.tar.gz\n", False),
     ):
         sums.write_text(listed)
