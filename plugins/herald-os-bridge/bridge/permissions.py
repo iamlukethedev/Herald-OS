@@ -47,6 +47,8 @@ BUILTIN_PROTECTED = (
     "~/.gnupg",
     "~/Library/Keychains",
     "~/Library/Cookies",
+    # Linux keyrings (gnome-keyring). One with no password of its own is a plain-text file.
+    "~/.local/share/keyrings",
     "$HERMES_HOME/.env",
     "$HERMES_HOME/auth.json",
     "/System",
