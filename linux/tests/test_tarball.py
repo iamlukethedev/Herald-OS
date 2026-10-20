@@ -1118,14 +1118,19 @@ def test_check_tries_a_bounded_number_of_releases(layout, monkeypatch):
     found = tb.candidates([release(f"v0.{n}.0") for n in range(2, 10)], "x64", signed=True)
     picked, skipped = tb.verified(layout, found, "0.1.0")
     assert picked is None and tried == ["0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0"]
-    assert skipped[-1].startswith("3 more newer releases were not tried")
+    assert skipped[-1].startswith("did not try 3 more newer releases (at most 5, within 180 s)")
     # And none is started once the time is up, however few were tried: the clock reads 0 at the
     # start, then 100 s and 200 s later, past the budget.
     clock = iter(range(0, 10_000, 100))
     monkeypatch.setattr(tb.time, "monotonic", lambda: next(clock))
     tried.clear()
     picked, skipped = tb.verified(layout, found, "0.1.0")
-    assert picked is None and tried == ["0.9.0"] and skipped[-1].startswith("7 more newer releases were not tried")
+    assert picked is None and tried == ["0.9.0"] and skipped[-1].startswith("did not try 7 more newer releases")
+    # One left over is one release.
+    monkeypatch.setattr(tb.time, "monotonic", lambda: 0)
+    tried.clear()
+    found = tb.candidates([release(f"v0.{n}.0") for n in range(2, 8)], "x64", signed=True)
+    assert tb.verified(layout, found, "0.1.0")[1][-1].startswith("did not try 1 more newer release (at most")
 
 
 def test_a_sha256_with_a_line_that_is_not_a_checksum_changes_nothing(layout, published, capsys):
@@ -1135,6 +1140,80 @@ def test_a_sha256_with_a_line_that_is_not_a_checksum_changes_nothing(layout, pub
     with pytest.raises(SystemExit):
         tb.update(layout)
     assert unchanged(layout) and "is not a list of checksums; nothing was changed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("problem", ["unsigned", "another key"])
+def test_update_to_a_given_version_checks_its_signature_too(layout, signed, keys, capsys, problem):
+    """The version named on the command line, as the background updater passes it, goes through the
+    same check: an unsigned release, or one signed with another key, is refused though its .sha256
+    matches."""
+    if problem == "unsigned":
+        signed.files.clear()
+    else:
+        keys.sign(keys.other, signed.served / tb.SUMS)
+    with pytest.raises(SystemExit):
+        tb.update(layout, "0.2.0")
+    assert unchanged(layout)
+    assert ("is not signed" if problem == "unsigned" else "does not trust") in capsys.readouterr().err
+    assert not any(name.endswith(".tar.gz") for name in signed.fetched)
+
+
+def test_every_signing_file_and_the_old_checksum_get_the_small_file_limits(layout, signed, published, monkeypatch):
+    """SHA256SUMS, its signature and the key file, whichever way update reaches them, and the .sha256
+    of an install without the key; only the tarball is downloaded as a big file."""
+    kinds: list[tuple[str, bool, bool]] = []
+
+    def download(url, target, small=False, deadline=None):
+        name = url.rsplit("/", 1)[1]
+        kinds.append((name, small, deadline is not None))
+        shutil.copy(published / name, target)
+
+    monkeypatch.setattr(tb, "download", download)
+    tarball = f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"
+    assert tb.update(layout) == 0
+    # Picked by the lookback, so within its time budget.
+    assert kinds == [(tb.SUMS, True, True), (tb.SUMS_SIG, True, True), (tb.KEY_ASSET, True, True), (tarball, False, False)]
+    tb.rollback(layout)
+    kinds.clear()
+    shutil.rmtree(layout.previous)
+    assert tb.update(layout, "0.2.0") == 0
+    assert kinds == [(tb.SUMS, True, False), (tb.SUMS_SIG, True, False), (tb.KEY_ASSET, True, False), (tarball, False, False)]
+    tb.rollback(layout)
+    kinds.clear()
+    shutil.rmtree(layout.previous)
+    layout.release_keys.unlink()
+    assert tb.update(layout) == 0
+    assert kinds == [(f"{tarball}.sha256", True, False), (tarball, False, False)]
+
+
+def test_a_download_with_less_than_a_second_left_does_not_start(tmp_path, monkeypatch):
+    """--max-time 0 would mean no limit at all, so under a second left is out of time."""
+    ran: list = []
+
+    def curl(argv, **kwargs):
+        ran.append(argv)
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"x")
+        return 0
+
+    monkeypatch.setattr(tb.subprocess, "call", curl)
+    with pytest.raises(tb.ReleaseError, match="ran out of time"):
+        tb.download("https://example.com/SHA256SUMS", tmp_path / "s", small=True, deadline=tb.time.monotonic() + 0.9)
+    assert not ran
+    tb.download("https://example.com/SHA256SUMS", tmp_path / "s", small=True, deadline=tb.time.monotonic() + 1.9)
+    assert flag(ran[0], "--max-time") == "1"
+
+
+def test_gpg_that_does_not_finish_is_ended(tmp_path, keys, monkeypatch):
+    """A gpg that hangs is ended at GPG_TIMEOUT, cut to 1 s here; without it the check would wait."""
+    stand_in = tmp_path / "bin"
+    write(stand_in / "gpg", "#!/bin/sh\nexec sleep 30\n", 0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(tb, "GPG_TIMEOUT", 1)
+    sums = sums_of(tmp_path)
+    started = time.monotonic()
+    with pytest.raises(tb.ReleaseError, match="gpg did not finish in 1 s"):
+        tb.verify_signature(sums, tmp_path / "SHA256SUMS.sig", pinned(tmp_path, keys, keys.release))
+    assert time.monotonic() - started < 10
 
 
 def test_a_release_key_file_too_big_to_be_one_is_refused(layout, signed, capsys):

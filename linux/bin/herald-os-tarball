@@ -362,7 +362,8 @@ def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[
     started = time.monotonic()
     for tried, release in enumerate(newer):
         if tried == VERIFY_LIMIT or time.monotonic() - started > VERIFY_BUDGET:
-            skipped.append(f"{len(newer) - tried} more newer releases were not tried (at most {VERIFY_LIMIT}, within {VERIFY_BUDGET} s)")
+            left = len(newer) - tried
+            skipped.append(f"did not try {left} more newer release{'' if left == 1 else 's'} (at most {VERIFY_LIMIT}, within {VERIFY_BUDGET} s)")
             break
         with tempfile.TemporaryDirectory(prefix="herald-os-check-") as folder:
             sums = Path(folder) / SUMS
@@ -370,7 +371,7 @@ def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[
                 signer = checked_signature(layout, release, Path(folder), sums, quiet=True, deadline=started + VERIFY_BUDGET)
                 listed_checksum(sums, release["name"])
             except ReleaseError as exc:
-                skipped.append(f"{release['version']}: {exc}")
+                skipped.append(f"passed over {release['version']}: {exc}")
                 continue
             return {**release, "checked_sums": sums.read_bytes(), "signer": signer}, skipped
     return None, skipped
@@ -629,7 +630,7 @@ def check(layout: Layout, channel: str) -> int:
         # The newest release this version would install, so the update that follows can succeed.
         release, skipped = verified(layout, found, installed)
         for note in skipped:
-            print(f"herald-os-tarball: passed over {note}", file=sys.stderr)
+            print(f"herald-os-tarball: {note}", file=sys.stderr)
     else:
         release = found[0] if found else None
     if release and is_newer(release["version"], installed):
