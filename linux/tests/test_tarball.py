@@ -348,15 +348,22 @@ def test_every_request_has_an_end(tmp_path, monkeypatch):
     """A server that stalls cannot hold check or update: every request has a connect timeout and a
     total one, the signing files a size cap, and the tarball is cut off when it stalls."""
     ran: list[list[str]] = []
+    totals: list = []
     size = {"bytes": 100}
 
     def curl(argv, **kwargs):
         ran.append(argv)
+        totals.append(kwargs.get("timeout"))
         Path(argv[argv.index("-o") + 1]).write_bytes(b"x" * size["bytes"])
         return 0
 
+    def listing_curl(argv, **kwargs):
+        ran.append(argv)
+        totals.append(kwargs.get("timeout"))
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+
     monkeypatch.setattr(tb.subprocess, "call", curl)
-    monkeypatch.setattr(tb.subprocess, "run", lambda argv, **kwargs: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "[]", ""))
+    monkeypatch.setattr(tb.subprocess, "run", listing_curl)
     tb.releases()
     tb.download("https://example.com/SHA256SUMS", tmp_path / "SHA256SUMS", small=True)
     tb.download("https://example.com/x.tar.gz", tmp_path / "x.tar.gz")
@@ -364,15 +371,18 @@ def test_every_request_has_an_end(tmp_path, monkeypatch):
     for argv in ran:
         assert flag(argv, "--connect-timeout") == "15", argv
         assert flag(argv, "--max-time") is not None, argv
-    assert flag(listing, "--max-time") == "60"
+    # Each limit is a total, retries included: curl starts no retry after it, and the process is ended at it.
+    assert flag(listing, "--max-time") == flag(listing, "--retry-max-time") == str(tb.API_TIME) == "60"
     assert flag(small, "--max-time") == flag(small, "--retry-max-time") == str(tb.SMALL_TIME) == "60"
     assert flag(small, "--max-filesize") == str(tb.SMALL_LIMIT) == str(1 << 20)
     assert flag(tarball, "--max-time") == str(tb.TARBALL_TIME) and flag(tarball, "--max-filesize") is None
-    assert flag(tarball, "--speed-limit") == "1024" and flag(tarball, "--speed-time") == "60"
+    assert flag(tarball, "--speed-limit") == "1024" and flag(tarball, "--speed-time") == flag(tarball, "--retry-max-time") == str(tb.STALL_TIME) == "60"
+    assert totals == [tb.API_TIME, tb.SMALL_TIME, tb.TARBALL_TIME]
     # The time left before a deadline bounds a small download, and none starts once it has passed.
     ran.clear()
     tb.download("https://example.com/SHA256SUMS.sig", tmp_path / "sig", small=True, deadline=tb.time.monotonic() + 20.5)
     assert 1 <= int(flag(ran[0], "--max-time")) <= 20 and flag(ran[0], "--retry-max-time") == flag(ran[0], "--max-time")
+    assert totals[-1] == int(flag(ran[0], "--max-time"))
     with pytest.raises(tb.ReleaseError, match="ran out of time"):
         tb.download("https://example.com/SHA256SUMS.sig", tmp_path / "sig", small=True, deadline=tb.time.monotonic() - 1)
     assert len(ran) == 1
@@ -404,9 +414,13 @@ import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("herald_os_tarball", sys.argv[1])
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader("herald_os_tarball", loader))
 loader.exec_module(module)
-module.SMALL_TIME, module.STALL = 2, ("--speed-limit", "1024", "--speed-time", "2")
+module.API_TIME = module.SMALL_TIME = module.STALL_TIME = 3
 try:
-    module.download(sys.argv[2], module.Path(sys.argv[3]), small=sys.argv[4] == "small")
+    if sys.argv[4] == "listing":
+        module.RELEASES_API = sys.argv[2]
+        module.releases()
+    else:
+        module.download(sys.argv[2], module.Path(sys.argv[3]), small=sys.argv[4] == "small")
 except module.ReleaseError as exc:
     print(exc)
     sys.exit(1)
@@ -460,19 +474,36 @@ def stalling_server(tmp_path, monkeypatch):
     server.server_close()
 
 
-@pytest.mark.parametrize("path,kind", [("/silent", "small"), ("/trickle", "tarball")])
-def test_a_stalled_server_ends_the_download(stalling_server, tmp_path, path, kind):
-    """With real curl: the small file's total time, and the tarball's stall limit, end it. The time
-    limits are cut to 2 s here; without them the download would wait for the server, which never
-    sends the rest."""
+def run_stalled(base: str, path: str, kind: str, tmp_path: Path, env: dict | None = None) -> tuple[subprocess.CompletedProcess, float]:
     started = time.monotonic()
     try:
-        done = subprocess.run([sys.executable, "-c", STALLED_DOWNLOAD, str(BIN / "herald-os-tarball"), stalling_server + path, str(tmp_path / "out"), kind], capture_output=True, text=True, timeout=40)
+        done = subprocess.run([sys.executable, "-c", STALLED_DOWNLOAD, str(BIN / "herald-os-tarball"), base + path, str(tmp_path / "out"), kind], capture_output=True, text=True, timeout=60, env=env)
     except subprocess.TimeoutExpired:
         pytest.fail("the download hung on a server that stalled")
-    assert done.returncode == 1 and "could not download" in done.stdout, done.stdout + done.stderr
-    # Retries are part of the small file's limit too; the tarball retries twice, each cut at 2 s.
-    assert time.monotonic() - started < 30
+    return done, time.monotonic() - started
+
+
+@pytest.mark.parametrize("path,kind", [("/silent", "listing"), ("/trickle", "listing"), ("/silent", "small"), ("/trickle", "small"), ("/trickle", "tarball")])
+def test_a_stalled_server_ends_the_request_at_its_limit(stalling_server, tmp_path, path, kind):
+    """With real curl, every limit cut to 3 s: each request ends at about its limit, retries included.
+    Three attempts with curl's pauses between them would take over 10 s."""
+    done, took = run_stalled(stalling_server, path, kind, tmp_path)
+    assert done.returncode == 1, done.stdout + done.stderr
+    # The listing passes on curl's own words, or says GitHub did not answer in time.
+    assert done.stdout.strip() if kind == "listing" else "could not download" in done.stdout, done.stdout
+    assert took < 8, f"{kind} {path} took {took:.1f} s"
+
+
+def test_a_curl_that_ignores_its_limits_is_ended_at_the_total(tmp_path):
+    """The process itself is ended at the limit, whatever curl does: here a curl that only sleeps."""
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    # One process, as curl is: exec, so ending it leaves nothing holding the output open.
+    write(stand_in / "curl", "#!/bin/sh\nexec sleep 50\n", 0o755)
+    env = {**os.environ, "PATH": f"{stand_in}{os.pathsep}{os.environ['PATH']}"}
+    for kind in ("listing", "small"):
+        done, took = run_stalled("https://example.com", "/x", kind, tmp_path, env)
+        assert done.returncode == 1 and took < 8, (kind, took, done.stdout + done.stderr)
 
 
 @pytest.fixture

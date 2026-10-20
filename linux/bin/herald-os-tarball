@@ -72,15 +72,17 @@ SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.
 # Every request goes over HTTPS, redirects included: GitHub sends release files on to its CDN, and
 # a redirect to plain http would let anyone on the way swap the tarball and its checksum together.
 CURL = ("curl", "--proto", "=https", "--proto-redir", "=https", "--fail", "--location", "--retry", "2", "--connect-timeout", "15")
-# Every request has an end, so a server that stalls cannot hold check or update. The signing files
-# are small: 1 MiB and a minute an attempt, with no retry started after that minute (curl's
-# --max-time is per attempt, so one retry begun just before it can take up to another). A tarball
-# may take long on a slow line, so it is cut off when it stalls (under 1 KB/s for a minute) and after
-# an hour at most.
+# Every request has an end, retries included, so a server that stalls cannot hold check or update.
+# The release listing and the signing files get a minute in all, and the signing files 1 MiB each:
+# curl stops each attempt at the minute and starts no retry after it, and since an attempt begun just
+# before that could still run a minute more, the curl process itself is ended at the minute. A tarball
+# may take long on a slow line, so it is cut off when it stalls (under 1 KB/s for STALL_TIME), starts
+# no retry after STALL_TIME, so a stall ends it within about that long, and is ended after an hour.
+API_TIME = 60
 SMALL_TIME = 60
 SMALL_LIMIT = KEY_ASSET_LIMIT
 TARBALL_TIME = 3600
-STALL = ("--speed-limit", "1024", "--speed-time", "60")
+STALL_TIME = 60
 AT_FDCWD = -100
 RENAME_EXCHANGE = 2
 # What renameat2 answers where the kernel, the C library or the filesystem cannot exchange two paths.
@@ -294,7 +296,11 @@ def machine_arch() -> str | None:
 
 def releases() -> list[dict]:
     """The repository's published releases, newest first (GitHub's API lists drafts only to the owner)."""
-    found = subprocess.run([*CURL, "-sS", "--max-time", "60", "-H", "Accept: application/vnd.github+json", RELEASES_API], capture_output=True, text=True, check=False)
+    argv = [*CURL, "-sS", "--max-time", str(API_TIME), "--retry-max-time", str(API_TIME), "-H", "Accept: application/vnd.github+json", RELEASES_API]
+    try:
+        found = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=API_TIME)
+    except subprocess.TimeoutExpired as exc:
+        raise ReleaseError(f"GitHub did not answer within {API_TIME} s") from exc
     if found.returncode != 0:
         raise ReleaseError(found.stderr.strip() or f"curl exited with {found.returncode}")
     try:
@@ -381,9 +387,14 @@ def download(url: str, target: Path, small: bool = False, deadline: float | None
             raise ReleaseError("ran out of time checking releases; nothing was changed")
         limits = ["--max-time", str(seconds), "--retry-max-time", str(seconds), "--max-filesize", str(SMALL_LIMIT)]
     else:
-        limits = ["--max-time", str(TARBALL_TIME), *STALL]
+        seconds = TARBALL_TIME
+        limits = ["--max-time", str(TARBALL_TIME), "--retry-max-time", str(STALL_TIME), "--speed-limit", "1024", "--speed-time", str(STALL_TIME)]
     progress = ["--progress-bar"] if sys.stderr.isatty() and not small else ["-sS"]
-    if subprocess.call([*CURL, *progress, *limits, "-o", str(target), url]) != 0:
+    try:
+        code = subprocess.call([*CURL, *progress, *limits, "-o", str(target), url], timeout=seconds)
+    except subprocess.TimeoutExpired:
+        code = None
+    if code != 0:
         raise ReleaseError(f"could not download {url} over HTTPS")
     # --max-filesize cannot stop a transfer that does not say its size up front.
     if small and target.stat().st_size > SMALL_LIMIT:
