@@ -382,18 +382,23 @@ name one): that slot would go in the disk password's place, leaving the owner's 
 the token pointing at nothing, so an interruption leaves a password that works; while it runs,
 Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits for the root side to finish or
 put things back, and says how it ended. Should the root side be killed anyway, the command looks and
-says which password opens which device. Ctrl+C at a prompt stops with nothing changed (exit 130). If
-adding it fails on one device, it comes back out of the others; a device it cannot be taken back out
-of (cryptsetup fails, or it still opens) is named, with the command that removes it (exit 8), and a
-cryptsetup that runs out of time says which passwords may work (exit 6). It takes printable ASCII
-only (no input method at start-up), refuses on a disk that is not encrypted, and `--status` prints
-`{"encrypted", "devices", "newOwner", "error"}` without root, with `encrypted` null when it cannot
-tell; setup then neither asks for a disk password nor calls the disk unencrypted. After setup "for
-someone else" (`~/.config/herald-os/new-owner`) or a reset (`/var/lib/herald-os/new-owner`, from
-`reset-helper apply`), setup on an encrypted disk asks the new owner for the disk password they
-typed at start-up and one of their own, and runs `herald-os password --disk --new-owner` in a
-terminal of its own with their new account password for sudo: it also removes every other key slot
-and the tokens left with none, so only the new owner's password opens the disk. "Later" skips it.
+says which password opens which device (exit 6). Ctrl+C at a prompt, or during the current
+password's check, stops with nothing changed, said once (exit 130). If adding it fails on one
+device, it comes back out of the others; a device it cannot be taken back out of (cryptsetup fails,
+or it still opens) is named, with the command that removes it (exit 8), and a cryptsetup that runs
+out of time says which passwords may work (exit 6). Exit 6 therefore means the change may be
+part-way: the new password was added but an old one could not be removed, cryptsetup ran out of
+time, or the root side was killed; the message says which, and what opens each device. A rollback
+also removes a new password an earlier run left on a device, and a new password that already opens a
+slot a token uses is refused first. It takes printable ASCII only (no input method at start-up),
+refuses on a disk that is not encrypted, and `--status` prints `{"encrypted", "devices", "newOwner",
+"error"}` without root, with `encrypted` null when it cannot tell; setup then neither asks for a
+disk password nor calls the disk unencrypted. After setup "for someone else"
+(`~/.config/herald-os/new-owner`) or a reset (`/var/lib/herald-os/new-owner`, from `reset-helper
+apply`), setup on an encrypted disk asks the new owner for the disk password they typed at start-up
+and one of their own, and runs `herald-os password --disk --new-owner` in a terminal of its own with
+their new account password for sudo: it also removes every other key slot and the tokens left with
+none, so only the new owner's password opens the disk. "Later" skips it.
 `linux/tests/test_disk_password.py` does all of it on LUKS2 images and a loop device and checks that
 the old password no longer opens them.
 
