@@ -188,3 +188,69 @@ def test_the_mac_downloads_get_a_sha256_for_sha256sums():
     assert "sha256sum" in step(job, "Checksum the Mac downloads")["run"]
     upload = step(job, "Upload to the draft release")["run"]
     assert "dist/*.dmg.sha256" in upload and "dist/*.zip.sha256" in upload
+
+
+# The Arch package: makepkg checks SHA256SUMS.sig with validpgpkeys, prepare() the tarball against it.
+
+PKGBUILD = ROOT / "packaging" / "arch" / "herald-os-bin" / "PKGBUILD"
+FINGERPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+
+def pkgbuild(tmp_path: Path, keys: str = "") -> Path:
+    text = PKGBUILD.read_text()
+    assert text.count("\n_release_keys=(") == 1
+    path = tmp_path / "PKGBUILD"
+    path.write_text(text.replace("\n_release_keys=()\n", f"\n_release_keys=({keys})\n") if keys else text)
+    return path
+
+
+def sourced(path: Path, script: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-c", f'source "$1" && {script}', "pkgbuild", str(path)], capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})})
+
+
+def test_until_the_release_key_is_set_the_package_is_as_before(tmp_path):
+    done = sourced(pkgbuild(tmp_path), 'echo "${#source[@]} ${#sha256sums[@]} ${validpgpkeys[*]-none}"')
+    assert done.stdout.split() == ["1", "1", "none"], done.stderr
+
+
+def test_with_the_release_key_makepkg_checks_the_signed_sha256sums(tmp_path):
+    done = sourced(pkgbuild(tmp_path, FINGERPRINT), 'printf "%s\\n" "${validpgpkeys[@]}" "${source[@]}" "${sha256sums[@]}" "$_version"')
+    lines = done.stdout.splitlines()
+    version = lines[-1]
+    base = f"https://github.com/iamlukethedev/Herald-OS/releases/download/v{version}"
+    assert lines[:-1] == [
+        FINGERPRINT,
+        "herald-os-package.sh",
+        f"SHA256SUMS-{version}::{base}/SHA256SUMS",
+        f"SHA256SUMS-{version}.sig::{base}/SHA256SUMS.sig",
+        lines[4], "SKIP", "SKIP",
+    ]
+
+
+@pytest.mark.parametrize("carch,build", [("x86_64", "x64"), ("aarch64", "arm64")])
+def test_prepare_checks_the_tarball_against_sha256sums(tmp_path, carch, build):
+    path = pkgbuild(tmp_path, FINGERPRINT)
+    version = sourced(path, 'echo "$_version"').stdout.strip()
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    tarball = srcdir / f"herald-os-{version}-{build}.tar.gz"
+    tarball.write_bytes(b"the release tarball")
+    good = hashlib.sha256(b"the release tarball").hexdigest()
+    sums = srcdir / f"SHA256SUMS-{version}"
+    env = {"srcdir": str(srcdir), "CARCH": carch}
+    for listed, ok in (
+        (f"{good}  herald-os-{version}-linux-{build}.tar.gz\n{'0' * 64}  herald-os-{version}-x86_64.iso\n", True),
+        (f"{good} *herald-os-{version}-linux-{build}.tar.gz\n", True),
+        (f"{'0' * 64}  herald-os-{version}-linux-{build}.tar.gz\n", False),
+        (f"{good}  herald-os-{version}-linux-other.tar.gz\n", False),
+        (f"{good}  herald-os-{version}-linux-{build}.tar.gz\n{good}  herald-os-{version}-linux-{build}.tar.gz\n", False),
+    ):
+        sums.write_text(listed)
+        done = sourced(path, "prepare", env)
+        assert (done.returncode == 0) == ok, (listed, done.stderr)
+    # A tarball of your own is checked by nothing here, as before.
+    assert sourced(path, "prepare", {**env, "HERALD_OS_TARBALL_URL": f"file://{tarball}"}).returncode == 0
+    unset = tmp_path / "unset"
+    unset.mkdir()
+    sums.write_text(f"{'0' * 64}  herald-os-{version}-linux-{build}.tar.gz\n")
+    assert sourced(pkgbuild(unset), "prepare", env).returncode == 0
