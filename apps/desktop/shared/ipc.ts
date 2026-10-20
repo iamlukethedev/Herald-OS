@@ -473,6 +473,11 @@ export interface SetupState {
    * open (no password of its own), password, or other. null when it cannot be told.
    */
   keyring: KeyringState | null
+  /**
+   * The filesystems that hold the keyring folder (not only the root's) all sit on LUKS, from the same
+   * command. null when it cannot be told, which setup treats as not encrypted for the keyring.
+   */
+  keyringEncrypted: boolean | null
 }
 
 export type KeyringState = 'none' | 'open' | 'password' | 'other'

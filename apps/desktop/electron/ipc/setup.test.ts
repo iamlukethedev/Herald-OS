@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringState, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -312,10 +312,12 @@ describe('the disk password', () => {
 })
 
 describe('the keyring', () => {
-  it('reads the keyring from the command, and anything it cannot tell as unknown', async () => {
+  it('reads the keyring and whether its disk is encrypted from the command, and anything it cannot tell as unknown', async () => {
     for (const state of ['none', 'open', 'password', 'other'] as const) {
-      host.run = { stdout: `{"keyring": "${state}", "folder": "/home/hermes/.local/share/keyrings"}\n`, stderr: '', code: 0 }
-      await expect(keyringState()).resolves.toBe(state)
+      for (const encrypted of [true, false, null]) {
+        host.run = { stdout: `{"keyring": "${state}", "folder": "/home/hermes/.local/share/keyrings", "encrypted": ${JSON.stringify(encrypted)}}\n`, stderr: '', code: 0 }
+        await expect(keyringStatus()).resolves.toEqual({ keyring: state, encrypted })
+      }
     }
 
     expect(run).toHaveBeenCalledWith('herald-os', ['keyring', '--status'], expect.any(Number))
@@ -324,12 +326,17 @@ describe('the keyring', () => {
       { stdout: '', stderr: "herald-os: unknown command 'keyring'", code: 2 },
       { stdout: '', stderr: 'herald-os: not found', code: 127 },
       { stdout: 'not json', stderr: '', code: 0 },
-      { stdout: '{"keyring": "locked"}', stderr: '', code: 0 },
-      { stdout: '{"keyring": null}', stderr: '', code: 0 }
+      { stdout: '{"keyring": "locked", "encrypted": "yes"}', stderr: '', code: 0 },
+      { stdout: '{"keyring": null}', stderr: '', code: 0 },
+      { stdout: 'null', stderr: '', code: 0 }
     ]) {
       host.run = result
-      await expect(keyringState()).resolves.toBeNull()
+      await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null })
     }
+
+    // A herald-os from before the keyring's disk was looked at: the keyring, and its disk unknown.
+    host.run = { stdout: '{"keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}', stderr: '', code: 0 }
+    await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null })
   })
 
   it('makes one with no password of its own, or with the password on stdin and never in the arguments', async () => {
@@ -380,10 +387,11 @@ describe('the keyring', () => {
     try {
       vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done')
       vi.mocked(run).mockImplementation(async (_command, args) =>
-        args[0] === 'keyring' ? { stdout: '{"keyring": "none"}', stderr: '', code: 0 } : { stdout: '{"encrypted": false}', stderr: '', code: 0 }
+        args[0] === 'keyring' ? { stdout: '{"keyring": "none", "encrypted": false}', stderr: '', code: 0 } : { stdout: '{"encrypted": true}', stderr: '', code: 0 }
       )
       registerSetupIpc()
-      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ needed: true, diskEncrypted: false, keyring: 'none' })
+      // The root is encrypted, the keyring's disk is not: each answer stays its own.
+      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ needed: true, diskEncrypted: true, keyring: 'none', keyringEncrypted: false })
     } finally {
       vi.mocked(run).mockImplementation(async () => host.run)
 

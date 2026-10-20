@@ -48,22 +48,30 @@ export function setupState(): SetupState {
     signedIn: fs.existsSync(LOGIN_SCREEN),
     diskEncrypted: null,
     newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET),
-    keyring: null
+    keyring: null,
+    keyringEncrypted: null
   }
 }
 
 const KEYRING_STATES: readonly KeyringState[] = ['none', 'open', 'password', 'other']
 
-/** The default keyring, from `herald-os keyring --status`; null when that cannot be told, so setup leaves the keyring alone. */
-export async function keyringState(): Promise<KeyringState | null> {
+export interface KeyringStatus {
+  /** null when it cannot be told, so setup leaves the keyring alone. */
+  keyring: KeyringState | null
+  /** Whether the disk that holds the keyring folder is encrypted; null when that cannot be told. */
+  encrypted: boolean | null
+}
+
+/** The default keyring and the disk it is kept on, from `herald-os keyring --status`. */
+export async function keyringStatus(): Promise<KeyringStatus> {
   const result = await run('herald-os', ['keyring', '--status'], 15_000)
 
   try {
-    const keyring = result.code === 0 ? (JSON.parse(result.stdout) as { keyring?: unknown }).keyring : null
+    const status = result.code === 0 ? (JSON.parse(result.stdout) as { keyring?: unknown; encrypted?: unknown }) : {}
 
-    return KEYRING_STATES.find(state => state === keyring) ?? null
+    return { keyring: KEYRING_STATES.find(state => state === status.keyring) ?? null, encrypted: typeof status.encrypted === 'boolean' ? status.encrypted : null }
   } catch {
-    return null
+    return { keyring: null, encrypted: null }
   }
 }
 
@@ -305,9 +313,9 @@ export function registerSetupIpc(): void {
       return state
     }
 
-    const [encrypted, keyring] = await Promise.all([diskEncrypted(), keyringState()])
+    const [encrypted, keyring] = await Promise.all([diskEncrypted(), keyringStatus()])
 
-    return { ...state, diskEncrypted: encrypted, keyring }
+    return { ...state, diskEncrypted: encrypted, keyring: keyring.keyring, keyringEncrypted: keyring.encrypted }
   })
   ipcMain.handle(IPC.setupName, (_event, name: string) => {
     const clean = String(name ?? '').replace(/[\r\n:]/g, ' ').trim().slice(0, 64)

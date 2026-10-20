@@ -20,8 +20,9 @@ type Step = 'welcome' | 'account' | 'disk' | 'keyring' | 'wifi' | 'hermes' | 'do
  * Wi-Fi, and Hermes's sign-in. Setting it up for someone else skips the account and leaves setup
  * waiting for them at the next start. On an encrypted disk, a new owner (after that, or a reset)
  * also replaces the disk password they were given with one of their own.
- * The keyring apps keep passwords in: on an encrypted disk setup makes it with no password of its own,
- * which the disk password protects; otherwise it asks how to protect it.
+ * The keyring apps keep passwords in: where the disk that holds it is encrypted (not only the system
+ * disk), setup makes it with no password of its own, which that disk's password protects; otherwise it
+ * asks how to protect it.
  */
 export function FirstRunSetup() {
   const t = useT()
@@ -32,7 +33,9 @@ export function FirstRunSetup() {
   const [newOwner, setNewOwner] = useState(false)
   // null: it could not be told, so setup leaves the keyring alone.
   const [keyring, setKeyring] = useState<KeyringState | null>(null)
-  // Setup made the keyring with no password of its own (an encrypted disk).
+  // Every filesystem that holds the keyring folder is on LUKS; null: it could not be told.
+  const [keyringEncrypted, setKeyringEncrypted] = useState<boolean | null>(null)
+  // Setup made the keyring with no password of its own (its disk is encrypted).
   const [keyringOpen, setKeyringOpen] = useState(false)
   // The account password from the account step, for sudo when the disk password changes.
   const [accountPassword, setAccountPassword] = useState('')
@@ -52,6 +55,7 @@ export function FirstRunSetup() {
         setDiskEncrypted(state.diskEncrypted)
         setNewOwner(state.newOwner)
         setKeyring(state.keyring ?? null)
+        setKeyringEncrypted(state.keyringEncrypted ?? null)
       })
       .catch(() => undefined)
   }, [])
@@ -79,7 +83,7 @@ export function FirstRunSetup() {
 
   const steps: Step[] = forSomeoneElse
     ? ['welcome', 'wifi', 'done']
-    : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), ...(diskEncrypted !== true && keyring === 'none' ? (['keyring'] as const) : []), 'wifi', 'hermes', 'done']
+    : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), ...(keyringEncrypted !== true && keyring === 'none' ? (['keyring'] as const) : []), 'wifi', 'hermes', 'done']
   const next = () => setStep(steps[Math.min(steps.length - 1, steps.indexOf(step) + 1)] ?? 'done')
 
   return (
@@ -109,7 +113,7 @@ export function FirstRunSetup() {
             onDone={password => {
               setAccountPassword(password)
 
-              if (diskEncrypted === true && keyring === 'none') {
+              if (keyringEncrypted === true && keyring === 'none') {
                 void window.heraldOS.setup
                   .keyring({ password: '' })
                   .then(result => setKeyringOpen(result.ok))
@@ -122,7 +126,7 @@ export function FirstRunSetup() {
           />
         )}
         {step === 'disk' && <DiskStep onDone={next} account={accountPassword} />}
-        {step === 'keyring' && <KeyringStep onDone={next} diskEncrypted={diskEncrypted} />}
+        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />
@@ -389,11 +393,11 @@ const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
 }
 
 /**
- * How the keyring is protected where the disk is not encrypted (or that could not be told): a password
- * of its own, asked by the first app that needs it after each start, or none, which anyone who has the
- * disk can read past.
+ * How the keyring is protected where the disk that holds it is not encrypted (or that could not be
+ * told): a password of its own, asked by the first app that needs it after each start, or none, which
+ * anyone who has the disk can read past.
  */
-function KeyringStep({ onDone, diskEncrypted }: { onDone: () => void; diskEncrypted: boolean | null }) {
+function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boolean | null }) {
   const t = useT()
   const [choice, setChoice] = useState<'password' | 'open' | null>(null)
   const [password, setPassword] = useState('')
@@ -455,7 +459,7 @@ function KeyringStep({ onDone, diskEncrypted }: { onDone: () => void; diskEncryp
         }
       }}
     >
-      <Heading icon={<IconKey size={18} />} title={t('firstRun.keyring.title')} text={t(diskEncrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')} />
+      <Heading icon={<IconKey size={18} />} title={t('firstRun.keyring.title')} text={t(encrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')} />
       <div className="grid grid-cols-2 gap-3">
         {option('password', 'firstRun.keyring.password', 'firstRun.keyring.passwordHint')}
         {option('open', 'firstRun.keyring.open', 'firstRun.keyring.openHint')}
