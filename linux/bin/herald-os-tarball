@@ -12,11 +12,15 @@ the pieces the Arch package lays out, and updates from the project's GitHub rele
                                     date, 2 when this is not a tarball install, 3 when GitHub cannot be asked
   sudo herald-os-tarball update [<version>]
                                     install that release (by default the newest stable one) once its
-                                    .sha256 matches; the version it replaces stays in /opt/herald-os.previous
+                                    signature and checksum check out; the version it replaces stays in
+                                    /opt/herald-os.previous
   sudo herald-os-tarball rollback   swap /opt/herald-os and /opt/herald-os.previous
 
 A Herald OS in /opt/herald-os that a package installed (herald-os-bin on Arch) is the package's: this
 leaves it alone. HERALD_OS_DESTDIR puts everything under another folder instead of / (a staged install).
+
+A version that carries the release key (resources/herald-os-linux/keys/herald-os-release.asc) installs
+only releases whose SHA256SUMS is signed with it, or with a key it has certified (docs/RELEASE-SIGNING.md).
 """
 
 from __future__ import annotations
@@ -48,8 +52,18 @@ Categories=System;Utility;
 StartupWMClass=herald-os
 Terminal=false
 """
-# A release's .sha256 is sha256sum's line for the file as it is named on the release.
+# A release's .sha256 is sha256sum's line for the file as it is named on the release; its SHA256SUMS
+# has one such line for every download, and SHA256SUMS.sig is a detached OpenPGP signature over it.
 CHECKSUM_LINE = re.compile(r"^([0-9a-f]{64}) [ *](\S+)$")
+SUMS, SUMS_SIG, KEY_ASSET = "SHA256SUMS", "SHA256SUMS.sig", "herald-os-release-key.asc"
+# The release's own copy of the keys: newer subkeys and expiry dates, and a new key certified by one
+# this version has. Never trusted by itself, so it only needs to be small.
+KEY_ASSET_LIMIT = 1 << 20
+GPG_TIMEOUT = 60
+# OpenPGP certification classes (0x10 to 0x13): a key vouching for another key's user ID.
+CERTIFICATION = re.compile(r"^1[0-3]x$")
+# A key's validity in gpg's listing: revoked, expired, invalid or disabled.
+UNUSABLE = frozenset("reid")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 # Every request goes over HTTPS, redirects included: GitHub sends release files on to its CDN, and
 # a redirect to plain http would let anyone on the way swap the tarball and its checksum together.
@@ -77,6 +91,8 @@ class Layout:
         self.app = root / "opt" / "herald-os"
         self.previous = root / "opt" / "herald-os.previous"
         self.linux = self.app / "resources" / "herald-os-linux"
+        # The keys the version in use trusts; none in the versions from before signed releases.
+        self.release_keys = self.linux / "keys" / "herald-os-release.asc"
         self.bin = root / "usr" / "local" / "bin"
         local_share = root / "usr" / "local" / "share"
         # Login screens look in /usr/share/wayland-sessions (LightDM only there); on Silverblue and other
@@ -277,10 +293,12 @@ def releases() -> list[dict]:
     return listing
 
 
-def pick_release(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None) -> dict | None:
-    """The release to install: `version` exactly, or the newest with a tarball and checksum for `arch`
-    (pre-releases only on the edge channel)."""
-    best: dict | None = None
+def candidates(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None, signed: bool = False) -> list[dict]:
+    """The releases that could be installed, newest first: `version` exactly, or any with a tarball for
+    `arch` (pre-releases only on the edge channel). Without the release key a release also needs the
+    tarball's .sha256, as it always has; with it, whether a release is signed is judged by checking
+    its signature (`verified`), so a release without one is refused by name rather than passed over."""
+    found: list[dict] = []
     for release in listing:
         tag = str(release.get("tag_name") or "")
         number = tag[1:] if tag.startswith("v") else tag
@@ -292,18 +310,45 @@ def pick_release(listing: list[dict], arch: str, channel: str = "stable", versio
             continue
         name = f"herald-os-{number}-linux-{arch}.tar.gz"
         assets = {asset.get("name"): asset for asset in release.get("assets") or [] if isinstance(asset, dict)}
-        if name not in assets or f"{name}.sha256" not in assets:
+        if name not in assets or (not signed and f"{name}.sha256" not in assets):
             continue
-        candidate = {
+        url = lambda asset: str(assets[asset].get("browser_download_url") or "") if asset in assets else ""
+        found.append({
             "version": number,
             "name": name,
-            "url": assets[name].get("browser_download_url", ""),
-            "checksum_url": assets[f"{name}.sha256"].get("browser_download_url", ""),
+            "url": url(name),
+            "checksum_url": url(f"{name}.sha256"),
+            "sums_url": url(SUMS),
+            "sig_url": url(SUMS_SIG),
+            "key_url": url(KEY_ASSET),
             "size": int(assets[name].get("size") or 0),
-        }
-        if best is None or version_key(number) > version_key(best["version"]):
-            best = candidate
-    return best
+        })
+    return sorted(found, key=lambda release: version_key(release["version"]), reverse=True)
+
+
+def pick_release(listing: list[dict], arch: str, channel: str = "stable", version: str | None = None, signed: bool = False) -> dict | None:
+    """The newest of `candidates`, unchecked."""
+    found = candidates(listing, arch, channel, version, signed)
+    return found[0] if found else None
+
+
+def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[dict | None, list[str]]:
+    """The newest release in `found` newer than `installed` whose SHA256SUMS is signed with a key the
+    version in use trusts and lists its tarball, and why each newer one before it was passed over. Only
+    the small signing files are downloaded, into a folder that is deleted."""
+    skipped: list[str] = []
+    for release in found:
+        if not is_newer(release["version"], installed):
+            break
+        with tempfile.TemporaryDirectory(prefix="herald-os-check-") as folder:
+            try:
+                checked_signature(layout, release, Path(folder), Path(folder) / SUMS, quiet=True)
+                listed_checksum(Path(folder) / SUMS, release["name"])
+            except ReleaseError as exc:
+                skipped.append(f"{release['version']}: {exc}")
+                continue
+        return release, skipped
+    return None, skipped
 
 
 def download(url: str, target: Path) -> None:
@@ -312,18 +357,124 @@ def download(url: str, target: Path) -> None:
         raise ReleaseError(f"could not download {url} over HTTPS")
 
 
+def listed_checksum(checksum: Path, name: str) -> str:
+    """The SHA-256 that `checksum` (a .sha256 or a SHA256SUMS) gives for `name`: exactly one line for it,
+    and every line in sha256sum's format."""
+    found: set[str] = set()
+    for line in checksum.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        match = CHECKSUM_LINE.match(line.strip())
+        if not match:
+            raise ReleaseError(f"{checksum.name} is not a list of checksums")
+        if match.group(2) == name:
+            found.add(match.group(1))
+    if len(found) != 1:
+        raise ReleaseError(f"{checksum.name} does not give one checksum for {name}")
+    return found.pop()
+
+
 def verify(tarball: Path, checksum: Path) -> None:
-    """The tarball is the one the release's .sha256 names, byte for byte."""
-    lines = checksum.read_text(errors="replace").strip().splitlines()
-    match = CHECKSUM_LINE.match(lines[0].strip()) if lines else None
-    if not match or match.group(2) != tarball.name:
-        raise ReleaseError(f"{checksum.name} does not give a checksum for {tarball.name}")
+    """The tarball is the one the release's .sha256 or SHA256SUMS names, byte for byte."""
+    expected = listed_checksum(checksum, tarball.name)
     digest = hashlib.sha256()
     with tarball.open("rb") as handle:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
-    if digest.hexdigest() != match.group(1):
+    if digest.hexdigest() != expected:
         raise ReleaseError(f"{tarball.name} does not match its published checksum; nothing was changed")
+
+
+def gpg_records(output: str, kind: str) -> list[list[str]]:
+    return [line.split(":") for line in output.splitlines() if line.startswith(f"{kind}:")]
+
+
+def primary_keys(listing: str) -> dict[str, list[list[str]]]:
+    """Each primary key's fingerprint in a --with-colons listing, with the records of its block."""
+    keys: dict[str, list[list[str]]] = {}
+    block: list[list[str]] | None = None
+    for line in listing.splitlines():
+        fields = line.split(":")
+        if fields[0] == "pub":
+            block = [fields]
+        elif block is not None and fields[0] == "fpr" and block[-1][0] == "pub":
+            keys[fields[9]] = block
+        elif block is not None:
+            block.append(fields)
+    return keys
+
+
+def verify_signature(sums: Path, signature: Path, pinned: Path, offered: Path | None = None) -> str:
+    """Check that `signature` is a good OpenPGP signature over `sums` by a key in `pinned` (the release
+    keys of the version in use), or by a key in `offered` (the release's own key file) that one of them
+    has certified. Returns the signing key's primary fingerprint. Works in a keyring of its own, which
+    it deletes, so neither the person's keys nor their trust settings come into it."""
+    gpg = shutil.which("gpg")
+    if not gpg:
+        raise ReleaseError("checking the release's signature needs gpg (the gnupg package; gpg on Debian and Ubuntu); install it and run this again. Nothing was changed")
+    home = Path(tempfile.mkdtemp(prefix="herald-os-gpg-"))
+
+    def run(*args: str) -> subprocess.CompletedProcess:
+        argv = [gpg, "--batch", "--no-options", "--no-autostart", "--no-auto-key-retrieve", "--homedir", str(home), *args]
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, timeout=GPG_TIMEOUT, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise ReleaseError(f"gpg did not finish in {GPG_TIMEOUT} s; nothing was changed") from exc
+
+    try:
+        if run("--import", str(pinned)).returncode != 0:
+            raise ReleaseError(f"the release keys in {pinned} cannot be read; nothing was changed")
+        pinned_keys = frozenset(primary_keys(run("--with-colons", "--fixed-list-mode", "--list-keys").stdout))
+        if not pinned_keys:
+            raise ReleaseError(f"{pinned} holds no key; nothing was changed")
+        if offered is not None:
+            # Whatever does not import cleanly is simply not there for the checks below.
+            run("--import", str(offered))
+        # Judged after both files are in: a revocation or expiry in either one counts.
+        keys = primary_keys(run("--with-colons", "--fixed-list-mode", "--check-signatures").stdout)
+        usable = frozenset(key for key in pinned_keys if key in keys and keys[key][0][1] not in UNUSABLE)
+        if not usable:
+            raise ReleaseError("every release key this version trusts has been revoked or has expired, so it installs nothing until a release brings a new key it can check; nothing was changed")
+        trusted = set(usable)
+        for fingerprint, block in keys.items():
+            if fingerprint in pinned_keys or block[0][1] in UNUSABLE:
+                continue
+            # Only a usable pinned key vouches, by its full fingerprint (a 64-bit key ID in a key file
+            # anyone can write could belong to a key made to collide with one of ours), and not once
+            # it has revoked that certification. A key it certified does not pass that on.
+            revoked = {fields[12] for fields in block if fields[0] == "rev" and fields[1] == "!" and len(fields) > 12 and fields[10].startswith("30")}
+            if any(
+                fields[0] == "sig" and fields[1] == "!" and len(fields) > 12 and CERTIFICATION.match(fields[10])
+                and fields[12] in usable and fields[12] not in revoked
+                for fields in block
+            ):
+                trusted.add(fingerprint)
+        checked = run("--status-fd", "1", "--verify", str(signature), str(sums))
+        status = [fields[1:] for fields in (line.split() for line in checked.stdout.splitlines()) if len(fields) > 1 and fields[0] == "[GNUPG:]"]
+        kinds = [fields[0] for fields in status]
+        valid = [fields for fields in status if fields[0] == "VALIDSIG"]
+        signer = valid[0][10] if len(valid) == 1 and len(valid[0]) > 10 else ""
+        # One signature only: with several, which of gpg's lines belong to which is not ours to guess.
+        single = kinds.count("NEWSIG") == 1 and kinds.count("GOODSIG") == 1 and len(valid) == 1
+        if checked.returncode == 0 and single and signer in trusted:
+            return signer
+        if kinds.count("NEWSIG") > 1:
+            reason = "carries more than one signature"
+        elif "BADSIG" in kinds:
+            reason = "does not match its signature: it was changed after it was signed"
+        elif "EXPKEYSIG" in kinds or "REVKEYSIG" in kinds:
+            reason = f"is signed with a release key that has {'expired' if 'EXPKEYSIG' in kinds else 'been revoked'}"
+        elif "NO_PUBKEY" in kinds or "ERRSIG" in kinds or (signer and signer not in trusted):
+            reason = "is signed with a key this version does not trust"
+        else:
+            reason = "has no signature that gpg can check"
+        raise ReleaseError(f"the release's {SUMS} {reason}; nothing was changed")
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def spaced(fingerprint: str) -> str:
+    return " ".join(fingerprint[i:i + 4] for i in range(0, len(fingerprint), 4))
 
 
 def tree_size(folder: Path) -> int:
@@ -414,28 +565,68 @@ def check(layout: Layout, channel: str) -> int:
     if not arch:
         print(f"herald-os-tarball: Herald OS releases are built for x86_64 and aarch64, not {platform.machine()}", file=sys.stderr)
         return 3
+    signed = layout.release_keys.is_file()
+    if signed and not shutil.which("gpg"):
+        print("herald-os-tarball: checking release signatures needs gpg (the gnupg package; gpg on Debian and Ubuntu)", file=sys.stderr)
+        return 3
     try:
-        release = pick_release(releases(), arch, channel)
+        found = candidates(releases(), arch, channel, signed=signed)
     except ReleaseError as exc:
         print(f"herald-os-tarball: could not ask GitHub for releases: {exc}", file=sys.stderr)
         return 3
-    if release and is_newer(release["version"], read_version(layout.app)):
+    installed = read_version(layout.app)
+    if signed:
+        # The newest release this version would install, so the update that follows can succeed.
+        release, skipped = verified(layout, found, installed)
+        for note in skipped:
+            print(f"herald-os-tarball: passed over {note}", file=sys.stderr)
+    else:
+        release = found[0] if found else None
+    if release and is_newer(release["version"], installed):
         print(release["version"])
         return 0
     return 1
+
+
+def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False) -> None:
+    """Download the release's SHA256SUMS into `sums` and check its signature, before anything else of
+    the release is trusted or downloaded."""
+    if not release["sums_url"] or not release["sig_url"]:
+        missing = SUMS if not release["sums_url"] else SUMS_SIG
+        raise ReleaseError(f"Herald OS {release['version']} is not signed (the release has no {missing}), and this version only installs signed releases; nothing was changed")
+    signature = staging / SUMS_SIG
+    download(release["sums_url"], sums)
+    download(release["sig_url"], signature)
+    offered = None
+    if release["key_url"]:
+        offered = staging / KEY_ASSET
+        download(release["key_url"], offered)
+        if offered.stat().st_size > KEY_ASSET_LIMIT:
+            raise ReleaseError(f"the release's {KEY_ASSET} is too big to be a key file; nothing was changed")
+    signer = verify_signature(sums, signature, layout.release_keys, offered)
+    if not quiet:
+        print(f"  {SUMS} is signed with the release key {spaced(signer)}")
 
 
 def update(layout: Layout, version: str | None = None) -> int:
     arch = machine_arch()
     if not arch:
         die(f"Herald OS releases are built for x86_64 and aarch64, not {platform.machine()}")
+    signed = layout.release_keys.is_file()
     try:
-        release = pick_release(releases(), arch, version=version)
+        found = candidates(releases(), arch, version=version, signed=signed)
     except ReleaseError as exc:
         die(f"could not ask GitHub for releases: {exc}")
-    if not release:
+    if not found:
         die(f"no release {'v' + version if version else ''} has a tarball and checksum for {arch}")
+    release = found[0]
     installed = read_version(layout.app)
+    if signed and version is None and is_newer(release["version"], installed):
+        # The newest release whose signature checks out, not merely the newest; it is checked again
+        # below, on the files this update keeps.
+        release, skipped = verified(layout, found, installed)
+        if release is None:
+            die("no newer release could be checked against the release key, so nothing was changed:\n  " + "\n  ".join(skipped))
     if version is None and not is_newer(release["version"], installed):
         print(f"Herald OS {installed} is up to date")
         return 0
@@ -451,11 +642,16 @@ def update(layout: Layout, version: str | None = None) -> int:
     # Unpacked next to /opt/herald-os: the same filesystem, so the swap moves nothing, and the same
     # SELinux labels as a tarball unpacked there by hand.
     staging = Path(tempfile.mkdtemp(prefix=".herald-os-update-", dir=layout.app.parent))
-    tarball, checksum, unpacked = staging / release["name"], staging / f"{release['name']}.sha256", staging / "herald-os"
+    tarball, unpacked = staging / release["name"], staging / "herald-os"
+    checksum = staging / (SUMS if layout.release_keys.is_file() else f"{release['name']}.sha256")
     replaced: Path | None = None
     try:
+        if layout.release_keys.is_file():
+            checked_signature(layout, release, staging, checksum)
+        else:
+            # Versions from before signed releases carry no key, so they check what they always did.
+            download(release["checksum_url"], checksum)
         download(release["url"], tarball)
-        download(release["checksum_url"], checksum)
         verify(tarball, checksum)
         print("  the checksum matches; unpacking")
         unpacked.mkdir()
@@ -473,8 +669,8 @@ def update(layout: Layout, version: str | None = None) -> int:
         die(f"{exc}; {whereabouts(layout)}")
     finally:
         if replaced == unpacked:
-            tarball.unlink(missing_ok=True)
-            checksum.unlink(missing_ok=True)
+            for path in (tarball, checksum, staging / SUMS_SIG, staging / KEY_ASSET):
+                path.unlink(missing_ok=True)
         else:
             shutil.rmtree(staging, ignore_errors=True)
     reinstall(layout)

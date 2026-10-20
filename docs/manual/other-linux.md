@@ -43,6 +43,8 @@ herald-os setup        # once per account
 
 This puts the `herald-os` commands in `/usr/local/bin`, Herald OS in your application menu and, if
 niri is installed, on your login screen. `sudo herald-os-tarball remove` takes them out again.
+On a signed release, check the tarball against its signed `SHA256SUMS` too, as
+[SECURITY.md](../../SECURITY.md#release-signatures) shows.
 
 ## Starting it
 

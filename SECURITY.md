@@ -60,9 +60,67 @@ These are the guarantees Herald OS aims for. Breaking one of them is a vulnerabi
   Hermes. CI scans the full history with [gitleaks](https://github.com/gitleaks/gitleaks); run
   `bash scripts/check-secrets.sh` to do the same locally.
 
+## Release signatures
+
+Every release from the first signed one on has a `SHA256SUMS` listing its downloads (the installer
+ISO and the VM disks under their joined names, the Linux tarballs, the Mac DMGs and zips), and
+`SHA256SUMS.sig`, a detached OpenPGP signature over it made by the release workflows with the Herald
+OS release key. The key's primary half never leaves an offline machine; CI holds only a signing
+subkey. Releases before the first signed one have only the `.sha256` beside each file, which proves
+the download is the file the release published, not who published it.
+
+Release key fingerprint: not set yet (the first signed release sets it here)
+
+The same fingerprint is in the [README](README.md) and in the project's announcements outside GitHub;
+trust a key only if they agree. A tarball install's `herald-os update` checks the signature before it
+trusts any checksum, once the version in use carries the key, and the Arch package checks it in
+`makepkg`. How the key is kept, renewed and replaced: [docs/RELEASE-SIGNING.md](docs/RELEASE-SIGNING.md).
+
+To check a download by hand, put it in one folder with `SHA256SUMS`, `SHA256SUMS.sig` and
+`herald-os-release-key.asc` from the same release (a split ISO or disk joined first). On Linux, or on
+macOS with GnuPG (`brew install gnupg`, or GPG Suite):
+
+```bash
+gpg --show-keys herald-os-release-key.asc   # the fingerprint above must be among those shown
+gpg --import herald-os-release-key.asc
+fpr=<the fingerprint above, without spaces>
+gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>/dev/null |
+  awk -v fpr="$fpr" '$2 == "NEWSIG" { n++ } $2 == "GOODSIG" { g++ } $2 == "VALIDSIG" { v++; k = $NF }
+    END { if (n == 1 && g == 1 && v == 1 && k == fpr) print "signed with the release key"; else { print "NOT signed with a good release key"; exit 1 } }'
+grep ' herald-os-<version>-x86_64.iso$' SHA256SUMS | shasum -a 256 -c   # sha256sum -c on Linux
+```
+
+Plain `gpg --verify SHA256SUMS.sig SHA256SUMS` is not enough by itself: it prints "Good signature" and
+exits 0 even when the subkey that signed has expired or been revoked, adding only a line "Note: This
+key has expired!" or "WARNING: This subkey has been revoked by its owner!". In gpg's status lines
+(`--status-fd 1`) those cases are `EXPKEYSIG` or `REVKEYSIG` instead of `GOODSIG`, which is what the
+check above looks for; it also requires exactly one signature, made under the release key's
+fingerprint (the last field of `VALIDSIG`). gpg's warning that the key "is not certified with a
+trusted signature" is about your own keyring's trust settings; the fingerprint check is what counts.
+On Windows, with [Gpg4win](https://www.gpg4win.org), in PowerShell:
+
+```powershell
+gpg --show-keys herald-os-release-key.asc
+gpg --import herald-os-release-key.asc
+gpg --status-fd 1 --verify SHA256SUMS.sig SHA256SUMS 2>$null | Select-String 'NEWSIG|GOODSIG|EXPKEYSIG|REVKEYSIG|BADSIG|VALIDSIG'
+(Get-FileHash herald-os-<version>-x86_64.iso -Algorithm SHA256).Hash.ToLower()
+Select-String -Path SHA256SUMS -Pattern 'herald-os-<version>-x86_64.iso$'   # the same hash
+```
+
+Trust it only if that shows one `NEWSIG`, one `GOODSIG` (no `EXPKEYSIG`, `REVKEYSIG` or `BADSIG`), and
+a `VALIDSIG` line ending in the fingerprint above.
+
+Once a release's key file carries the revocation of the key an install trusts, `herald-os update`
+there refuses every release until one is signed with a key it can still check, or a newer tarball is
+installed by hand. That is intended: nothing a revoked key signed or certified is trusted.
+[docs/RELEASE-SIGNING.md](docs/RELEASE-SIGNING.md) lists that and the other limits, such as
+`herald-os update <version>` installing an older signed release.
+
 ## In scope
 
 - A bridge tool that skips its tier, its approval, the protected-path check, or the audit log.
+- `herald-os update` or the Arch package installing a release whose signature does not check out
+  against the release key.
 - Reaching the control socket, the backend, or the preload API from a web page, a file, a model
   response, or another user on the machine.
 - Escaping a web window, viewer or preview into the shell.

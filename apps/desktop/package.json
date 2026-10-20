@@ -255,6 +255,7 @@
             "omakase/**",
             "migrations/**",
             "plymouth/**",
+            "keys/**",
             "!**/__pycache__/**"
           ]
         },

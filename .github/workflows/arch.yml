@@ -67,8 +67,9 @@ jobs:
       - name: Package it
         run: |
           tarball="$(ls "$GITHUB_WORKSPACE"/apps/desktop/release/herald-os-*-linux-x64.tar.gz)"
-          # A fresh tarball, so not the release's checksums.
-          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch/herald-os-bin' && HERALD_OS_TARBALL_URL='file://$tarball' makepkg --noconfirm --nodeps --skipchecksums"
+          # A fresh tarball, so not the release's checksums, nor its signed SHA256SUMS once the PKGBUILD has
+          # the release keys.
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch/herald-os-bin' && HERALD_OS_TARBALL_URL='file://$tarball' makepkg --noconfirm --nodeps --skipchecksums --skippgpcheck"
           for dir in herald-os-bin herald-os-git; do
             su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch/$dir' && makepkg --printsrcinfo > .SRCINFO"
           done

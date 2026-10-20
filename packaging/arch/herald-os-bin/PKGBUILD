@@ -51,6 +51,31 @@ sha256sums=('120a3b0922a8677c6790af4a93b04109030b5d7201bc85125b62031b152c247c')
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
 
+# The release keys' fingerprints, those of linux/keys/herald-os-release.asc; empty until the first
+# signed release (docs/RELEASE-SIGNING.md), which _version must then be at least. With them, makepkg
+# checks the release's SHA256SUMS.sig, and prepare() the tarball against SHA256SUMS. Import the key
+# once first: gpg --import ../../../linux/keys/herald-os-release.asc
+_release_keys=()
+if (( ${#_release_keys[@]} )); then
+  validpgpkeys=("${_release_keys[@]}")
+  source+=("SHA256SUMS-${_version}::$url/releases/download/v${_version}/SHA256SUMS"
+           "SHA256SUMS-${_version}.sig::$url/releases/download/v${_version}/SHA256SUMS.sig")
+  sha256sums+=('SKIP' 'SKIP')
+fi
+
+prepare() {
+  # A tarball of your own is not in the release's SHA256SUMS.
+  (( ${#_release_keys[@]} )) && [[ -z ${HERALD_OS_TARBALL_URL:-} ]] || return 0
+  local build=x64 expected actual
+  [[ $CARCH == aarch64 ]] && build=arm64
+  expected="$(awk -v name="herald-os-${_version}-linux-$build.tar.gz" '$2 == name || $2 == "*" name { print $1 }' "$srcdir/SHA256SUMS-${_version}")"
+  actual="$(sha256sum "$srcdir/herald-os-${_version}-$build.tar.gz" | cut -d ' ' -f 1)"
+  if [[ ! $expected =~ ^[0-9a-f]{64}$ || $expected != "$actual" ]]; then
+    echo "herald-os-${_version}-linux-$build.tar.gz does not match the release's signed SHA256SUMS" >&2
+    return 1
+  fi
+}
+
 package() {
   source "$srcdir/herald-os-package.sh"
   _herald_os_package "$(_herald_os_appdir "$srcdir")"
