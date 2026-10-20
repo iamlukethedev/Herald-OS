@@ -15,6 +15,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "release-sums.sh"
+# The bash the scripts run under: macOS has 3.2, so CI on macOS runs them there.
+BASH = os.environ.get("HERALD_OS_TEST_BASH", "bash")
 
 _LOADER = importlib.machinery.SourceFileLoader("herald_os_tarball_signing", str(ROOT / "linux" / "bin" / "herald-os-tarball"))
 tb = importlib.util.module_from_spec(importlib.util.spec_from_loader("herald_os_tarball_signing", _LOADER))
@@ -41,7 +43,7 @@ def run(tmp_path: Path, env: dict | None = None, sums: Path | None = None) -> su
     sums = sums or checksums(tmp_path / "sums")
     full = {k: v for k, v in os.environ.items() if not k.startswith("RELEASE_")}
     full.update({"RELEASE_KEYS": str(tmp_path / "not-committed.asc"), "GITHUB_OUTPUT": str(tmp_path / "github-output"), **(env or {})})
-    return subprocess.run(["bash", str(SCRIPT), str(sums), str(tmp_path / "out")], env=full, capture_output=True, text=True, timeout=120)
+    return subprocess.run([BASH, str(SCRIPT), str(sums), str(tmp_path / "out")], env=full, capture_output=True, text=True, timeout=120)
 
 
 def output(tmp_path: Path) -> str:
@@ -207,7 +209,7 @@ def pkgbuild(tmp_path: Path, keys: str = "") -> Path:
 
 
 def sourced(path: Path, script: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", "-c", f'source "$1" && {script}', "pkgbuild", str(path)], capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})})
+    return subprocess.run([BASH, "-c", f'source "$1" && {script}', "pkgbuild", str(path)], capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})})
 
 
 def test_until_the_release_key_is_set_the_package_is_as_before(tmp_path):
@@ -287,7 +289,7 @@ def mismatches(key_file: Path, docs: list[Path], pkgbuild_file: Path, home: Path
             problems.append(f"{doc.name} gives {listed or lines[0]!r}, the key file holds {keys}")
         if not keys and (listed or not lines[0].startswith(NOT_SET)):
             problems.append(f"{doc.name} gives {lines[0]!r} but no release key is committed")
-    sourced_keys = subprocess.run(["bash", "-c", 'source "$1" && printf "%s\\n" "${_release_keys[@]}"', "pkgbuild", str(pkgbuild_file)], capture_output=True, text=True, timeout=60)
+    sourced_keys = subprocess.run([BASH, "-c", 'source "$1" && printf "%s\\n" "${_release_keys[@]}"', "pkgbuild", str(pkgbuild_file)], capture_output=True, text=True, timeout=60)
     if sorted(sourced_keys.stdout.split()) != sorted(keys):
         problems.append(f"{pkgbuild_file.name}'s _release_keys are {sourced_keys.stdout.split()}, the key file holds {keys}")
     return problems

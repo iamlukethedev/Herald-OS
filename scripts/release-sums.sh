@@ -64,7 +64,8 @@ if [[ -z "${RELEASE_SIGNING_KEY:-}" ]]; then
   exit 0
 fi
 
-work="$(mktemp -d)"
+# Under /tmp, not $TMPDIR: gpg-agent's socket path must stay short, and macOS's $TMPDIR is long.
+work="$(mktemp -d /tmp/release-sums.XXXXXX)"
 trap 'gpgconf --homedir "$work/sign" --kill all >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 mkdir -m 700 "$work/sign" "$work/check"
 gpg_sign() { gpg --batch --no-options --homedir "$work/sign" "$@"; }
@@ -72,7 +73,11 @@ gpg_check() { gpg --batch --no-options --no-autostart --homedir "$work/check" "$
 primaries() { awk -F: '$1 == "pub" || $1 == "sec" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }'; }
 
 gpg_sign --import <<<"$RELEASE_SIGNING_KEY" 2>/dev/null || { echo "::error::RELEASE_SIGNING_KEY is not an OpenPGP secret key"; exit 1; }
-mapfile -t signer < <(gpg_sign --with-colons --fixed-list-mode --list-secret-keys | primaries)
+# Read in loops, not with mapfile, which bash 3.2 (macOS's) lacks.
+signer=()
+while IFS= read -r line; do
+  signer+=("$line")
+done < <(gpg_sign --with-colons --fixed-list-mode --list-secret-keys | primaries)
 if (( ${#signer[@]} != 1 )); then
   echo "::error::RELEASE_SIGNING_KEY holds ${#signer[@]} keys; it must hold one release key (its signing subkey)"
   exit 1
@@ -84,9 +89,13 @@ fi
 
 if [[ -f "$KEYS" ]]; then
   gpg_check --import "$KEYS" 2>/dev/null || { echo "::error::$KEYS cannot be read"; exit 1; }
-  mapfile -t trusted < <(gpg_check --with-colons --fixed-list-mode --list-keys | primaries)
-  if [[ ! " ${trusted[*]} " == *" ${signer[0]} "* ]]; then
-    echo "::error::RELEASE_SIGNING_KEY belongs to ${signer[0]}, which is not in $(basename "$KEYS") (${trusted[*]}): installs would refuse this signature."
+  trusted=()
+  while IFS= read -r line; do
+    trusted+=("$line")
+  done < <(gpg_check --with-colons --fixed-list-mode --list-keys | primaries)
+  # An empty array is "unbound" under set -u before bash 4.4, so it is never expanded as one.
+  if (( ${#trusted[@]} == 0 )) || [[ ! " ${trusted[*]} " == *" ${signer[0]} "* ]]; then
+    echo "::error::RELEASE_SIGNING_KEY belongs to ${signer[0]}, which is not in $(basename "$KEYS") (${trusted[*]:-no keys}): installs would refuse this signature."
     exit 1
   fi
   cp "$KEYS" "$out/herald-os-release-key.asc"
