@@ -298,6 +298,17 @@ def dump(disk: Path) -> bytes:
     return subprocess.run([CRYPTSETUP, "luksDump", "--dump-json-metadata", str(disk)], capture_output=True, check=True, env=C_ENV).stdout
 
 
+def test_token_types_are_said_in_plain_words():
+    assert cli.token_words(["systemd-recovery"]) == "the recovery key"
+    assert cli.token_words(["systemd-tpm2"]) == "the TPM"
+    assert cli.token_words(["systemd-fido2"]) == "a security key (FIDO2)"
+    assert cli.token_words(["systemd-tpm2", "systemd-tpm2"]) == "the TPM"
+    assert cli.token_words(["herald-test"]) == "a herald-test token"
+    for kinds in (["systemd-recovery"], ["systemd-tpm2"], ["systemd-fido2"], ["systemd-pkcs11"]):
+        message, _ = cli.disk_not_the_password("/dev/vda3", 1, kinds)
+        assert "systemd-" not in message, message
+
+
 def test_a_slot_a_token_uses_is_named_by_its_token():
     metadata = {"keyslots": {"0": {}, "1": {}, "2": {}}, "tokens": {"0": {"type": "systemd-recovery", "keyslots": ["1"]}, "1": {"type": "systemd-tpm2", "keyslots": ["2"]}, "2": {"type": "x", "keyslots": [2]}}}
     assert cli.luks_slot_tokens(metadata, 0) == []
@@ -309,8 +320,8 @@ def test_a_slot_a_token_uses_is_named_by_its_token():
         (["systemd-recovery", "systemd-tpm2"], "that is the recovery key", cli.DISK_RECOVERY_KEY),
         (["systemd-tpm2"], "key slot 2 of /dev/vda3, which TPM unlocking uses", cli.DISK_TPM_SLOT),
         (["systemd-fido2"], "which security key (FIDO2) unlocking uses", cli.DISK_FIDO2_SLOT),
-        (["clevis"], "which clevis unlocking uses", cli.DISK_OTHER_SLOT),
-        (["systemd-pkcs11", "x"], "which systemd-pkcs11 and x unlocking uses", cli.DISK_OTHER_SLOT),
+        (["clevis"], "which Clevis (a TPM or a network key server) uses to unlock it", cli.DISK_OTHER_SLOT),
+        (["systemd-pkcs11", "x"], "which a smart card (PKCS#11) and a x token uses to unlock it", cli.DISK_OTHER_SLOT),
     ]:
         message, exit_code = cli.disk_not_the_password("/dev/vda3", 2, kinds)
         assert said in message and "Nothing was changed" in message and exit_code == code, kinds
@@ -452,7 +463,7 @@ def test_a_new_password_that_already_opens_a_token_s_slot_is_refused_before_anyt
     second = make_image(tmp_path / "b.img", OLD)
     before = {disk: dump(disk) for disk in (first, second)}
     result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": RECOVERY})
-    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and f"already opens {first}, through key slot 1, which systemd-recovery unlocking uses" in result.stderr
+    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and f"already opens {first}, through key slot 1, which the recovery key uses to unlock it" in result.stderr
     assert {disk: dump(disk) for disk in (first, second)} == before
 
 
@@ -466,7 +477,7 @@ def test_a_new_password_in_a_plain_slot_and_a_token_s_slot_is_refused_and_both_s
     assert slots(first) == ["0", "1", "2"]
     before = {disk: dump(disk) for disk in (first, second)}
     result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
-    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and "key slot 2, which systemd-recovery unlocking uses" in result.stderr
+    assert result.returncode == cli.DISK_NEW_IS_OTHER_KEY and "key slot 2, which the recovery key uses to unlock it" in result.stderr
     assert {disk: dump(disk) for disk in (first, second)} == before
     assert json.loads(dump(first))["tokens"]["0"]["keyslots"] == ["2"]
 
@@ -514,7 +525,7 @@ def test_a_take_back_never_removes_a_slot_a_token_came_to_use(tmp_path, monkeypa
 
     monkeypatch.setattr(cli, "cryptsetup", cryptsetup)
     assert cli.disk_change([str(first), str(second)], OLD, NEW, False, {str(first): 0, str(second): 0}) == cli.DISK_NOT_TAKEN_BACK
-    assert "is one systemd-recovery unlocking uses" in capsys.readouterr().err
+    assert "is one the recovery key uses to unlock it" in capsys.readouterr().err
     assert slots(first) == ["0", "1"] and json.loads(dump(first))["tokens"]["0"]["keyslots"] == ["1"]
 
 
@@ -836,7 +847,7 @@ def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monke
     header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 2: OLD}, on_add=token_on_slot_2)
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
     err = capsys.readouterr().err
-    assert "also opens key slot 2 of /dev/vda3, which systemd-recovery unlocking uses, so that slot was left" in err
+    assert "also opens key slot 2 of /dev/vda3, which the recovery key uses to unlock it, so that slot was left" in err
     assert header["keyslots"] == {1: NEW, 2: OLD} and header["tokens"]["0"]["keyslots"] == ["2"]
 
 

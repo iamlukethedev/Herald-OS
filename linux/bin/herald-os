@@ -2942,6 +2942,16 @@ def luks_slot_tokens(metadata: dict, slot: int) -> list[str]:
     return sorted(kinds)
 
 
+TOKEN_WORDS = {"systemd-recovery": "the recovery key", "systemd-tpm2": "the TPM", "systemd-fido2": "a security key (FIDO2)",
+               "systemd-pkcs11": "a smart card (PKCS#11)", "clevis": "Clevis (a TPM or a network key server)"}
+
+
+def token_words(kinds: list[str]) -> str:
+    """Token types in plain words, as in "a slot the recovery key uses" (pure; tested)."""
+    words = [TOKEN_WORDS.get(kind, f"a {kind} token") for kind in kinds]
+    return " and ".join(dict.fromkeys(words))
+
+
 def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str, int]:
     """Why a secret that opens a slot a token uses is not taken as the disk password, and the exit code
     that says which way of unlocking it belongs to (pure; tested)."""
@@ -2953,7 +2963,7 @@ def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str
     if "systemd-fido2" in kinds:
         return (f"that is not the disk password: it opens key slot {slot} of {device}, which security key (FIDO2) unlocking uses. "
                 f"{ask}; the security key keeps working. Nothing was changed."), DISK_FIDO2_SLOT
-    return (f"that is not the disk password: it opens key slot {slot} of {device}, which {' and '.join(kinds)} unlocking uses. "
+    return (f"that is not the disk password: it opens key slot {slot} of {device}, which {token_words(kinds)} uses to unlock it. "
             f"{ask}. Nothing was changed."), DISK_OTHER_SLOT
 
 
@@ -3031,8 +3041,8 @@ def disk_root_op(args: list[str]) -> int:
             slot = min(bound)
             message, code = disk_not_the_password(device, slot, bound[slot])
             if len(bound) < len(opened):
-                message = (f"the disk password also opens key slot {slot} of {device}, which {' and '.join(bound[slot])} unlocking "
-                           "uses: the same secret is in both, and changing the password would remove that slot too, or leave the "
+                message = (f"the disk password also opens key slot {slot} of {device}, which {token_words(bound[slot])} uses to "
+                           "unlock it: the same secret is in both, and changing the password would remove that slot too, or leave the "
                            "old password working through it. Give that way of unlocking a secret of its own first. Nothing was changed.")
             die(message, code)
         old_slots[device] = opened[0]
@@ -3069,7 +3079,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             disk_say(f"herald-os: {error}. Nothing was changed.", file=sys.stderr)
             return 1
         if bound or not opened:
-            through = (f"key slot {min(bound)}, which {' and '.join(bound[min(bound)])} unlocking uses" if bound
+            through = (f"key slot {min(bound)}, which {token_words(bound[min(bound)])} uses to unlock it" if bound
                        else "a key slot that cannot be told apart")
             disk_say(f"herald-os: the new disk password already opens {device}, through {through}: choose another one. "
                      "Nothing was changed.", file=sys.stderr)
@@ -3090,7 +3100,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                     continue
                 opened, bound = luks_opened_slots(device, new)
                 if bound:
-                    why_left = f"key slot {min(bound)}, which it opens, is one {' and '.join(bound[min(bound)])} unlocking uses"
+                    why_left = f"key slot {min(bound)}, which it opens, is one {token_words(bound[min(bound)])} uses to unlock it"
                 elif not opened:
                     why_left = "which key slot it opens cannot be told"
                 else:
@@ -3154,7 +3164,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                 problems.append(str(error))
                 continue
             for slot, kinds in sorted(bound.items()):
-                problems.append(f"the old disk password also opens key slot {slot} of {device}, which {' and '.join(kinds)} unlocking uses, so that slot was left")
+                problems.append(f"the old disk password also opens key slot {slot} of {device}, which {token_words(kinds)} uses to unlock it, so that slot was left")
             problems += luks_kill_slots(device, [slot for slot in opened if slot not in bound and slot != new_slots[device]], new)
         if luks_slot(device, current) is not None:
             problems.append(f"the old disk password still opens {device}")
