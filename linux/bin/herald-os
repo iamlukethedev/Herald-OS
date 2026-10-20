@@ -3036,7 +3036,7 @@ def disk_root_op(args: list[str]) -> int:
         try:
             opened, bound = luks_opened_slots(device, current)
         except (RuntimeError, json.JSONDecodeError) as error:
-            die(f"{error}. Nothing was changed.", 1)
+            die(f"{str(error).rstrip('.')}. Nothing was changed.", 1)
         if not opened:
             die(f"cryptsetup did not say which key slot that password opens on {device}, so it cannot be told apart from "
                 "a key slot another way of unlocking uses. Nothing was changed.", DISK_OTHER_SLOT)
@@ -3080,7 +3080,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
         try:
             opened, bound = luks_opened_slots(device, new)
         except (RuntimeError, json.JSONDecodeError) as error:
-            disk_say(f"herald-os: {error}. Nothing was changed.", file=sys.stderr)
+            disk_say(f"herald-os: {str(error).rstrip('.')}. Nothing was changed.", file=sys.stderr)
             return 1
         if bound or not opened:
             through = (f"key slot {min(bound)}, which {token_words(bound[min(bound)])} uses to unlock it" if bound

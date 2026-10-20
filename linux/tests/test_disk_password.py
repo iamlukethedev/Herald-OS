@@ -450,12 +450,16 @@ def test_a_take_back_also_removes_the_new_password_an_earlier_run_left(tmp_path)
 
 
 @needs_cryptsetup
-def test_a_run_over_a_leftover_new_password_finishes(tmp_path):
+@pytest.mark.parametrize("copies, new_owner", [(1, False), (2, False), (2, True)])
+def test_a_run_over_a_leftover_new_password_finishes(tmp_path, copies, new_owner):
     first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
-    add_key(tmp_path, first, NEW)
-    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    for _ in range(copies):
+        add_key(tmp_path, first, NEW)
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW, "newOwner": new_owner})
     assert result.returncode == 0, result.stderr
-    assert all(opens(disk, NEW) and not opens(disk, OLD) and len(slots(disk)) == 1 for disk in (first, second))
+    assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
+    # A plain change leaves the new password's copies; --new-owner keeps one slot only.
+    assert len(slots(first)) == (1 if new_owner else copies) and len(slots(second)) == 1
 
 
 @needs_cryptsetup
@@ -486,11 +490,13 @@ def test_a_new_password_in_a_plain_slot_and_a_token_s_slot_is_refused_and_both_s
 
 @needs_cryptsetup
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes to a read-only file")
-def test_two_plain_leftover_slots_of_the_new_password_both_go(tmp_path):
+@pytest.mark.parametrize("copies", [2, 3])
+def test_two_plain_leftover_slots_of_the_new_password_both_go(tmp_path, copies):
+    """The new password in two or three plain slots of one device: a take back removes every one."""
     first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
-    add_key(tmp_path, first, NEW)
-    add_key(tmp_path, first, NEW)
-    assert slots(first) == ["0", "1", "2"]
+    for _ in range(copies):
+        add_key(tmp_path, first, NEW)
+    assert slots(first) == [str(n) for n in range(copies + 1)]
     second.chmod(0o444)
     result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
     assert result.returncode == 1, result.stderr
@@ -890,6 +896,23 @@ def test_an_unnamed_leftover_slot_of_the_new_password_is_refused(monkeypatch, ca
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_NEW_IS_OTHER_KEY
     assert "already opens /dev/vda3, through a key slot that cannot be told apart" in capsys.readouterr().err
     assert header["keyslots"] == before
+
+
+def test_a_leftover_whose_slots_cannot_be_read_is_refused(monkeypatch, capsys):
+    """The new password opens the device, but the header cannot be read to tell whose slot that is:
+    nothing changes."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 1: NEW})
+    real = cli.luks_opened_slots
+
+    def unreadable_for_the_new_one(device, passphrase):
+        if passphrase == NEW:
+            raise RuntimeError(f"cannot read the key slots of {device}: Device is busy.")
+        return real(device, passphrase)
+
+    monkeypatch.setattr(cli, "luks_opened_slots", unreadable_for_the_new_one)
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
+    assert "cannot read the key slots of /dev/vda3: Device is busy. Nothing was changed." in capsys.readouterr().err
+    assert header["keyslots"] == {0: OLD, 1: NEW}
 
 
 def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monkeypatch, capsys):
