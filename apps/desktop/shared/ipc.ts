@@ -480,9 +480,10 @@ export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' 
  * part-way, and it could not be taken back out of every device, so it may open some of them too;
  * `recoveryKey`, `tpmKey`, `fido2Key`, `otherKey`: what was typed opens the key slot the recovery key,
  * TPM unlocking, security key (FIDO2) unlocking or another way of unlocking uses, or one that cannot be
- * told apart from such a slot (`otherKey`), not the disk password's.
+ * told apart from such a slot (`otherKey`), not the disk password's; `newIsOtherKey`: the new one already
+ * opens a slot another way of unlocking uses; `sameAsCurrent`: the new one is the one typed at start-up.
  */
-export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'notTakenBack' | 'recoveryKey' | 'tpmKey' | 'fido2Key' | 'otherKey' | 'timeout' | 'noTerminal' | 'failed'
+export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'notTakenBack' | 'recoveryKey' | 'tpmKey' | 'fido2Key' | 'otherKey' | 'newIsOtherKey' | 'sameAsCurrent' | 'timeout' | 'noTerminal' | 'failed'
 
 export interface SetupResult {
   ok: boolean

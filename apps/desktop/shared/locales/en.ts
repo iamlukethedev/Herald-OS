@@ -680,6 +680,8 @@ export const en = {
   'firstRun.disk.tpmKey': 'That is not the disk password: it belongs to unlocking with the TPM. Type the password the computer asked for when it started; TPM unlocking stays as it is. Nothing was changed.',
   'firstRun.disk.fido2Key': 'That is not the disk password: it belongs to unlocking with a security key (FIDO2). Type the password the computer asked for when it started; the security key keeps working. Nothing was changed.',
   'firstRun.disk.otherKey': 'That is not the disk password: it belongs to another way of unlocking the disk, or Herald OS could not tell whether it does. Type the password the computer asked for when it started. Nothing was changed.',
+  'firstRun.disk.newIsOtherKey': 'That new disk password already belongs to another way of unlocking the disk, such as the recovery key. Choose a different one. Nothing was changed.',
+  'firstRun.disk.sameAsCurrent': 'The new disk password is the one you typed when the computer started. Choose a different one.',
   'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.

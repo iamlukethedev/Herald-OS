@@ -240,6 +240,7 @@ describe('the disk password', () => {
       [10, 'tpmKey'],
       [11, 'fido2Key'],
       [12, 'otherKey'],
+      [13, 'newIsOtherKey'],
       [7, 'failed'],
       [1, 'failed'],
       [2, 'failed']
@@ -294,6 +295,7 @@ describe('the disk password', () => {
     expect(await handler?.({}, { ...SECRETS, password: 'senha do coração' })).toEqual({ ok: false, reason: 'notAscii' })
     expect(await handler?.({}, { ...SECRETS, current: '' })).toEqual({ ok: false, reason: 'wrongCurrent' })
     expect(await handler?.({}, { ...SECRETS, account: 'two\nlines' })).toEqual({ ok: false, reason: 'wrongCurrent' })
+    expect(await handler?.({}, { ...SECRETS, password: SECRETS.current })).toEqual({ ok: false, reason: 'sameAsCurrent' })
     expect((host.pty as { spawn: ReturnType<typeof vi.fn> }).spawn).not.toHaveBeenCalled()
   })
 

@@ -641,6 +641,8 @@ export const zhCN: Translation = {
   'firstRun.disk.tpmKey': '这不是磁盘密码：它属于 TPM 解锁。请输入电脑开机时要求输入的密码；TPM 解锁保持不变。未做任何更改。',
   'firstRun.disk.fido2Key': '这不是磁盘密码：它属于安全密钥（FIDO2）解锁。请输入电脑开机时要求输入的密码；安全密钥照常可用。未做任何更改。',
   'firstRun.disk.otherKey': '这不是磁盘密码：它属于另一种解锁磁盘的方式，或者 Herald OS 无法判断它是否属于。请输入电脑开机时要求输入的密码。未做任何更改。',
+  'firstRun.disk.newIsOtherKey': '这个新的磁盘密码已属于另一种解锁磁盘的方式，例如恢复密钥。请换一个。未做任何更改。',
+  'firstRun.disk.sameAsCurrent': '新的磁盘密码就是电脑开机时你输入的那个。请换一个。',
   'firstRun.disk.notAdmin': '你的账户密码未被接受，无法进行更改。未做任何更改。',
   'firstRun.disk.notEncrypted': '这台电脑的磁盘没有加密，因此没有可更改的磁盘密码。',
   'firstRun.disk.partly': '已添加你的磁盘密码，但有一个旧密码未能移除。请在终端中运行 herald-os password --disk --new-owner。',

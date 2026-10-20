@@ -137,6 +137,8 @@ const DISK_FAILURES = [
   ['tpmKey', 'firstRun.disk.tpmKey'],
   ['fido2Key', 'firstRun.disk.fido2Key'],
   ['otherKey', 'firstRun.disk.otherKey'],
+  ['newIsOtherKey', 'firstRun.disk.newIsOtherKey'],
+  ['sameAsCurrent', 'firstRun.disk.sameAsCurrent'],
   ['timeout', 'firstRun.disk.timeout'],
   ['noTerminal', 'firstRun.disk.noTerminal'],
   ['tooShort', 'firstRun.account.tooShort'],
