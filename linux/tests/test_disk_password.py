@@ -314,11 +314,13 @@ def test_a_rollback_that_fails_on_a_real_disk_leaves_both_passwords_there_and_sa
     assert opens(second, OLD) and not opens(second, NEW)
 
 
-def fake_tools(folder: Path, disk: Path) -> dict:
-    """sudo that runs the command (and asks once, like sudo -v), and lsblk and findmnt that show the image as the root's LUKS device."""
+def fake_tools(folder: Path, disk: Path, *more: Path) -> dict:
+    """sudo that runs the command (and asks once, like sudo -v), and lsblk and findmnt that show the images
+    as the root's LUKS devices (one btrfs over all of them, mounted from the first)."""
     folder.mkdir()
-    tree = {"blockdevices": [{"name": str(disk), "path": str(disk), "type": "loop", "fstype": "crypto_LUKS", "uuid": "luks-t",
-                              "children": [{"name": "/dev/mapper/luks-t", "path": "/dev/mapper/luks-t", "type": "crypt", "fstype": "btrfs", "uuid": "fs-t", "mountpoints": ["/sysroot"]}]}]}
+    tree = {"blockdevices": [{"name": str(image), "path": str(image), "type": "loop", "fstype": "crypto_LUKS", "uuid": f"luks-{n}",
+                              "children": [{"name": f"/dev/mapper/luks-{n}", "path": f"/dev/mapper/luks-{n}", "type": "crypt", "fstype": "btrfs", "uuid": "fs-t",
+                                            "mountpoints": ["/sysroot"] if n == 0 else [None]}]} for n, image in enumerate((disk, *more))]}
     (folder / "lsblk").write_text(f"#!/bin/sh\ncat <<'EOF'\n{json.dumps(tree)}\nEOF\n")
     (folder / "findmnt").write_text("#!/bin/sh\n[ \"$5\" = /sysroot ] && echo fs-t\n")
     (folder / "sudo").write_text(
@@ -332,9 +334,10 @@ def fake_tools(folder: Path, disk: Path) -> dict:
     return {**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}", "USER": "tester"}
 
 
-def converse(argv: list[str], env: dict, answers: list[tuple[str, str]], timeout: float = 600) -> tuple[int, str]:
-    """Run argv on a terminal of its own and answer each prompt as it comes. `setsid -c` makes the
-    terminal the command's own (getpass and sudo read /dev/tty), without forking the test process."""
+def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]], timeout: float = 600) -> tuple[int, str]:
+    """Run argv on a terminal of its own and answer each prompt as it comes: a str as a typed line, bytes
+    as they are (b"\\x03" is Ctrl+C). `setsid -c` makes the terminal the command's own (getpass and sudo
+    read /dev/tty), without forking the test process."""
     if not shutil.which("setsid"):
         pytest.skip("needs setsid (util-linux)")
     fd, child_end = pty.openpty()
@@ -352,7 +355,8 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str]], timeout
                 break
             screen += data.decode(errors="replace")
             if pending and screen.rstrip().endswith(pending[0][0]):
-                os.write(fd, f"{pending.pop(0)[1]}\n".encode())
+                answer = pending.pop(0)[1]
+                os.write(fd, answer if isinstance(answer, bytes) else f"{answer}\n".encode())
     code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
     os.close(fd)
     return code, screen
@@ -387,6 +391,87 @@ def test_the_command_stops_at_a_wrong_password_or_a_mismatch(tmp_path):
     code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [("for tester:", "not it")])
     assert code == cli.DISK_NO_ROOT
     assert opens(disk, OLD) and not opens(disk, NEW)
+
+
+CHANGE = [("[sudo] password for tester:", "account-pass"), ("Current disk password:", OLD), ("New disk password:", NEW), ("New disk password again:", NEW)]
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("when", ["adding to the first device", "adding to the second device", "removing the old one"])
+def test_ctrl_c_during_the_change_waits_for_it_to_finish(tmp_path, when):
+    """Ctrl+C reaches the whole terminal's process group. The command waits for the root side, which
+    finishes the change on every device; no traceback, and nothing left half-done."""
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    env = fake_tools(tmp_path / "bin", first, second)
+    trigger = {"adding to the first device": f"Adding the new disk password to {first}…",
+               "adding to the second device": f"Adding the new disk password to {second}…",
+               "removing the old one": "Removing the old one…"}[when]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*CHANGE, (trigger, b"\x03")])
+    assert "Traceback" not in screen and "KeyboardInterrupt" not in screen
+    assert "still changing" in screen and "Done" in screen, screen
+    assert code == 0
+    for disk in (first, second):
+        assert opens(disk, NEW) and not opens(disk, OLD), disk
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(os.geteuid() == 0 or not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0,
+                    reason="needs sudo without a password, as someone other than root")
+def test_ctrl_c_during_the_change_through_the_real_sudo(tmp_path):
+    """As on the image: sudo runs the root side on a terminal of its own (use_pty) and passes Ctrl+C on."""
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    env = fake_tools(tmp_path / "bin", first, second)
+    # Only sudo -v is answered here (it may want a password even where sudo -n runs commands); the root
+    # side runs under the real sudo.
+    real = shutil.which("sudo")
+    (tmp_path / "bin" / "sudo").write_text(f'#!/bin/sh\n[ "$1" = -v ] && exit 0\nexec {real} "$@"\n')
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [
+        ("Current disk password:", OLD), ("New disk password:", NEW), ("New disk password again:", NEW), (f"Adding the new disk password to {second}…", b"\x03")])
+    assert code == 0 and "Traceback" not in screen and "Done" in screen, screen
+    assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
+
+
+@needs_cryptsetup
+def test_ctrl_c_and_more_during_the_change_still_wait(tmp_path):
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    env = fake_tools(tmp_path / "bin", first, second)
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [
+        *CHANGE, (f"Adding the new disk password to {first}…", b"\x03\x1c\x03"), (f"Adding the new disk password to {second}…", b"\x03")])
+    assert code == 0 and "Traceback" not in screen and screen.count("still changing") == 1
+    assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("at", ["Current disk password:", "New disk password:", "New disk password again:"])
+def test_ctrl_c_before_the_change_stops_and_changes_nothing(tmp_path, at):
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    answers = CHANGE[:[prompt for prompt, _ in CHANGE].index(at)]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*answers, (at, b"\x03")])
+    assert code == 130 and "stopped. Nothing was changed." in screen and "Traceback" not in screen
+    assert opens(disk, OLD) and not opens(disk, NEW) and slots(disk) == ["0"]
+
+
+def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeypatch, capsys):
+    state = {"/dev/vda3": {"current": True, "new": True}, "/dev/vdb1": {"current": True, "new": False}}
+    argv = {"change": ["sh", "-c", "kill -9 $$"], "probe": [sys.executable, "-c", f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(state))})"]}
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: argv[op])
+    assert cli.disk_helper("change", {"devices": list(state), "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    err = capsys.readouterr().err
+    assert "ended before it could say how (signal 9)" in err
+    assert "/dev/vda3: the new disk password and the current one both open it" in err
+    assert "/dev/vdb1: the current disk password opens it, the new one does not" in err
+
+
+def test_when_even_looking_fails_it_says_what_is_sure(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: ["sh", "-c", "kill -9 $$"] if op == "change" else ["false"])
+    assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
+    assert "at least one of the two opens each device" in capsys.readouterr().err
+
+
+def test_the_end_state_in_words():
+    assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
+        "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
 
 
 def test_an_unencrypted_disk_says_so(tmp_path):

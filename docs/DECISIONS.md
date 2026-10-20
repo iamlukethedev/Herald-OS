@@ -1681,7 +1681,8 @@ the installer less of the person's.
 - **A disk password change never leaves the disk without one.** `herald-os password --disk` adds
   the new passphrase, checks that it opens every LUKS device under the root filesystem (a btrfs over
   two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
-  which replaces a slot device by device without a check in between. Signals wait until it is done.
+  which replaces a slot device by device without a check in between. Signals wait until it is done,
+  on both sides: the person's side waits for the root side rather than stopping sudo with it.
   If adding fails on one device, the new passphrase comes out of the others again. The devices come
   from `lsblk` only: when it cannot list them, nothing changes, because `/etc/crypttab` also names
   data and USB disks whose other key slots `--new-owner` would remove. It runs as root

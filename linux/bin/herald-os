@@ -2709,6 +2709,11 @@ DISK_NOT_ENCRYPTED_TEXT = (
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
     "installing again."
 )
+DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyboard (ASCII) for the disk password: "
+                   "it is typed before anything else starts, without an input method. Nothing was changed.")
+# How the root side of a change can end and say so itself; any other end (it was killed) is looked
+# at afterwards (disk_probe).
+DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, 127, 130}
 # /sysroot is the real root filesystem on the image (ostree); / elsewhere.
 DISK_ROOT_MOUNTS = ("/sysroot", "/")
 # Made by reset-helper apply: the next account belongs to someone new, so setup asks for a disk
@@ -2807,8 +2812,7 @@ def disk_password_problem(new: str, again: str, current: str) -> str | None:
     if len(new) < DISK_MIN:
         return f"use at least {DISK_MIN} characters for the disk password. Nothing was changed."
     if not all(" " <= char <= "~" for char in new):
-        return ("use only letters, digits, spaces and the symbols on the keyboard (ASCII) for the disk password: "
-                "it is typed before anything else starts, without an input method. Nothing was changed.")
+        return DISK_ASCII_TEXT
     if new == current:
         return "the new disk password is the same as the current one. Nothing was changed."
     return None
@@ -2871,6 +2875,13 @@ def luks_extra(metadata: dict, keep: int) -> tuple[list[int], list[int]]:
     return slots, sorted(tokens)
 
 
+def disk_say(*args, **kwargs) -> None:
+    """print, for the root side while it changes the disk: the terminal may be gone (closed, or sudo
+    stopped with it), and a write that fails then must not stop the change half-done."""
+    with contextlib.suppress(OSError, ValueError):
+        print(*args, **kwargs, flush=True)
+
+
 @contextlib.contextmanager
 def disk_signals_held():
     """Ctrl+C, a closed terminal or a stop request wait until the change is done (cryptsetup inherits it)."""
@@ -2882,7 +2893,7 @@ def disk_signals_held():
     # do nothing (ssh_ignored), which exec resets to the default, because its commands may be stopped
     # (each runs in a process group of its own and is ended when its time is up), and a signal
     # arriving there must not raise in the middle of the rollback.
-    held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGTSTP)
+    held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, signal.SIG_IGN) for held_signal in held}
     try:
         yield
@@ -2892,7 +2903,21 @@ def disk_signals_held():
 
 
 def disk_root(args: list[str]) -> int:
-    """`password --disk-root check|change`, as root: {"devices": [...], "current": ..., "new": ..., "newOwner": bool} on stdin."""
+    """`password --disk-root check|change|probe`, as root: {"devices": [...], "current": ..., "new": ..., "newOwner": bool} on stdin."""
+    try:
+        return disk_root_op(args)
+    except KeyboardInterrupt:
+        # Only before the change: once it starts, Ctrl+C is ignored until it is done (disk_signals_held).
+        die("stopped. Nothing was changed.", 130)
+        return 130
+
+
+def disk_probe(devices: list[str], current: str, new: str) -> dict:
+    """Which of the two passwords opens each device now, for a change that ended without saying."""
+    return {device: {"current": luks_slot(device, current) is not None, "new": bool(new) and luks_slot(device, new) is not None} for device in devices}
+
+
+def disk_root_op(args: list[str]) -> int:
     op = args[0] if args else ""
     try:
         request = json.loads(sys.stdin.read())
@@ -2902,10 +2927,13 @@ def disk_root(args: list[str]) -> int:
         new_owner = request.get("newOwner") is True
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         die("password --disk-root check|change takes its request as JSON on stdin", 2)
-    if op not in ("check", "change") or not devices:
+    if op not in ("check", "change", "probe") or not devices:
         die("password --disk-root check|change takes its request as JSON on stdin", 2)
     if not shutil.which("cryptsetup"):
         die("cryptsetup is not installed", 127)
+    if op == "probe":
+        print(json.dumps(disk_probe(devices, current, new)))
+        return 0
     for device in devices:
         if cryptsetup(["isLuks", device]).returncode != 0:
             die(f"{device} is not an encrypted (LUKS) device. Nothing was changed.", DISK_NOT_ENCRYPTED)
@@ -2924,7 +2952,7 @@ def disk_root(args: list[str]) -> int:
         try:
             return disk_change(devices, current, new, new_owner, old_slots)
         except subprocess.TimeoutExpired as error:
-            print(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped. "
+            disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped. "
                   "The new password was added before anything was removed, so at least one of the two opens the disk: "
                   "try the new one first at the next start, then run `herald-os password --disk` again.", file=sys.stderr)
             return DISK_PARTLY
@@ -2937,7 +2965,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     def take_back(why: str) -> int:
         # Back to the old password alone: the new one goes again from the devices it went into, and
         # only a device it no longer opens counts as taken back.
-        print(f"herald-os: {why}", file=sys.stderr)
+        disk_say(f"herald-os: {why}", file=sys.stderr)
         left: list[str] = []
         for device in added:
             try:
@@ -2947,17 +2975,18 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                 result, gone = subprocess.CompletedProcess([], 1, b"", str(error).encode()), False
             if not gone:
                 left.append(device)
-                print(f"herald-os: the new disk password could not be taken back out of {device} "
+                disk_say(f"herald-os: the new disk password could not be taken back out of {device} "
                       f"({cryptsetup_said(result) if result.returncode else 'it still opens it'}).", file=sys.stderr)
         if not left:
-            print("herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
+            disk_say("herald-os: nothing was changed; the current disk password still works.", file=sys.stderr)
             return 1
-        print(f"herald-os: the current disk password still opens every device, but the new one may open {' and '.join(left)} "
+        disk_say(f"herald-os: the current disk password still opens every device, but the new one may open {' and '.join(left)} "
               "too. To take it out: " + "; ".join(f"sudo cryptsetup luksRemoveKey {shlex.quote(device)}" for device in left)
               + " (it asks for the new password), or run `herald-os password --disk` again with the same new password.", file=sys.stderr)
         return DISK_NOT_TAKEN_BACK
 
     for device in devices:
+        disk_say(f"Adding the new disk password to {device}…")
         if luks_slot(device, new) is None:
             result = cryptsetup(["luksAddKey", device], current, new)
             if result.returncode != 0:
@@ -2967,7 +2996,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
         if slot is None or slot == old_slots[device]:
             return take_back(f"the new disk password does not open {device} after adding it")
         new_slots[device] = slot
-    print("The new disk password opens the disk. Removing the old one…")
+    disk_say("The new disk password opens the disk. Removing the old one…")
 
     problems: list[str] = []
     for device in devices:
@@ -2997,22 +3026,101 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             problems.append(f"the new disk password does not open {device}")
     if problems:
         for problem in problems:
-            print(f"herald-os: {problem}", file=sys.stderr)
-        print("herald-os: the new disk password was added, but not everything above went as planned. Run "
+            disk_say(f"herald-os: {problem}", file=sys.stderr)
+        disk_say("herald-os: the new disk password was added, but not everything above went as planned. Run "
               "`herald-os password --disk` again with the new password as the current one.", file=sys.stderr)
         return DISK_PARTLY
     if new_owner:
         with contextlib.suppress(OSError):
             NEW_OWNER_MARK.unlink(missing_ok=True)
-    print("Done: the disk asks for the new password at the next start; the old one no longer opens it.")
+    disk_say("Done: the disk asks for the new password at the next start; the old one no longer opens it.")
     return 0
 
 
-def disk_helper(op: str, request: dict) -> int:
+def disk_root_argv(op: str) -> list[str]:
     argv = [sys.executable, str(Path(__file__).resolve()), "password", "--disk-root", op]
-    if os.geteuid() != 0:
-        argv = ["sudo", "-n", *argv]
-    return subprocess.run(argv, input=json.dumps(request), text=True).returncode
+    return argv if os.geteuid() == 0 else ["sudo", "-n", *argv]
+
+
+def disk_helper(op: str, request: dict) -> int:
+    if op == "change":
+        return disk_helper_change(request)
+    return subprocess.run(disk_root_argv(op), input=json.dumps(request), text=True).returncode
+
+
+def disk_helper_change(request: dict) -> int:
+    """The change, which nothing here may stop part-way. subprocess.run would kill sudo on Ctrl+C, and
+    the root side with it, between two devices; instead Ctrl+C, Ctrl+\\, Ctrl+Z, a closed terminal and
+    SIGTERM wait here while the root side finishes or puts things back, and then say how it ended."""
+    started: list[subprocess.Popen] = []
+    stops: list[int] = []
+
+    def wait_on(signum: int, frame) -> None:
+        if not stops:
+            disk_say("herald-os: the disk password is still changing; stopping it now could leave it half-done, "
+                     "so this waits until it is finished or put back.", file=sys.stderr)
+        stops.append(signum)
+        # Ctrl+Z also stops sudo; it goes on, so the root side can end and be waited for.
+        if signum == signal.SIGTSTP and started:
+            with contextlib.suppress(OSError):
+                os.kill(started[0].pid, signal.SIGCONT)
+
+    # Python handlers, not SIG_IGN: sudo gets its own back when it starts, and passes them on to the
+    # root side, which ignores them while it changes the disk.
+    held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
+    before = {held_signal: signal.signal(held_signal, wait_on) for held_signal in held}
+    try:
+        process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, text=True)
+        started.append(process)
+        with contextlib.suppress(OSError):
+            process.stdin.write(json.dumps(request))
+        with contextlib.suppress(OSError):
+            process.stdin.close()
+        code = process.wait()
+    finally:
+        for held_signal, handler in before.items():
+            signal.signal(held_signal, handler)
+    if code in DISK_ENDS:
+        return code
+    return disk_report_end(request, code)
+
+
+def disk_end_lines(state: dict) -> list[str]:
+    """What opens each device now, from disk_probe (pure; tested)."""
+    words = {(True, True): "the new disk password and the current one both open it",
+             (False, True): "the new disk password opens it, the current one no longer does",
+             (True, False): "the current disk password opens it, the new one does not",
+             (False, False): "neither password opens it"}
+    return [f"{device}: {words[(bool(opens.get('current')), bool(opens.get('new')))]}" for device, opens in state.items() if isinstance(opens, dict)]
+
+
+def disk_report_end(request: dict, code: int) -> int:
+    """The root side ended without saying how (it was killed): look, and say what opens what."""
+    disk_say(f"herald-os: the disk password change ended before it could say how ({'signal ' + str(-code) if code < 0 else 'exit ' + str(code)}). "
+             "What opens the disk now:", file=sys.stderr)
+    try:
+        probe = subprocess.run(disk_root_argv("probe"), input=json.dumps(request), capture_output=True, text=True, timeout=CRYPTSETUP_TIMEOUT * 2)
+        state = json.loads(probe.stdout) if probe.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        state = None
+    if not isinstance(state, dict):
+        disk_say("herald-os: that could not be checked. The new password was added before anything was removed, so at "
+                 "least one of the two opens each device: at the next start, try the new one first, then the current one.", file=sys.stderr)
+        return DISK_PARTLY
+    for line in disk_end_lines(state):
+        disk_say(f"herald-os:   {line}", file=sys.stderr)
+    disk_say("herald-os: run `herald-os password --disk` again to finish, with a password that opens every device as the current one.", file=sys.stderr)
+    return DISK_PARTLY
+
+
+def disk_ask(prompt: str) -> str:
+    """getpass, which cannot decode a byte that is not text in the terminal's encoding: that is refused as
+    anything outside ASCII is, rather than ending in a traceback."""
+    try:
+        return getpass.getpass(prompt)
+    except UnicodeDecodeError:
+        die(DISK_ASCII_TEXT, 2)
+        return ""
 
 
 def disk_password(args: list[str]) -> int:
@@ -3036,15 +3144,20 @@ def disk_password(args: list[str]) -> int:
     if not sys.stdin.isatty():
         die("run `herald-os password --disk` in a terminal", 2)
     print(f"The disk password unlocks {' and '.join(devices)} when the computer starts.")
-    # sudo asks first, with a prompt of its own that stays the same in every language.
-    if os.geteuid() != 0 and subprocess.call(["sudo", "-v", "-p", "[sudo] password for %p: "]) != 0:
-        die("changing the disk password needs root through sudo, which did not let you in. Nothing was changed.", DISK_NO_ROOT)
-    current = getpass.getpass("Current disk password: ")
-    code = disk_helper("check", {"devices": devices, "current": current})
-    if code != 0:
-        return code
-    new = getpass.getpass("New disk password: ")
-    again = getpass.getpass("New disk password again: ")
+    # Until the change starts, Ctrl+C (or the end of input) only stops the asking: nothing has changed.
+    try:
+        # sudo asks first, with a prompt of its own that stays the same in every language.
+        if os.geteuid() != 0 and subprocess.call(["sudo", "-v", "-p", "[sudo] password for %p: "]) != 0:
+            die("changing the disk password needs root through sudo, which did not let you in. Nothing was changed.", DISK_NO_ROOT)
+        current = disk_ask("Current disk password: ")
+        code = disk_helper("check", {"devices": devices, "current": current})
+        if code != 0:
+            return code
+        new = disk_ask("New disk password: ")
+        again = disk_ask("New disk password again: ")
+    except (KeyboardInterrupt, EOFError):
+        print(file=sys.stderr)
+        die("stopped. Nothing was changed.", 130)
     problem = disk_password_problem(new, again, current)
     if problem:
         die(problem, 2)
