@@ -900,7 +900,9 @@ an expired or revoked one, or a changed `SHA256SUMS` is refused, and nothing cha
 back to a release from before signing with `herald-os update <version>` (`herald-os rollback` still
 works). `herald-os-tarball check`, which the menu bar's daily check runs, and `herald-os update`
 without a version pass over newer releases that do not check out and take the newest one that does,
-saying on stderr which they passed over. Without the key, as in every version from before signed
+saying on stderr which they passed over. Every download has a limit that includes its retries: the
+release listing and each signing file a minute, the tarball an hour, cut off after about a minute
+if it stalls. Without the key, as in every version from before signed
 releases, releases are chosen and checked as they always were: by the tarball's `.sha256`, which
 proves the download is the file the release published, not who published it, so a release is
 trusted as far as GitHub is. [docs/RELEASE-SIGNING.md](RELEASE-SIGNING.md) has the key, how it

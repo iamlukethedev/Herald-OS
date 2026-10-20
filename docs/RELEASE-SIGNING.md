@@ -200,3 +200,10 @@ revoked key whatever a release's key file says.
   revocation out, signed with a stolen subkey, is accepted by installs whose own key file predates
   the revocation. Releases must keep carrying the revocation, and the subkeys expire after two years,
   which bounds the window.
+- **The Arch package reads revocations from the release's key file only.** Its `prepare()` check
+  imports the release's `herald-os-release-key.asc`, not `linux/keys/herald-os-release.asc`, so a
+  release whose key file leaves out the revocation of a stolen subkey passes it. makepkg's own check
+  still refuses such a signature when the builder's keyring holds the revocation (from importing
+  `linux/keys/herald-os-release.asc`), so for Arch a revocation sticks through what the builder
+  imported, not through the PKGBUILD. When a key is revoked, move `_release_keys` to the new key in
+  the same commit.
