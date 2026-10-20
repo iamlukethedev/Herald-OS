@@ -1062,6 +1062,27 @@ def test_the_refusals_are_all_ends_the_root_side_says_itself():
     assert {9, 10, 11, 12, 13, 14} <= cli.DISK_ENDS
 
 
+EARLY_STOP_DRIVER = """
+import importlib.machinery, importlib.util, os, signal, sys, threading
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+# The root side checks for a moment, then begins (it says so), then is done.
+cli.disk_root_argv = lambda op: ["sh", "-c", "cat >/dev/null; sleep 0.8; echo 'Adding the new disk password to /dev/vda3…'; sleep 0.5; echo Done; exit 0"]
+# Ctrl+C reaching this side alone, before the root side has begun.
+threading.Timer(0.2, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+print("code", cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": "x", "new": "y"}), flush=True)
+"""
+
+
+def test_a_stop_before_the_change_begins_is_told_once_it_has_begun():
+    """A Ctrl+C that reaches the command alone before the root side begins says nothing yet; once the root
+    side says it is adding the new password, the command says that it waits, once, and the change ends."""
+    result = subprocess.run([sys.executable, "-c", EARLY_STOP_DRIVER, str(CLI)], capture_output=True, text=True, timeout=30)
+    assert "code 0" in result.stdout and "Done" in result.stdout, result
+    assert result.stderr.count("still changing") == 1, result.stderr
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
