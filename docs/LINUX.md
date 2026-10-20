@@ -396,7 +396,9 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   password on purpose: if this run fails and takes the new password back, that slot goes too. The
   current password still opens its own slot on that device.
 - **When it fails part-way.** If adding fails on one device, the new password comes back out of the
-  others. A device it cannot be taken back out of (cryptsetup fails, the slot is a token's, or it
+  others. An add cryptsetup calls failed is checked first: cryptsetup 2.7 reached by Ctrl+C writes
+  the key slot and then exits 1 without a word, so when the new password opens the device after
+  all, the change says so and goes on. A device it cannot be taken back out of (cryptsetup fails, the slot is a token's, or it
   still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means the change
   ended without finishing: an old password could not be removed after the new one went in,
   cryptsetup ran out of time (the message names the devices), or the root side was killed. The last
