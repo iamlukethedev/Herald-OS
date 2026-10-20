@@ -76,6 +76,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import select
 import time
 import urllib.parse
 from datetime import datetime
@@ -2717,6 +2718,8 @@ DISK_NOT_ENCRYPTED_TEXT = (
 )
 DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyboard (ASCII) for the disk password: "
                    "it is typed before anything else starts, without an input method. Nothing was changed.")
+# What the root side prints as it begins changing a device; until then a stop changes nothing.
+DISK_CHANGE_BEGINS = b"Adding the new disk password to "
 # How the root side of a change can end and say so itself; any other end (it was killed) is looked
 # at afterwards (disk_probe).
 DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, DISK_NEW_IS_OTHER_KEY, 127, 130}
@@ -3208,24 +3211,40 @@ def disk_helper_change(request: dict) -> int:
     the root side with it, between two devices; instead Ctrl+C, Ctrl+\\, Ctrl+Z, a closed terminal and
     SIGTERM wait here while the root side finishes or puts things back, and then say how it ended."""
     stops: list[int] = []
+    # Whether the root side has begun changing the disk (it says "Adding the new disk password to …"),
+    # and whether that a stop waits has been said: only once it has begun. A stop before then ends with
+    # "Nothing was changed", which "still changing" must not come just before.
+    progress = {"seen": b"", "started": False, "told": False}
 
-    def wait_on(signum: int, frame) -> None:
-        if not stops:
+    def tell() -> None:
+        if stops and progress["started"] and not progress["told"]:
+            progress["told"] = True
             disk_say("herald-os: the disk password is still changing; stopping it now could leave it half-done, "
                      "so this waits until it is finished or put back.", file=sys.stderr)
+
+    def wait_on(signum: int, frame) -> None:
         stops.append(signum)
+        tell()
+
+    def relay(chunk: bytes) -> None:
+        with contextlib.suppress(OSError):
+            os.write(sys.stdout.fileno(), chunk)
+        progress["seen"] = (progress["seen"] + chunk)[-256:]
+        if not progress["started"] and DISK_CHANGE_BEGINS in progress["seen"]:
+            progress["started"] = True
+            tell()
 
     # Python handlers, not SIG_IGN: sudo gets its own back when it starts, and passes them on to the
     # root side, which ignores them while it changes the disk.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, wait_on) for held_signal in held}
     try:
-        process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, text=True)
+        process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         with contextlib.suppress(OSError):
-            process.stdin.write(json.dumps(request))
+            process.stdin.write(json.dumps(request).encode())
         with contextlib.suppress(OSError):
             process.stdin.close()
-        code = disk_wait(process, stops)
+        code = disk_wait(process, stops, relay)
     finally:
         for held_signal, handler in before.items():
             signal.signal(held_signal, handler)
@@ -3244,17 +3263,32 @@ def disk_stopped(pid: int) -> bool:
     return state == "T"
 
 
-def disk_wait(process: subprocess.Popen, stops: list[int]) -> int:
-    """Wait for the root side. After Ctrl+Z, sudo (or what runs in its place) may stop itself, at once or
-    a moment later; it is continued whenever it is found stopped, so that it can end and be waited for,
-    rather than once when Ctrl+Z comes, which a stop just after would outlast."""
+def disk_wait(process: subprocess.Popen, stops: list[int], relay=None) -> int:
+    """Wait for the root side, passing what it prints on to `relay`. After Ctrl+Z, sudo (or what runs in
+    its place) may stop itself, at once or a moment later; it is continued whenever it is found
+    stopped, so that it can end and be waited for, rather than once when Ctrl+Z comes, which a stop just
+    after would outlast."""
+    out = process.stdout
     while True:
-        try:
-            return process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            if signal.SIGTSTP in stops and disk_stopped(process.pid):
-                with contextlib.suppress(OSError):
-                    os.kill(process.pid, signal.SIGCONT)
+        if out is not None:
+            ready, _, _ = select.select([out], [], [], 0.5)
+            chunk = os.read(out.fileno(), 65536) if ready else b""
+            if chunk and relay:
+                relay(chunk)
+            elif ready and not chunk:
+                out.close()
+                out = None
+        else:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=0.5)
+        code = process.poll()
+        if code is not None and (out is None or not ready):
+            if out is not None:
+                out.close()
+            return code
+        if signal.SIGTSTP in stops and disk_stopped(process.pid):
+            with contextlib.suppress(OSError):
+                os.kill(process.pid, signal.SIGCONT)
 
 
 def disk_end_lines(state: dict) -> list[str]:

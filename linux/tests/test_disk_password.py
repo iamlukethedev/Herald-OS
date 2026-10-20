@@ -701,6 +701,52 @@ def test_ctrl_c_during_the_current_password_check_says_so_once(tmp_path):
     assert opens(disk, OLD) and slots(disk) == ["0"]
 
 
+def slow_root_side(tmp_path: Path, disk: Path, op: str, stop_root_after: float | None = None) -> dict:
+    """fake_tools, with the root side's `op` (check, or change before it begins) taking its time: its
+    cryptsetup says SLOW-CHECK on the terminal and waits. With stop_root_after, the sudo stand-in sends
+    SIGINT to the root side alone that long after starting it, as if only it were stopped."""
+    env = fake_tools(tmp_path / "bin", disk)
+    killer = f'( sleep {stop_root_after}; pkill -INT -f -- "--disk-root {op}" ) & ' if stop_root_after else ""
+    (tmp_path / "bin" / "sudo").write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ $1 == -v ]]; then printf '%s' \"${3/\\%p/$USER}\" >/dev/tty; IFS= read -rs answer </dev/tty; echo >/dev/tty; [[ $answer == account-pass ]]; exit; fi\n"
+        "[[ $1 == -n ]] && shift\n"
+        f'case "$*" in *"--disk-root {op}"*) export SLOW=1; {killer};; esac\n'
+        "exec \"$@\"\n")
+    (tmp_path / "bin" / "cryptsetup").write_text(f'#!/bin/sh\n[ -n "$SLOW" ] && [ "$1" = open ] && {{ echo SLOW-CHECK >/dev/tty; sleep 3; }}\nexec {CRYPTSETUP} "$@"\n')
+    for tool in ("sudo", "cryptsetup"):
+        (tmp_path / "bin" / tool).chmod(0o755)
+    return env
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(not shutil.which("pkill"), reason="needs pkill")
+@pytest.mark.parametrize("op", ["check", "change"], ids=["during the check", "just before the change"])
+def test_only_the_root_side_stopped_before_the_change_says_so_once(tmp_path, op):
+    """The root side alone gets SIGINT, while it checks the current password (op check) or just before
+    its change begins (op change): it exits 130 without a word, and the command says it once."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = slow_root_side(tmp_path, disk, op, stop_root_after=1)
+    answers = CHANGE if op == "change" else CHANGE[:2]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(answers))
+    assert code == 130, screen
+    assert screen.count("Nothing was changed.") == 1 and "stopped. Nothing was changed." in screen
+    assert "Traceback" not in screen and "still changing" not in screen
+    assert opens(disk, OLD) and not opens(disk, NEW) and slots(disk) == ["0"]
+
+
+@needs_cryptsetup
+def test_ctrl_c_before_the_change_begins_does_not_say_it_is_still_changing(tmp_path):
+    """Ctrl+C reaches both sides while the root side, already started for the change, still checks:
+    nothing has begun, so "stopped. Nothing was changed." alone, not "still changing" just before it."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = slow_root_side(tmp_path, disk, "change")
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*CHANGE, ("SLOW-CHECK", b"\x03")])
+    assert code == 130 and screen.count("Nothing was changed.") == 1, screen
+    assert "still changing" not in screen and "Traceback" not in screen
+    assert opens(disk, OLD) and slots(disk) == ["0"]
+
+
 def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeypatch, capsys):
     state = {"/dev/vda3": {"current": True, "new": True}, "/dev/vdb1": {"current": True, "new": False}}
     argv = {"change": ["sh", "-c", "kill -9 $$"], "probe": [sys.executable, "-c", f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(state))})"]}
@@ -727,7 +773,7 @@ loader.exec_module(cli)
 stop_after, ctrl_z_after = float(sys.argv[2]), float(sys.argv[3])
 # The root side's stand-in stops itself, as a sudo that suspends on Ctrl+Z would, then ends.
 stops = int(sys.argv[4]) if len(sys.argv) > 4 else 1
-cli.disk_root_argv = lambda op: ["sh", "-c", "cat >/dev/null; " + " ".join([f"sleep {stop_after}; kill -STOP $$;"] * stops) + " echo resumed; exit 0"]
+cli.disk_root_argv = lambda op: ["sh", "-c", "cat >/dev/null; echo 'Adding the new disk password to /dev/vda3…'; " + " ".join([f"sleep {stop_after}; kill -STOP $$;"] * stops) + " echo resumed; exit 0"]
 threading.Timer(ctrl_z_after, lambda: os.kill(os.getpid(), signal.SIGTSTP)).start()
 print("code", cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": "x", "new": "y"}), flush=True)
 """
