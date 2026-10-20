@@ -37,6 +37,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 RELEASES_API = "https://api.github.com/repos/iamlukethedev/Herald-OS/releases?per_page=30"
@@ -60,6 +61,9 @@ SUMS, SUMS_SIG, KEY_ASSET = "SHA256SUMS", "SHA256SUMS.sig", "herald-os-release-k
 # this version has. Never trusted by itself, so it only needs to be small.
 KEY_ASSET_LIMIT = 1 << 20
 GPG_TIMEOUT = 60
+# How far check and update look back for a release that checks out, past newer ones that do not.
+VERIFY_LIMIT = 5
+VERIFY_BUDGET = 180
 # OpenPGP certification classes (0x10 to 0x13): a key vouching for another key's user ID.
 CERTIFICATION = re.compile(r"^1[0-3]x$")
 # A key's validity in gpg's listing: revoked, expired, invalid or disabled.
@@ -335,19 +339,25 @@ def pick_release(listing: list[dict], arch: str, channel: str = "stable", versio
 def verified(layout: Layout, found: list[dict], installed: str | None) -> tuple[dict | None, list[str]]:
     """The newest release in `found` newer than `installed` whose SHA256SUMS is signed with a key the
     version in use trusts and lists its tarball, and why each newer one before it was passed over. Only
-    the small signing files are downloaded, into a folder that is deleted."""
+    the small signing files are downloaded, into a folder that is deleted; the release comes back with
+    the SHA256SUMS that was checked ("checked_sums") and its signer, for the update to use as they are.
+    At most VERIFY_LIMIT releases are tried, and none is started after VERIFY_BUDGET seconds."""
     skipped: list[str] = []
-    for release in found:
-        if not is_newer(release["version"], installed):
+    newer = [release for release in found if is_newer(release["version"], installed)]
+    started = time.monotonic()
+    for tried, release in enumerate(newer):
+        if tried == VERIFY_LIMIT or time.monotonic() - started > VERIFY_BUDGET:
+            skipped.append(f"{len(newer) - tried} more newer releases were not tried (at most {VERIFY_LIMIT}, within {VERIFY_BUDGET} s)")
             break
         with tempfile.TemporaryDirectory(prefix="herald-os-check-") as folder:
+            sums = Path(folder) / SUMS
             try:
-                checked_signature(layout, release, Path(folder), Path(folder) / SUMS, quiet=True)
-                listed_checksum(Path(folder) / SUMS, release["name"])
+                signer = checked_signature(layout, release, Path(folder), sums, quiet=True)
+                listed_checksum(sums, release["name"])
             except ReleaseError as exc:
                 skipped.append(f"{release['version']}: {exc}")
                 continue
-        return release, skipped
+            return {**release, "checked_sums": sums.read_bytes(), "signer": signer}, skipped
     return None, skipped
 
 
@@ -590,7 +600,7 @@ def check(layout: Layout, channel: str) -> int:
     return 1
 
 
-def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False) -> None:
+def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, quiet: bool = False) -> str:
     """Download the release's SHA256SUMS into `sums` and check its signature, before anything else of
     the release is trusted or downloaded."""
     if not release["sums_url"] or not release["sig_url"]:
@@ -608,6 +618,7 @@ def checked_signature(layout: Layout, release: dict, staging: Path, sums: Path, 
     signer = verify_signature(sums, signature, layout.release_keys, offered)
     if not quiet:
         print(f"  {SUMS} is signed with the release key {spaced(signer)}")
+    return signer
 
 
 def update(layout: Layout, version: str | None = None) -> int:
@@ -624,8 +635,8 @@ def update(layout: Layout, version: str | None = None) -> int:
     release = found[0]
     installed = read_version(layout.app)
     if signed and version is None and is_newer(release["version"], installed):
-        # The newest release whose signature checks out, not merely the newest; it is checked again
-        # below, on the files this update keeps.
+        # The newest release whose signature checks out, not merely the newest, with the SHA256SUMS
+        # that was checked, which the tarball is then checked against.
         release, skipped = verified(layout, found, installed)
         if release is None:
             die("no newer release could be checked against the release key, so nothing was changed:\n  " + "\n  ".join(skipped))
@@ -648,7 +659,11 @@ def update(layout: Layout, version: str | None = None) -> int:
     checksum = staging / (SUMS if layout.release_keys.is_file() else f"{release['name']}.sha256")
     replaced: Path | None = None
     try:
-        if layout.release_keys.is_file():
+        if "checked_sums" in release:
+            # Exactly the SHA256SUMS whose signature was checked: fetching it again could bring another.
+            checksum.write_bytes(release["checked_sums"])
+            print(f"  {SUMS} is signed with the release key {spaced(release['signer'])}")
+        elif layout.release_keys.is_file():
             checked_signature(layout, release, staging, checksum)
         else:
             # Versions from before signed releases carry no key, so they check what they always did.

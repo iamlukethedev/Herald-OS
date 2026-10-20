@@ -857,9 +857,9 @@ def test_a_signed_release_installs_once_its_signature_checks_out(layout, signed,
     assert tb.update(layout) == 0
     assert tb.read_version(layout.app) == "0.2.0" and tb.read_version(layout.previous) == "0.1.0"
     assert f"signed with the release key {tb.spaced(keys.release)}" in capsys.readouterr().out
-    # The signature first (checked to pick the release, then again on the files kept), and the
-    # tarball only once it checks out.
-    assert signed.fetched == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET] * 2 + [f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"]
+    # The signing files once, checked to pick the release and then used as they are, and the tarball
+    # only once they check out.
+    assert signed.fetched == [tb.SUMS, tb.SUMS_SIG, tb.KEY_ASSET, f"herald-os-0.2.0-linux-{tb.machine_arch()}.tar.gz"]
 
 
 @pytest.mark.parametrize("missing", [tb.SUMS_SIG, tb.SUMS])
@@ -892,6 +892,52 @@ def test_a_changed_tarball_under_a_good_signature_is_refused(layout, signed, cap
     with pytest.raises(SystemExit):
         tb.update(layout)
     assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+
+
+def test_the_update_installs_against_the_sha256sums_it_checked(layout, signed, keys, tmp_path, monkeypatch, capsys):
+    """Asked for the signing files a second time, the server sends another SHA256SUMS, also signed with
+    the release key, for another tarball that also holds 0.2.0. The update never asks again, so that
+    tarball does not match what was checked."""
+    other = tmp_path / "other"
+    other.mkdir()
+    app = make_app(tmp_path / "build-other" / "app", "0.2.0")
+    write(app / "resources" / "planted", "not in the release that was checked")
+    tarball_of(app, "0.2.0", tb.machine_arch(), other)
+    keys.sign(keys.release, sums_of(other))
+    asked: dict[str, int] = {}
+
+    def download(url, target):
+        name = url.rsplit("/", 1)[1]
+        asked[name] = asked.get(name, 0) + 1
+        second = name.endswith(".tar.gz") or asked[name] > 1
+        shutil.copy((other if second else signed.served) / name, target)
+
+    monkeypatch.setattr(tb, "download", download)
+    with pytest.raises(SystemExit):
+        tb.update(layout)
+    assert unchanged(layout) and "does not match its published checksum" in capsys.readouterr().err
+    assert asked[tb.SUMS] == asked[tb.SUMS_SIG] == 1
+
+
+def test_check_tries_a_bounded_number_of_releases(layout, monkeypatch):
+    tried: list[str] = []
+
+    def refuse(layout, release, *args, **kwargs):
+        tried.append(release["version"])
+        raise tb.ReleaseError("not signed")
+
+    monkeypatch.setattr(tb, "checked_signature", refuse)
+    found = tb.candidates([release(f"v0.{n}.0") for n in range(2, 10)], "x64", signed=True)
+    picked, skipped = tb.verified(layout, found, "0.1.0")
+    assert picked is None and tried == ["0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0"]
+    assert skipped[-1].startswith("3 more newer releases were not tried")
+    # And none is started once the time is up, however few were tried: the clock reads 0 at the
+    # start, then 100 s and 200 s later, past the budget.
+    clock = iter(range(0, 10_000, 100))
+    monkeypatch.setattr(tb.time, "monotonic", lambda: next(clock))
+    tried.clear()
+    picked, skipped = tb.verified(layout, found, "0.1.0")
+    assert picked is None and tried == ["0.9.0"] and skipped[-1].startswith("7 more newer releases were not tried")
 
 
 def test_a_sha256_with_a_line_that_is_not_a_checksum_changes_nothing(layout, published, capsys):
