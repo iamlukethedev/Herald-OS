@@ -2960,7 +2960,7 @@ def disk_root(args: list[str]) -> int:
         return disk_root_op(args)
     except KeyboardInterrupt:
         # Only before the change: once it starts, Ctrl+C is ignored until it is done (disk_signals_held).
-        die("stopped. Nothing was changed.", 130)
+        # Quietly: the person's side says it, once, as Ctrl+C reaches both.
         return 130
 
 
@@ -3261,6 +3261,8 @@ def disk_password(args: list[str]) -> int:
             die("changing the disk password needs root through sudo, which did not let you in. Nothing was changed.", DISK_NO_ROOT)
         current = disk_ask("Current disk password: ")
         code = disk_helper("check", {"devices": devices, "current": current})
+        if code == 130:
+            raise KeyboardInterrupt
         if code != 0:
             return code
         new = disk_ask("New disk password: ")
@@ -3272,7 +3274,11 @@ def disk_password(args: list[str]) -> int:
     if problem:
         die(problem, 2)
     print("Adding the new disk password and checking it, then removing the old one. Keep the computer on until it is done.")
-    return disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
+    code = disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
+    if code == 130:
+        # The root side was stopped before its change began (it ignores Ctrl+C from then on).
+        die("stopped. Nothing was changed.", 130)
+    return code
 
 
 def suspend() -> int:

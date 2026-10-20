@@ -607,6 +607,20 @@ def test_a_byte_that_is_not_text_is_refused_like_anything_outside_ascii(tmp_path
     assert opens(disk, OLD) and slots(disk) == ["0"]
 
 
+@needs_cryptsetup
+def test_ctrl_c_during_the_current_password_check_says_so_once(tmp_path):
+    """Ctrl+C reaches both sides while the root side checks the current password: one message."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    # A cryptsetup that takes its time over the check, and says when it starts.
+    (tmp_path / "bin" / "cryptsetup").write_text(f'#!/bin/sh\n[ "$1" = open ] && {{ echo SLOW-CHECK >/dev/tty; sleep 3; }}\nexec {CRYPTSETUP} "$@"\n')
+    (tmp_path / "bin" / "cryptsetup").chmod(0o755)
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*CHANGE[:2], ("SLOW-CHECK", b"\x03")])
+    assert code == 130 and "Traceback" not in screen
+    assert screen.count("Nothing was changed.") == 1, screen
+    assert opens(disk, OLD) and slots(disk) == ["0"]
+
+
 def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeypatch, capsys):
     state = {"/dev/vda3": {"current": True, "new": True}, "/dev/vdb1": {"current": True, "new": False}}
     argv = {"change": ["sh", "-c", "kill -9 $$"], "probe": [sys.executable, "-c", f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(state))})"]}
