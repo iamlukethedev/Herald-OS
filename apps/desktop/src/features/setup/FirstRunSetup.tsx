@@ -276,6 +276,9 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
   partly: 'firstRun.disk.partly',
   notTakenBack: 'firstRun.disk.notTakenBack',
   recoveryKey: 'firstRun.disk.recoveryKey',
+  tpmKey: 'firstRun.disk.tpmKey',
+  fido2Key: 'firstRun.disk.fido2Key',
+  otherKey: 'firstRun.disk.otherKey',
   timeout: 'firstRun.disk.timeout',
   noTerminal: 'firstRun.disk.noTerminal',
   failed: 'firstRun.disk.failed'

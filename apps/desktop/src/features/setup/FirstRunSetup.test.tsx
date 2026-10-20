@@ -43,7 +43,7 @@ const SIGNED_OUT_AUTH = $hermesAuth.get()
 
 // What may read the same in every language: product names, and the keyboard shortcuts, commands
 // and units that stay as they are (en.ts says which). The longer command goes first.
-const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz', 'TPM']
+const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os password', 'API', 'GHz', 'TPM', 'FIDO2']
 
 // Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal",
 // "teclado Bluetooth").
@@ -134,6 +134,9 @@ const DISK_FAILURES = [
   ['partly', 'firstRun.disk.partly'],
   ['notTakenBack', 'firstRun.disk.notTakenBack'],
   ['recoveryKey', 'firstRun.disk.recoveryKey'],
+  ['tpmKey', 'firstRun.disk.tpmKey'],
+  ['fido2Key', 'firstRun.disk.fido2Key'],
+  ['otherKey', 'firstRun.disk.otherKey'],
   ['timeout', 'firstRun.disk.timeout'],
   ['noTerminal', 'firstRun.disk.noTerminal'],
   ['tooShort', 'firstRun.account.tooShort'],
@@ -540,6 +543,24 @@ describe("the disk step's warning", () => {
     const words = { en: ['recovery keys', 'security key', 'TPM'], 'pt-BR': ['chaves de recuperação', 'chave de segurança', 'TPM'], 'zh-CN': ['恢复密钥', '安全密钥', 'TPM'] }[language]
     for (const word of words) {
       expect(text, word).toContain(word)
+    }
+  })
+})
+
+describe('a refused current disk password', () => {
+  it('says which way of unlocking it belongs to, never the recovery key for the others, in every language', () => {
+    const keys = ['firstRun.disk.recoveryKey', 'firstRun.disk.tpmKey', 'firstRun.disk.fido2Key', 'firstRun.disk.otherKey'] as const
+    const recovery = { en: 'recovery key', 'pt-BR': 'chave de recuperação', 'zh-CN': '恢复密钥' } as const
+    for (const language of ['en', 'pt-BR', 'zh-CN'] as const) {
+      $prefs.set({ ...$prefs.get(), language })
+      const texts = keys.map(key => t(key))
+      expect(new Set(texts).size, language).toBe(4)
+      expect(texts[0], language).toContain(recovery[language])
+      for (const text of texts.slice(1)) {
+        expect(text, language).not.toContain(recovery[language])
+      }
+      expect(texts[1], language).toContain('TPM')
+      expect(texts[2], language).toContain('FIDO2')
     }
   })
 })

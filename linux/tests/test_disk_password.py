@@ -299,8 +299,17 @@ def test_a_slot_a_token_uses_is_named_by_its_token():
     assert cli.luks_slot_tokens(metadata, 1) == ["systemd-recovery"]
     assert cli.luks_slot_tokens(metadata, 2) == ["systemd-tpm2", "x"]
     assert cli.luks_slot_tokens({}, 0) == []
-    assert "recovery key, not the disk password" in cli.disk_not_the_password("/dev/vda3", 1, ["systemd-recovery"])
-    assert "systemd-tpm2 unlocking uses" in cli.disk_not_the_password("/dev/vda3", 2, ["systemd-tpm2"])
+    for kinds, said, code in [
+        (["systemd-recovery"], "that is the recovery key, not the disk password", cli.DISK_RECOVERY_KEY),
+        (["systemd-recovery", "systemd-tpm2"], "that is the recovery key", cli.DISK_RECOVERY_KEY),
+        (["systemd-tpm2"], "key slot 2 of /dev/vda3, which TPM unlocking uses", cli.DISK_TPM_SLOT),
+        (["systemd-fido2"], "which security key (FIDO2) unlocking uses", cli.DISK_FIDO2_SLOT),
+        (["clevis"], "which clevis unlocking uses", cli.DISK_OTHER_SLOT),
+        (["systemd-pkcs11", "x"], "which systemd-pkcs11 and x unlocking uses", cli.DISK_OTHER_SLOT),
+    ]:
+        message, exit_code = cli.disk_not_the_password("/dev/vda3", 2, kinds)
+        assert said in message and "Nothing was changed" in message and exit_code == code, kinds
+    assert len({cli.DISK_RECOVERY_KEY, cli.DISK_TPM_SLOT, cli.DISK_FIDO2_SLOT, cli.DISK_OTHER_SLOT}) == 4
 
 
 @needs_cryptsetup
@@ -313,7 +322,7 @@ def test_the_recovery_key_typed_as_the_current_password_is_refused(tmp_path, new
     before = {disk: dump(disk) for disk in (first, second)}
     for op in ("check", "change"):
         result = root_side(op, {"devices": [str(first), str(second)], "current": RECOVERY, "new": NEW, "newOwner": new_owner})
-        assert result.returncode == cli.DISK_NOT_THE_PASSWORD, result.stderr
+        assert result.returncode == cli.DISK_RECOVERY_KEY, result.stderr
         assert "that is the recovery key, not the disk password" in result.stderr and "Nothing was changed" in result.stderr
         assert "Done" not in result.stdout
     assert {disk: dump(disk) for disk in (first, second)} == before
@@ -332,7 +341,17 @@ def test_a_tpm_slots_secret_is_refused_too(tmp_path):
     disk = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), "a secret the tpm keeps", "systemd-tpm2")
     before = dump(disk)
     result = root_side("change", {"devices": [str(disk)], "current": "a secret the tpm keeps", "new": NEW})
-    assert result.returncode == cli.DISK_NOT_THE_PASSWORD and "systemd-tpm2 unlocking uses" in result.stderr
+    assert result.returncode == cli.DISK_TPM_SLOT and "which TPM unlocking uses" in result.stderr
+    assert dump(disk) == before
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("kind, code", [("systemd-fido2", 11), ("clevis", 12)])
+def test_a_fido2_or_other_token_slot_is_refused_with_its_own_code(tmp_path, kind, code):
+    disk = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), "a secret a token keeps", kind)
+    before = dump(disk)
+    result = root_side("check", {"devices": [str(disk)], "current": "a secret a token keeps"})
+    assert result.returncode == code and "that is not the disk password" in result.stderr
     assert dump(disk) == before
 
 
@@ -341,7 +360,7 @@ def test_the_command_stops_at_the_recovery_key_before_asking_for_a_new_password(
     disk = with_token_slot(tmp_path, make_image(tmp_path / "disk.img", OLD), RECOVERY, "systemd-recovery")
     env = fake_tools(tmp_path / "bin", disk)
     code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*CHANGE[:1], ("Current disk password:", RECOVERY)])
-    assert code == cli.DISK_NOT_THE_PASSWORD and "recovery key, not the disk password" in screen
+    assert code == cli.DISK_RECOVERY_KEY and "recovery key, not the disk password" in screen
     assert "New disk password" not in screen and "Traceback" not in screen
     assert opens(disk, OLD) and opens(disk, RECOVERY)
 
@@ -641,14 +660,14 @@ def test_a_slot_cryptsetup_does_not_name_is_found_by_trying_each(monkeypatch):
 
 def test_a_slot_found_by_trying_is_still_refused_when_a_token_uses_it(monkeypatch, capsys):
     quiet_cryptsetup(monkeypatch, {0: OLD, 1: RECOVERY}, {"0": {"type": "systemd-recovery", "keyslots": ["1"]}})
-    assert root_side_here(monkeypatch, "check", {"devices": ["/dev/vda3"], "current": RECOVERY}) == cli.DISK_NOT_THE_PASSWORD
+    assert root_side_here(monkeypatch, "check", {"devices": ["/dev/vda3"], "current": RECOVERY}) == cli.DISK_RECOVERY_KEY
     assert "recovery key, not the disk password" in capsys.readouterr().err
 
 
 def test_a_slot_that_cannot_be_told_at_all_is_refused(monkeypatch, capsys):
     header, _ = quiet_cryptsetup(monkeypatch, {0: OLD}, named_by_slot=False)
     for op in ("check", "change"):
-        assert root_side_here(monkeypatch, op, {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_NOT_THE_PASSWORD
+        assert root_side_here(monkeypatch, op, {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_OTHER_SLOT
         assert "did not say which key slot that password opens on /dev/vda3" in capsys.readouterr().err
     assert header["keyslots"] == {0: OLD}
 

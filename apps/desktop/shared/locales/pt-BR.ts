@@ -657,6 +657,10 @@ export const ptBR: Translation = {
   'firstRun.disk.notAscii': 'Use só letras, números, espaços e os símbolos do teclado, sem acentos nem outros alfabetos: não há método de entrada enquanto o computador está ligando.',
   'firstRun.disk.wrongCurrent': 'Essa não é a senha do disco que o computador pediu ao ligar. Nada foi alterado.',
   'firstRun.disk.recoveryKey': 'Essa é uma chave de recuperação, não a senha do disco. Digite a senha que o computador pediu ao ligar; a chave de recuperação continua como está. Nada foi alterado.',
+  'firstRun.disk.tpmKey': 'Essa não é a senha do disco: ela é do desbloqueio pelo TPM. Digite a senha que o computador pediu ao ligar; o desbloqueio pelo TPM continua como está. Nada foi alterado.',
+  'firstRun.disk.fido2Key': 'Essa não é a senha do disco: ela é do desbloqueio com chave de segurança (FIDO2). Digite a senha que o computador pediu ao ligar; a chave de segurança continua funcionando. Nada foi alterado.',
+  'firstRun.disk.otherKey':
+    'Essa não é a senha do disco: ela é de outra forma de desbloquear o disco, ou o Herald OS não conseguiu saber se é. Digite a senha que o computador pediu ao ligar. Nada foi alterado.',
   'firstRun.disk.notAdmin': 'A senha da sua conta não foi aceita para fazer a troca. Nada foi alterado.',
   'firstRun.disk.notEncrypted': 'O disco deste computador não é criptografado, então não há senha do disco para trocar.',
   'firstRun.disk.partly': 'Sua senha do disco foi adicionada, mas não foi possível remover uma senha antiga. Execute herald-os password --disk --new-owner em um terminal.',

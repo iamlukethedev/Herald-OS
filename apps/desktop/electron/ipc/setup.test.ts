@@ -237,6 +237,9 @@ describe('the disk password', () => {
       [6, 'partly'],
       [8, 'notTakenBack'],
       [9, 'recoveryKey'],
+      [10, 'tpmKey'],
+      [11, 'fido2Key'],
+      [12, 'otherKey'],
       [7, 'failed'],
       [1, 'failed'],
       [2, 'failed']
