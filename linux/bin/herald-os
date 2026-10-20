@@ -2863,6 +2863,22 @@ def luks_slot(device: str, passphrase: str) -> int | None:
     return int(match.group(1)) if match else -1
 
 
+def luks_which_slot(device: str, passphrase: str) -> int | None:
+    """luks_slot, and where cryptsetup opened the device without naming the slot, each slot the header
+    lists tried on its own (--key-slot) until one opens: -1 only when none does, None when it opens none."""
+    slot = luks_slot(device, passphrase)
+    if slot is None or slot >= 0:
+        return slot
+    try:
+        listed = sorted(int(each) for each in (luks_metadata(device).get("keyslots") or {}) if str(each).isdigit())
+    except (RuntimeError, json.JSONDecodeError):
+        return -1
+    for each in listed:
+        if cryptsetup(["open", "--test-passphrase", "--key-slot", str(each), device], passphrase).returncode == 0:
+            return each
+    return -1
+
+
 def luks_metadata(device: str) -> dict:
     result = cryptsetup(["luksDump", "--dump-json-metadata", device])
     if result.returncode != 0:
@@ -2966,7 +2982,7 @@ def disk_root_op(args: list[str]) -> int:
             die(f"{device} is not an encrypted (LUKS) device. Nothing was changed.", DISK_NOT_ENCRYPTED)
     old_slots: dict[str, int] = {}
     for device in devices:
-        slot = luks_slot(device, current)
+        slot = luks_which_slot(device, current)
         if slot is None:
             die("that is not the disk password" + (f" (it does not open {device})" if len(devices) > 1 else "") + ". Nothing was changed.", DISK_WRONG)
         old_slots[device] = slot
@@ -3032,7 +3048,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             if result.returncode != 0:
                 return take_back(f"the new disk password could not be added to {device}: {cryptsetup_said(result)}")
             added.append(device)
-        slot = luks_slot(device, new)
+        slot = luks_which_slot(device, new)
         if slot is None or slot == old_slots[device]:
             return take_back(f"the new disk password does not open {device} after adding it")
         new_slots[device] = slot
@@ -3040,6 +3056,9 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
 
     problems: list[str] = []
     for device in devices:
+        if new_owner and new_slots[device] < 0:
+            # Which slot is the new one cannot be told, so of the others only the old password's goes.
+            problems.append(f"which key slot of {device} the new disk password opens could not be told, so its other key slots were left")
         if new_owner and new_slots[device] >= 0:
             try:
                 slots, tokens = luks_extra(luks_metadata(device), new_slots[device])

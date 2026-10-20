@@ -584,6 +584,90 @@ def test_after_ctrl_z_a_stopped_root_side_is_continued_and_waited_for(stop_after
     assert result.stderr.count("still changing") == 1
 
 
+def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None = None, named_by_slot: bool = True):
+    """A cryptsetup that opens a device without saying which key slot opened it (no "Key slot N
+    unlocked"), on one device whose slots hold `keyslots`. With named_by_slot False, trying a slot on its
+    own (--key-slot) never opens either, so the slot cannot be told at all."""
+    header = {"keyslots": dict(keyslots), "tokens": dict(tokens or {})}
+    tried: list[int] = []
+
+    def run(args, key=None, new=None):
+        ok = subprocess.CompletedProcess(args, 0, b"Command successful.\n", b"")
+        no = subprocess.CompletedProcess(args, 2, b"", b"No key available with this passphrase.")
+        slots = header["keyslots"]
+        if args[0] == "open":
+            if "--key-slot" in args:
+                slot = int(args[args.index("--key-slot") + 1])
+                tried.append(slot)
+                return ok if named_by_slot and slots.get(slot) == key else no
+            return ok if key in slots.values() else no
+        if args[0] == "luksDump":
+            return subprocess.CompletedProcess(args, 0, json.dumps({"keyslots": {str(n): {} for n in slots}, "tokens": header["tokens"]}).encode(), b"")
+        if args[0] == "luksAddKey":
+            slots[min(set(range(32)) - set(slots))] = new
+            return ok
+        if args[0] == "luksRemoveKey":
+            slot = next((n for n, value in sorted(slots.items()) if value == key), None)
+            if slot is None:
+                return no
+            del slots[slot]
+            return ok
+        if args[0] == "luksKillSlot":
+            slots.pop(int(args[2]), None)
+            return ok
+        if args[0] == "token":
+            header["tokens"].pop(args[args.index("--token-id") + 1], None)
+            return ok
+        return ok
+
+    monkeypatch.setattr(cli, "cryptsetup", run)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/sbin/{name}")
+    return header, tried
+
+
+def root_side_here(monkeypatch, op: str, request: dict) -> int:
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps(request)))
+    try:
+        return cli.disk_root([op])
+    except SystemExit as stop:
+        return stop.code
+
+
+def test_a_slot_cryptsetup_does_not_name_is_found_by_trying_each(monkeypatch):
+    header, tried = quiet_cryptsetup(monkeypatch, {0: "someone else's", 1: OLD})
+    assert root_side_here(monkeypatch, "check", {"devices": ["/dev/vda3"], "current": OLD}) == 0
+    assert 1 in tried
+
+
+def test_a_slot_found_by_trying_is_still_refused_when_a_token_uses_it(monkeypatch, capsys):
+    quiet_cryptsetup(monkeypatch, {0: OLD, 1: RECOVERY}, {"0": {"type": "systemd-recovery", "keyslots": ["1"]}})
+    assert root_side_here(monkeypatch, "check", {"devices": ["/dev/vda3"], "current": RECOVERY}) == cli.DISK_NOT_THE_PASSWORD
+    assert "recovery key, not the disk password" in capsys.readouterr().err
+
+
+def test_a_slot_that_cannot_be_told_at_all_is_refused(monkeypatch, capsys):
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD}, named_by_slot=False)
+    for op in ("check", "change"):
+        assert root_side_here(monkeypatch, op, {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_NOT_THE_PASSWORD
+        assert "did not say which key slot that password opens on /dev/vda3" in capsys.readouterr().err
+    assert header["keyslots"] == {0: OLD}
+
+
+def test_a_new_owner_s_slot_found_by_trying_is_the_one_kept(monkeypatch):
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 1: "someone else's"})
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW, "newOwner": True}) == 0
+    assert list(header["keyslots"].values()) == [NEW]
+
+
+def test_a_new_owner_s_slot_that_cannot_be_told_leaves_the_others_and_says_so(monkeypatch, capsys):
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 1: "someone else's"})
+    real = cli.luks_which_slot
+    monkeypatch.setattr(cli, "luks_which_slot", lambda device, passphrase: -1 if passphrase == NEW and cli.luks_slot(device, passphrase) is not None else real(device, passphrase))
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW, "newOwner": True}) == cli.DISK_PARTLY
+    assert "could not be told, so its other key slots were left" in capsys.readouterr().err
+    assert sorted(header["keyslots"].values()) == sorted(["someone else's", NEW])
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
