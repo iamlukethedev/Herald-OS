@@ -562,6 +562,28 @@ def test_when_even_looking_fails_it_says_what_is_sure(monkeypatch, capsys):
     assert "at least one of the two opens each device" in capsys.readouterr().err
 
 
+CTRL_Z_DRIVER = """
+import importlib.machinery, importlib.util, json, os, signal, sys, threading
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+stop_after, ctrl_z_after = float(sys.argv[2]), float(sys.argv[3])
+# The root side's stand-in stops itself, as a sudo that suspends on Ctrl+Z would, then ends.
+cli.disk_root_argv = lambda op: ["sh", "-c", f"cat >/dev/null; sleep {stop_after}; kill -STOP $$; echo resumed; exit 0"]
+threading.Timer(ctrl_z_after, lambda: os.kill(os.getpid(), signal.SIGTSTP)).start()
+print("code", cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": "x", "new": "y"}), flush=True)
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+@pytest.mark.parametrize("stop_after, ctrl_z_after", [(0.8, 0.2), (0.1, 0.4)], ids=["stops after Ctrl+Z", "stopped before Ctrl+Z"])
+def test_after_ctrl_z_a_stopped_root_side_is_continued_and_waited_for(stop_after, ctrl_z_after):
+    """Continuing it once, as Ctrl+Z comes, would leave one that stops a moment later stopped for good."""
+    result = subprocess.run([sys.executable, "-c", CTRL_Z_DRIVER, str(CLI), str(stop_after), str(ctrl_z_after)], capture_output=True, text=True, timeout=30)
+    assert "resumed" in result.stdout and "code 0" in result.stdout, result
+    assert result.stderr.count("still changing") == 1
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]

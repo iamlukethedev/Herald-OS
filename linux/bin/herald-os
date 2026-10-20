@@ -3092,7 +3092,6 @@ def disk_helper_change(request: dict) -> int:
     """The change, which nothing here may stop part-way. subprocess.run would kill sudo on Ctrl+C, and
     the root side with it, between two devices; instead Ctrl+C, Ctrl+\\, Ctrl+Z, a closed terminal and
     SIGTERM wait here while the root side finishes or puts things back, and then say how it ended."""
-    started: list[subprocess.Popen] = []
     stops: list[int] = []
 
     def wait_on(signum: int, frame) -> None:
@@ -3100,10 +3099,6 @@ def disk_helper_change(request: dict) -> int:
             disk_say("herald-os: the disk password is still changing; stopping it now could leave it half-done, "
                      "so this waits until it is finished or put back.", file=sys.stderr)
         stops.append(signum)
-        # Ctrl+Z also stops sudo; it goes on, so the root side can end and be waited for.
-        if signum == signal.SIGTSTP and started:
-            with contextlib.suppress(OSError):
-                os.kill(started[0].pid, signal.SIGCONT)
 
     # Python handlers, not SIG_IGN: sudo gets its own back when it starts, and passes them on to the
     # root side, which ignores them while it changes the disk.
@@ -3111,18 +3106,40 @@ def disk_helper_change(request: dict) -> int:
     before = {held_signal: signal.signal(held_signal, wait_on) for held_signal in held}
     try:
         process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, text=True)
-        started.append(process)
         with contextlib.suppress(OSError):
             process.stdin.write(json.dumps(request))
         with contextlib.suppress(OSError):
             process.stdin.close()
-        code = process.wait()
+        code = disk_wait(process, stops)
     finally:
         for held_signal, handler in before.items():
             signal.signal(held_signal, handler)
     if code in DISK_ENDS:
         return code
     return disk_report_end(request, code)
+
+
+def disk_stopped(pid: int) -> bool:
+    """The process is stopped (state T in /proc); where that cannot be read, taken as stopped, since
+    continuing a running process does nothing."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[-1].split()[0]
+    except (OSError, IndexError):
+        return True
+    return state == "T"
+
+
+def disk_wait(process: subprocess.Popen, stops: list[int]) -> int:
+    """Wait for the root side. After Ctrl+Z, sudo (or what runs in its place) may stop itself, at once or
+    a moment later; it is continued whenever it is found stopped, so that it can end and be waited for,
+    rather than once when Ctrl+Z comes, which a stop just after would outlast."""
+    while True:
+        try:
+            return process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            if signal.SIGTSTP in stops and disk_stopped(process.pid):
+                with contextlib.suppress(OSError):
+                    os.kill(process.pid, signal.SIGCONT)
 
 
 def disk_end_lines(state: dict) -> list[str]:
