@@ -2703,7 +2703,7 @@ def password() -> int:
 # root side (`password --disk-root`, through sudo) takes them as JSON on stdin and runs cryptsetup.
 DISK_USAGE = "password --disk [--new-owner] | password --disk --status"
 DISK_MIN = 8
-DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN, DISK_NOT_TAKEN_BACK = 3, 4, 5, 6, 7, 8
+DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_NO_ROOT, DISK_PARTLY, DISK_UNKNOWN, DISK_NOT_TAKEN_BACK, DISK_NOT_THE_PASSWORD = 3, 4, 5, 6, 7, 8, 9
 DISK_NOT_ENCRYPTED_TEXT = (
     "this computer's disk is not encrypted, so there is no disk password to change. Herald OS encrypts "
     "the disk when it is installed, unless \"Encrypt my data\" was unticked; encrypting it now means "
@@ -2713,7 +2713,7 @@ DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyb
                    "it is typed before anything else starts, without an input method. Nothing was changed.")
 # How the root side of a change can end and say so itself; any other end (it was killed) is looked
 # at afterwards (disk_probe).
-DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, 127, 130}
+DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_NOT_THE_PASSWORD, 127, 130}
 # /sysroot is the real root filesystem on the image (ostree); / elsewhere.
 DISK_ROOT_MOUNTS = ("/sysroot", "/")
 # Made by reset-helper apply: the next account belongs to someone new, so setup asks for a disk
@@ -2882,6 +2882,25 @@ def disk_say(*args, **kwargs) -> None:
         print(*args, **kwargs, flush=True)
 
 
+def luks_slot_tokens(metadata: dict, slot: int) -> list[str]:
+    """The types of the tokens that use a key slot (systemd-recovery, systemd-tpm2, systemd-fido2, …),
+    from `cryptsetup luksDump --dump-json-metadata` (pure; tested)."""
+    kinds = []
+    for value in (metadata.get("tokens") or {}).values():
+        if isinstance(value, dict) and str(slot) in {str(each) for each in value.get("keyslots") or []}:
+            kinds.append(str(value.get("type") or "unknown"))
+    return sorted(kinds)
+
+
+def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> str:
+    """Why a secret that opens a slot a token uses is not taken as the disk password (pure; tested)."""
+    if "systemd-recovery" in kinds:
+        return ("that is the recovery key, not the disk password. Type the password the computer asks for when it "
+                "starts; the recovery key stays as it is. Nothing was changed.")
+    return (f"that opens key slot {slot} of {device}, which {' and '.join(kinds)} unlocking uses, not the disk password. "
+            "Type the password the computer asks for when it starts. Nothing was changed.")
+
+
 @contextlib.contextmanager
 def disk_signals_held():
     """Ctrl+C, a closed terminal or a stop request wait until the change is done (cryptsetup inherits it)."""
@@ -2943,6 +2962,19 @@ def disk_root_op(args: list[str]) -> int:
         if slot is None:
             die("that is not the disk password" + (f" (it does not open {device})" if len(devices) > 1 else "") + ". Nothing was changed.", DISK_WRONG)
         old_slots[device] = slot
+    # Only a slot of its own counts as the disk password. One a token uses (the recovery key, TPM or
+    # FIDO2 unlocking) would be removed in its place, leaving the owner's password working and the token
+    # pointing at nothing; a slot cryptsetup did not name cannot be told apart, so it is refused too.
+    for device, slot in old_slots.items():
+        if slot < 0:
+            die(f"cryptsetup did not say which key slot that password opens on {device}, so it cannot be told from "
+                "the recovery key. Nothing was changed.", DISK_NOT_THE_PASSWORD)
+        try:
+            kinds = luks_slot_tokens(luks_metadata(device), slot)
+        except (RuntimeError, json.JSONDecodeError) as error:
+            die(f"{error}. Nothing was changed.", 1)
+        if kinds:
+            die(disk_not_the_password(device, slot, kinds), DISK_NOT_THE_PASSWORD)
     if op == "check":
         return 0
     problem = disk_password_problem(new, new, current)

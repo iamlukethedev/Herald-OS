@@ -1683,6 +1683,8 @@ the installer less of the person's.
   two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
   which replaces a slot device by device without a check in between. Signals wait until it is done,
   on both sides: the person's side waits for the root side rather than stopping sudo with it.
+  Only a key slot of its own counts as the disk password: a secret that opens one a token uses (the
+  recovery key, TPM or FIDO2) is refused, as replacing it would keep the owner's password.
   If adding fails on one device, the new passphrase comes out of the others again. The devices come
   from `lsblk` only: when it cannot list them, nothing changes, because `/etc/crypttab` also names
   data and USB disks whose other key slots `--new-owner` would remove. It runs as root

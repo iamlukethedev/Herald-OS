@@ -275,6 +275,7 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
   notEncrypted: 'firstRun.disk.notEncrypted',
   partly: 'firstRun.disk.partly',
   notTakenBack: 'firstRun.disk.notTakenBack',
+  recoveryKey: 'firstRun.disk.recoveryKey',
   timeout: 'firstRun.disk.timeout',
   noTerminal: 'firstRun.disk.noTerminal',
   failed: 'firstRun.disk.failed'

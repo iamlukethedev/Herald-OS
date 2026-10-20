@@ -96,7 +96,7 @@ export function diskReply(screen: string, secrets: DiskSecrets): { reply: string
 }
 
 /** Exit codes of `herald-os password --disk` (linux/bin/herald-os: DISK_WRONG and the rest). */
-const DISK_EXITS: Record<number, DiskPasswordFailure> = { 3: 'wrongCurrent', 4: 'notEncrypted', 5: 'notAdmin', 6: 'partly', 8: 'notTakenBack' }
+const DISK_EXITS: Record<number, DiskPasswordFailure> = { 3: 'wrongCurrent', 4: 'notEncrypted', 5: 'notAdmin', 6: 'partly', 8: 'notTakenBack', 9: 'recoveryKey' }
 // Adding a key slot and checking each passphrase take seconds apiece (argon2id), more with two disks.
 const DISK_TIMEOUT_MS = 300_000
 

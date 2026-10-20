@@ -133,6 +133,7 @@ const DISK_FAILURES = [
   ['notEncrypted', 'firstRun.disk.notEncrypted'],
   ['partly', 'firstRun.disk.partly'],
   ['notTakenBack', 'firstRun.disk.notTakenBack'],
+  ['recoveryKey', 'firstRun.disk.recoveryKey'],
   ['timeout', 'firstRun.disk.timeout'],
   ['noTerminal', 'firstRun.disk.noTerminal'],
   ['tooShort', 'firstRun.account.tooShort'],

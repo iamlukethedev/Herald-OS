@@ -636,6 +636,7 @@ export const zhCN: Translation = {
   'firstRun.disk.laterHint': '在你更改之前，旧的磁盘密码仍能打开磁盘；之后可用 herald-os password --disk --new-owner 更改。',
   'firstRun.disk.notAscii': '请只使用字母、数字、空格和键盘上的符号，不要用带重音的字母或其他文字：开机时没有输入法。',
   'firstRun.disk.wrongCurrent': '这不是电脑开机时要求输入的磁盘密码。未做任何更改。',
+  'firstRun.disk.recoveryKey': '这是恢复密钥，不是磁盘密码。请输入电脑开机时要求输入的密码；恢复密钥保持不变。未做任何更改。',
   'firstRun.disk.notAdmin': '你的账户密码未被接受，无法进行更改。未做任何更改。',
   'firstRun.disk.notEncrypted': '这台电脑的磁盘没有加密，因此没有可更改的磁盘密码。',
   'firstRun.disk.partly': '已添加你的磁盘密码，但有一个旧密码未能移除。请在终端中运行 herald-os password --disk --new-owner。',

@@ -656,6 +656,7 @@ export const ptBR: Translation = {
   'firstRun.disk.laterHint': 'Enquanto você não trocar, a senha antiga continua abrindo o disco; o comando herald-os password --disk --new-owner troca a senha depois.',
   'firstRun.disk.notAscii': 'Use só letras, números, espaços e os símbolos do teclado, sem acentos nem outros alfabetos: não há método de entrada enquanto o computador está ligando.',
   'firstRun.disk.wrongCurrent': 'Essa não é a senha do disco que o computador pediu ao ligar. Nada foi alterado.',
+  'firstRun.disk.recoveryKey': 'Essa é uma chave de recuperação, não a senha do disco. Digite a senha que o computador pediu ao ligar; a chave de recuperação continua como está. Nada foi alterado.',
   'firstRun.disk.notAdmin': 'A senha da sua conta não foi aceita para fazer a troca. Nada foi alterado.',
   'firstRun.disk.notEncrypted': 'O disco deste computador não é criptografado, então não há senha do disco para trocar.',
   'firstRun.disk.partly': 'Sua senha do disco foi adicionada, mas não foi possível remover uma senha antiga. Execute herald-os password --disk --new-owner em um terminal.',

@@ -271,6 +271,79 @@ def test_a_new_owner_keeps_only_their_own_password(tmp_path):
     assert json.loads(dump.stdout)["tokens"] == {}
 
 
+RECOVERY = "fjvh-ktbr-ueng-hbcd-kvlr-ngrc-rtjf-dbvu"
+
+
+def with_token_slot(tmp_path: Path, disk: Path, secret: str, kind: str) -> Path:
+    """Add `secret` in a slot of its own, with a token of `kind` that uses it, as systemd-cryptenroll does."""
+    old, key = tmp_path / f"{disk.name}.old", tmp_path / f"{disk.name}.{kind}"
+    old.write_text(OLD)
+    key.write_text(secret)
+    subprocess.run([CRYPTSETUP, "luksAddKey", "--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", "--key-file", str(old), str(disk), str(key)], env=C_ENV, check=True)
+    slot = max(slots(disk), key=int)
+    token = {"type": kind, "keyslots": [slot]}
+    # Without the systemd token plugins, which would want a real TPM's fields in a systemd-tpm2 token.
+    subprocess.run([CRYPTSETUP, "token", "import", "--disable-external-tokens", "--json-file", "-", str(disk)], input=json.dumps(token).encode(), env=C_ENV, check=True)
+    return disk
+
+
+def dump(disk: Path) -> bytes:
+    return subprocess.run([CRYPTSETUP, "luksDump", "--dump-json-metadata", str(disk)], capture_output=True, check=True, env=C_ENV).stdout
+
+
+def test_a_slot_a_token_uses_is_named_by_its_token():
+    metadata = {"keyslots": {"0": {}, "1": {}, "2": {}}, "tokens": {"0": {"type": "systemd-recovery", "keyslots": ["1"]}, "1": {"type": "systemd-tpm2", "keyslots": ["2"]}, "2": {"type": "x", "keyslots": [2]}}}
+    assert cli.luks_slot_tokens(metadata, 0) == []
+    assert cli.luks_slot_tokens(metadata, 1) == ["systemd-recovery"]
+    assert cli.luks_slot_tokens(metadata, 2) == ["systemd-tpm2", "x"]
+    assert cli.luks_slot_tokens({}, 0) == []
+    assert "recovery key, not the disk password" in cli.disk_not_the_password("/dev/vda3", 1, ["systemd-recovery"])
+    assert "systemd-tpm2 unlocking uses" in cli.disk_not_the_password("/dev/vda3", 2, ["systemd-tpm2"])
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_the_recovery_key_typed_as_the_current_password_is_refused(tmp_path, new_owner):
+    """Taken as the disk password, the recovery key's slot would go in its place: the owner's password
+    would still open the disk and the recovery token would point at nothing."""
+    first = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), RECOVERY, "systemd-recovery")
+    second = with_token_slot(tmp_path, make_image(tmp_path / "b.img", OLD), RECOVERY, "systemd-recovery")
+    before = {disk: dump(disk) for disk in (first, second)}
+    for op in ("check", "change"):
+        result = root_side(op, {"devices": [str(first), str(second)], "current": RECOVERY, "new": NEW, "newOwner": new_owner})
+        assert result.returncode == cli.DISK_NOT_THE_PASSWORD, result.stderr
+        assert "that is the recovery key, not the disk password" in result.stderr and "Nothing was changed" in result.stderr
+        assert "Done" not in result.stdout
+    assert {disk: dump(disk) for disk in (first, second)} == before
+    assert all(opens(disk, OLD) and opens(disk, RECOVERY) and not opens(disk, NEW) for disk in (first, second))
+    # The owner's own password still changes it, and leaves the recovery key and its token as they were.
+    result = root_side("change", {"devices": [str(first), str(second)], "current": OLD, "new": NEW})
+    assert result.returncode == 0, result.stderr
+    for disk in (first, second):
+        assert opens(disk, NEW) and opens(disk, RECOVERY) and not opens(disk, OLD)
+        tokens = json.loads(dump(disk))["tokens"]
+        assert [token["type"] for token in tokens.values()] == ["systemd-recovery"] and all(token["keyslots"] for token in tokens.values())
+
+
+@needs_cryptsetup
+def test_a_tpm_slots_secret_is_refused_too(tmp_path):
+    disk = with_token_slot(tmp_path, make_image(tmp_path / "a.img", OLD), "a secret the tpm keeps", "systemd-tpm2")
+    before = dump(disk)
+    result = root_side("change", {"devices": [str(disk)], "current": "a secret the tpm keeps", "new": NEW})
+    assert result.returncode == cli.DISK_NOT_THE_PASSWORD and "systemd-tpm2 unlocking uses" in result.stderr
+    assert dump(disk) == before
+
+
+@needs_cryptsetup
+def test_the_command_stops_at_the_recovery_key_before_asking_for_a_new_password(tmp_path):
+    disk = with_token_slot(tmp_path, make_image(tmp_path / "disk.img", OLD), RECOVERY, "systemd-recovery")
+    env = fake_tools(tmp_path / "bin", disk)
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*CHANGE[:1], ("Current disk password:", RECOVERY)])
+    assert code == cli.DISK_NOT_THE_PASSWORD and "recovery key, not the disk password" in screen
+    assert "New disk password" not in screen and "Traceback" not in screen
+    assert opens(disk, OLD) and opens(disk, RECOVERY)
+
+
 @needs_cryptsetup
 def test_every_root_device_changes_or_none_does(tmp_path):
     first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)

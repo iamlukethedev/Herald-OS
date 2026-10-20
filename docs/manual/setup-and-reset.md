@@ -48,7 +48,8 @@ What stays on the disk depends on its encryption:
 ## The disk password
 
 To change it yourself, run `herald-os password --disk` in a terminal. It asks for your account
-password (for `sudo`), the current disk password, then the new one twice. It adds the new one and
+password (for `sudo`), the current disk password (the one typed at start-up, not a recovery
+key, which it refuses), then the new one twice. It adds the new one and
 checks it before it removes the old one, so the disk always has a password that opens it; keep the
 computer on until it says it is done. If the new owner chose "Later" in setup, `herald-os password
 --disk --new-owner` does what setup would have done.

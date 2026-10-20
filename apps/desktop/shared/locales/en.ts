@@ -673,6 +673,7 @@ export const en = {
   'firstRun.disk.laterHint': 'Until you change it, the old disk password still opens the disk; herald-os password --disk --new-owner changes it later.',
   'firstRun.disk.notAscii': 'Use only letters, digits, spaces and the symbols on the keyboard, without accents or other scripts: there is no input method when the computer starts.',
   'firstRun.disk.wrongCurrent': 'That is not the disk password the computer asked for when it started. Nothing was changed.',
+  'firstRun.disk.recoveryKey': 'That is a recovery key, not the disk password. Type the password the computer asked for when it started; the recovery key stays as it is. Nothing was changed.',
   'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
