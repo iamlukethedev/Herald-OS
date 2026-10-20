@@ -4,6 +4,7 @@ gnome-keyring unit, and `herald-os keyring`."""
 import configparser
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -153,6 +154,20 @@ def test_the_keyring_state_comes_from_gnome_keyring_s_files(tmp_path, files, sta
     assert cli.keyring_state(keyrings(tmp_path, files)) == state
 
 
+@pytest.mark.parametrize("name, where", [
+    # A keyring outside the folder, which the name would reach.
+    ("../login", lambda folder: folder.parent / "login.keyring"),
+    ("sub/login", lambda folder: folder / "sub" / "login.keyring"),
+    (".hidden", lambda folder: folder / ".hidden.keyring"),
+])
+def test_a_default_name_that_is_not_a_plain_file_name_is_not_followed(tmp_path, name, where):
+    folder = keyrings(tmp_path, {"default": name.encode()})
+    target = where(folder)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(PLAIN)
+    assert cli.keyring_state(folder) == "other"
+
+
 def test_a_missing_folder_is_no_keyring(tmp_path):
     assert cli.keyring_state(tmp_path / "nowhere") == "none"
 
@@ -178,6 +193,26 @@ def test_the_folder_follows_xdg_data_home(tmp_path, monkeypatch):
 def test_keyring_password_rules(password, again, said):
     problem = cli.keyring_password_problem(password, again)
     assert (problem is None) if said is None else (said in problem and "Nothing was changed" in problem)
+
+
+@pytest.mark.parametrize("stdin, password", [
+    ("correct horse\n", "correct horse"),
+    ("correct horse", "correct horse"),
+    # Spaces are part of a password; only the one newline that ends the line goes.
+    ("  correct horse  \n", "  correct horse  "),
+    ("\tcorrect horse\t\n", "\tcorrect horse\t"),
+])
+def test_a_password_on_stdin_is_taken_as_typed(monkeypatch, stdin, password):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(stdin))
+    assert cli.keyring_password_input() == password
+
+
+@pytest.mark.parametrize("stdin", ["correct horse\n\n", "correct\nhorse\n", "\ncorrect horse\n"])
+def test_more_than_one_line_on_stdin_is_refused(monkeypatch, capsys, stdin):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(stdin))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and "one line" in capsys.readouterr().err
 
 
 def test_the_unencrypted_note_is_only_for_a_disk_known_to_be_unencrypted(monkeypatch):
