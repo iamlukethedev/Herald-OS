@@ -117,6 +117,16 @@ def test_the_cli_refuses_wrong_disk_arguments():
     assert result.returncode == 2 and "JSON" in result.stderr
 
 
+def test_a_new_password_that_does_not_open_the_disk_is_taken_back(monkeypatch, capsys):
+    """luksAddKey said yes, but the new password opens nothing: the old one must stay, the new one go."""
+    calls = []
+    monkeypatch.setattr(cli, "cryptsetup", lambda args, key=None, new=None: calls.append((args[0], key)) or subprocess.CompletedProcess(args, 0, b"", b""))
+    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: 0 if passphrase == OLD else None)
+    assert cli.disk_change(["/dev/vda3"], OLD, NEW, False, {"/dev/vda3": 0}) == 1
+    assert calls == [("luksAddKey", OLD), ("luksRemoveKey", NEW)]
+    assert "does not open /dev/vda3" in capsys.readouterr().err
+
+
 # ----- real LUKS2 images
 
 
