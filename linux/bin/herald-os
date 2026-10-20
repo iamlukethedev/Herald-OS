@@ -3138,8 +3138,15 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
         disk_say(f"Adding the new disk password to {device}…")
         if luks_slot(device, new) is None:
             result = cryptsetup(["luksAddKey", device], current, new)
-            if result.returncode != 0:
-                return take_back(f"the new disk password could not be added to {device}: {cryptsetup_said(result)}")
+            if result.returncode != 0 and luks_slot(device, new) is not None:
+                # cryptsetup reached by Ctrl+C finishes writing the key slot, then exits 1 without a word.
+                disk_say(f"herald-os: cryptsetup said the new disk password could not be added to {device} ({cryptsetup_said(result)}, "
+                         "as when Ctrl+C reaches it), but it opens it; going on.", file=sys.stderr)
+            elif result.returncode != 0:
+                said = cryptsetup_said(result)
+                if not (result.stderr or result.stdout):
+                    said += ", without a message, as it does when Ctrl+C reaches it"
+                return take_back(f"the new disk password could not be added to {device}: {said}")
             added.append(device)
         slot = luks_which_slot(device, new)
         if slot is None or slot == old_slots[device]:

@@ -149,7 +149,10 @@ def test_a_rollback_that_works_says_nothing_was_changed(monkeypatch, capsys):
     opened = stand_in_disks(monkeypatch, lambda device: 0)
     assert cli.disk_change(["/dev/vda3", "/dev/vdb1"], OLD, NEW, False, {"/dev/vda3": 0, "/dev/vdb1": 0}) == 1
     assert opened == {"/dev/vda3": {OLD}, "/dev/vdb1": {OLD}}
-    assert "nothing was changed" in capsys.readouterr().err
+    said = capsys.readouterr().err
+    # The failed add's own words, not the generic "does not open ... after adding it".
+    assert "the new disk password could not be added to /dev/vdb1: Keyslot area too small." in said
+    assert "after adding it" not in said and "nothing was changed" in said
 
 
 @pytest.mark.parametrize("remove", [
@@ -551,6 +554,29 @@ def test_a_take_back_never_removes_a_slot_a_token_came_to_use(tmp_path, monkeypa
     assert slots(first) == ["0", "1"] and json.loads(dump(first))["tokens"]["0"]["keyslots"] == ["1"]
 
 
+@needs_cryptsetup
+def test_a_real_cryptsetup_interrupted_while_adding_still_finishes_the_change(tmp_path):
+    """cryptsetup 2.7, reached by SIGINT during luksAddKey, writes the key slot and then exits 1 without
+    a word. The change sees the new password opens the device and finishes."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "cryptsetup").write_text(
+        "#!/bin/sh\n"
+        # A background job gets /dev/null for stdin, so the current password goes in through fd 9 (the
+        # new one comes as /dev/fd/3 or so, which must stay as it is).
+        f'if [ "$1" = luksAddKey ]; then exec 9<&0; {CRYPTSETUP} "$@" <&9 9<&- & pid=$!; exec 9<&-; sleep 0.5; kill -INT "$pid"; wait "$pid"; exit $?; fi\n'
+        f'exec {CRYPTSETUP} "$@"\n')
+    (folder / "cryptsetup").chmod(0o755)
+    env = {**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"}
+    result = subprocess.run([sys.executable, str(CLI), "password", "--disk-root", "change"], input=json.dumps({"devices": [str(disk)], "current": OLD, "new": NEW}),
+                            capture_output=True, text=True, env=env, timeout=600)
+    assert result.returncode == 0, result.stderr
+    assert opens(disk, NEW) and not opens(disk, OLD)
+    if "going on" not in result.stderr:
+        pytest.skip("this cryptsetup finished luksAddKey before the interrupt reached it")
+
+
 def fake_tools(folder: Path, disk: Path, *more: Path) -> dict:
     """sudo that runs the command (and asks once, like sudo -v), and lsblk and findmnt that show the images
     as the root's LUKS devices (one btrfs over all of them, mounted from the first)."""
@@ -838,10 +864,13 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
         if args[0] == "luksDump":
             return subprocess.CompletedProcess(args, 0, json.dumps({"keyslots": {str(n): {} for n in slots}, "tokens": header["tokens"]}).encode(), b"")
         if args[0] == "luksAddKey":
+            if header.get("add") == "silent failure":
+                return subprocess.CompletedProcess(args, 1, b"", b"")
             slots[min(set(range(32)) - set(slots))] = new
             if on_add:
                 on_add(header)
-            return ok
+            # As cryptsetup does when Ctrl+C reaches it: the slot is written, then it exits 1 without a word.
+            return subprocess.CompletedProcess(args, 1, b"", b"") if header.get("add") == "interrupted" else ok
         if args[0] == "luksRemoveKey":
             slot = next((n for n, value in sorted(slots.items()) if value == key), None)
             if slot is None:
@@ -984,6 +1013,25 @@ def test_a_tellable_failure_still_advises_running_it_again(monkeypatch, capsys):
     assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_PARTLY
     said = capsys.readouterr().err
     assert "again with the new password as the current one" in said and "Running this again would ask" not in said
+
+
+def test_an_add_that_says_it_failed_but_wrote_the_key_goes_on(monkeypatch, capsys):
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+    header["add"] = "interrupted"
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
+    said = capsys.readouterr().err
+    assert "cryptsetup said the new disk password could not be added to /dev/vda3" in said and "as when Ctrl+C reaches it" in said
+    assert "going on" in said and "nothing was changed" not in said
+    assert list(header["keyslots"].values()) == [NEW]
+
+
+def test_a_silent_failed_add_says_ctrl_c_may_be_why(monkeypatch, capsys):
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+    header["add"] = "silent failure"
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
+    said = capsys.readouterr().err
+    assert "could not be added to /dev/vda3: cryptsetup exited 1, without a message, as it does when Ctrl+C reaches it" in said
+    assert header["keyslots"] == {0: OLD}
 
 
 def test_the_old_password_is_never_removed_from_a_slot_a_token_came_to_use(monkeypatch, capsys):
