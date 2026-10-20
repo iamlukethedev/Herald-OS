@@ -581,11 +581,11 @@ describe("first-run setup's keyring", () => {
     expect(bridge.setup.keyring).not.toHaveBeenCalled()
   })
 
-  it.each([
+  it.each<[boolean, string]>([
     // The system disk does not decide: only the disk that holds the keyring folder does.
     [true, 'an encrypted system disk'],
     [false, 'a system disk that is not encrypted, under an encrypted home']
-  ] as const)('makes one with no password of its own when its disk is encrypted, with %s, without asking, and says so at the end', async diskEncrypted => {
+  ])('makes one with no password of its own when its disk is encrypted, with %s, without asking, and says so at the end', async diskEncrypted => {
     const host = await afterTheAccount({ diskEncrypted, keyringEncrypted: true, keyring: 'none' })
     expect(heading(host)).toBe(t('firstRun.wifi.title'))
     expect(bridge.setup.keyring).toHaveBeenCalledExactlyOnceWith({ password: '' })
