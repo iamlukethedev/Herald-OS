@@ -380,7 +380,11 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   then removes the old one, so an interruption leaves a password that works.
 - **Key slots.** Every slot in the header is tried on its own (`--test-passphrase --key-slot N`), so
   it knows each slot a password opens and the tokens that use each, not only the slot cryptsetup
-  names first. Removing a password means `luksKillSlot` on exactly those slots, never a token's.
+  names first. Removing a password means `luksKillSlot` on exactly those slots, never a token's;
+  a kill that says it failed counts as done when the header no longer lists the slot. Only
+  cryptsetup's "no key available" (exit 2) counts as a password not opening a slot: any other
+  failure is unclear, and stops a change there (exit 6) or refuses before one (exit 1), never
+  "Done" or "nothing was changed".
 - **Refusals before anything changes.** A current password that opens only a slot a token uses is
   not the disk password: exit 9 for the recovery key, 10 TPM, 11 FIDO2, 12 another token's, or a
   slot that cannot be told. A current password that opens a plain slot of its own and also a
@@ -396,15 +400,16 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   password on purpose: if this run fails and takes the new password back, that slot goes too. The
   current password still opens its own slot on that device.
 - **When it fails part-way.** If adding fails on one device, the new password comes back out of the
-  others. An add cryptsetup calls failed is checked first: cryptsetup 2.7 reached by Ctrl+C writes
-  the key slot and then exits 1 without a word, so when the new password opens the device after
-  all, the change says so and goes on. A device it cannot be taken back out of (cryptsetup fails, the slot is a token's, or it
-  still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means the change
-  ended without finishing: an old password could not be removed after the new one went in,
-  cryptsetup ran out of time (the message names the devices), or the root side was killed. The last
-  two can come before anything changed as well as part-way; nothing is removed before the new
-  password opens every device, so the current one or the new one (or both) opens each, and after a
-  killed root side the command looks and says which.
+  others. An add cryptsetup calls failed is checked first, by comparing the key slot numbers from
+  before and after: only a slot that was not there before, that the new password opens on its own
+  and that no token uses counts as added, and the change goes on. A slot the new password opened
+  already never does. A device it cannot be taken back out of (cryptsetup fails, the slot is a
+  token's, or it still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means
+  the change ended without finishing: an old password could not be removed after the new one went
+  in, cryptsetup ran out of time (the message names the devices), a check gave no clear answer, or
+  the root side was killed. The last three can come before anything changed as well as part-way;
+  nothing is removed before the new password opens every device, so the current one or the new one
+  (or both) opens each, and after a killed root side the command looks and says which.
 - **A key slot that cannot be told.** On a cryptsetup that names no slot and where no slot opens on
   its own, the change cannot tell which slot is the new one, or which one the old password is in.
   `--new-owner` then leaves the other slots, and a plain change leaves the old password's slot; both
@@ -413,7 +418,10 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   --test-passphrase --key-slot`, `luksKillSlot`, never on a slot a token uses).
 - **Signals.** While it runs, Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits
   for the root side to finish or put things back, continues it if it stops after a Ctrl+Z, and says
-  how it ended. It says that it waits only once the root side has begun adding the new password (it
+  how it ended. The root side ignores them, and cryptsetup, which sets its own SIGINT handler and
+  would be reached through sudo's terminal or the same process group, starts in a session of its
+  own for the whole change, so none of them reaches it. Both sides keep them held after the change
+  until they exit. It says that it waits only once the root side has begun adding the new password (it
   passes the root side's output on and watches for that). Ctrl+C at a prompt, during the current
   password's check, or before the change begins stops with nothing changed, said once (exit 130),
   also when only the root side was stopped.

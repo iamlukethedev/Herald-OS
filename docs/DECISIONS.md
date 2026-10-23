@@ -1682,7 +1682,10 @@ the installer less of the person's.
   the new passphrase, checks that it opens every LUKS device under the root filesystem (a btrfs over
   two encrypted disks has two), and only then removes the old one, rather than `luksChangeKey`,
   which replaces a slot device by device without a check in between. Signals wait until it is done,
-  on both sides: the person's side waits for the root side rather than stopping sudo with it.
+  on both sides: the person's side waits for the root side rather than stopping sudo with it, and
+  cryptsetup runs in a session of its own during the change, since it sets its own SIGINT handler and
+  an interrupted cryptsetup exits 1 after writing or removing a slot, or with a password that opens
+  one. Only its "no key available" answer counts as a password not opening a slot.
   Only a key slot of its own counts as the disk password. A secret that opens a slot a token uses
   (the recovery key, TPM or FIDO2) is refused, whether it opens only that slot (it is not the disk
   password) or a plain slot as well (the same secret in both, which that way of unlocking must stop
