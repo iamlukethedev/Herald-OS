@@ -619,7 +619,9 @@ describe('a disk password whose secret another way of unlocking shares', () => {
       $prefs.set({ ...$prefs.get(), language })
       const text = t('firstRun.disk.sharedSecret')
       expect(text, language).toContain('herald-os password --disk --new-owner')
-      expect(text, language).toContain('TPM')
+      // A TPM token's secret is random, never a password typed twice: the examples are the recovery key and a password.
+      expect(text, language).not.toContain('TPM')
+      expect(text, language).toContain({ en: 'recovery key', 'pt-BR': 'chave de recuperação', 'zh-CN': '恢复密钥' }[language])
     }
     $prefs.set({ ...$prefs.get(), language: 'en' })
     expect(t('firstRun.disk.sharedSecret')).not.toMatch(/type the password/i)

@@ -682,9 +682,9 @@ export const en = {
   'firstRun.disk.otherKey': 'That is not the disk password: it belongs to another way of unlocking the disk, or Herald OS could not tell whether it does. Type the password the computer asked for when it started. Nothing was changed.',
   'firstRun.disk.newIsOtherKey': 'That new disk password already belongs to another way of unlocking the disk, such as the recovery key. Choose a different one. Nothing was changed.',
   'firstRun.disk.sameAsCurrent': 'The new disk password is the one you typed when the computer started. Choose a different one.',
-  // TPM and herald-os password --disk --new-owner stay as they are.
+  // herald-os password --disk --new-owner stays as it is.
   'firstRun.disk.sharedSecret':
-    'Your disk password is right, but the same secret also unlocks the disk another way, such as the recovery key or the TPM. Changing it now would remove that way as well, or leave the old password working through it. Give that way of unlocking a secret of its own first (or remove it), then change the disk password with herald-os password --disk --new-owner. Nothing was changed.',
+    'Your disk password is right, but the same secret also unlocks the disk another way, such as a recovery key or a second password set to the same thing. Changing it now would remove that way as well, or leave the old password working through it. Give that way of unlocking a secret of its own first (or remove it), then change the disk password with herald-os password --disk --new-owner. Nothing was changed.',
   'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
