@@ -2837,23 +2837,38 @@ def disk_password_problem(new: str, again: str, current: str) -> str | None:
     return None
 
 
+# While the change runs (disk_signals_held), cryptsetup starts in a session of its own, so nothing sent
+# to the terminal's processes reaches it: Ctrl+C there reaches it otherwise, through sudo's terminal or
+# the same process group, as it sets its own SIGINT handler rather than keeping an ignored one, and an
+# interrupted cryptsetup exits 1, also after writing a key slot or with a password that opens one.
+CRYPTSETUP_OWN_SESSION = {"on": False}
+# The exit status cryptsetup gives a passphrase that opens no key slot ("No key available with this
+# passphrase"). Any other failure of --test-passphrase says nothing about whether it opens.
+CRYPTSETUP_NO_KEY = 2
+
+
+class LuksUnsure(Exception):
+    """cryptsetup ended without saying whether a passphrase opens a device (interrupted, busy, …)."""
+
+
 def cryptsetup(args: list[str], key: str | None = None, new: str | None = None) -> subprocess.CompletedProcess:
     """cryptsetup, with a passphrase on stdin and a new one through a pipe. --key-file=- reads to the end
     of the input, newline and all, so each goes in without one: the same bytes as typed at start-up.
     External token plugins are kept out, so a TPM or FIDO2 token cannot stand in for the passphrase."""
     argv = ["cryptsetup", args[0], "--disable-external-tokens", *args[1:]]
     env = {**os.environ, "LC_ALL": "C"}
+    own = {"start_new_session": CRYPTSETUP_OWN_SESSION["on"]}
     if key is None:
-        return subprocess.run(argv, capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT)
+        return subprocess.run(argv, capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT, **own)
     argv.insert(2, "--key-file=-")
     if new is None:
-        return subprocess.run(argv, input=key.encode(), capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT)
+        return subprocess.run(argv, input=key.encode(), capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT, **own)
     read, write = os.pipe()
     try:
         os.write(write, new.encode())
         os.close(write)
         write = -1
-        return subprocess.run([*argv, f"/dev/fd/{read}"], input=key.encode(), capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT, pass_fds=(read,))
+        return subprocess.run([*argv, f"/dev/fd/{read}"], input=key.encode(), capture_output=True, env=env, timeout=CRYPTSETUP_TIMEOUT, pass_fds=(read,), **own)
     finally:
         os.close(read)
         if write >= 0:
@@ -2865,10 +2880,24 @@ def cryptsetup_said(result: subprocess.CompletedProcess) -> str:
     return text.splitlines()[-1] if text else f"cryptsetup exited {result.returncode}"
 
 
+def luks_tried(device: str, passphrase: str, slot: int | None = None) -> subprocess.CompletedProcess | None:
+    """--test-passphrase, on one key slot with `slot`: cryptsetup's result when the passphrase opens it,
+    None only when cryptsetup plainly says it does not (no key available). Anything else raises
+    LuksUnsure, never "does not open": an interrupted cryptsetup exits 1 even after "Key slot N unlocked"."""
+    result = cryptsetup(["open", "--test-passphrase", "-v", *([] if slot is None else ["--key-slot", str(slot)]), device], passphrase)
+    if result.returncode == 0:
+        return result
+    if result.returncode == CRYPTSETUP_NO_KEY:
+        return None
+    where = device if slot is None else f"key slot {slot} of {device}"
+    raise LuksUnsure(f"cryptsetup could not tell whether a password opens {where} ({cryptsetup_said(result)})")
+
+
 def luks_slot(device: str, passphrase: str) -> int | None:
-    """The key slot the passphrase opens, -1 when it opens one cryptsetup did not name, None when it opens none."""
-    result = cryptsetup(["open", "--test-passphrase", "-v", device], passphrase)
-    if result.returncode != 0:
+    """The key slot the passphrase opens, -1 when it opens one cryptsetup did not name, None when it opens
+    none; LuksUnsure when that cannot be told."""
+    result = luks_tried(device, passphrase)
+    if result is None:
         return None
     match = re.search(rb"Key slot (\d+) unlocked", (result.stdout or b"") + (result.stderr or b""))
     return int(match.group(1)) if match else -1
@@ -2885,7 +2914,7 @@ def luks_which_slot(device: str, passphrase: str) -> int | None:
     except (RuntimeError, json.JSONDecodeError):
         return -1
     for each in listed:
-        if cryptsetup(["open", "--test-passphrase", "--key-slot", str(each), device], passphrase).returncode == 0:
+        if luks_tried(device, passphrase, each) is not None:
             return each
     return -1
 
@@ -2897,17 +2926,43 @@ def luks_opened_slots(device: str, passphrase: str) -> tuple[list[int], dict[int
     json.JSONDecodeError when the header cannot be read."""
     metadata = luks_metadata(device)
     listed = sorted(int(each) for each in (metadata.get("keyslots") or {}) if str(each).isdigit())
-    opened = [each for each in listed
-              if cryptsetup(["open", "--test-passphrase", "--key-slot", str(each), device], passphrase).returncode == 0]
+    opened = [each for each in listed if luks_tried(device, passphrase, each) is not None]
     return opened, {each: kinds for each in opened if (kinds := luks_slot_tokens(metadata, each))}
 
 
+def luks_slot_numbers(device: str) -> set[int] | None:
+    """The key slot numbers the header lists, or None when it cannot be read."""
+    try:
+        return {int(each) for each in (luks_metadata(device).get("keyslots") or {}) if str(each).isdigit()}
+    except (RuntimeError, json.JSONDecodeError):
+        return None
+
+
+def disk_appeared_slots(device: str, passphrase: str, before: set[int] | None) -> list[tuple[int, list[str]]]:
+    """The key slots that were not in `before` and that the passphrase opens on its own, each with the
+    token types that use it; none when either header cannot be read."""
+    if before is None:
+        return []
+    try:
+        metadata = luks_metadata(device)
+    except (RuntimeError, json.JSONDecodeError):
+        return []
+    now = sorted(int(each) for each in (metadata.get("keyslots") or {}) if str(each).isdigit())
+    return [(each, luks_slot_tokens(metadata, each)) for each in now
+            if each not in before and luks_tried(device, passphrase, each) is not None]
+
+
 def luks_kill_slots(device: str, slots: list[int], key: str) -> list[str]:
-    """luksKillSlot each of these slots, with a passphrase that opens another one; what went wrong."""
+    """luksKillSlot each of these slots, with a passphrase that opens another one; what went wrong. A kill
+    that says it failed is looked at again: an interrupted cryptsetup may remove the slot and still exit 1,
+    so a slot the header no longer lists counts as removed."""
     problems = []
     for slot in slots:
         result = cryptsetup(["luksKillSlot", device, str(slot)], key)
         if result.returncode != 0:
+            left = luks_slot_numbers(device)
+            if left is not None and slot not in left:
+                continue
             problems.append(f"key slot {slot} of {device} could not be removed: {cryptsetup_said(result)}")
     return problems
 
@@ -2976,22 +3031,30 @@ def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str
 
 @contextlib.contextmanager
 def disk_signals_held():
-    """Ctrl+C, a closed terminal or a stop request wait until the change is done (cryptsetup inherits it)."""
-    # SIG_IGN on purpose, not a Python handler: an ignored signal stays ignored across exec, so the
-    # cryptsetup children (and what sudo passes on to them) cannot be stopped between writing a key slot
-    # and the header that records it. That is bounded: each cryptsetup call has CRYPTSETUP_TIMEOUT
-    # (300 s), after which subprocess kills it with SIGKILL, which cannot be ignored, and SIGKILL still
-    # stops this process. setup ssh does it the other way round: its rollback keeps Python handlers that
-    # do nothing (ssh_ignored), which exec resets to the default, because its commands may be stopped
-    # (each runs in a process group of its own and is ended when its time is up), and a signal
-    # arriving there must not raise in the middle of the rollback.
+    """Ctrl+C, a closed terminal or a stop request wait until the change is done, here and in cryptsetup."""
+    # This process ignores them (SIG_IGN). That alone does not hold cryptsetup: it sets its own SIGINT
+    # handler, so a Ctrl+C that reaches it (through sudo's terminal, or the same process group) stops it,
+    # with exit 1, between writing a key slot and saying so, or in the middle of a check. So cryptsetup
+    # starts in a session of its own while the change runs (CRYPTSETUP_OWN_SESSION): no terminal, no
+    # process group of the terminal's, and nothing sent to those reaches it. That is bounded: each
+    # cryptsetup call has CRYPTSETUP_TIMEOUT (300 s), after which subprocess kills it with SIGKILL, and
+    # SIGKILL still stops this process. The check of the current password, before the change, stays in
+    # the terminal's session, where Ctrl+C stops it with nothing changed. setup ssh does it the other way
+    # round: its rollback keeps Python handlers that do nothing (ssh_ignored), which exec resets to the
+    # default, because its commands may be stopped (each runs in a process group of its own and is ended
+    # when its time is up), and a signal arriving there must not raise in the middle of the rollback.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, signal.SIG_IGN) for held_signal in held}
+    CRYPTSETUP_OWN_SESSION["on"] = True
     try:
         yield
     finally:
-        for held_signal, handler in before.items():
-            signal.signal(held_signal, handler)
+        CRYPTSETUP_OWN_SESSION["on"] = False
+        # Run as its own process, the root side ends right after the change: the handlers from before
+        # would let a late Ctrl+C kill it between saying it is done and exiting, so the signals stay held.
+        if not SSH_OWN_PROCESS:
+            for held_signal, handler in before.items():
+                signal.signal(held_signal, handler)
 
 
 def disk_root(args: list[str]) -> int:
@@ -3002,11 +3065,21 @@ def disk_root(args: list[str]) -> int:
         # Only before the change: once it starts, Ctrl+C is ignored until it is done (disk_signals_held).
         # Quietly: the person's side says it, once, as Ctrl+C reaches both.
         return 130
+    except LuksUnsure as error:
+        # Only before the change, which handles its own (disk_change's caller).
+        die(f"{error}. Nothing was changed.", 1)
+        return 1
 
 
 def disk_probe(devices: list[str], current: str, new: str) -> dict:
-    """Which of the two passwords opens each device now, for a change that ended without saying."""
-    return {device: {"current": luks_slot(device, current) is not None, "new": bool(new) and luks_slot(device, new) is not None} for device in devices}
+    """Which of the two passwords opens each device now, for a change that ended without saying; None
+    for one cryptsetup could not tell."""
+    def opens(device: str, passphrase: str) -> bool | None:
+        try:
+            return bool(passphrase) and luks_slot(device, passphrase) is not None
+        except LuksUnsure:
+            return None
+    return {device: {"current": opens(device, current), "new": opens(device, new)} for device in devices}
 
 
 def disk_root_op(args: list[str]) -> int:
@@ -3062,6 +3135,12 @@ def disk_root_op(args: list[str]) -> int:
     with disk_signals_held():
         try:
             return disk_change(devices, current, new, new_owner, old_slots)
+        except LuksUnsure as error:
+            # A check without an answer is never taken for "does not open": the change stops there.
+            disk_say(f"herald-os: {error}, so the change stopped there, maybe part-way on {' and '.join(devices)}. Nothing is "
+                     "removed before the new password opens every device, so the current one or the new one (or both) opens "
+                     "each: try the new one first at the next start, then run `herald-os password --disk` again.", file=sys.stderr)
+            return DISK_PARTLY
         except subprocess.TimeoutExpired as error:
             disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped, "
                      f"so the change may have stopped part-way on {' and '.join(devices)}. Nothing is removed before the new password "
@@ -3116,7 +3195,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                     failed = luks_kill_slots(device, [slot for slot in opened if slot != old_slots[device]], current)
                     why_left = failed[0] if failed else ""
                 gone = not why_left and luks_slot(device, new) is None
-            except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError) as error:
+            except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError, LuksUnsure) as error:
                 why_left, gone = str(error), False
             if not gone:
                 left.append(device)
@@ -3136,19 +3215,33 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
 
     for device in devices:
         disk_say(f"Adding the new disk password to {device}…")
-        if luks_slot(device, new) is None:
+        if device in leftover:
+            slot = luks_which_slot(device, new)
+        else:
+            before = luks_slot_numbers(device)
             result = cryptsetup(["luksAddKey", device], current, new)
-            if result.returncode != 0 and luks_slot(device, new) is not None:
-                # cryptsetup reached by Ctrl+C finishes writing the key slot, then exits 1 without a word.
-                disk_say(f"herald-os: cryptsetup said the new disk password could not be added to {device} ({cryptsetup_said(result)}, "
-                         "as when Ctrl+C reaches it), but it opens it; going on.", file=sys.stderr)
-            elif result.returncode != 0:
+            if result.returncode == 0:
+                added.append(device)
+                slot = luks_which_slot(device, new)
+            else:
+                # An interrupted cryptsetup may write the key slot and still exit 1. Only a slot that was
+                # not there before, that the new password opens on its own and no token uses, counts as
+                # added; a slot the new password opened already never does (the recovery key's, say).
+                appeared = disk_appeared_slots(device, new, before)
+                accepted = [each for each, kinds in appeared if not kinds]
                 said = cryptsetup_said(result)
                 if not (result.stderr or result.stdout):
                     said += ", without a message, as it does when Ctrl+C reaches it"
-                return take_back(f"the new disk password could not be added to {device}: {said}")
-            added.append(device)
-        slot = luks_which_slot(device, new)
+                if accepted:
+                    disk_say(f"herald-os: cryptsetup said the new disk password could not be added to {device} ({said}), but it "
+                             f"wrote key slot {accepted[0]}, which the new password opens; going on.", file=sys.stderr)
+                    added.append(device)
+                    slot = accepted[0]
+                else:
+                    if appeared:
+                        # A new slot the new password opens, but a token uses it: the take back leaves it and says so.
+                        added.append(device)
+                    return take_back(f"the new disk password could not be added to {device}: {said}")
         if slot is None or slot == old_slots[device]:
             return take_back(f"the new disk password does not open {device} after adding it")
         new_slots[device] = slot
@@ -3259,6 +3352,8 @@ def disk_helper_change(request: dict) -> int:
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, wait_on) for held_signal in held}
     try:
+        # Said only now that a stop waits: a Ctrl+C before this line stops with nothing changed.
+        disk_say("Adding the new disk password and checking it, then removing the old one. Keep the computer on until it is done.")
         process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         with contextlib.suppress(OSError):
             process.stdin.write(json.dumps(request).encode())
@@ -3266,8 +3361,10 @@ def disk_helper_change(request: dict) -> int:
             process.stdin.close()
         code = disk_wait(process, stops, relay)
     finally:
+        # Run as its own process, not the handlers from before: once the root side has ended, what is left
+        # is saying how it ended (and maybe looking), which a late Ctrl+C must not cut short.
         for held_signal, handler in before.items():
-            signal.signal(held_signal, handler)
+            signal.signal(held_signal, signal.SIG_IGN if SSH_OWN_PROCESS else handler)
     if code in DISK_ENDS:
         return code
     return disk_report_end(request, code)
@@ -3335,7 +3432,10 @@ def disk_end_lines(state: dict) -> list[str]:
              (False, True): "the new disk password opens it, the current one no longer does",
              (True, False): "the current disk password opens it, the new one does not",
              (False, False): "neither password opens it"}
-    return [f"{device}: {words[(bool(opens.get('current')), bool(opens.get('new')))]}" for device, opens in state.items() if isinstance(opens, dict)]
+    return [f"{device}: " + ("it could not be checked; try the new disk password first, then the current one"
+                             if opens.get("current") is None or opens.get("new") is None
+                             else words[(bool(opens["current"]), bool(opens["new"]))])
+            for device, opens in state.items() if isinstance(opens, dict)]
 
 
 def disk_report_end(request: dict, code: int) -> int:
@@ -3408,8 +3508,12 @@ def disk_password(args: list[str]) -> int:
     problem = disk_password_problem(new, again, current)
     if problem:
         die(problem, 2)
-    print("Adding the new disk password and checking it, then removing the old one. Keep the computer on until it is done.")
-    code = disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
+    try:
+        code = disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
+    except KeyboardInterrupt:
+        # Only before disk_helper_change holds Ctrl+C, so before the root side has started.
+        print(file=sys.stderr)
+        die("stopped. Nothing was changed.", 130)
     if code == 130:
         # The root side was stopped before its change began (it ignores Ctrl+C from then on).
         die("stopped. Nothing was changed.", 130)
@@ -5062,7 +5166,8 @@ SSH_STOP: dict = {"by": None}
 # True when herald-os runs as its own process (set where it starts), not imported. A signal that stops
 # `on` then decides the process's exit code, so INT, TERM and HUP stay blocked from the end of `on`
 # until the process has exited: the handlers put back there (SIGTERM's default ends the process at once)
-# would otherwise let a later signal replace that code in the moments before the exit.
+# would otherwise let a later signal replace that code in the moments before the exit. The disk
+# password's change uses it the same way: its signals stay held from the end of the change to the exit.
 SSH_OWN_PROCESS = False
 
 
