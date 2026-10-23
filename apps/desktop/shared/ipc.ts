@@ -478,10 +478,14 @@ export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' 
  * `notAdmin`: sudo refused the account password; `notAscii`: a character there is no sure way to type
  * at start-up; `partly`: the new one was added but an old one could not be taken out; `notTakenBack`: adding it failed
  * part-way, and it could not be taken back out of every device, so it may open some of them too;
- * `recoveryKey`: what was typed opens the recovery key's slot (or one TPM or FIDO2 unlocking uses), not
- * the disk password's.
+ * `recoveryKey`, `tpmKey`, `fido2Key`, `otherKey`: what was typed opens the key slot the recovery key,
+ * TPM unlocking, security key (FIDO2) unlocking or another way of unlocking uses, or one that cannot be
+ * told apart from such a slot (`otherKey`), not the disk password's; `newIsOtherKey`: the new one already
+ * opens a slot another way of unlocking uses; `sameAsCurrent`: the new one is the one typed at start-up;
+ * `sharedSecret`: the current one is the disk password, but the same secret also opens a slot another
+ * way of unlocking uses, which needs a secret of its own before the disk password can change.
  */
-export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'notTakenBack' | 'recoveryKey' | 'timeout' | 'noTerminal' | 'failed'
+export type DiskPasswordFailure = 'tooShort' | 'notAscii' | 'wrongCurrent' | 'notAdmin' | 'notEncrypted' | 'partly' | 'notTakenBack' | 'recoveryKey' | 'tpmKey' | 'fido2Key' | 'otherKey' | 'newIsOtherKey' | 'sameAsCurrent' | 'sharedSecret' | 'timeout' | 'noTerminal' | 'failed'
 
 export interface SetupResult {
   ok: boolean
