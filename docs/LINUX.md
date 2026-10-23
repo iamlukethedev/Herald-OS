@@ -421,7 +421,8 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   how it ended. The root side ignores them, and cryptsetup, which sets its own SIGINT handler and
   would be reached through sudo's terminal or the same process group, starts in a session of its
   own for the whole change, so none of them reaches it. Both sides keep them held after the change
-  until they exit. It says that it waits only once the root side has begun adding the new password (it
+  until they exit. Once the root side has said the change is done, a failure of sudo's own after it
+  (a Ctrl+C at that moment can leave it with "Broken pipe" and exit 1) is said, and the command exits 0. It says that it waits only once the root side has begun adding the new password (it
   passes the root side's output on and watches for that). Ctrl+C at a prompt, during the current
   password's check, or before the change begins stops with nothing changed, said once (exit 130),
   also when only the root side was stopped.

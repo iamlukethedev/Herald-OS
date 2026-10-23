@@ -2724,6 +2724,8 @@ DISK_ASCII_TEXT = ("use only letters, digits, spaces and the symbols on the keyb
                    "it is typed before anything else starts, without an input method. Nothing was changed.")
 # What the root side prints as it begins changing a device; until then a stop changes nothing.
 DISK_CHANGE_BEGINS = b"Adding the new disk password to "
+# What it prints last when the change is done; an exit status after that is sudo's, not the change's.
+DISK_CHANGE_DONE = "Done: the disk asks for the new password at the next start; the old one no longer opens it."
 # How the root side of a change can end and say so itself; any other end (it was killed) is looked
 # at afterwards (disk_probe).
 DISK_ENDS = {0, 1, 2, DISK_WRONG, DISK_NOT_ENCRYPTED, DISK_PARTLY, DISK_NOT_TAKEN_BACK, DISK_RECOVERY_KEY, DISK_TPM_SLOT, DISK_FIDO2_SLOT, DISK_OTHER_SLOT, DISK_NEW_IS_OTHER_KEY, DISK_SHARED_SECRET, 127, 130}
@@ -3304,7 +3306,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
     if new_owner:
         with contextlib.suppress(OSError):
             NEW_OWNER_MARK.unlink(missing_ok=True)
-    disk_say("Done: the disk asks for the new password at the next start; the old one no longer opens it.")
+    disk_say(DISK_CHANGE_DONE)
     return 0
 
 
@@ -3327,7 +3329,7 @@ def disk_helper_change(request: dict) -> int:
     # Whether the root side has begun changing the disk (it says "Adding the new disk password to …"),
     # and whether that a stop waits has been said: only once it has begun. A stop before then ends with
     # "Nothing was changed", which "still changing" must not come just before.
-    progress = {"seen": b"", "started": False, "told": False}
+    progress = {"seen": b"", "started": False, "told": False, "done": False}
 
     def tell() -> None:
         if stops and progress["started"] and not progress["told"]:
@@ -3343,6 +3345,8 @@ def disk_helper_change(request: dict) -> int:
         with contextlib.suppress(OSError):
             os.write(sys.stdout.fileno(), chunk)
         progress["seen"] = (progress["seen"] + chunk)[-256:]
+        if DISK_CHANGE_DONE.encode() in progress["seen"]:
+            progress["done"] = True
         if not progress["started"] and DISK_CHANGE_BEGINS in progress["seen"]:
             progress["started"] = True
             tell()
@@ -3365,6 +3369,11 @@ def disk_helper_change(request: dict) -> int:
         # is saying how it ended (and maybe looking), which a late Ctrl+C must not cut short.
         for held_signal, handler in before.items():
             signal.signal(held_signal, signal.SIG_IGN if SSH_OWN_PROCESS else handler)
+    if code != 0 and progress["done"]:
+        # The root side said the change was done; sudo, ending after it, may still fail (a Ctrl+C at that
+        # moment can leave it with "Broken pipe" and exit 1), which says nothing about the disk.
+        disk_say(f"herald-os: sudo ended with exit {code} after the change was done; the new disk password is in place.", file=sys.stderr)
+        return 0
     if code in DISK_ENDS:
         return code
     return disk_report_end(request, code)

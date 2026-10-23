@@ -478,7 +478,9 @@ def test_ctrl_c_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, 
         answers = answers[1:]
     # From the root side's first "Adding … to" on: the change has begun, and Ctrl+C before it stops with nothing changed.
     code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers, burst_after=f"Adding the new disk password to {first}")
-    assert code == 0 and "Done" in screen and "Traceback" not in screen, screen
+    # Not "Done" on the screen: each Ctrl+C makes the terminal throw away output still queued on it (no
+    # NOFLSH), which can be that last line. The exit code and the disks say how it ended.
+    assert code == 0 and "Traceback" not in screen, screen
     assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
 
 
@@ -871,6 +873,22 @@ def test_a_root_side_that_was_killed_is_looked_at_and_the_end_state_said(monkeyp
     assert "ended before it could say how (signal 9)" in err
     assert "/dev/vda3: the new disk password and the current one both open it" in err
     assert "/dev/vdb1: the current disk password opens it, the new one does not" in err
+
+
+@pytest.mark.parametrize("code", [1, 6, -2])
+def test_a_failure_of_sudo_after_the_change_was_done_is_not_the_change_s(monkeypatch, capsys, code):
+    """The root side says the change is done, then sudo ends with a failure of its own (as with "sudo: :
+    Broken pipe" when Ctrl+C lands at that moment): the change is done, so exit 0, and it says why."""
+    stand_in = f"cat >/dev/null; echo '{cli.DISK_CHANGE_DONE}'; " + ("kill -INT $$" if code < 0 else f"exit {code}")
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: ["sh", "-c", stand_in] if op == "change" else ["false"])
+    assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
+    assert f"sudo ended with exit {code} after the change was done" in capsys.readouterr().err
+
+
+def test_a_failure_without_done_is_still_the_change_s(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: ["sh", "-c", "cat >/dev/null; echo 'Adding the new disk password to /dev/vda3…'; exit 1"] if op == "change" else ["false"])
+    assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
+    assert "after the change was done" not in capsys.readouterr().err
 
 
 def test_when_even_looking_fails_it_says_what_is_sure(monkeypatch, capsys):
