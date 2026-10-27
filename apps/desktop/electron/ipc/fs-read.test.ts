@@ -265,6 +265,17 @@ describe('refusing credential stores', () => {
     await expect(readFile(`${home}/.ssh/not-there`)).rejects.toThrow(PROTECTED)
   })
 
+  it('refuses the keyring folder in its usual place', async () => {
+    // gnome-keyring's folder: one with no password of its own is a plain-text file.
+    expect(HOME_SECRETS).toContain('.local/share/keyrings')
+    write('.local/share/keyrings/login.keyring', '[keyring]')
+    write('.local/share/applications/x.desktop', '[Desktop Entry]')
+    await expect(readFile(`${home}/.local/share/keyrings/login.keyring`)).rejects.toThrow(PROTECTED)
+    await expect(readFile('~/.local/share/keyrings/login.keyring')).rejects.toThrow(PROTECTED)
+    await expect(readDir(`${home}/.local/share/keyrings`)).rejects.toThrow(PROTECTED)
+    expect((await readFile(`${home}/.local/share/applications/x.desktop`)).content).toBe('[Desktop Entry]')
+  })
+
   it('refuses the keyring folder where XDG_DATA_HOME moves it, and only an absolute one', async () => {
     write('data/keyrings/login.keyring', '[keyring]')
     write('data/notes.md', 'notes')
