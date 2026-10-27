@@ -75,7 +75,10 @@ export async function keyringStatus(): Promise<KeyringStatus> {
   }
 }
 
-/** Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). */
+/**
+ * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 5 (no PyGObject)
+ * is a plain failure: the keyring service is not what is missing, and the terminal says what is.
+ */
 const KEYRING_EXITS: Record<number, KeyringFailure> = { 3: 'keyringExists', 4: 'noKeyringService' }
 // Starting gnome-keyring through D-Bus activation and writing the keyring take well under a second.
 const KEYRING_TIMEOUT_MS = 30_000

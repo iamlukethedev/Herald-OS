@@ -649,3 +649,24 @@ def test_the_arch_package_pins_the_package_script_it_ships(flavour):
     import hashlib
     sums = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${sha256sums[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout.split()
     assert hashlib.sha256((ARCH / flavour / "herald-os-package.sh").read_bytes()).hexdigest() in sums
+
+
+def test_without_pygobject_setup_says_so_and_does_not_blame_the_keyring_service(tmp_path):
+    # A gi that cannot be imported, ahead of any real one.
+    fake = tmp_path / "nogi" / "gi"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text('raise ImportError("no PyGObject here")\n')
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    result = run_cli(tmp_path, "setup", "--no-password", env={"PYTHONPATH": str(tmp_path / "nogi"), "XDG_RUNTIME_DIR": str(runtime),
+                                                              "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == cli.KEYRING_NO_GOBJECT == 5, result.stderr
+    assert "needs PyGObject" in result.stderr and "python-gobject" in result.stderr and "python3-gobject-base" in result.stderr
+    assert "did not answer" not in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_depends_on_pygobject_for_herald_os_keyring(flavour):
+    listed = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${depends[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout
+    assert "python-gobject" in listed.split()

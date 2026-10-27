@@ -434,7 +434,9 @@ Setup never replaces a keyring the account already has. `herald-os keyring --sta
 from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
 twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
-rather than gnome-keyring (exit 3); 4 means no keyring service answered. Making it holds
+rather than gnome-keyring (exit 3); 4 means no keyring service answered, and 5 that PyGObject, which
+the command talks to the keyring with, is missing (`python3-gobject-base` on Fedora, `python-gobject` on
+Arch, where the package depends on it). Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made. The password

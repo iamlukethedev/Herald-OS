@@ -3211,7 +3211,7 @@ def disk_password(args: list[str]) -> int:
 # setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
 # keyring password, which the first app that needs the keyring asks for after each start.
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
-KEYRING_EXISTS, KEYRING_NO_SERVICE = 3, 4
+KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT = 3, 4, 5
 KEYRING_MIN = 8
 # gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
 KEYRING_SEALED = b"GnomeKeyring\n\r\x00\n"
@@ -3411,7 +3411,9 @@ def keyring_create(password: str) -> str:
     try:
         from gi.repository import Gio, GLib
     except ImportError:
-        die("herald-os keyring needs PyGObject (python3-gobject-base). Nothing was changed.", KEYRING_NO_SERVICE)
+        # Not the keyring service's fault: exit 4 would send the person looking for gnome-keyring.
+        die("herald-os keyring needs PyGObject to talk to the keyring (python3-gobject-base on Fedora, "
+            "python-gobject on Arch). Nothing was changed.", KEYRING_NO_GOBJECT)
 
     def call(bus, path: str, interface: str, method: str, args, reply: str):
         return bus.call_sync(SECRETS, path, interface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, KEYRING_TIMEOUT_MS).unpack()

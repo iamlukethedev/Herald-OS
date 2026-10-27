@@ -351,6 +351,8 @@ describe('the keyring', () => {
     const reasons: [number, string][] = [
       [3, 'keyringExists'],
       [4, 'noKeyringService'],
+      // No PyGObject: not the keyring service, so not its message.
+      [5, 'failed'],
       [1, 'failed'],
       [2, 'failed'],
       [127, 'failed']
