@@ -721,3 +721,50 @@ def test_without_pygobject_setup_says_so_and_does_not_blame_the_keyring_service(
 def test_the_arch_package_depends_on_pygobject_for_herald_os_keyring(flavour):
     listed = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${depends[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout
     assert "python-gobject" in listed.split()
+
+
+@pytest.mark.parametrize("errors", ["surrogateescape", "strict"])
+def test_bytes_that_are_not_text_on_stdin_are_refused_before_the_lock_or_the_bus(tmp_path, errors):
+    # surrogateescape is what Python's UTF-8 mode (the C locale) gives stdin; strict, a full UTF-8 locale.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    environment = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+    environment.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "PYTHONIOENCODING": f"utf-8:{errors}",
+                        # Were the bus reached, this would end in exit 4 instead.
+                        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    result = subprocess.run([sys.executable, str(CLI), "keyring", "setup", "--password"], input=b"abcdefgh\xff\n", capture_output=True, env=environment, timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert result.returncode == 2, stderr
+    assert cli.KEYRING_NOT_TEXT in stderr and "Traceback" not in stderr
+    assert list(runtime.iterdir()) == [], "the lock was taken"
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+class Undecodable(io.StringIO):
+    def read(self, *args):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
+@pytest.mark.parametrize("stdin", [io.StringIO("abcdefgh\udcff\n"), io.StringIO("\udcffabcdefgh"), Undecodable("")])
+def test_a_password_that_is_not_text_gets_one_clean_message(monkeypatch, capsys, stdin):
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("typed", [["abcdefgh\udcff", "abcdefgh\udcff"], ["abcdefgh", "abcdefgh\udcff"]])
+def test_the_terminal_gives_the_same_message_for_bytes_that_are_not_text(monkeypatch, capsys, typed):
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    answers = iter(typed)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(answers))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err
+
+    def undecodable(prompt):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(cli.getpass, "getpass", undecodable)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err

@@ -3213,6 +3213,7 @@ def disk_password(args: list[str]) -> int:
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
 KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT = 3, 4, 5
 KEYRING_MIN = 8
+KEYRING_NOT_TEXT = "the keyring password has bytes that are not text (UTF-8). Nothing was changed."
 # gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
 KEYRING_SEALED = b"GnomeKeyring\n\r\x00\n"
 KEYRING_PLAIN = b"[keyring]"
@@ -3386,20 +3387,26 @@ def keyring_password_problem(password: str, again: str | None = None) -> str | N
 
 
 def keyring_password_input() -> str:
-    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way)."""
-    if sys.stdin.isatty():
-        try:
-            password = getpass.getpass("Keyring password: ")
-            again = getpass.getpass("Keyring password again: ")
-        except (KeyboardInterrupt, EOFError):
-            print(file=sys.stderr)
-            die("stopped. Nothing was changed.", 130)
-        except UnicodeDecodeError:
-            die("the terminal sent something that is not text. Nothing was changed.", 2)
-    else:
-        password = sys.stdin.read()
-        password = password[:-1] if password.endswith("\n") else password
-        again = None
+    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way). Bytes that
+    are not text are refused the same way on both, before anything else happens."""
+    try:
+        if sys.stdin.isatty():
+            try:
+                password = getpass.getpass("Keyring password: ")
+                again = getpass.getpass("Keyring password again: ")
+            except (KeyboardInterrupt, EOFError):
+                print(file=sys.stderr)
+                die("stopped. Nothing was changed.", 130)
+        else:
+            password = sys.stdin.read()
+            password = password[:-1] if password.endswith("\n") else password
+            again = None
+        # A stream decoded with surrogateescape (Python's UTF-8 mode, as in the C locale) passes such
+        # bytes on as surrogates, which would only fail when the password is sent to the keyring.
+        for typed in (password, again or ""):
+            typed.encode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        die(KEYRING_NOT_TEXT, 2)
     problem = keyring_password_problem(password, again)
     if problem:
         die(problem, 2)
