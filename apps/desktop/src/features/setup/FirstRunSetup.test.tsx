@@ -652,6 +652,13 @@ describe("first-run setup's keyring", () => {
     await type(password, 'short')
     await type(again, 'short')
     expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    // Seven characters are one too few; eight are enough.
+    await type(password, 'correct')
+    await type(again, 'correct')
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(password, 'correct!')
+    await type(again, 'correct!')
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(false)
     await type(password, 'senha do coração')
     await type(again, 'senha do coração')
     expect(host.textContent).toContain(t('firstRun.keyring.sameAsAccount'))

@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -373,6 +373,8 @@ describe('the keyring', () => {
     vi.mocked(run).mockClear()
 
     expect(await handler?.({}, { password: 'short' })).toEqual({ ok: false, reason: 'tooShort' })
+    // Seven characters: one too few.
+    expect(await handler?.({}, { password: 'correct' })).toEqual({ ok: false, reason: 'tooShort' })
     expect(await handler?.({}, { password: 'two\nlines here' })).toEqual({ ok: false, reason: 'tooShort' })
     expect(run).not.toHaveBeenCalled()
     host.run = { stdout: '', stderr: '', code: 0 }
@@ -380,6 +382,20 @@ describe('the keyring', () => {
     expect(await handler?.({}, {})).toEqual({ ok: true })
     expect(run).toHaveBeenCalledTimes(2)
     expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--no-password'], expect.any(Number))
+  })
+
+  it('takes eight characters and refuses seven', () => {
+    expect(keyringPasswordProblem('correct')).toBe('tooShort')
+    expect(keyringPasswordProblem('correct!')).toBeNull()
+    expect(keyringPasswordProblem('çoração!')).toBeNull()
+  })
+
+  it('runs the command for a password of exactly eight characters', async () => {
+    registerSetupIpc()
+    host.run = { stdout: '', stderr: '', code: 0 }
+    vi.mocked(run).mockClear()
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: 'correct!' })).toEqual({ ok: true })
+    expect(run).toHaveBeenCalledExactlyOnceWith('herald-os', ['keyring', 'setup', '--password'], expect.any(Number), 'correct!\n')
   })
 
   it('is part of the state setup starts from, next to the disk', async () => {

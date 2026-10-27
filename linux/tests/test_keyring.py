@@ -187,6 +187,11 @@ def test_the_folder_follows_xdg_data_home(tmp_path, monkeypatch):
     ("contraseña-ñ", None, None),
     ("correct horse", "correct house", "not the same"),
     ("short", None, "at least 8"),
+    # Seven characters are one too few; eight are enough.
+    ("correct", None, "at least 8"),
+    ("correct", "correct", "at least 8"),
+    ("correct!", None, None),
+    ("correct!", "correct!", None),
     ("two\nlines-here", None, "one line"),
     ("nul\0inside-it", None, "one line"),
 ])
@@ -443,6 +448,12 @@ def test_setup_never_replaces_a_keyring(tmp_path, body, flag):
 def test_keyring_usage(tmp_path, args):
     result = run_cli(tmp_path, *args)
     assert result.returncode == 2 and "keyring --status" in result.stderr
+
+
+def test_a_seven_character_password_on_stdin_is_refused_before_the_keyring_service_is_asked(tmp_path):
+    result = run_cli(tmp_path, "setup", "--password", stdin="correct\n", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == 2 and "at least 8" in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
 
 
 def test_a_bad_password_on_stdin_changes_nothing(tmp_path):
