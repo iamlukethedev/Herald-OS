@@ -439,7 +439,14 @@ the command talks to the keyring with, is missing (`python3-gobject-base` on Fed
 Arch, where the package depends on it). Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
-after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made. The password
+after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
+Ctrl+C exits 130 at once, even while the keyring service is not answering, and says how far it got:
+nothing changed, or the keyring may have been made, or it was made but not yet finished as the default
+one. A keyring is made labelled `login` and relabelled `Login` once it is the default one, so one still
+labelled `login` was stopped half-way: running the same `herald-os keyring setup` again finishes it
+(it opens it, with no password or with the one it was made with, which `--password` asks for again; makes
+it the default one, which writes `default`; and relabels it) instead of refusing it. The other flag is
+refused with exit 3 and named, and a wrong password changes nothing (exit 2). The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.
