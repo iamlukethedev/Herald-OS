@@ -91,6 +91,30 @@ computer passes to someone else, setup asks the new owner for their own, and the
 working ([Setting it up for someone else, and reset](setup-and-reset.md)). The disk password cannot
 be recovered: without it, the files are gone.
 
+## Saved passwords (the keyring)
+
+Apps such as VS Code, Signal and GitHub's `gh` keep passwords and sign-ins in the keyring. Herald OS
+signs you in without a password at start-up, so the keyring cannot open with your login:
+
+- **When the disk that holds it is encrypted**, setup gives the keyring no password of its own, and
+  apps never ask. The disk password protects it: without it, nobody can read the disk. That is the
+  disk that holds the keyring folder (`$XDG_DATA_HOME/keyrings`, usually `~/.local/share/keyrings` in
+  your home folder), which may not be the system disk.
+- **When that disk is not encrypted**, or Herald OS cannot tell, setup asks. With a keyring
+  password, the first app that needs a saved password after each start asks for it; if you forget
+  it, what apps saved is lost and you sign in to them again. Without one, apps never ask, but anyone
+  who has the disk can read what they saved.
+
+The disk's encryption guards against someone who takes the computer or the disk, not against
+programs running as you. While you are signed in, an unlocked keyring (one with no password always
+is) gives its secrets to any app that asks for them. Hermes's own file tools refuse the keyring's
+folder (`~/.local/share/keyrings`), but a command you approve for Hermes to run in the terminal can
+still read it, as can anything else you run.
+
+If you skipped this in setup, `herald-os keyring setup --password` (or `--no-password`) sets the
+keyring up later, and `herald-os keyring --status` says how it is protected and whether the disk it
+is kept on is encrypted.
+
 ## Secure Boot
 
 Secure Boot can stay on: Herald OS starts through Fedora's signed shim.

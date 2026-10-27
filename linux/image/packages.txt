@@ -9,6 +9,9 @@ dbus-daemon
 xdg-desktop-portal
 xdg-desktop-portal-gtk
 xdg-desktop-portal-gnome
+# The keyring apps keep passwords and sign-ins in (Secret Service, and the Secret portal for Flatpak
+# apps). niri only recommends it. It brings gcr3, whose prompter asks for a keyring's password.
+gnome-keyring
 xdg-user-dirs
 swaybg
 swaylock
@@ -78,6 +81,10 @@ liberation-fonts
 # What the CLIs and the shell shell out to.
 python3
 python3-pyyaml
+# herald-os keyring talks to the keyring over D-Bus (Gio). firewalld needs it too.
+python3-gobject-base
+# secret-tool, to store and look up keyring entries from a terminal.
+libsecret
 git
 tar
 xdg-utils

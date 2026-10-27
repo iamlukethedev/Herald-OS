@@ -52,6 +52,7 @@ call the tools directly.
   Events        event <name> [key=value ...] | hook list | hook install <event> <script> | hook dir
   System        lock | suspend | power | wm <niri action...> | state | debug | commands [--json]
                 password | password --disk [--new-owner]: the login password, or the disk password asked at start-up
+                keyring --status | keyring setup --no-password|--password: where apps keep passwords and sign-ins
                 panel wifi|bluetooth|audio|display|power|clock: the menu bar's quick panels
                 restart wifi|bluetooth|sound|touchpad: bring one back when it stopped working
                 toggle nightlight|dnd|idle|screensaver [on|off] | screensaver | idle show|set ...
@@ -62,6 +63,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import getpass
 import io
 import json
@@ -150,6 +152,7 @@ COMMANDS: dict[str, str] = {
     "branding": "branding [show] | set [--logo <image>] [--lock <image>] [--name <text>] | reset [all|logo|lock|name]: About's logo and name, and the lock-screen picture",
     "lock": "Lock the session (needs an account password; see `herald-os password`)",
     "password": "Set the login password the lock screen asks for | password --disk [--new-owner]: change the disk password typed at start-up (asks for the current one; --new-owner also removes every other key) | password --disk --status: whether the disk is encrypted, as JSON",
+    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other) and whether the disk that holds it is encrypted, as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
     "suspend": "Suspend the machine",
     "power": "Power menu (sleep, restart, shut down, log out)",
     "webapp-open": "Internal: open a web app window: webapp-open <url> <name>",
@@ -2800,10 +2803,8 @@ def lsblk_version_hint(stderr: str) -> str:
     return " (util-linux 2.37 or later is needed)" if "unknown column" in stderr.lower() else ""
 
 
-def disk_devices() -> list[str]:
-    """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
-    (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
-    every other key slot of each device it is given."""
+def lsblk_tree() -> list:
+    """lsblk's view of the block devices; DiskUnknown when there is none."""
     try:
         listing = subprocess.run(["lsblk", "-J", "-p", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,MOUNTPOINTS"], capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
@@ -2817,7 +2818,14 @@ def disk_devices() -> list[str]:
     if not isinstance(tree, list):
         said = (listing.stderr or "").strip().splitlines()
         raise DiskUnknown("lsblk could not list the disks" + (f" ({said[-1]})" if said else "") + lsblk_version_hint(listing.stderr or ""))
-    return lsblk_root_luks(tree, disk_root_uuid())
+    return tree
+
+
+def disk_devices() -> list[str]:
+    """The encrypted devices under the root filesystem, from lsblk. Without lsblk's view it fails closed
+    (DiskUnknown) rather than guess: /etc/crypttab also names data and USB disks, and --new-owner removes
+    every other key slot of each device it is given."""
+    return lsblk_root_luks(lsblk_tree(), disk_root_uuid())
 
 
 def disk_unknown_text(error: DiskUnknown) -> str:
@@ -3527,6 +3535,309 @@ def disk_password(args: list[str]) -> int:
         # The root side was stopped before its change began (it ignores Ctrl+C from then on).
         die("stopped. Nothing was changed.", 130)
     return code
+
+
+# ---------------------------------------------------------------------------------------------
+# The keyring: where apps keep passwords and sign-ins (the Secret Service; gnome-keyring on the image).
+# The session signs in without a password, so nothing unlocks a keyring at login. On an encrypted disk
+# setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
+# keyring password, which the first app that needs the keyring asks for after each start.
+KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
+KEYRING_EXISTS, KEYRING_NO_SERVICE = 3, 4
+KEYRING_MIN = 8
+# gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
+KEYRING_SEALED = b"GnomeKeyring\n\r\x00\n"
+KEYRING_PLAIN = b"[keyring]"
+KEYRING_STATES = {
+    "open": "with no password of its own",
+    "password": "with a password",
+    "other": "one Herald OS did not make",
+}
+SECRETS = "org.freedesktop.secrets"
+SECRETS_PATH = "/org/freedesktop/secrets"
+SECRET_SERVICE = "org.freedesktop.Secret.Service"
+# gnome-keyring's own interface, which takes a keyring's password without a prompt. The Secret
+# Service's CreateCollection always asks for it in a window. The interface has kept its methods since
+# gnome-keyring 3.0.
+KEYRING_INTERNAL = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface"
+KEYRING_TIMEOUT_MS = 20_000
+# How long a second `keyring setup` waits for one already running (setup's own times out at 30 s).
+KEYRING_LOCK_WAIT = 25
+
+
+def keyring_dir() -> Path:
+    """Where gnome-keyring keeps keyrings: $XDG_DATA_HOME/keyrings, ~/.local/share/keyrings by default."""
+    data = os.environ.get("XDG_DATA_HOME")
+    return (Path(data) if data and os.path.isabs(data) else HOME / ".local" / "share") / "keyrings"
+
+
+def keyring_all(values) -> bool | None:
+    """True when every value is True, False when one is False, None otherwise (pure)."""
+    values = list(values)
+    if any(value is False for value in values):
+        return False
+    return None if any(value is None for value in values) else True
+
+
+def lsblk_on_luks(tree: list) -> dict[str, bool | None]:
+    """Each block device's path, and whether it sits on LUKS: a crypto_LUKS device above it (pure). A crypt
+    mapping with no LUKS above it (plain dm-crypt, or one opened without a LUKS header) is None: encrypted,
+    but not in a way this can check. A device lsblk shows under several parents (RAID) counts as each
+    of them together."""
+    found: dict[str, bool | None] = {}
+
+    def walk(node: dict, above: bool | None) -> None:
+        path = node.get("path") or node.get("name")
+        own = above if above is True or node.get("type") != "crypt" else None
+        if isinstance(path, str) and path:
+            found[path] = keyring_all([found[path], own]) if path in found else own
+        below = True if node.get("fstype") == "crypto_LUKS" else own
+        for child in lsblk_children(node):
+            walk(child, below)
+
+    for node in tree if isinstance(tree, list) else []:
+        if isinstance(node, dict):
+            walk(node, False)
+    return found
+
+
+def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambda device: device) -> bool | None:
+    """Whether the filesystems that hold the keyring folder `place` all sit on LUKS (pure; tested): the
+    mount it is in (or would be in, before it exists), and every mount below it. `mounts` is
+    `findmnt -J -l -v -o TARGET,SOURCE,FSTYPE,UUID`'s list. A btrfs over several disks counts each disk
+    lsblk shows with its UUID. False when one of them is a block device not on LUKS; None when one is
+    not a block device lsblk knows (tmpfs, NFS, a FUSE folder), is encrypted some other way, is a btrfs
+    (or a filesystem nobody names) whose UUID lsblk does not know, or nothing holds `place`, since that
+    cannot be told."""
+    devices = {resolve(path): on_luks for path, on_luks in lsblk_on_luks(tree).items()}
+    by_uuid: dict[str, list[str]] = {}
+    filesystems: dict[str, tuple[str | None, str | None]] = {}
+
+    def gather(node: dict) -> None:
+        path, uuid, fstype = node.get("path") or node.get("name"), node.get("uuid"), node.get("fstype")
+        uuid = uuid if isinstance(uuid, str) and uuid else None
+        if isinstance(path, str) and fstype != "crypto_LUKS":
+            filesystems.setdefault(resolve(path), (fstype if isinstance(fstype, str) and fstype else None, uuid))
+            if uuid:
+                by_uuid.setdefault(uuid, []).append(resolve(path))
+        for child in lsblk_children(node):
+            gather(child)
+
+    for node in tree if isinstance(tree, list) else []:
+        if isinstance(node, dict):
+            gather(node)
+
+    def target(mount) -> str | None:
+        value = mount.get("target") if isinstance(mount, dict) else None
+        return value if isinstance(value, str) and value.startswith("/") else None
+
+    def within(path: str, folder: str) -> bool:
+        return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+    holding = None
+    for mount in mounts if isinstance(mounts, list) else []:
+        # The last one mounted over the same place is the one in use.
+        if target(mount) and within(place, target(mount)) and (holding is None or len(target(mount)) >= len(target(holding))):
+            holding = mount
+    if holding is None:
+        return None
+    relevant = [holding] + [mount for mount in mounts if target(mount) and target(mount) != place and within(target(mount), place)]
+    answers = []
+    for mount in relevant:
+        source = mount.get("source")
+        source = resolve(source.split("[", 1)[0]) if isinstance(source, str) else ""
+        if source not in devices:
+            answers.append(None)
+            continue
+        fstype, uuid = filesystems.get(source, (None, None))
+        fstype = mount.get("fstype") or fstype
+        # The other disks of a btrfs are found by lsblk's UUID for it, which it lacks without udev's data.
+        if fstype in ("btrfs", None) and not uuid:
+            answers.append(None)
+            continue
+        disks = {source, *by_uuid.get(uuid, [])} if uuid else {source}
+        answers.append(keyring_all(devices.get(disk, False) for disk in disks))
+    return keyring_all(answers)
+
+
+def keyring_encrypted(directory: Path) -> bool | None:
+    """keyring_mounts_encrypted for this machine, from lsblk and findmnt; None when either cannot say."""
+    try:
+        tree = lsblk_tree()
+        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,FSTYPE,UUID"], capture_output=True, text=True, timeout=30)
+        mounts = json.loads(listing.stdout).get("filesystems") if listing.returncode == 0 else None
+    except (DiskUnknown, OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(mounts, list):
+        return None
+
+    def resolve(device: str) -> str:
+        return os.path.realpath(device) if device.startswith("/dev/") else device
+
+    # Links resolved (the image's /home is a link to /var/home); a part that does not exist yet stays as written.
+    return keyring_mounts_encrypted(os.path.realpath(directory), mounts, tree, resolve)
+
+
+def keyring_state(directory: Path) -> str:
+    """The default keyring, read from gnome-keyring's files so no daemon is needed (pure; tested): none
+    (there is no keyring yet), open (no password of its own), password, or other (keyrings, but no
+    default one this can read)."""
+    try:
+        name = (directory / "default").read_text(encoding="utf-8").strip() or "login"
+    except FileNotFoundError:
+        name = "login"
+    except (OSError, UnicodeDecodeError):
+        return "other"
+    if "/" in name or name.startswith("."):
+        return "other"
+    try:
+        with open(directory / f"{name}.keyring", "rb") as handle:
+            head = handle.read(len(KEYRING_SEALED))
+    except FileNotFoundError:
+        try:
+            return "other" if any(directory.glob("*.keyring")) else "none"
+        except OSError:
+            return "other"
+    except OSError:
+        return "other"
+    if head == KEYRING_SEALED:
+        return "password"
+    return "open" if head.startswith(KEYRING_PLAIN) else "other"
+
+
+def keyring_password_problem(password: str, again: str | None = None) -> str | None:
+    """Why a keyring password will not do, or None (pure; tested)."""
+    if again is not None and password != again:
+        return "the two keyring passwords are not the same. Nothing was changed."
+    if len(password) < KEYRING_MIN:
+        return f"use at least {KEYRING_MIN} characters for the keyring password. Nothing was changed."
+    if any(char in password for char in "\r\n\0"):
+        return "a keyring password is one line. Nothing was changed."
+    return None
+
+
+def keyring_password_input() -> str:
+    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way)."""
+    if sys.stdin.isatty():
+        try:
+            password = getpass.getpass("Keyring password: ")
+            again = getpass.getpass("Keyring password again: ")
+        except (KeyboardInterrupt, EOFError):
+            print(file=sys.stderr)
+            die("stopped. Nothing was changed.", 130)
+        except UnicodeDecodeError:
+            die("the terminal sent something that is not text. Nothing was changed.", 2)
+    else:
+        password = sys.stdin.read()
+        password = password[:-1] if password.endswith("\n") else password
+        again = None
+    problem = keyring_password_problem(password, again)
+    if problem:
+        die(problem, 2)
+    return password
+
+
+def keyring_create(password: str) -> str:
+    """The login keyring, made the default one; with no password of its own when password is empty.
+    Returns its D-Bus path."""
+    try:
+        from gi.repository import Gio, GLib
+    except ImportError:
+        die("herald-os keyring needs PyGObject (python3-gobject-base). Nothing was changed.", KEYRING_NO_SERVICE)
+
+    def call(bus, path: str, interface: str, method: str, args, reply: str):
+        return bus.call_sync(SECRETS, path, interface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, KEYRING_TIMEOUT_MS).unpack()
+
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        default = call(bus, SECRETS_PATH, SECRET_SERVICE, "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
+        # A plain session: the password goes over the session bus to a daemon of the same account.
+        session = call(bus, SECRETS_PATH, SECRET_SERVICE, "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
+    except GLib.Error as error:
+        die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
+    # The files are not the whole story: another Secret Service (KeePassXC, KWallet) keeps its own, and
+    # gnome-keyring keeps a keyring whose file was deleted while it runs.
+    if default != "/":
+        die(f"the keyring service already has a default keyring ({default}). Nothing was changed.", KEYRING_EXISTS)
+    try:
+        # gnome-keyring names a keyring after its label: "login" gives the usual login keyring, which
+        # some apps (gh, through go-keyring) look for by name before the default alias.
+        label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", "login")}
+        secret = (session, b"", password.encode("utf-8"), "text/plain")
+        collection = call(bus, SECRETS_PATH, KEYRING_INTERNAL, "CreateWithMasterPassword", GLib.Variant("(a{sv}(oayays))", (label, secret)), "(o)")[0]
+    except GLib.Error as error:
+        die(f"the keyring service could not make the keyring ({error.message}). Herald OS makes it with gnome-keyring. Nothing was changed.", 1)
+    try:
+        call(bus, SECRETS_PATH, SECRET_SERVICE, "SetAlias", GLib.Variant("(so)", ("default", collection)), "()")
+        call(bus, collection, "org.freedesktop.DBus.Properties", "Set", GLib.Variant("(ssv)", ("org.freedesktop.Secret.Collection", "Label", GLib.Variant("s", "Login"))), "()")
+        call(bus, session, "org.freedesktop.Secret.Session", "Close", None, "()")
+    except GLib.Error as error:
+        die(f"made the keyring {collection} but could not make it the default one ({error.message}).", 1)
+    return collection
+
+
+def keyring_unencrypted_note(directory: Path) -> str | None:
+    """What a keyring with no password of its own gives away where the disk that holds it is not
+    encrypted; nothing when it is, or that cannot be told."""
+    if keyring_encrypted(directory) is not False:
+        return None
+    return "note: the disk that holds the keyring is not encrypted, so anyone with the disk can read what apps keep in it."
+
+
+def keyring_lock_path() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return (Path(runtime) if runtime and os.path.isabs(runtime) else CONFIG_DIR) / "herald-os-keyring.lock"
+
+
+@contextlib.contextmanager
+def keyring_lock():
+    """Held while a keyring is checked for and made. gnome-keyring names a second keyring with the same
+    label login_1, so two setups at once (setup and a terminal) would make two; the second waits and
+    then finds the first one's."""
+    path = keyring_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        deadline = time.monotonic() + KEYRING_LOCK_WAIT
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    die(f"another `herald-os keyring setup` is still running ({path}). Nothing was changed.", 1)
+                time.sleep(0.1)
+        yield
+
+
+def keyring_refuse_existing(directory: Path) -> None:
+    state = keyring_state(directory)
+    if state != "none":
+        die(f"this account already has a keyring ({KEYRING_STATES[state]}) in {directory}. Nothing was changed.", KEYRING_EXISTS)
+
+
+def keyring_cmd(args: list[str]) -> int:
+    """`keyring --status` as JSON; `keyring setup --no-password | --password` makes the default keyring
+    when there is none. An existing keyring is never replaced: it holds what apps saved."""
+    directory = keyring_dir()
+    if args == ["--status"]:
+        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory), "encrypted": keyring_encrypted(directory)}))
+        return 0
+    if args not in (["setup", "--no-password"], ["setup", "--password"]):
+        die(KEYRING_USAGE, 2)
+    # Checked before the password is asked, and again under the lock.
+    keyring_refuse_existing(directory)
+    password = keyring_password_input() if args[1] == "--password" else ""
+    with keyring_lock():
+        keyring_refuse_existing(directory)
+        keyring_create(password)
+    if password:
+        print("The keyring is ready. After each start, the first app that needs it asks for its password.")
+        return 0
+    print("The keyring is ready, with no password of its own.")
+    note = keyring_unencrypted_note(directory)
+    if note:
+        print(note, file=sys.stderr)
+    return 0
 
 
 def suspend() -> int:
@@ -6231,6 +6542,8 @@ def main(argv: list[str]) -> int:
         if args:
             die(f"password | {DISK_USAGE}", 2)
         return password()
+    if cmd == "keyring":
+        return keyring_cmd(args)
     if cmd == "suspend":
         return suspend()
     if cmd == "wm":

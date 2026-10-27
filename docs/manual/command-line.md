@@ -71,6 +71,7 @@ your scripts drive the system the same way. Any of them can be a key of your own
 | `herald-os lock` | Lock the screen |
 | `herald-os password` | Set your password |
 | `herald-os password --disk` | Change the disk password asked for at start-up (it asks for the current one first; `--new-owner` also removes every other key) |
+| `herald-os keyring --status` | How the keyring apps save passwords in is protected; `herald-os keyring setup --password` (or `--no-password`) sets it up when setup did not; see [Security](security.md#saved-passwords-the-keyring) |
 | `herald-os suspend`, `herald-os power` | Sleep now, or open the power menu |
 | `herald-os setup` | Once per account on Arch or the tarball: Hermes Agent and Herald's tools (`herald-os setup --undo` takes them back) |
 | `herald-os setup fingerprint` | Fingerprint sign-in (`setup fido2` for a security key) |

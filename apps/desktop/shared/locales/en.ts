@@ -696,6 +696,29 @@ export const en = {
   'firstRun.disk.noTerminal': 'The disk password cannot be changed here; run herald-os password --disk --new-owner in a terminal.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
   'firstRun.disk.failed': 'The disk password was not changed, and the old one still works. Run herald-os password --disk --new-owner in a terminal to see why.',
+  // The keyring is where apps keep passwords and sign-ins (GNOME calls it that in its own windows).
+  // Setup asks only when the disk the keyring is kept on (which may not be the system disk) is not
+  // encrypted, or that could not be told.
+  'firstRun.keyring.title': 'Saved passwords',
+  // VS Code, Signal and GitHub CLI are product names.
+  'firstRun.keyring.text': 'Apps such as VS Code, Signal and GitHub CLI keep passwords and sign-ins in a keyring. The disk it is kept on is not encrypted, so choose how the keyring is protected.',
+  'firstRun.keyring.textUnknown':
+    'Apps such as VS Code, Signal and GitHub CLI keep passwords and sign-ins in a keyring. Herald OS could not tell whether the disk it is kept on is encrypted, so choose how the keyring is protected.',
+  'firstRun.keyring.password': 'A keyring password',
+  'firstRun.keyring.passwordHint': 'Saved passwords are encrypted with it. After each start, the first app that needs one asks for it. If you forget it, they are lost and you sign in to those apps again.',
+  'firstRun.keyring.open': 'No keyring password',
+  'firstRun.keyring.openHint': 'Apps use saved passwords without asking, but anyone who has the disk can read them.',
+  'firstRun.keyring.field': 'Keyring password (at least 8 characters)',
+  'firstRun.keyring.fieldAgain': 'The same keyring password again',
+  'firstRun.keyring.sameAsAccount': 'It can be the same as your account password.',
+  'firstRun.keyring.mismatch': 'The keyring passwords do not match.',
+  'firstRun.keyring.laterHint': 'Later: the first time an app saves a password, a window asks you to choose a keyring password.',
+  // herald-os keyring setup --password is a command, and stays as it is.
+  'firstRun.keyring.noService': 'The keyring service did not answer, so no keyring was made. Run herald-os keyring setup --password in a terminal later.',
+  // herald-os keyring setup --password is a command, and stays as it is.
+  'firstRun.keyring.failed': 'The keyring was not made. Run herald-os keyring setup --password in a terminal to see why.',
+  // On the last step, when the disk the keyring is kept on is encrypted and setup made it with no password of its own.
+  'firstRun.keyring.encrypted': 'Apps keep saved passwords in a keyring with no password of its own: the disk password you type at start-up protects it.',
 
   // When the voice Hermes speaks with fails and the computer's own voice stands in, or nothing can.
   // {voice} is a voice.name message that begins the sentence; {system} is voice.name.mac or

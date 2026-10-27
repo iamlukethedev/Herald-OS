@@ -6,6 +6,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _perm(plugin):
     return importlib.import_module(plugin.__name__ + ".bridge.permissions")
@@ -43,6 +45,54 @@ def test_protected_paths_cover_linux_system_locations(plugin):
     assert perm.protected_root(Path("/var/lib/dpkg/status"), policy) is not None
     assert perm.protected_root(Path("/proc/1/status"), policy) is not None
     assert perm.protected_root(Path("/var/log/syslog"), policy) is None
+
+
+def test_protected_paths_cover_the_linux_keyring(plugin):
+    perm = _perm(plugin)
+    assert "~/.local/share/keyrings" in perm.BUILTIN_PROTECTED
+    policy = perm.parse_policy({})
+    keyrings = Path.home() / ".local" / "share" / "keyrings"
+    for path in (keyrings, keyrings / "login.keyring", keyrings / "default"):
+        assert perm.protected_root(path, policy) == keyrings
+    assert perm.protected_root(Path.home() / ".local" / "share" / "applications" / "x.desktop", policy) is None
+    assert perm.protected_root(Path.home() / ".local" / "share" / "keyrings-notes.txt", policy) is None
+
+
+def test_the_keyring_folder_follows_xdg_data_home(plugin, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    policy = perm.parse_policy({})
+    assert perm.protected_root(tmp_path / "data" / "keyrings" / "login.keyring", policy) == tmp_path / "data" / "keyrings"
+    assert perm.protected_root(tmp_path / "data" / "applications" / "x.desktop", policy) is None
+    # The usual place stays protected too.
+    assert perm.protected_root(Path.home() / ".local" / "share" / "keyrings" / "login.keyring", policy) is not None
+
+
+@pytest.mark.parametrize("value", ["", "relative/data", "$HOME/data"])
+def test_an_xdg_data_home_that_is_not_absolute_adds_nothing(plugin, monkeypatch, value):
+    perm = _perm(plugin)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    unset = perm.parse_policy({}).protected
+    monkeypatch.setenv("XDG_DATA_HOME", value)
+    assert perm.parse_policy({}).protected == unset
+
+
+def test_a_keyring_is_refused_through_a_link_before_any_prompt(plugin, isolated_home, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(perm, "_cache", None)
+    keyrings = Path.home() / ".local" / "share" / "keyrings"
+    keyrings.mkdir(parents=True)
+    (keyrings / "login.keyring").write_text("[keyring]\n")
+    link = Path.home() / "Documents" / "notes"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(keyrings / "login.keyring")
+    asked = []
+    monkeypatch.setattr(perm, "_confirm", lambda *a, **k: asked.append(a) or perm.Decision(True, "approved"))
+    for tier, action, path in ((perm.Tier.READ, "read", keyrings / "login.keyring"), (perm.Tier.MUTATE, "move", keyrings), (perm.Tier.DESTRUCTIVE, "delete", link)):
+        decision = perm.authorize("system_files", tier, action, f"{action} keyring", paths=[path])
+        assert not decision.allowed and decision.outcome == "protected", (action, path)
+    assert asked == []
 
 
 def test_protected_path_is_refused_before_any_prompt(plugin, monkeypatch):

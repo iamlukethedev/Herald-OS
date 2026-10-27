@@ -4,6 +4,7 @@
 #   /usr/bin/herald-os*               the CLIs and session scripts, linked from the app
 #   /usr/share/herald-os/*            themes, catalog, niri template, omakase lists, migrations, bridge
 #   /usr/share/wayland-sessions/      the full Herald OS session for the login screen
+#   /usr/share/xdg-desktop-portal/    which portal backends answer in that session (HeraldOS)
 #   /usr/share/applications/          Herald OS as an app inside Hyprland, Omarchy or any desktop
 
 # The folder that holds resources/app.asar, wherever the archive put it.
@@ -39,6 +40,8 @@ _herald_os_package() {
   done
 
   install -Dm644 "$pkgdir$res/herald-os-linux/session/herald-os.desktop" "$pkgdir/usr/share/wayland-sessions/herald-os.desktop"
+  # Read only where XDG_CURRENT_DESKTOP is HeraldOS (the session above); Hyprland and Omarchy keep theirs.
+  install -Dm644 "$pkgdir$res/herald-os-linux/session/heraldos-portals.conf" "$pkgdir/usr/share/xdg-desktop-portal/heraldos-portals.conf"
   install -Dm644 -t "$pkgdir/usr/lib/systemd/user" "$pkgdir$res/herald-os-linux/session/herald-os-update-check.service" "$pkgdir$res/herald-os-linux/session/herald-os-update-check.timer"
   install -Dm644 "$pkgdir$res/icons/herald-os.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/herald-os.png"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/herald-os.desktop" <<'DESKTOP'

@@ -675,6 +675,23 @@ export const ptBR: Translation = {
   'firstRun.disk.timeout': 'A troca da senha do disco demorou demais. Na próxima vez que ligar o computador, tente primeiro a nova senha do disco e depois a antiga.',
   'firstRun.disk.noTerminal': 'Não é possível trocar a senha do disco aqui; execute herald-os password --disk --new-owner em um terminal.',
   'firstRun.disk.failed': 'A senha do disco não foi trocada, e a antiga continua funcionando. Execute herald-os password --disk --new-owner em um terminal para ver o motivo.',
+  'firstRun.keyring.title': 'Senhas salvas',
+  'firstRun.keyring.text': 'Apps como VS Code, Signal e GitHub CLI guardam senhas e logins em um chaveiro. O disco onde ele fica não é criptografado, então escolha como o chaveiro vai ser protegido.',
+  'firstRun.keyring.textUnknown':
+    'Apps como VS Code, Signal e GitHub CLI guardam senhas e logins em um chaveiro. O Herald OS não conseguiu saber se o disco onde ele fica é criptografado, então escolha como o chaveiro vai ser protegido.',
+  'firstRun.keyring.password': 'Uma senha para o chaveiro',
+  'firstRun.keyring.passwordHint':
+    'As senhas salvas ficam criptografadas com ela. Sempre que o computador for ligado, o primeiro app que precisar de uma senha vai pedir essa. Se você esquecer, as senhas salvas se perdem e você precisa entrar de novo nesses apps.',
+  'firstRun.keyring.open': 'Sem senha no chaveiro',
+  'firstRun.keyring.openHint': 'Os apps usam as senhas salvas sem perguntar, mas quem estiver com o disco consegue ler essas senhas.',
+  'firstRun.keyring.field': 'Senha do chaveiro (pelo menos 8 caracteres)',
+  'firstRun.keyring.fieldAgain': 'Repita a senha do chaveiro',
+  'firstRun.keyring.sameAsAccount': 'Pode ser a mesma senha da sua conta.',
+  'firstRun.keyring.mismatch': 'As senhas do chaveiro não são iguais.',
+  'firstRun.keyring.laterHint': 'Depois: na primeira vez que um app salvar uma senha, uma janela vai pedir que você escolha uma senha para o chaveiro.',
+  'firstRun.keyring.noService': 'O serviço de chaveiro não respondeu, então nenhum chaveiro foi criado. Execute herald-os keyring setup --password em um terminal mais tarde.',
+  'firstRun.keyring.failed': 'O chaveiro não foi criado. Execute herald-os keyring setup --password em um terminal para ver o motivo.',
+  'firstRun.keyring.encrypted': 'Os apps guardam as senhas salvas em um chaveiro sem senha própria: quem protege esse chaveiro é a senha do disco que você digita ao ligar o computador.',
 
   'voice.fallback.title': 'Voz',
   'voice.fallback.usingSystem': '{voice} não está funcionando agora, então o Herald OS está usando {system}.',

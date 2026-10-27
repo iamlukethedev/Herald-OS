@@ -407,6 +407,8 @@ const api = {
     password: (password: string): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupPassword, password),
     /** A new owner's own disk password in place of the one typed at start-up; `account` is the account password sudo asks for. */
     diskPassword: (request: { current: string; password: string; account: string }): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupDiskPassword, request),
+    /** The default keyring; with no password of its own when `password` is empty. An existing one is never replaced. */
+    keyring: (request: { password: string }): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupKeyring, request),
     /** `later`: setting it up for someone else, who finishes setup at the next start. */
     finish: (options: { later?: boolean } = {}): Promise<SetupResult> => ipcRenderer.invoke(IPC.setupFinish, options)
   },

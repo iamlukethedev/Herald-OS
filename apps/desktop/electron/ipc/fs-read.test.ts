@@ -265,6 +265,25 @@ describe('refusing credential stores', () => {
     await expect(readFile(`${home}/.ssh/not-there`)).rejects.toThrow(PROTECTED)
   })
 
+  it('refuses the keyring folder where XDG_DATA_HOME moves it, and only an absolute one', async () => {
+    write('data/keyrings/login.keyring', '[keyring]')
+    write('data/notes.md', 'notes')
+    vi.stubEnv('XDG_DATA_HOME', `${home}/data`)
+
+    try {
+      await expect(readFile(`${home}/data/keyrings/login.keyring`)).rejects.toThrow(PROTECTED)
+      await expect(readDir(`${home}/data/keyrings`)).rejects.toThrow(PROTECTED)
+      expect((await readFile(`${home}/data/notes.md`)).content).toBe('notes')
+      // Relative, even one that leads there from here, is ignored, as the XDG specification says.
+      for (const relative of ['data', path.relative(process.cwd(), `${home}/data`)]) {
+        vi.stubEnv('XDG_DATA_HOME', relative)
+        expect((await readFile(`${home}/data/keyrings/login.keyring`)).content, relative).toBe('[keyring]')
+      }
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('refuses the read handlers on secrets', async () => {
     await expect(invoke(IPC.fsReadFile, `${hermes}/.env`)).rejects.toThrow(PROTECTED)
     await expect(invoke(IPC.fsReadDir, `${home}/.ssh`)).rejects.toThrow(PROTECTED)
