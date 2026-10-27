@@ -11,8 +11,8 @@ After the installer and the first start (which installs Hermes Agent), Herald OS
 - **It is for me:** your name, a password of at least 8 characters, Wi-Fi, and Hermes's sign-in
   (Nous Portal by default; "Use another provider" takes an API key). "Later" skips the sign-in, and
   the sign-in card comes back the first time Hermes needs a model. When the disk that holds the
-  keyring folder (usually in your home folder) is not encrypted, it also asks how to protect the
-  passwords apps save ([Saved passwords](security.md#saved-passwords-the-keyring)).
+  keyring folder (usually in your home folder) is not encrypted, or Herald OS cannot tell whether it
+  is, it also asks how to protect the passwords apps save ([Saved passwords](security.md#saved-passwords-the-keyring)).
 - **For someone else:** only Wi-Fi, so you can check the computer works. Setup does not finish: at
   the next start it waits for the new owner, who chooses "It is for me" and picks their own name and
   password. On an encrypted disk (the installer's default), tell them the disk password you chose

@@ -1720,8 +1720,8 @@ cannot unlock a keyring at login, and the keyring's protection has to come from 
   encrypted system disk with a plain `/home` would otherwise keep the keyring in plain text there.
 - **What that protects against.** Someone who has the disk, nothing more. gnome-keyring keeps such a
   keyring as plain text, and while the person is signed in an unlocked keyring answers any of their
-  processes over D-Bus. The bridge's file tools and the shell refuse its folder, but a shell command
-  the person approves can still read it.
+  processes over D-Bus. The bridge's file tools and the shell refuse its folder, also by its real path
+  and through links, but a shell command the person approves can still read it.
 - **Elsewhere, the person chooses, told plainly.** A keyring password (asked by the first app that
   needs it after each start; forgetting it loses what was saved), or none (anyone who has the disk
   can read it). When setup cannot tell whether the keyring's disk is encrypted, it asks rather than

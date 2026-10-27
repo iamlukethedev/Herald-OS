@@ -108,8 +108,9 @@ signs you in without a password at start-up, so the keyring cannot open with you
 The disk's encryption guards against someone who takes the computer or the disk, not against
 programs running as you. While you are signed in, an unlocked keyring (one with no password always
 is) gives its secrets to any app that asks for them. Hermes's own file tools refuse the keyring's
-folder (`~/.local/share/keyrings`), but a command you approve for Hermes to run in the terminal can
-still read it, as can anything else you run.
+folder, `~/.local/share/keyrings` and `$XDG_DATA_HOME/keyrings` when that is set, also when it is
+reached through a link, but a command you approve for Hermes to run in the terminal can still read
+it, as can anything else you run.
 
 If you skipped this in setup, `herald-os keyring setup --password` (or `--no-password`) sets the
 keyring up later, and `herald-os keyring --status` says how it is protected and whether the disk it

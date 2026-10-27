@@ -434,9 +434,11 @@ Setup never replaces a keyring the account already has. `herald-os keyring --sta
 from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
 twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
-rather than gnome-keyring (exit 3); 4 means no keyring service answered, and 5 that PyGObject, which
-the command talks to the keyring with, is missing (`python3-gobject-base` on Fedora, `python-gobject` on
-Arch, where the package depends on it). Making it holds
+rather than gnome-keyring (exit 3). Exit 4 means no keyring service answered on the session bus
+(gnome-keyring is not installed, or cannot start), which setup reports as such. Exit 5 means
+PyGObject, which the command talks to the keyring with, is missing (`python3-gobject-base` on Fedora,
+`python-gobject` on Arch, where the package depends on it); it is kept apart from 4 so that setup does
+not send the person looking for gnome-keyring, and reports it as a plain failure instead. Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
@@ -452,7 +454,8 @@ goes through gnome-keyring's own master-password interface, as the Secret Servic
 is an absolute path.
 
 What protects the keyring's contents is narrower than it may look. The bridge's file tools and the
-shell's own file reading refuse the keyring folder, in either place
+shell's own file reading refuse the keyring folder, in either place and also by its real path or
+through a link, so a home or `$XDG_DATA_HOME` given as a link path does not open a way around
 ([SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#protected-paths)), but a shell command the person approves for
 Hermes runs as them and can read it. While they are signed in, an unlocked keyring (one with no
 password always is) gives any secret to any process of theirs that asks over D-Bus. The disk's
