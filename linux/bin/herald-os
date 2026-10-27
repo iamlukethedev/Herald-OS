@@ -3366,7 +3366,8 @@ def keyring_state(directory: Path) -> str:
             return "other" if any(directory.glob("*.keyring")) else "none"
         except OSError:
             return "other"
-    except OSError:
+    # ValueError: a name with a NUL byte, which no file can have.
+    except (OSError, ValueError):
         return "other"
     if head == KEYRING_SEALED:
         return "password"

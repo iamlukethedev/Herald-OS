@@ -168,6 +168,25 @@ def test_a_default_name_that_is_not_a_plain_file_name_is_not_followed(tmp_path, 
     assert cli.keyring_state(folder) == "other"
 
 
+@pytest.mark.parametrize("name", [b"lo\0gin", b"\0", b"login\0", b"\0login\n"])
+def test_a_default_name_with_a_nul_byte_is_other(tmp_path, name):
+    folder = keyrings(tmp_path, {"default": name, "login.keyring": PLAIN})
+    assert cli.keyring_state(folder) == "other"
+
+
+def test_status_and_setup_take_a_nul_byte_in_default_without_a_traceback(tmp_path):
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    folder.mkdir(parents=True)
+    (folder / "default").write_bytes(b"lo\0gin")
+    status = run_cli(tmp_path, "--status", env={"PATH": f"{disk_tools(tmp_path, None, None)}:{os.environ['PATH']}"})
+    assert status.returncode == 0 and json.loads(status.stdout)["keyring"] == "other", status.stderr
+    setup = run_cli(tmp_path, "setup", "--no-password", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert setup.returncode == cli.KEYRING_EXISTS and "one Herald OS did not make" in setup.stderr
+    for result in (status, setup):
+        assert "Traceback" not in result.stderr
+    assert (folder / "default").read_bytes() == b"lo\0gin"
+
+
 def test_a_missing_folder_is_no_keyring(tmp_path):
     assert cli.keyring_state(tmp_path / "nowhere") == "none"
 
