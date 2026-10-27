@@ -211,6 +211,10 @@ def test_the_folder_follows_xdg_data_home(tmp_path, monkeypatch):
     ("correct", "correct", "at least 8"),
     ("correct!", None, None),
     ("correct!", "correct!", None),
+    # Characters (code points), as setup counts them too: 8 UTF-16 units each, but 4 and 7 characters.
+    ("😀😀😀😀", None, "at least 8"),
+    ("abcdef😀", None, "at least 8"),
+    ("abcdefg😀", None, None),
     ("two\nlines-here", None, "one line"),
     ("nul\0inside-it", None, "one line"),
 ])

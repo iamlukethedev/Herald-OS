@@ -76,15 +76,19 @@ export async function keyringStatus(): Promise<KeyringStatus> {
 }
 
 /**
- * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 5 (no PyGObject)
- * is a plain failure: the keyring service is not what is missing, and the terminal says what is.
+ * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 2 is the
+ * command's refusal of the password, which is a length the check below lets through only if the two disagree.
+ * 5 (no PyGObject) is a plain failure: the keyring service is not what is missing, and the terminal says what is.
  */
-const KEYRING_EXITS: Record<number, KeyringFailure> = { 3: 'keyringExists', 4: 'noKeyringService' }
+const KEYRING_EXITS: Record<number, KeyringFailure> = { 2: 'tooShort', 3: 'keyringExists', 4: 'noKeyringService' }
 // Starting gnome-keyring through D-Bus activation and writing the keyring take well under a second.
 const KEYRING_TIMEOUT_MS = 30_000
 
+/** In characters (code points), as the command counts them: `length` counts an emoji as two. */
+export const passwordLength = (password: string): number => [...password].length
+
 export function keyringPasswordProblem(password: string): KeyringFailure | null {
-  return password.length < 8 || /[\r\n\0]/.test(password) ? 'tooShort' : null
+  return passwordLength(password) < 8 || /[\r\n\0]/.test(password) ? 'tooShort' : null
 }
 
 /** `herald-os keyring setup`: with the password on stdin, never on the command line; with none, `--no-password`. */

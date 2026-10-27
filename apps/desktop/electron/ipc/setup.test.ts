@@ -353,8 +353,9 @@ describe('the keyring', () => {
       [4, 'noKeyringService'],
       // No PyGObject: not the keyring service, so not its message.
       [5, 'failed'],
+      // The command refused the password (its length).
+      [2, 'tooShort'],
       [1, 'failed'],
-      [2, 'failed'],
       [127, 'failed']
     ]
 
@@ -388,6 +389,20 @@ describe('the keyring', () => {
     expect(keyringPasswordProblem('correct')).toBe('tooShort')
     expect(keyringPasswordProblem('correct!')).toBeNull()
     expect(keyringPasswordProblem('çoração!')).toBeNull()
+  })
+
+  it('counts characters as the command does, not UTF-16 units', async () => {
+    // Each of these is 8 UTF-16 units long, and 4 or 7 characters.
+    expect('😀😀😀😀'.length).toBe(8)
+    expect(keyringPasswordProblem('😀😀😀😀')).toBe('tooShort')
+    expect(keyringPasswordProblem('abcdef😀')).toBe('tooShort')
+    expect(keyringPasswordProblem('abcdefg😀')).toBeNull()
+    expect(keyringPasswordProblem('😀😀😀😀😀😀😀😀')).toBeNull()
+    registerSetupIpc()
+    vi.mocked(run).mockClear()
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: '😀😀😀😀' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: 'abcdef😀' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('runs the command for a password of exactly eight characters', async () => {

@@ -659,6 +659,15 @@ describe("first-run setup's keyring", () => {
     await type(password, 'correct!')
     await type(again, 'correct!')
     expect(button(host, t('firstRun.next'))?.disabled).toBe(false)
+    // Characters, as the command counts them: 8 UTF-16 units each, but 4 and 7 characters.
+    for (const short of ['😀😀😀😀', 'abcdef😀']) {
+      await type(password, short)
+      await type(again, short)
+      expect(button(host, t('firstRun.next'))?.disabled, short).toBe(true)
+    }
+    await type(password, 'abcdefg😀')
+    await type(again, 'abcdefg😀')
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(false)
     await type(password, 'senha do coração')
     await type(again, 'senha do coração')
     expect(host.textContent).toContain(t('firstRun.keyring.sameAsAccount'))
