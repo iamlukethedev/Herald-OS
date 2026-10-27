@@ -112,11 +112,17 @@ def _data_home_keyrings() -> tuple[str, ...]:
 
 
 def _expand_protected(raw: Iterable[str]) -> tuple[Path, ...]:
+    """Each root as written and, where it differs, by its real path: with a linked home (HOME=/home/x
+    and /home a link to /var/home) or a linked $XDG_DATA_HOME, the real path of a file under it, or a link
+    to that file, would otherwise fall outside every root."""
     home = str(hermes_home())
     out: list[Path] = []
     for entry in raw:
         text = str(entry).replace("$HERMES_HOME", home)
-        out.append(expand(text))
+        root = expand(text)
+        for form in (root, Path(os.path.realpath(root))):
+            if form not in out:
+                out.append(form)
     return tuple(out)
 
 
