@@ -1023,7 +1023,7 @@ def test_without_timeout_the_check_still_never_reads_the_terminal(machine, tmp_p
     tools.mkdir()
     for folder in ("/usr/bin", "/bin"):
         for tool in Path(folder).iterdir():
-            if tool.name != "timeout" and not (tools / tool.name).exists():
+            if tool.name != "timeout" and not os.path.lexists(tools / tool.name):
                 (tools / tool.name).symlink_to(tool)
     env = {**env, "PATH": os.pathsep.join([str(tmp_path / "stubs"), str(tools)])}
     deploy(home, booted={"requested-packages": ["htop"]})
@@ -1043,7 +1043,7 @@ def test_without_timeout_the_check_uses_gtimeout(machine, tmp_path):
     tools.mkdir()
     for folder in ("/usr/bin", "/bin"):
         for tool in Path(folder).iterdir():
-            if tool.name not in ("timeout", "gtimeout") and not (tools / tool.name).exists():
+            if tool.name not in ("timeout", "gtimeout") and not os.path.lexists(tools / tool.name):
                 (tools / tool.name).symlink_to(tool)
     env = {**env, "PATH": os.pathsep.join([str(stubs), str(tools)])}
     out, _, _ = check(home, env)
