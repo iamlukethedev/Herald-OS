@@ -616,11 +616,32 @@ ARCH = ROOT / "packaging" / "arch"
 ARCH_BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "org.freedesktop.secrets"}
 
 
+def is_gnu_install(version: str) -> bool:
+    """`install --version`'s first line is GNU coreutils' own: "install (GNU coreutils) 9.4"."""
+    return re.fullmatch(r"install \(GNU coreutils\) \d[\w.+-]*", version.split("\n", 1)[0].strip()) is not None
+
+
 def gnu_install() -> bool:
     try:
-        return "GNU coreutils" in subprocess.run(["install", "--version"], capture_output=True, text=True).stdout
+        return is_gnu_install(subprocess.run(["install", "--version"], capture_output=True, text=True).stdout)
     except OSError:
         return False
+
+
+@pytest.mark.parametrize("version, gnu", [
+    ("install (GNU coreutils) 9.4\nCopyright (C) 2023 Free Software Foundation, Inc.\n", True),
+    ("install (GNU coreutils) 8.32\n", True),
+    ("install (GNU coreutils) 9.5.12-abcd\n", True),
+    # Other installs that mention GNU coreutils, or look like it, are not it.
+    ("install (uutils coreutils) 0.0.28\n", False),
+    ("usage: install [-bCcpSsUv] [-B suffix] ... (see GNU coreutils for install -D)\n", False),
+    ("BusyBox v1.36.1 multi-call binary.\nGNU coreutils compatible\n", False),
+    ("ginstall (GNU coreutils) 9.4\n", False),
+    ("install (GNU coreutils)\n", False),
+    ("", False),
+])
+def test_only_gnu_install_counts_as_gnu_install(version, gnu):
+    assert is_gnu_install(version) is gnu
 
 
 @pytest.mark.skipif(not gnu_install(), reason="the package script needs GNU install (install -D), as on Arch")
