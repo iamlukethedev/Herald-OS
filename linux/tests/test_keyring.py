@@ -10,8 +10,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1155,3 +1157,37 @@ def test_under_the_lock_a_keyring_still_half_made_is_finished(tmp_path, monkeypa
     monkeypatch.setattr(cli, "keyring_finish", lambda password, flag: finished.append((password, flag)))
     assert cli.keyring_cmd(["setup", "--no-password"]) == 0
     assert finished == [("", "--no-password")] and "Finished the keyring" in capsys.readouterr().out
+
+
+class Interrupted(io.StringIO):
+    def read(self, *args):
+        raise KeyboardInterrupt
+
+
+def test_ctrl_c_while_the_password_is_read_from_a_pipe_changes_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "stdin", Interrupted(""))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == cli.KEYRING_STOPPED and "stopped. Nothing was changed." in capsys.readouterr().err
+
+
+def test_ctrl_c_on_a_pipe_that_sends_nothing_exits_130_without_a_traceback(tmp_path):
+    # `sleep 30 | herald-os keyring setup --password`, stopped with Ctrl+C before anything arrives.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    environment = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+    environment.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    command = subprocess.Popen([sys.executable, str(CLI), "keyring", "setup", "--password"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=environment)
+    try:
+        time.sleep(1)
+        assert command.poll() is None, "it should be waiting for the password"
+        command.send_signal(signal.SIGINT)
+        _, err = command.communicate(timeout=10)
+    finally:
+        command.kill()
+    err = err.decode("utf-8", "replace")
+    # 130 as an exit code of its own, not death by SIGINT (-2), and no traceback.
+    assert command.returncode == 130, err
+    assert "stopped. Nothing was changed." in err and "Traceback" not in err
+    assert list(runtime.iterdir()) == [] and not (tmp_path / ".local" / "share" / "keyrings").exists()

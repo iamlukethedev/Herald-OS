@@ -3403,7 +3403,12 @@ def keyring_password_input() -> str:
                 print(file=sys.stderr)
                 die("stopped. Nothing was changed.", 130)
         else:
-            password = sys.stdin.read()
+            # Ctrl+C while a pipe has sent nothing yet, as with `slow | herald-os keyring setup --password`.
+            try:
+                password = sys.stdin.read()
+            except KeyboardInterrupt:
+                print(file=sys.stderr)
+                die("stopped. Nothing was changed.", KEYRING_STOPPED)
             password = password[:-1] if password.endswith("\n") else password
             again = None
         # A stream decoded with surrogateescape (Python's UTF-8 mode, as in the C locale) passes such
