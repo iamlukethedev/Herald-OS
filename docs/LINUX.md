@@ -448,7 +448,10 @@ one. A keyring is made labelled `login` and relabelled `Login` once it is the de
 labelled `login` was stopped half-way: running the same `herald-os keyring setup` again finishes it
 (it opens it, with no password or with the one it was made with, which `--password` asks for again; makes
 it the default one, which writes `default`; and relabels it) instead of refusing it. The other flag is
-refused with exit 3 and named, and a wrong password changes nothing (exit 2). The password
+refused with exit 3 and named. The password `--password` asks for is checked, even in the session that
+made the keyring, where gnome-keyring would open it with any password: the keyring is locked first, then
+opened with that password. A wrong one is refused with exit 3 and changes nothing else; the keyring
+stays locked, as after a restart. The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.

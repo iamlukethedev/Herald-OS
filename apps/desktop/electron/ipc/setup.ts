@@ -78,6 +78,7 @@ export async function keyringStatus(): Promise<KeyringStatus> {
 /**
  * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 2 is the
  * command's refusal of the password, which is a length the check below lets through only if the two disagree.
+ * 3 is also a half-made keyring whose password is not the one given: it too stays as it is.
  * 5 (no PyGObject) is a plain failure: the keyring service is not what is missing, and the terminal says what is.
  */
 const KEYRING_EXITS: Record<number, KeyringFailure> = { 2: 'tooShort', 3: 'keyringExists', 4: 'noKeyringService' }
