@@ -444,7 +444,8 @@ and `login_1`: the second waits, then finds the first one's and exits 3. If the 
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
 Ctrl+C exits 130 at once, even while the keyring service is not answering, and says how far it got:
 nothing changed, or the keyring may have been made, or it was made but not yet finished as the default
-one. A keyring is made labelled `login` and relabelled `Login` once it is the default one, so one still
+one, or it was being finished (a rerun then finishes it or says the account has a keyring), or it was
+already finished and there is nothing to run again. A keyring is made labelled `login` and relabelled `Login` once it is the default one, so one still
 labelled `login` was stopped half-way: running the same `herald-os keyring setup` again finishes it
 (it opens it, with no password or with the one it was made with, which `--password` asks for again; makes
 it the default one, which writes `default`; and relabels it) instead of refusing it. The other flag is

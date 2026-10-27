@@ -3459,11 +3459,26 @@ def keyring_session(call, GLib):
     return call(SECRETS_PATH, SECRET_SERVICE, "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
 
 
-def keyring_make_default(call, GLib, collection: str, session: str) -> None:
-    """The last steps of making a keyring: the default one, labelled "Login"."""
+def keyring_make_default(call, GLib, collection: str, session: str, progress: dict) -> None:
+    """The last steps of making a keyring: the default one, labelled "Login". `progress["stage"]` says how
+    far they got: "labelling" while the label is being set, "finished" once it is (then only the session
+    is left to close)."""
     call(SECRETS_PATH, SECRET_SERVICE, "SetAlias", GLib.Variant("(so)", ("default", collection)), "()")
+    progress["stage"] = "labelling"
     call(collection, "org.freedesktop.DBus.Properties", "Set", GLib.Variant("(ssv)", ("org.freedesktop.Secret.Collection", "Label", GLib.Variant("s", "Login"))), "()")
+    progress["stage"] = "finished"
     call(session, "org.freedesktop.Secret.Session", "Close", None, "()")
+
+
+def keyring_stopped_finishing(progress: dict, flag: str) -> None:
+    """What Ctrl+C says once the keyring is being, or has been, finished as the default one. A keyring
+    labelled "Login" is finished, and a rerun refuses it (exit 3), so "run it again to finish" would be
+    wrong advice there."""
+    if progress["stage"] == "finished":
+        die("stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again.", KEYRING_STOPPED)
+    if progress["stage"] == "labelling":
+        die(f"stopped while the keyring was being finished as the default one. Running `herald-os keyring setup {flag}` again "
+            "finishes it if it was not, or says this account already has a keyring if it was.", KEYRING_STOPPED)
 
 
 def keyring_create(password: str, flag: str) -> str:
@@ -3471,7 +3486,7 @@ def keyring_create(password: str, flag: str) -> str:
     Returns its D-Bus path. Ctrl+C says how far it got, and what to run to finish (exit 130)."""
     call, GLib = keyring_dbus()
     again = f"Run `herald-os keyring setup {flag}` again"
-    stage = "before"
+    progress = {"stage": "before"}
     try:
         try:
             default = call(SECRETS_PATH, SECRET_SERVICE, "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
@@ -3488,20 +3503,21 @@ def keyring_create(password: str, flag: str) -> str:
             # label until it is the default one (keyring_make_default), which marks one stopped half-way.
             label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", KEYRING_MAKING_LABEL)}
             secret = (session, b"", password.encode("utf-8"), "text/plain")
-            stage = "asked"
+            progress["stage"] = "asked"
             collection = call(SECRETS_PATH, KEYRING_INTERNAL, "CreateWithMasterPassword", GLib.Variant("(a{sv}(oayays))", (label, secret)), "(o)")[0]
-            stage = "made"
+            progress["stage"] = "made"
         except GLib.Error as error:
             die(f"the keyring service could not make the keyring ({error.message}). Herald OS makes it with gnome-keyring. Nothing was changed.", 1)
         try:
-            keyring_make_default(call, GLib, collection, session)
+            keyring_make_default(call, GLib, collection, session, progress)
         except GLib.Error as error:
             die(f"made the keyring {collection} but could not make it the default one ({error.message}). {again} to finish it.", 1)
     except KeyboardInterrupt:
         print(file=sys.stderr)
-        if stage == "made":
+        keyring_stopped_finishing(progress, flag)
+        if progress["stage"] == "made":
             die(f"stopped after the keyring was made, before it was finished as the default one. {again} to finish it.", KEYRING_STOPPED)
-        if stage == "asked":
+        if progress["stage"] == "asked":
             die(f"stopped while the keyring service was making the keyring, which it may have done. {again}: it finishes the keyring if it was made, and makes it if not.", KEYRING_STOPPED)
         die("stopped. Nothing was changed.", KEYRING_STOPPED)
     return collection
@@ -3557,6 +3573,7 @@ def keyring_finish(password: str, flag: str) -> None:
     the one it was made with), make it the default one and label it "Login". Nothing else changes."""
     call, GLib = keyring_dbus()
     again = f"Run `herald-os keyring setup {flag}` again"
+    progress = {"stage": "before"}
     try:
         try:
             session = keyring_session(call, GLib)
@@ -3578,11 +3595,12 @@ def keyring_finish(password: str, flag: str) -> None:
                 die(f"{said}. It stays locked, as after a restart, and nothing else was changed.", KEYRING_EXISTS)
             die(f"the keyring service could not open the keyring to finish it ({error.message}). Nothing was changed.", 1)
         try:
-            keyring_make_default(call, GLib, KEYRING_LOGIN, session)
+            keyring_make_default(call, GLib, KEYRING_LOGIN, session, progress)
         except GLib.Error as error:
             die(f"could not finish the keyring ({error.message}). {again} to try again.", 1)
     except KeyboardInterrupt:
         print(file=sys.stderr)
+        keyring_stopped_finishing(progress, flag)
         die(f"stopped before the keyring was finished. {again} to finish it.", KEYRING_STOPPED)
 
 

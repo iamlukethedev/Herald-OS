@@ -869,8 +869,10 @@ MAKING = ["ReadAlias", "OpenSession", "CreateWithMasterPassword", "SetAlias", "S
     ("OpenSession", "stopped. Nothing was changed."),
     ("CreateWithMasterPassword", "which it may have done. Run `herald-os keyring setup --no-password` again: it finishes the keyring if it was made"),
     ("SetAlias", "stopped after the keyring was made, before it was finished as the default one. Run `herald-os keyring setup --no-password` again to finish it."),
-    ("Set", "stopped after the keyring was made"),
-    ("Close", "stopped after the keyring was made"),
+    # Relabelling under way: it may or may not have landed, so the advice covers both.
+    ("Set", "stopped while the keyring was being finished as the default one. Running `herald-os keyring setup --no-password` again finishes it if it was not, or says this account already has a keyring if it was."),
+    # Relabelled: finished, and a rerun would refuse it, so there is nothing to run again.
+    ("Close", "stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again."),
 ])
 def test_ctrl_c_while_making_the_keyring_says_how_far_it_got(monkeypatch, capsys, stop_at, said):
     calls: list = []
@@ -893,8 +895,13 @@ def test_making_the_keyring_runs_every_call_in_order(monkeypatch):
     assert calls == MAKING
 
 
-@pytest.mark.parametrize("stop_at", ["OpenSession", "Lock", "UnlockWithMasterPassword", "SetAlias", "Set"])
-def test_ctrl_c_while_finishing_says_to_run_it_again(monkeypatch, capsys, stop_at):
+@pytest.mark.parametrize("stop_at, said", [
+    *[(stage, "stopped before the keyring was finished. Run `herald-os keyring setup --password` again to finish it.")
+      for stage in ("OpenSession", "Lock", "UnlockWithMasterPassword", "SetAlias")],
+    ("Set", "stopped while the keyring was being finished as the default one. Running `herald-os keyring setup --password` again finishes it if it was not"),
+    ("Close", "stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again."),
+])
+def test_ctrl_c_while_finishing_says_how_far_it_got(monkeypatch, capsys, stop_at, said):
     calls: list = []
     held = fake_keyring_service(monkeypatch, stop_at, calls)
     try:
@@ -904,7 +911,7 @@ def test_ctrl_c_while_finishing_says_to_run_it_again(monkeypatch, capsys, stop_a
         held.set()
     err = capsys.readouterr().err
     assert stopped.value.code == 130
-    assert "stopped before the keyring was finished. Run `herald-os keyring setup --password` again to finish it." in err
+    assert said in err and "Traceback" not in err
 
 
 def test_finishing_with_the_wrong_password_changes_nothing(monkeypatch, capsys):
