@@ -334,6 +334,16 @@ describe('the keyring', () => {
       await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null })
     }
 
+    // Still true, however the command lays its answer out: other keys, another order, white space.
+    for (const stdout of [
+      '{"encrypted": true, "keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}',
+      '  \n{"keyring":"none","folder":"/var/home/hermes/.local/share/keyrings","encrypted":true}\r\n\n',
+      '{"keyring": "none", "folder": "/x", "encrypted": true, "devices": ["/dev/mapper/luks-1"], "note": null}'
+    ]) {
+      host.run = { stdout, stderr: 'a warning on stderr\n', code: 0 }
+      await expect(keyringStatus(), stdout).resolves.toEqual({ keyring: 'none', encrypted: true })
+    }
+
     // A herald-os from before the keyring's disk was looked at: the keyring, and its disk unknown.
     host.run = { stdout: '{"keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}', stderr: '', code: 0 }
     await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null })

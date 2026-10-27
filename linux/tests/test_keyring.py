@@ -1005,3 +1005,54 @@ def test_ctrl_c_while_the_keyring_service_does_not_answer(tmp_path):
     # The daemon makes the folder when it starts; nothing is written into it.
     folder = tmp_path / ".local" / "share" / "keyrings"
     assert not list(folder.glob("*.keyring")) and not (folder / "default").exists()
+
+
+# Unusual layouts that are encrypted all the same, and must still count as true.
+def luks(path: str, inner: dict, uuid: str = "LX", kind: str = "part") -> dict:
+    return disk(path, "crypto_LUKS", uuid=uuid, children=[inner], kind=kind)
+
+
+EXOTIC_TRUE = {
+    "LUKS on RAID over two plain partitions": (
+        [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "linux_raid_member", children=[
+            luks("/dev/md0", disk("/dev/mapper/luks-md", "ext4", ["/"], uuid="R1", kind="crypt"), kind="raid1")])]),
+         disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", "linux_raid_member", children=[
+             luks("/dev/md0", disk("/dev/mapper/luks-md", "ext4", ["/"], uuid="R1", kind="crypt"), kind="raid1")])])],
+        [mount("/", "/dev/mapper/luks-md", "R1", "ext4")], PLACE),
+    "LUKS on an LVM volume": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "LVM2_member", children=[luks("/dev/mapper/vg-home", disk("/dev/mapper/luks-home", "xfs", ["/"], uuid="X1", kind="crypt"), kind="lvm")])),
+        [mount("/", "/dev/mapper/luks-home", "X1", "xfs")], PLACE),
+    "LUKS inside LUKS": (
+        nvme(ESP, luks("/dev/nvme0n1p2", disk("/dev/mapper/outer", "crypto_LUKS", uuid="L2", kind="crypt", children=[
+            disk("/dev/mapper/inner", "ext4", ["/"], uuid="I1", kind="crypt")]))),
+        [mount("/", "/dev/mapper/inner", "I1", "ext4")], PLACE),
+    "LUKS on a whole disk, no partitions": (
+        [disk("/dev/sda", "crypto_LUKS", kind="disk", uuid="L9", children=[disk("/dev/mapper/luks-sda", "ext4", ["/"], uuid="E1", kind="crypt")])],
+        [mount("/", "/dev/mapper/luks-sda", "E1", "ext4")], PLACE),
+    "LUKS on a loop device": (
+        nvme(ESP, ROOT_LUKS) + [disk("/dev/loop0", "crypto_LUKS", kind="loop", uuid="L5", children=[disk("/dev/mapper/vault", "ext4", [PLACE], uuid="V1", kind="crypt")])],
+        ROOT_MOUNTS + [mount(PLACE, "/dev/mapper/vault", "V1", "ext4")], PLACE),
+    "the keyring folder is itself a mount on LUKS, under a plain home": (
+        nvme(ESP, ROOT_PLAIN, luks("/dev/nvme0n1p3", disk("/dev/mapper/k", "ext4", [PLACE], uuid="K1", kind="crypt"))),
+        [mount("/", "/dev/nvme0n1p2", "B1", "btrfs"), mount(PLACE, "/dev/mapper/k", "K1", "ext4")], PLACE),
+    "several mounts below the folder, each on LUKS": (
+        nvme(ESP, ROOT_LUKS, HOME_LUKS, luks("/dev/nvme0n1p4", disk("/dev/mapper/luks-4", "ext4", uuid="F4", kind="crypt"), uuid="L4")),
+        ROOT_MOUNTS + [mount(PLACE + "/a", "/dev/mapper/luks-L2", "H1"), mount(PLACE + "/a/b", "/dev/mapper/luks-4", "F4", "ext4")], PLACE),
+    "btrfs over three LUKS disks, mounted as a subvolume": (
+        nvme(ESP, ROOT_LUKS) + [disk(f"/dev/sd{letter}", None, kind="disk", children=[luks(f"/dev/sd{letter}1", disk(f"/dev/mapper/luks-{letter}", "btrfs", uuid="B1", kind="crypt"), uuid=f"L{letter}")])
+                                for letter in "ab"],
+        [mount("/", "/dev/mapper/luks-L1[/root]", "B1", "btrfs"), mount("/home", "/dev/mapper/luks-a[/home]", "B1", "btrfs")], PLACE),
+}
+
+
+@pytest.mark.parametrize("name", EXOTIC_TRUE)
+def test_unusual_encrypted_layouts_still_count_as_encrypted(name):
+    tree, mounts, place = EXOTIC_TRUE[name]
+    assert cli.keyring_mounts_encrypted(place, mounts, tree) is True
+
+
+def test_a_source_named_by_a_link_counts_as_its_device():
+    # findmnt may name a device by a /dev/disk link, which resolves to the mapper device lsblk names.
+    tree, _, place, _ = MACHINES["root encrypted, no separate home"]
+    links = {"/dev/disk/by-uuid/B1": "/dev/dm-0", "/dev/mapper/luks-L1": "/dev/dm-0"}
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/disk/by-uuid/B1", "B1", "btrfs")], tree, lambda device: links.get(device, device)) is True
