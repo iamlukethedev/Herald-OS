@@ -1121,3 +1121,30 @@ def test_a_wrong_password_leaves_the_half_made_keyring_as_it_was(tmp_path):
     folder = tmp_path / ".local" / "share" / "keyrings"
     assert not (folder / "default").exists() and cli.keyring_label(folder / "login.keyring") == "login"
     assert cli.keyring_unfinished(folder) == "password"
+
+
+def test_under_the_lock_a_keyring_no_longer_half_made_is_not_finished(tmp_path, monkeypatch, capsys):
+    # While this run waited for the lock, the person made another keyring, "work", the default one.
+    # Finishing "login" now would take the default away from it.
+    folder = keyrings(tmp_path, {"default": b"work", "work.keyring": b"[keyring]\ndisplay-name=Work\n"})
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "keyring_dir", lambda: folder)
+    looks = iter(["open", None])
+    monkeypatch.setattr(cli, "keyring_unfinished", lambda directory: next(looks))
+    finished = []
+    monkeypatch.setattr(cli, "keyring_finish", lambda password, flag: finished.append(flag))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_cmd(["setup", "--no-password"])
+    assert stopped.value.code == cli.KEYRING_EXISTS and "already has a keyring" in capsys.readouterr().err
+    assert finished == []
+    assert (folder / "default").read_bytes() == b"work"
+
+
+def test_under_the_lock_a_keyring_still_half_made_is_finished(tmp_path, monkeypatch, capsys):
+    folder = keyrings(tmp_path, {"login.keyring": b"[keyring]\ndisplay-name=login\n"})
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "keyring_dir", lambda: folder)
+    finished = []
+    monkeypatch.setattr(cli, "keyring_finish", lambda password, flag: finished.append((password, flag)))
+    assert cli.keyring_cmd(["setup", "--no-password"]) == 0
+    assert finished == [("", "--no-password")] and "Finished the keyring" in capsys.readouterr().out
