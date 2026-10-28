@@ -831,9 +831,10 @@ class FakeGLibError(Exception):
         self.message = message
 
 
-def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, lock_prompt: str = "/"):
+def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, lock_prompt: str = "/", fail_at: str | None = None):
     """A stand-in for PyGObject and the keyring service. At `stop_at` it does what Ctrl+C does while that
-    call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting."""
+    call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting. At
+    `fail_at` the call fails with an error that is not a refused password."""
     import _thread
     import threading
     import types
@@ -848,6 +849,8 @@ def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: 
             if method == stop_at:
                 _thread.interrupt_main()
                 held.wait(5)
+            if method == fail_at:
+                raise FakeGLibError("GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong")
             if denied and method == "UnlockWithMasterPassword":
                 raise FakeGLibError("GDBus.Error:org.gnome.keyring.Error.Denied: The password was invalid")
             return types.SimpleNamespace(unpack=lambda: answers.get(method, ()))
@@ -934,6 +937,18 @@ def test_finishing_without_a_password_a_keyring_that_has_one_names_the_flag_that
     with pytest.raises(SystemExit) as stopped:
         cli.keyring_finish("", "--no-password")
     assert stopped.value.code == cli.KEYRING_EXISTS and "`herald-os keyring setup --password` finishes it" in capsys.readouterr().err
+
+
+def test_finishing_stops_when_the_keyring_cannot_be_locked(monkeypatch, capsys):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, fail_at="Lock")
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish("correct horse", "--password")
+    err = capsys.readouterr().err
+    assert stopped.value.code == 1, err
+    assert "could not lock the keyring to check its password (GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong). Nothing was changed." in err
+    # Nothing after the failed lock: no unlock, no default, no label.
+    assert calls == ["OpenSession", "Lock"]
 
 
 def test_finishing_stops_when_the_service_wants_to_ask_before_locking(monkeypatch, capsys):
