@@ -3024,9 +3024,20 @@ def luks_extra(metadata: dict, keep: int) -> tuple[list[int], list[int]]:
 
 def disk_say(*args, **kwargs) -> None:
     """print, for the root side while it changes the disk: the terminal may be gone (closed, or sudo
-    stopped with it), and a write that fails then must not stop the change half-done."""
-    with contextlib.suppress(OSError, ValueError):
+    stopped with it), and a write that fails then must not stop the change half-done. Once the reader
+    has gone (the person's side was killed), that stream goes to /dev/null from then on: what is left
+    in its buffer would otherwise fail again at exit, as "Exception ignored … BrokenPipeError" and
+    exit 120 in place of the change's own code."""
+    stream = kwargs.get("file") or sys.stdout
+    try:
         print(*args, **kwargs, flush=True)
+    except BrokenPipeError:
+        with contextlib.suppress(OSError, ValueError):
+            nowhere = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(nowhere, stream.fileno())
+            os.close(nowhere)
+    except (OSError, ValueError):
+        pass
 
 
 def luks_slot_tokens(metadata: dict, slot: int) -> list[str]:
@@ -3226,7 +3237,7 @@ def disk_root_op(args: list[str]) -> int:
     if op == "probe":
         # Held as a change is, cryptsetup in a session of its own: Ctrl+C must not cut the look short.
         with disk_signals_held():
-            print(json.dumps(disk_probe(devices, current, new)))
+            disk_say(json.dumps(disk_probe(devices, current, new)))
         return 0
     for device in devices:
         if cryptsetup(["isLuks", device]).returncode != 0:

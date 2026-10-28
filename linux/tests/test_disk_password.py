@@ -1839,6 +1839,29 @@ def test_the_change_runs_with_noflsh_and_the_settings_come_back_after_a_pause(mo
     assert cli.DISK_SETTLE >= 0.2 and restored[0] - seen["ended"] >= cli.DISK_SETTLE * 0.9
 
 
+GONE_READER_DRIVER = """
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+for line in ("Adding the new disk password to /dev/vda3…", "The new disk password opens the disk. Removing the old one…", cli.DISK_CHANGE_DONE):
+    cli.disk_say(line)
+sys.exit(6)
+"""
+
+
+def test_the_root_side_ends_quietly_with_its_own_code_when_its_reader_is_gone():
+    """The person's side was killed (SIGKILL), so the root side writes to a pipe nobody reads: no
+    "Exception ignored … BrokenPipeError" at exit, and its own exit code, not Python's 120."""
+    read, write = os.pipe()
+    os.close(read)
+    try:
+        result = subprocess.run([sys.executable, "-c", GONE_READER_DRIVER, str(CLI)], stdout=write, stderr=subprocess.PIPE, text=True, timeout=60)
+    finally:
+        os.close(write)
+    assert result.returncode == 6 and result.stderr == "", result.stderr
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
