@@ -3318,6 +3318,7 @@ def disk_root(args: list[str]) -> int:
 
 
 DISK_LOOK_WAIT = 30
+DISK_PROC = Path("/proc")
 # The look's own limit, with that wait in it. The root side stops itself then (SIGALRM), even when the
 # person's side that waits for it is gone; the person's side gives up a moment later.
 DISK_LOOK_TIMEOUT = 120
@@ -3326,10 +3327,15 @@ DISK_LOOK_GRACE = 15
 
 def disk_busy(devices: list[str]) -> set[str]:
     """The devices a cryptsetup is still working on, from /proc. A root side that was killed (SIGKILL)
-    leaves the luksAddKey it started running, in a session of its own, and it may still write its slot."""
+    leaves the luksAddKey it started running, in a session of its own, and it may still write its slot.
+    Empty where /proc cannot be listed (not Linux): nothing can be found busy there."""
     wanted = {os.fsencode(device): device for device in devices}
     busy: set[str] = set()
-    for entry in Path("/proc").iterdir():
+    try:
+        entries = list(DISK_PROC.iterdir())
+    except OSError:
+        return busy
+    for entry in entries:
         if not entry.name.isdigit():
             continue
         try:
