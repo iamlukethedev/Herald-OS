@@ -401,6 +401,7 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
 
 const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
   tooShort: 'firstRun.account.tooShort',
+  passwordRefused: 'firstRun.keyring.passwordRefused',
   keyringExists: 'firstRun.keyring.failed',
   noKeyringService: 'firstRun.keyring.noService',
   wrongPassword: 'firstRun.keyring.wrongPassword',

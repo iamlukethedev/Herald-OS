@@ -150,6 +150,7 @@ const DISK_FAILURES = [
 // Each way making the keyring can fail and setup stays on the step, and what it says.
 const KEYRING_FAILURES = [
   ['noKeyringService', 'firstRun.keyring.noService'],
+  ['passwordRefused', 'firstRun.keyring.passwordRefused'],
   ['wrongPassword', 'firstRun.keyring.wrongPassword'],
   ['keyringNeedsPassword', 'firstRun.keyring.needsPassword'],
   ['tooShort', 'firstRun.account.tooShort'],

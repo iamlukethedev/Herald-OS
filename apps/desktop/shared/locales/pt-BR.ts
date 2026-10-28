@@ -688,6 +688,7 @@ export const ptBR: Translation = {
   'firstRun.keyring.fieldAgain': 'Repita a senha do chaveiro',
   'firstRun.keyring.sameAsAccount': 'Pode ser a mesma senha da sua conta.',
   'firstRun.keyring.mismatch': 'As senhas do chaveiro não são iguais.',
+  'firstRun.keyring.passwordRefused': 'Essa senha não pode ser usada no chaveiro. Tente outra.',
   'firstRun.keyring.laterHint': 'Depois: na primeira vez que um app salvar uma senha, uma janela vai pedir que você escolha uma senha para o chaveiro.',
   'firstRun.keyring.noService': 'O serviço de chaveiro não respondeu, então nenhum chaveiro foi criado. Execute herald-os keyring setup --password em um terminal mais tarde.',
   'firstRun.keyring.failed': 'O chaveiro não foi criado. Execute herald-os keyring setup --password em um terminal para ver o motivo.',

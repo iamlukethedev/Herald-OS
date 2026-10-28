@@ -712,6 +712,7 @@ export const en = {
   'firstRun.keyring.fieldAgain': 'The same keyring password again',
   'firstRun.keyring.sameAsAccount': 'It can be the same as your account password.',
   'firstRun.keyring.mismatch': 'The keyring passwords do not match.',
+  'firstRun.keyring.passwordRefused': 'That password cannot be used for the keyring. Try another one.',
   'firstRun.keyring.laterHint': 'Later: the first time an app saves a password, a window asks you to choose a keyring password.',
   // herald-os keyring setup --password is a command, and stays as it is.
   'firstRun.keyring.noService': 'The keyring service did not answer, so no keyring was made. Run herald-os keyring setup --password in a terminal later.',

@@ -76,13 +76,13 @@ export async function keyringStatus(): Promise<KeyringStatus> {
 }
 
 /**
- * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 2 is the
- * command's refusal of the password, which is a length the check below lets through only if the two disagree.
+ * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 2, the
+ * command's refusal, is read in makeKeyring: it refuses more than a short password.
  * 6 is a keyring an earlier, interrupted run started with another password: setup asks for that password.
  * 7 is such a keyring with a password, finished with none: setup asks for its password too.
  * 5 (no PyGObject) is a plain failure: the keyring service is not what is missing, and the terminal says what is.
  */
-const KEYRING_EXITS: Record<number, KeyringFailure> = { 2: 'tooShort', 3: 'keyringExists', 4: 'noKeyringService', 6: 'wrongPassword', 7: 'keyringNeedsPassword' }
+const KEYRING_EXITS: Record<number, KeyringFailure> = { 3: 'keyringExists', 4: 'noKeyringService', 6: 'wrongPassword', 7: 'keyringNeedsPassword' }
 // Starting gnome-keyring through D-Bus activation and writing the keyring take well under a second.
 const KEYRING_TIMEOUT_MS = 30_000
 
@@ -106,7 +106,19 @@ export async function makeKeyring(password: string): Promise<SetupResult> {
   const last = result.stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).pop() ?? ''
   log('setup', `herald-os keyring setup exited ${result.code}: ${last}`)
 
-  return { ok: false, reason: KEYRING_EXITS[result.code] ?? 'failed' }
+  return { ok: false, reason: result.code === 2 ? refusal(password) : (KEYRING_EXITS[result.code] ?? 'failed') }
+}
+
+/**
+ * What the command's exit 2 means for this password. It refuses a short password, but also one with more than one
+ * line or bytes that are not text, and without a password, 2 can only be a mistake in how it was run.
+ */
+export function refusal(password: string): KeyringFailure {
+  if (!password) {
+    return 'failed'
+  }
+
+  return passwordLength(password) < 8 ? 'tooShort' : 'passwordRefused'
 }
 
 /**

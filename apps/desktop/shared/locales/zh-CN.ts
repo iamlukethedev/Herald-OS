@@ -662,6 +662,7 @@ export const zhCN: Translation = {
   'firstRun.keyring.fieldAgain': '再次输入密钥环密码',
   'firstRun.keyring.sameAsAccount': '可以和你的账户密码相同。',
   'firstRun.keyring.mismatch': '两次输入的密钥环密码不一致。',
+  'firstRun.keyring.passwordRefused': '这个密码不能用作密钥环密码。请换一个。',
   'firstRun.keyring.laterHint': '稍后：应用第一次保存密码时，会弹出窗口请你设置密钥环密码。',
   'firstRun.keyring.noService': '密钥环服务没有响应，因此未创建密钥环。稍后请在终端中运行 herald-os keyring setup --password。',
   'firstRun.keyring.failed': '未能创建密钥环。请在终端中运行 herald-os keyring setup --password 查看原因。',
