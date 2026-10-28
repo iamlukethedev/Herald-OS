@@ -61,23 +61,36 @@ call the tools directly.
 
 from __future__ import annotations
 
+import os
+import signal
+import sys
+
+
+def disk_stopped_starting(signum: int, frame) -> None:
+    os.write(2, b"\nherald-os: stopped. Nothing was changed.\n")
+    os._exit(130)
+
+
+# A Ctrl+C while Python is still loading this file, before `password --disk` handles one itself, ends
+# it quietly rather than with a KeyboardInterrupt traceback. Not where Ctrl+C was ignored when it
+# started, which it keeps.
+if __name__ == "__main__" and sys.argv[1:3] == ["password", "--disk"] and signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+    signal.signal(signal.SIGINT, disk_stopped_starting)
+
 import base64
 import contextlib
 import fcntl
 import getpass
 import io
 import json
-import os
 import pwd
 import re
 import select
 import shlex
 import shutil
-import signal
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import termios
 import threading
@@ -7034,4 +7047,13 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     SSH_OWN_PROCESS = True
-    sys.exit(main(sys.argv[1:]))
+    if signal.getsignal(signal.SIGINT) is disk_stopped_starting:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        # Before `password --disk` asks anything (it finds the devices first), nothing has changed.
+        if sys.argv[1:3] != ["password", "--disk"]:
+            raise
+        print(file=sys.stderr)
+        die("stopped. Nothing was changed.", 130)

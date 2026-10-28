@@ -1994,6 +1994,53 @@ def test_a_device_cryptsetup_still_works_on_after_the_wait_is_said_to_be_changin
     assert cli.disk_end_lines(state)[0].startswith("/dev/vda3: cryptsetup was still changing it, so what opens it may change")
 
 
+STARTING_DRIVER = """
+import importlib.abc, os, runpy, signal, sys
+# Ctrl+C while Python loads the command: as it imports base64, from its first lines.
+class Stop(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name == "base64":
+            os.kill(os.getpid(), signal.SIGINT)
+        return None
+sys.meta_path.insert(0, Stop())
+cli = sys.argv[1]
+sys.argv = ["herald-os", "password", "--disk"]
+runpy.run_path(cli, run_name="__main__")
+"""
+
+
+def test_ctrl_c_while_the_command_starts_ends_quietly():
+    """No KeyboardInterrupt traceback for a Ctrl+C before `password --disk` handles one itself."""
+    result = subprocess.run([sys.executable, "-c", STARTING_DRIVER, str(CLI)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 130 and "Traceback" not in result.stderr, result
+    assert "stopped. Nothing was changed." in result.stderr
+
+
+def test_a_command_started_with_ctrl_c_ignored_keeps_it_ignored_while_it_starts(tmp_path):
+    """Started with SIGINT ignored, it does not take one as a stop while it loads: it carries on."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text("#!/bin/sh\nexit 1\n")
+    (folder / "lsblk").chmod(0o755)
+    driver = STARTING_DRIVER.replace('sys.argv = ["herald-os", "password", "--disk"]',
+                                     'sys.argv = ["herald-os", "password", "--disk", "--status"]\nsignal.signal(signal.SIGINT, signal.SIG_IGN)')
+    result = subprocess.run([sys.executable, "-c", driver, str(CLI)], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == 0 and json.loads(result.stdout)["encrypted"] is None, result
+
+
+def test_ctrl_c_while_it_looks_for_the_disks_ends_quietly(tmp_path):
+    """Ctrl+C while it lists the disks, before it asks anything: a stop, said plainly."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text("#!/bin/sh\nkill -INT $PPID\nsleep 5\n")
+    (folder / "lsblk").chmod(0o755)
+    result = subprocess.run([sys.executable, str(CLI), "password", "--disk"], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == 130 and "Traceback" not in result.stderr, result
+    assert result.stderr.count("stopped. Nothing was changed.") == 1
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
