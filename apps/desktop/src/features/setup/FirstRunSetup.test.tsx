@@ -150,6 +150,7 @@ const DISK_FAILURES = [
 // Each way making the keyring can fail and setup stays on the step, and what it says.
 const KEYRING_FAILURES = [
   ['noKeyringService', 'firstRun.keyring.noService'],
+  ['wrongPassword', 'firstRun.keyring.wrongPassword'],
   ['tooShort', 'firstRun.account.tooShort'],
   ['failed', 'firstRun.keyring.failed']
 ] as const
@@ -288,6 +289,13 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
       await click(button(host, t('firstRun.next')))
       at(`keyring ${reason}`, 'firstRun.keyring.title')
       says(t(key))
+
+      // That one empties the fields for the password to be typed again.
+      if (reason === 'wrongPassword') {
+        for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+          await type(input, 'keyring pass')
+        }
+      }
     }
     bridge.setup.keyring.mockRejectedValueOnce(new Error('No handler registered for herald-os:setup:keyring'))
     await click(button(host, t('firstRun.next')))
@@ -686,6 +694,27 @@ describe("first-run setup's keyring", () => {
     await click(button(host, t('firstRun.later')))
     expect(heading(host)).toBe(t('firstRun.wifi.title'))
     expect(bridge.setup.keyring).not.toHaveBeenCalled()
+  })
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('asks in %s for the password again when an earlier try started the keyring with another one', async language => {
+    bridge.setup.keyring.mockResolvedValueOnce({ ok: false, reason: 'wrongPassword' })
+    const host = await afterTheAccount({ diskEncrypted: false, keyringEncrypted: false, keyring: 'none' }, language)
+    await click(button(host, t('firstRun.keyring.password')))
+    const [password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    await type(password, 'not the one I chose')
+    await type(again, 'not the one I chose')
+    await click(button(host, t('firstRun.next')))
+    // It stays on the step, says why, and the fields are empty for the password to be typed again.
+    expect(heading(host)).toBe(t('firstRun.keyring.title'))
+    expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.keyring.wrongPassword'))
+    const [password2, again2] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect([password2.value, again2.value]).toEqual(['', ''])
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(password2, 'the one I chose')
+    await type(again2, 'the one I chose')
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: 'the one I chose' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
   })
 
   it('moves on when the account has a keyring by then, which stays as it is', async () => {

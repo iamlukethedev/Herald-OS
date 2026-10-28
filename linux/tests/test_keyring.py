@@ -831,16 +831,17 @@ class FakeGLibError(Exception):
         self.message = message
 
 
-def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, lock_prompt: str = "/"):
+def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, fail_at: str | None = None, locked: bool = True):
     """A stand-in for PyGObject and the keyring service. At `stop_at` it does what Ctrl+C does while that
-    call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting."""
+    call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting. At
+    `fail_at` the call fails with an error that is not a refused password."""
     import _thread
     import threading
     import types
 
     held = threading.Event()
     answers = {"ReadAlias": ("/",), "OpenSession": (None, "/org/freedesktop/secrets/session/s1"), "CreateWithMasterPassword": (cli.KEYRING_LOGIN,),
-               "Lock": ([cli.KEYRING_LOGIN], lock_prompt)}
+               "Get": (locked,)}
 
     class Bus:
         def call_sync(self, name, path, interface, method, args, reply, flags, timeout):
@@ -848,7 +849,9 @@ def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: 
             if method == stop_at:
                 _thread.interrupt_main()
                 held.wait(5)
-            if denied and method == "UnlockWithMasterPassword":
+            if method == fail_at:
+                raise FakeGLibError("GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong")
+            if denied and method == "ChangeWithMasterPassword":
                 raise FakeGLibError("GDBus.Error:org.gnome.keyring.Error.Denied: The password was invalid")
             return types.SimpleNamespace(unpack=lambda: answers.get(method, ()))
 
@@ -899,7 +902,7 @@ def test_making_the_keyring_runs_every_call_in_order(monkeypatch):
 
 @pytest.mark.parametrize("stop_at, said", [
     *[(stage, "stopped before the keyring was finished. Run `herald-os keyring setup --password` again to finish it.")
-      for stage in ("OpenSession", "Lock", "UnlockWithMasterPassword", "SetAlias")],
+      for stage in ("OpenSession", "ChangeWithMasterPassword", "Get", "UnlockWithMasterPassword", "SetAlias")],
     ("Set", "stopped while the keyring was being finished as the default one. Running `herald-os keyring setup --password` again finishes it if it was not"),
     ("Close", "stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again."),
 ])
@@ -922,10 +925,11 @@ def test_finishing_with_the_wrong_password_changes_nothing(monkeypatch, capsys):
     with pytest.raises(SystemExit) as stopped:
         cli.keyring_finish("not it at all", "--password")
     err = capsys.readouterr().err
-    # Exit 3, which setup takes as a keyring that stays as it is (2 would read as a password too short).
-    assert stopped.value.code == cli.KEYRING_EXISTS and "not the password the keyring was made with" in err and "stays locked" in err
-    # Locked first, so the password is really checked even where the keyring was still open.
-    assert calls == ["OpenSession", "Lock", "UnlockWithMasterPassword"]
+    # Its own exit, so setup asks for the password again: 3 would read as a keyring left as it is, and 2
+    # as a password too short.
+    assert stopped.value.code == cli.KEYRING_WRONG_PASSWORD == 6 and "not the password the keyring was made with" in err
+    # Checked by changing it to itself, which never locks the keyring; nothing after the refusal.
+    assert calls == ["OpenSession", "ChangeWithMasterPassword"]
 
 
 def test_finishing_without_a_password_a_keyring_that_has_one_names_the_flag_that_finishes_it(monkeypatch, capsys):
@@ -936,13 +940,34 @@ def test_finishing_without_a_password_a_keyring_that_has_one_names_the_flag_that
     assert stopped.value.code == cli.KEYRING_EXISTS and "`herald-os keyring setup --password` finishes it" in capsys.readouterr().err
 
 
-def test_finishing_stops_when_the_service_wants_to_ask_before_locking(monkeypatch, capsys):
+def test_finishing_stops_when_the_password_cannot_be_checked(monkeypatch, capsys):
     calls: list = []
-    fake_keyring_service(monkeypatch, None, calls, lock_prompt="/org/freedesktop/secrets/prompt/p1")
+    fake_keyring_service(monkeypatch, None, calls, fail_at="ChangeWithMasterPassword")
     with pytest.raises(SystemExit) as stopped:
         cli.keyring_finish("correct horse", "--password")
-    assert stopped.value.code == 1 and "cannot be checked here" in capsys.readouterr().err
-    assert calls == ["OpenSession", "Lock"]
+    err = capsys.readouterr().err
+    assert stopped.value.code == 1, err
+    assert "could not check the keyring's password (GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong). Nothing was changed." in err
+    # Nothing after the failed check: no unlock, no default, no label.
+    assert calls == ["OpenSession", "ChangeWithMasterPassword"]
+
+
+def test_finishing_stops_when_the_keyring_cannot_be_opened(monkeypatch, capsys):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, fail_at="UnlockWithMasterPassword")
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish("correct horse", "--password")
+    assert stopped.value.code == 1 and "could not open the keyring to finish it" in capsys.readouterr().err
+    assert calls == ["OpenSession", "ChangeWithMasterPassword", "Get", "UnlockWithMasterPassword"]
+
+
+@pytest.mark.parametrize("locked, opened", [(True, ["UnlockWithMasterPassword"]), (False, [])])
+def test_finishing_never_locks_the_keyring_and_opens_it_only_if_it_is_locked(monkeypatch, locked, opened):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, locked=locked)
+    cli.keyring_finish("correct horse", "--password")
+    assert calls == ["OpenSession", "ChangeWithMasterPassword", "Get", *opened, "SetAlias", "Set", "Close"]
+    assert "Lock" not in calls
 
 
 def test_ctrl_c_while_waiting_for_the_lock_changes_nothing(tmp_path, monkeypatch, capsys):
@@ -1004,7 +1029,7 @@ def test_a_rerun_finishes_a_keyring_with_a_password_only_with_that_password(tmp_
     wrong_kind = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password')
     assert wrong_kind.returncode == cli.KEYRING_EXISTS and "`herald-os keyring setup --password` finishes it" in wrong_kind.stderr
     wrong = session(tmp_path, 'printf "not the one\\n" | "$PY" "$CLI" keyring setup --password')
-    assert wrong.returncode == cli.KEYRING_EXISTS and "not the password the keyring was made with" in wrong.stderr
+    assert wrong.returncode == cli.KEYRING_WRONG_PASSWORD and "not the password the keyring was made with" in wrong.stderr
     assert (folder / "login.keyring").read_bytes() == before and not (folder / "default").exists()
     right = session(tmp_path, 'printf "correct horse\\n" | "$PY" "$CLI" keyring setup --password')
     assert right.returncode == 0 and "Finished the keyring" in right.stdout, right.stderr
@@ -1113,7 +1138,7 @@ def test_a_wrong_password_is_refused_while_the_half_made_keyring_is_still_open(t
                                '{ printf "Second pw 188?\\n" | "$PY" "$CLI" keyring setup --password; echo "wrong=$?"; } && '
                                '{ printf "First pw 188!\\n" | "$PY" "$CLI" keyring setup --password; echo "right=$?"; }',
                      env={"MAKE": MAKE_UNFINISHED})
-    assert "wrong=3" in result.stdout and "right=0" in result.stdout, result.stdout + result.stderr
+    assert "wrong=6" in result.stdout and "right=0" in result.stdout, result.stdout + result.stderr
     assert "not the password the keyring was made with" in result.stderr
     folder = tmp_path / ".local" / "share" / "keyrings"
     assert (folder / "default").read_text().strip() == "login" and cli.keyring_label(folder / "login.keyring") == "Login"
@@ -1126,7 +1151,7 @@ def test_a_wrong_password_is_refused_while_the_half_made_keyring_is_still_open(t
 def test_a_wrong_password_leaves_the_half_made_keyring_as_it_was(tmp_path):
     result = session(tmp_path, '"$PY" -c "$MAKE" "First pw 188!" && printf "Second pw 188?\\n" | "$PY" "$CLI" keyring setup --password; echo "rc=$?"',
                      env={"MAKE": MAKE_UNFINISHED})
-    assert "rc=3" in result.stdout, result.stdout + result.stderr
+    assert "rc=6" in result.stdout, result.stdout + result.stderr
     folder = tmp_path / ".local" / "share" / "keyrings"
     assert not (folder / "default").exists() and cli.keyring_label(folder / "login.keyring") == "login"
     assert cli.keyring_unfinished(folder) == "password"
@@ -1191,3 +1216,23 @@ def test_ctrl_c_on_a_pipe_that_sends_nothing_exits_130_without_a_traceback(tmp_p
     assert command.returncode == 130, err
     assert "stopped. Nothing was changed." in err and "Traceback" not in err
     assert list(runtime.iterdir()) == [] and not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+@real_daemon
+def test_a_wrong_password_does_not_disturb_programs_using_the_half_made_keyring(tmp_path):
+    # In the session that made it the keyring is open, and another program keeps a secret in it. Checking
+    # a wrong password must not lock it: the program must still read its secret without being asked.
+    result = session(tmp_path, '"$PY" -c "$MAKE" "First pw 188!" && printf s3cret | secret-tool store --label t service herald key t && '
+                               '{ printf "Second pw 188?\\n" | "$PY" "$CLI" keyring setup --password; echo "wrong=$?"; } && '
+                               'echo "read=$(secret-tool lookup service herald key t)" && '
+                               '{ printf "First pw 188!\\n" | "$PY" "$CLI" keyring setup --password; echo "right=$?"; } && '
+                               'echo "after=$(secret-tool lookup service herald key t)"',
+                     env={"MAKE": MAKE_UNFINISHED})
+    assert "wrong=6" in result.stdout and "right=0" in result.stdout, result.stdout + result.stderr
+    assert "read=s3cret" in result.stdout and "after=s3cret" in result.stdout, result.stdout + result.stderr
+
+
+def test_the_wrong_password_has_an_exit_code_of_its_own():
+    codes = {"exists": cli.KEYRING_EXISTS, "no service": cli.KEYRING_NO_SERVICE, "no PyGObject": cli.KEYRING_NO_GOBJECT,
+             "stopped": cli.KEYRING_STOPPED, "usage or a refused password": 2, "other failures": 1}
+    assert cli.KEYRING_WRONG_PASSWORD == 6 and cli.KEYRING_WRONG_PASSWORD not in codes.values()

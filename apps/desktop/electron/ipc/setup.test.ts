@@ -371,6 +371,8 @@ describe('the keyring', () => {
       [5, 'failed'],
       // The command refused the password (its length).
       [2, 'tooShort'],
+      // A half-made keyring's password is another one: setup asks again rather than moving on.
+      [6, 'wrongPassword'],
       [1, 'failed'],
       [127, 'failed']
     ]

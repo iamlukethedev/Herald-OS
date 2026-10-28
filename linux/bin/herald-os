@@ -70,6 +70,7 @@ import json
 import os
 import pwd
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -79,7 +80,6 @@ import subprocess
 import sys
 import tempfile
 import termios
-import select
 import threading
 import time
 import urllib.parse
@@ -3721,7 +3721,7 @@ def disk_password(args: list[str]) -> int:
 # setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
 # keyring password, which the first app that needs the keyring asks for after each start.
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
-KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_STOPPED = 3, 4, 5, 130
+KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_WRONG_PASSWORD, KEYRING_STOPPED = 3, 4, 5, 6, 130
 # The label a keyring is made with, until it is the default one and labelled "Login": one that still
 # has it was stopped half-way, and `keyring setup` finishes it.
 KEYRING_MAKING_LABEL = "login"
@@ -4093,20 +4093,26 @@ def keyring_finish(password: str, flag: str) -> None:
             session = keyring_session(call, GLib)
         except GLib.Error as error:
             die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
-        # gnome-keyring opens a keyring that is already unlocked whatever password it is given, as one
-        # stopped half-way still is in the session that made it. Locked first, it opens only with its own.
+        secret = (session, b"", password.encode("utf-8"), "text/plain")
+        # UnlockWithMasterPassword checks nothing on a keyring that is already unlocked, as one stopped
+        # half-way still is in the session that made it. Changing the password to itself does check it,
+        # locked or not, and never locks the keyring, so programs using it meanwhile are not disturbed.
+        # gnome-keyring writes the file again, with the same password.
         try:
-            prompt = call(SECRETS_PATH, SECRET_SERVICE, "Lock", GLib.Variant("(ao)", ([KEYRING_LOGIN],)), "(aoo)")[1]
+            call(SECRETS_PATH, KEYRING_INTERNAL, "ChangeWithMasterPassword", GLib.Variant("(o(oayays)(oayays))", (KEYRING_LOGIN, secret, secret)), "()")
         except GLib.Error as error:
-            die(f"the keyring service could not lock the keyring to check its password ({error.message}). Nothing was changed.", 1)
-        if prompt != "/":
-            die("the keyring service wants to ask before it locks the keyring, so its password cannot be checked here. Nothing was changed.", 1)
-        try:
-            call(SECRETS_PATH, KEYRING_INTERNAL, "UnlockWithMasterPassword", GLib.Variant("(o(oayays))", (KEYRING_LOGIN, (session, b"", password.encode("utf-8"), "text/plain"))), "()")
-        except GLib.Error as error:
+            if "Denied" in error.message and password:
+                # Its own code, so setup can ask for the password again instead of moving on.
+                die("that is not the password the keyring was made with. Nothing was changed.", KEYRING_WRONG_PASSWORD)
             if "Denied" in error.message:
-                said = "that is not the password the keyring was made with" if password else "the keyring has a password of its own, so `herald-os keyring setup --password` finishes it"
-                die(f"{said}. It stays locked, as after a restart, and nothing else was changed.", KEYRING_EXISTS)
+                die("the keyring has a password of its own, so `herald-os keyring setup --password` finishes it. Nothing was changed.", KEYRING_EXISTS)
+            die(f"the keyring service could not check the keyring's password ({error.message}). Nothing was changed.", 1)
+        # Relabelling needs it open: unlocked only if it is locked, with the password just checked.
+        try:
+            locked = call(KEYRING_LOGIN, "org.freedesktop.DBus.Properties", "Get", GLib.Variant("(ss)", ("org.freedesktop.Secret.Collection", "Locked")), "(v)")[0]
+            if locked:
+                call(SECRETS_PATH, KEYRING_INTERNAL, "UnlockWithMasterPassword", GLib.Variant("(o(oayays))", (KEYRING_LOGIN, secret)), "()")
+        except GLib.Error as error:
             die(f"the keyring service could not open the keyring to finish it ({error.message}). Nothing was changed.", 1)
         try:
             keyring_make_default(call, GLib, KEYRING_LOGIN, session, progress)

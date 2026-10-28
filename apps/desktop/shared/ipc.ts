@@ -482,8 +482,11 @@ export interface SetupState {
 
 export type KeyringState = 'none' | 'open' | 'password' | 'other'
 
-/** Why no keyring was made: `keyringExists`, the account has one already; `noKeyringService`, nothing answered on D-Bus. */
-export type KeyringFailure = 'tooShort' | 'keyringExists' | 'noKeyringService' | 'failed'
+/**
+ * Why no keyring was made: `keyringExists`, the account has one already; `noKeyringService`, nothing answered on D-Bus;
+ * `wrongPassword`, an earlier, interrupted try made the keyring with another password, which finishing it needs.
+ */
+export type KeyringFailure = 'tooShort' | 'keyringExists' | 'noKeyringService' | 'wrongPassword' | 'failed'
 
 /** Why the password was not set; the renderer says it in the person's language. */
 export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' | 'failed'
