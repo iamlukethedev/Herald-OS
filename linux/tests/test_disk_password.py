@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import termios
+import threading
 import time
 from pathlib import Path
 
@@ -1643,15 +1644,20 @@ def test_an_unclear_look_is_not_taken_for_does_not_open(monkeypatch):
     assert cli.disk_end_lines(state) == ["/dev/vda3: it could not be checked; try the new disk password first, then the current one"]
 
 
-def test_the_look_holds_its_signals_and_runs_cryptsetup_in_a_session_of_its_own(monkeypatch, capsys):
-    seen = []
-    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: seen.append((cli.CRYPTSETUP_OWN_SESSION["on"], signal.getsignal(signal.SIGINT))) or 0)
+def test_the_root_side_s_look_has_a_time_limit_and_ignores_ctrl_z(monkeypatch):
+    """The look may be stopped (SIGTERM, or Ctrl+C reaching its cryptsetup), never left stopped by Ctrl+Z,
+    and it sets its own time limit."""
+    seen, alarms = [], []
+    monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: seen.append(signal.getsignal(signal.SIGTSTP)) or 0)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/sbin/{name}")
-    before = signal.getsignal(signal.SIGINT)
-    assert root_side_here(monkeypatch, "probe", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
-    # SIG_IGN, not a Python handler: a child keeps it through the moment between fork and setsid.
-    assert seen and all(own and handler == signal.SIG_IGN for own, handler in seen)
-    assert signal.getsignal(signal.SIGINT) == before
+    monkeypatch.setattr(cli.signal, "alarm", alarms.append)
+    before = signal.getsignal(signal.SIGTSTP)
+    try:
+        assert root_side_here(monkeypatch, "probe", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
+    finally:
+        signal.signal(signal.SIGTSTP, before)
+    assert seen and all(handler == signal.SIG_IGN for handler in seen)
+    assert alarms == [cli.DISK_LOOK_TIMEOUT] and cli.DISK_LOOK_TIMEOUT <= 120
 
 
 def test_the_root_side_takes_ctrl_c_as_a_stop_only_for_the_check_and_the_change(monkeypatch):
@@ -1789,18 +1795,67 @@ def test_a_check_that_ends_by_a_signal_is_a_stop(monkeypatch, capsys, code):
 
 
 def test_a_look_that_runs_out_of_time_is_killed_and_said(monkeypatch, tmp_path, capsys):
-    """The look after an odd end has a time limit; past it the root side is killed rather than waited for,
+    """The look after an odd end has a time limit; past it the root side is ended rather than waited for,
     and the command says the state could not be checked."""
     pid_file = tmp_path / "pid"
     look = f"import os, sys, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); sys.stdin.read(); time.sleep(30)"
     monkeypatch.setattr(cli, "disk_root_argv", lambda op: [sys.executable, "-c", look])
-    monkeypatch.setattr(cli, "CRYPTSETUP_TIMEOUT", 0.5)
+    monkeypatch.setattr(cli, "DISK_LOOK_TIMEOUT", 0.5)
+    monkeypatch.setattr(cli, "DISK_LOOK_GRACE", 0)
     started = time.monotonic()
     assert cli.disk_report_end({"devices": ["/dev/vda3"], "current": OLD, "new": NEW}, -9) == cli.DISK_PARTLY
     assert time.monotonic() - started < 10
     assert "that could not be checked" in capsys.readouterr().err
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
+
+
+def test_ctrl_c_stops_the_look_and_the_root_side_with_it(monkeypatch, tmp_path, capsys):
+    """The look is not held: Ctrl+C stops it at once, ends the root side, and says what is still sure."""
+    pid_file = tmp_path / "pid"
+    look = f"import os, sys, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); sys.stdin.read(); time.sleep(30)"
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: [sys.executable, "-c", look])
+    timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT))
+    started = time.monotonic()
+    timer.start()
+    try:
+        assert cli.disk_report_end({"devices": ["/dev/vda3"], "current": OLD, "new": NEW}, -9) == cli.DISK_PARTLY
+    finally:
+        timer.cancel()
+    assert time.monotonic() - started < 10
+    said = capsys.readouterr().err
+    assert "Ctrl+C stops looking" in said and "stopped looking" in said and "the current one or the new one (or both) opens each" in said
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+LOOK_LIMIT_DRIVER = """
+import importlib.machinery, importlib.util, io, json, sys
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+cli.DISK_LOOK_TIMEOUT = 1
+sys.stdin = io.StringIO(json.dumps({"devices": ["/dev/vda3"], "current": "x", "new": "y"}))
+sys.exit(cli.disk_root(["probe"]))
+"""
+
+
+def test_the_root_side_s_look_ends_itself_at_its_time_limit(tmp_path):
+    """Even with the person's side gone, the root side's look does not run on: it ends at its own limit
+    (SIGALRM), here while its cryptsetup hangs."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "cryptsetup").write_text("#!/bin/sh\nexec sleep 60\n")
+    (folder / "cryptsetup").chmod(0o755)
+    process = subprocess.Popen([sys.executable, "-c", LOOK_LIMIT_DRIVER, str(CLI)], env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"},
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        process.wait(timeout=30)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+    assert process.returncode == -signal.SIGALRM
 
 
 def test_the_change_runs_with_noflsh_and_the_settings_come_back_after_a_pause(monkeypatch):

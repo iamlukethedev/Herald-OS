@@ -3219,6 +3219,10 @@ def disk_root(args: list[str]) -> int:
 
 
 DISK_LOOK_WAIT = 30
+# The look's own limit, with that wait in it. The root side stops itself then (SIGALRM), even when the
+# person's side that waits for it is gone; the person's side gives up a moment later.
+DISK_LOOK_TIMEOUT = 120
+DISK_LOOK_GRACE = 15
 
 
 def disk_busy(devices: list[str]) -> set[str]:
@@ -3270,9 +3274,12 @@ def disk_root_op(args: list[str]) -> int:
     if not shutil.which("cryptsetup"):
         die("cryptsetup is not installed", 127)
     if op == "probe":
-        # Held as a change is, cryptsetup in a session of its own: Ctrl+C must not cut the look short.
-        with disk_signals_held():
-            disk_say(json.dumps(disk_probe(devices, current, new)))
+        # It only looks, so it may be stopped: SIGTERM (which sudo passes on) or its own time limit ends
+        # it, and Ctrl+C reaches the cryptsetup it runs. Never stopped by Ctrl+Z, which would leave it
+        # where neither could end it.
+        signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+        signal.alarm(DISK_LOOK_TIMEOUT)
+        disk_say(json.dumps(disk_probe(devices, current, new)))
         return 0
     for device in devices:
         if cryptsetup(["isLuks", device]).returncode != 0:
@@ -3689,15 +3696,59 @@ def disk_end_lines(state: dict) -> list[str]:
             for device, opens in state.items() if isinstance(opens, dict)]
 
 
+def disk_end_process(process: subprocess.Popen) -> None:
+    """End the root side (through sudo, which passes SIGTERM on to it), continued first should it be
+    stopped; SIGKILL if it does not end."""
+    for each in (signal.SIGCONT, signal.SIGTERM):
+        with contextlib.suppress(OSError):
+            process.send_signal(each)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def disk_look(request: dict) -> dict | str | None:
+    """The probe: what opens each device, None when that could not be told (it failed or ran out of
+    time), or "stopped" after Ctrl+C. Either of those ends the root side too."""
+    stopped: list[int] = []
+    held = (signal.SIGINT, signal.SIGQUIT)
+    before = {each: signal.signal(each, lambda signum, frame: stopped.append(signum)) for each in held}
+    try:
+        process = disk_root_start("probe", text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + DISK_LOOK_TIMEOUT + DISK_LOOK_GRACE
+        given: str | None = json.dumps(request)
+        with process:
+            while True:
+                try:
+                    stdout, _ = process.communicate(given, timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    given = None
+                    if stopped or time.monotonic() >= deadline:
+                        disk_end_process(process)
+                        return "stopped" if stopped else None
+        if stopped and process.returncode != 0:
+            return "stopped"
+        return json.loads(stdout) if process.returncode == 0 else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    finally:
+        for each, handler in before.items():
+            if handler is not None:
+                signal.signal(each, handler)
+
+
 def disk_report_end(request: dict, code: int) -> int:
     """The root side ended without saying how (it was killed): look, and say what opens what."""
     disk_say(f"herald-os: the disk password change ended before it could say how ({'signal ' + str(-code) if code < 0 else 'exit ' + str(code)}). "
-             "What opens the disk now:", file=sys.stderr)
-    try:
-        probe = disk_root_run("probe", request, timeout=CRYPTSETUP_TIMEOUT * 2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        state = json.loads(probe.stdout) if probe.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        state = None
+             "Looking at what opens the disk now (Ctrl+C stops looking):", file=sys.stderr)
+    state = disk_look(request)
+    if state == "stopped":
+        disk_say("herald-os: stopped looking. Nothing is removed before the new password opens every device, so the current one or "
+                 "the new one (or both) opens each: at the next start, try the new one first, then the current one.", file=sys.stderr)
+        return DISK_PARTLY
     if not isinstance(state, dict):
         disk_say("herald-os: that could not be checked. It may have ended before anything changed, or part-way; nothing is "
                  "removed before the new password opens every device, so the current one or the new one (or both) opens each: "
