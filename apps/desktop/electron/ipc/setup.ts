@@ -79,9 +79,10 @@ export async function keyringStatus(): Promise<KeyringStatus> {
  * Exit codes of `herald-os keyring setup` (linux/bin/herald-os: KEYRING_EXISTS, KEYRING_NO_SERVICE). 2 is the
  * command's refusal of the password, which is a length the check below lets through only if the two disagree.
  * 6 is a keyring an earlier, interrupted run started with another password: setup asks for that password.
+ * 7 is such a keyring with a password, finished with none: setup asks for its password too.
  * 5 (no PyGObject) is a plain failure: the keyring service is not what is missing, and the terminal says what is.
  */
-const KEYRING_EXITS: Record<number, KeyringFailure> = { 2: 'tooShort', 3: 'keyringExists', 4: 'noKeyringService', 6: 'wrongPassword' }
+const KEYRING_EXITS: Record<number, KeyringFailure> = { 2: 'tooShort', 3: 'keyringExists', 4: 'noKeyringService', 6: 'wrongPassword', 7: 'keyringNeedsPassword' }
 // Starting gnome-keyring through D-Bus activation and writing the keyring take well under a second.
 const KEYRING_TIMEOUT_MS = 30_000
 

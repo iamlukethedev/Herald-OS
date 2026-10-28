@@ -692,6 +692,7 @@ export const ptBR: Translation = {
   'firstRun.keyring.noService': 'O serviço de chaveiro não respondeu, então nenhum chaveiro foi criado. Execute herald-os keyring setup --password em um terminal mais tarde.',
   'firstRun.keyring.failed': 'O chaveiro não foi criado. Execute herald-os keyring setup --password em um terminal para ver o motivo.',
   'firstRun.keyring.wrongPassword': 'Já existe um chaveiro começado com outra senha, que não chegou a ser concluído. Digite a senha do chaveiro que você escolheu naquela vez para concluí-lo.',
+  'firstRun.keyring.needsPassword': 'Já existe um chaveiro começado com senha, que não chegou a ser concluído. Digite a senha desse chaveiro para concluí-lo.',
   'firstRun.keyring.encrypted': 'Os apps guardam as senhas salvas em um chaveiro sem senha própria: quem protege esse chaveiro é a senha do disco que você digita ao ligar o computador.',
 
   'voice.fallback.title': 'Voz',

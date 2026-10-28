@@ -151,6 +151,7 @@ const DISK_FAILURES = [
 const KEYRING_FAILURES = [
   ['noKeyringService', 'firstRun.keyring.noService'],
   ['wrongPassword', 'firstRun.keyring.wrongPassword'],
+  ['keyringNeedsPassword', 'firstRun.keyring.needsPassword'],
   ['tooShort', 'firstRun.account.tooShort'],
   ['failed', 'firstRun.keyring.failed']
 ] as const
@@ -290,8 +291,8 @@ async function walk(language: Language, path: Path): Promise<{ step: string; tex
       at(`keyring ${reason}`, 'firstRun.keyring.title')
       says(t(key))
 
-      // That one empties the fields for the password to be typed again.
-      if (reason === 'wrongPassword') {
+      // Those empty the fields for the password to be typed again.
+      if (reason === 'wrongPassword' || reason === 'keyringNeedsPassword') {
         for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
           await type(input, 'keyring pass')
         }
@@ -712,6 +713,27 @@ describe("first-run setup's keyring", () => {
     expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
     await type(password2, 'the one I chose')
     await type(again2, 'the one I chose')
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: 'the one I chose' })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+  })
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('asks in %s for the password of a keyring an earlier try started with one, when none was chosen', async language => {
+    bridge.setup.keyring.mockResolvedValueOnce({ ok: false, reason: 'keyringNeedsPassword' })
+    const host = await afterTheAccount({ diskEncrypted: false, keyringEncrypted: false, keyring: 'none' }, language)
+    await click(button(host, t('firstRun.keyring.open')))
+    expect(host.querySelectorAll('input[type="password"]')).toHaveLength(0)
+    await click(button(host, t('firstRun.next')))
+    expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: '' })
+    // It stays on the step, says why, and turns to the password choice with empty fields.
+    expect(heading(host)).toBe(t('firstRun.keyring.title'))
+    expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.keyring.needsPassword'))
+    expect(button(host, t('firstRun.keyring.password'))?.getAttribute('aria-pressed')).toBe('true')
+    const [password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect([password.value, again.value]).toEqual(['', ''])
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await type(password, 'the one I chose')
+    await type(again, 'the one I chose')
     await click(button(host, t('firstRun.next')))
     expect(bridge.setup.keyring).toHaveBeenLastCalledWith({ password: 'the one I chose' })
     expect(heading(host)).toBe(t('firstRun.wifi.title'))

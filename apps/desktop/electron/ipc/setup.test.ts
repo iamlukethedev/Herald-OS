@@ -373,6 +373,8 @@ describe('the keyring', () => {
       [2, 'tooShort'],
       // A half-made keyring's password is another one: setup asks again rather than moving on.
       [6, 'wrongPassword'],
+      // Such a keyring has a password and none was given: setup asks for it rather than moving on.
+      [7, 'keyringNeedsPassword'],
       [1, 'failed'],
       [127, 'failed']
     ]

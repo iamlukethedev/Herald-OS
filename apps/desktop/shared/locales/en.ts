@@ -720,6 +720,8 @@ export const en = {
   // An earlier try at setting up the keyring was interrupted after the keyring was made with a password,
   // and the password just typed is not that one.
   'firstRun.keyring.wrongPassword': 'A keyring was already started with a different password and not finished. Type the keyring password you chose then to finish it.',
+  // The same, when "No keyring password" was chosen but the keyring started earlier has a password.
+  'firstRun.keyring.needsPassword': 'A keyring was already started with a password and not finished. Type that keyring password to finish it.',
   // On the last step, when the disk the keyring is kept on is encrypted and setup made it with no password of its own.
   'firstRun.keyring.encrypted': 'Apps keep saved passwords in a keyring with no password of its own: the disk password you type at start-up protects it.',
 

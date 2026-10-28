@@ -666,6 +666,7 @@ export const zhCN: Translation = {
   'firstRun.keyring.noService': '密钥环服务没有响应，因此未创建密钥环。稍后请在终端中运行 herald-os keyring setup --password。',
   'firstRun.keyring.failed': '未能创建密钥环。请在终端中运行 herald-os keyring setup --password 查看原因。',
   'firstRun.keyring.wrongPassword': '之前已经用另一个密码开始创建密钥环，但没有完成。请输入你当时设置的密钥环密码来完成它。',
+  'firstRun.keyring.needsPassword': '之前已经用一个密码开始创建密钥环，但没有完成。请输入那个密钥环密码来完成它。',
   'firstRun.keyring.encrypted': '应用会把已保存的密码放在一个没有单独密码的密钥环中：开机时输入的磁盘密码保护着它。',
 
   'voice.fallback.title': '语音',

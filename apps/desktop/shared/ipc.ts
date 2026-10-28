@@ -484,9 +484,10 @@ export type KeyringState = 'none' | 'open' | 'password' | 'other'
 
 /**
  * Why no keyring was made: `keyringExists`, the account has one already; `noKeyringService`, nothing answered on D-Bus;
- * `wrongPassword`, an earlier, interrupted try made the keyring with another password, which finishing it needs.
+ * `wrongPassword`, an earlier, interrupted try made the keyring with another password, which finishing it needs;
+ * `keyringNeedsPassword`, such a keyring has a password and none was given.
  */
-export type KeyringFailure = 'tooShort' | 'keyringExists' | 'noKeyringService' | 'wrongPassword' | 'failed'
+export type KeyringFailure = 'tooShort' | 'keyringExists' | 'noKeyringService' | 'wrongPassword' | 'keyringNeedsPassword' | 'failed'
 
 /** Why the password was not set; the renderer says it in the person's language. */
 export type PasswordFailure = 'tooShort' | 'refused' | 'timeout' | 'noTerminal' | 'failed'
