@@ -33,6 +33,15 @@ C_ENV = {**os.environ, "LC_ALL": "C", "PATH": f"{Path(CRYPTSETUP).parent}:{os.en
 NO_SUDO_AS_ROOT_EARLY = pytest.mark.skipif(os.geteuid() == 0, reason="as root the root side runs without sudo, where the stand-in steps in")
 
 
+@pytest.fixture(autouse=True)
+def _keep_signal_handlers():
+    """disk_root sets its own SIGINT and SIGQUIT handlers; put the originals back so other tests in the same run are not affected."""
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGQUIT)}
+    yield
+    for sig, handler in saved.items():
+        signal.signal(sig, handler)
+
+
 OLD = "old disk pass 1"
 NEW = "New-disk-pass-2"
 
