@@ -1309,3 +1309,31 @@ def test_only_gnome_keyring_s_own_refusal_counts_as_a_wrong_password(monkeypatch
     assert stopped.value.code == 1, err
     assert f"could not check the keyring's password ({failure}). Nothing was changed." in err
     assert calls == ["OpenSession", "ChangeWithMasterPassword"]
+
+
+def test_d_bus_calls_are_waited_for_in_short_steps(monkeypatch):
+    # Python lets Ctrl+C through a bare join() on Linux and macOS, so a Ctrl+C test cannot tell join(0.1)
+    # from join(); this pins the short steps the code counts on to see Ctrl+C during a slow call.
+    import threading
+    import time as clock
+
+    waits: list = []
+
+    class Recording(threading.Thread):
+        def join(self, timeout=None):
+            waits.append(timeout)
+            return super().join(timeout)
+
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls)
+    monkeypatch.setattr(cli.threading, "Thread", Recording)
+    slow = sys.modules["gi.repository"].Gio.bus_get_sync(0)
+    real = type(slow).call_sync
+
+    def call_sync(self, *args):
+        clock.sleep(0.35)
+        return real(self, *args)
+    monkeypatch.setattr(type(slow), "call_sync", call_sync)
+    call, glib = cli.keyring_dbus()
+    assert call(cli.SECRETS_PATH, cli.SECRET_SERVICE, "ReadAlias", ("default",), "(o)") == ("/",)
+    assert len(waits) >= 3 and all(wait is not None and wait <= 0.1 for wait in waits), waits
