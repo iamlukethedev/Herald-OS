@@ -423,7 +423,9 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   password opens every device, so the current one or the new one (or both) opens each, and after a
   killed root side the command looks and says which. The look first waits (30 s at most) for a
   cryptsetup the killed root side left working on the disk, and says so for a device one still works
-  on. It takes 120 s at most, ends the root side when it stops, and Ctrl+C stops it.
+  on. It takes 120 s at most, ends the root side when it stops, and Ctrl+C stops it. A change waits
+  the same way, before it begins, for a cryptsetup still at work on the disk, and leaves the disk as
+  it is (exit 1) if one does not end.
 - **A key slot that cannot be told.** On a cryptsetup that names no slot and where no slot opens on
   its own, the change cannot tell which slot is the new one, or which one the old password is in.
   `--new-owner` then leaves the other slots, and a plain change leaves the old password's slot; both
@@ -445,11 +447,15 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   password's check, or before the change begins stops with nothing changed, said once (exit 130),
   also when only the root side was stopped.
 - **The rest.** Printable ASCII only (no input method at start-up). It refuses on a disk that is not
-  encrypted (exit 4), and `--status` prints `{"encrypted", "devices", "newOwner", "error"}` without
-  root, with `encrypted` null when it cannot tell; setup then neither asks for a disk password nor
-  calls the disk unencrypted. `encrypted` is false, with the LUKS devices still listed, where the root
-  is not encrypted throughout: LUKS with cipher_null (read from the header where the account may
-  read it), or an ext4 journal, xfs log or realtime device outside LUKS.
+  encrypted (exit 4), and `--status` prints `{"encrypted", "devices", "protection", "plainParts",
+  "newOwner", "error"}` without root. `encrypted` says LUKS asks for a password at start-up, null when
+  it cannot tell; setup then neither asks for a disk password nor calls the disk unencrypted.
+  `protection` is `"full"`, or `"partial"` where part of the root is written without encryption, with
+  each part in `plainParts` (`{"device", "kind"}`, kind `cipher_null`, `journal`, `log` or `realtime`):
+  LUKS with cipher_null (read from the header where the account may read it), or an ext4 journal, xfs
+  log or realtime device outside LUKS. What cannot be looked at counts as encrypted. A partly protected
+  disk is still encrypted: setup still asks a new owner for a disk password and the hand-over still
+  says to pass the start-up one on, with a warning that names those parts; `reset` says the same.
 - **A new owner.** After setup "for someone else" (`~/.config/herald-os/new-owner`) or a reset
   (`/var/lib/herald-os/new-owner`, from `reset-helper apply`), setup on an encrypted disk asks the
   new owner for the disk password they typed at start-up and one of their own, and runs
