@@ -3065,6 +3065,17 @@ def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str
 
 
 DISK_SETTLE = 0.25
+DISK_TTY = "/dev/tty"
+
+
+def disk_foreground(fd: int) -> bool:
+    """Whether this process is in the terminal's foreground process group; not when that cannot be told
+    (no controlling terminal, or it was closed). A change of the terminal's settings from anywhere else
+    stops the process (SIGTTOU)."""
+    try:
+        return os.tcgetpgrp(fd) == os.getpgrp()
+    except OSError:
+        return False
 
 
 @contextlib.contextmanager
@@ -3073,17 +3084,16 @@ def disk_terminal_kept():
     throw away output the terminal has not taken yet, so the last line ("stopped. Nothing was
     changed.", "Done: …") could vanish under a few quick ones. The settings from before come back on
     the way out, after a moment for that line to reach the terminal, with TCSAFLUSH so nothing typed
-    meanwhile is left for the shell."""
+    meanwhile is left for the shell. Only from the foreground, at the start and again on the way out:
+    after Ctrl+Z and `bg` the change goes on in the background, and its settings are left as they are."""
     try:
-        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+        fd = os.open(DISK_TTY, os.O_RDWR | os.O_NOCTTY)
     except OSError:
         yield
         return
     try:
         try:
-            # Only from the terminal's foreground: a change of its settings from elsewhere stops this
-            # process (SIGTTOU).
-            if os.tcgetpgrp(fd) != os.getpgrp():
+            if not disk_foreground(fd):
                 raise termios.error
             before = termios.tcgetattr(fd)
             kept = termios.tcgetattr(fd)
@@ -3098,11 +3108,17 @@ def disk_terminal_kept():
                 held = (signal.SIGINT, signal.SIGQUIT)
                 handlers = {each: signal.getsignal(each) for each in held}
                 disk_ignore_held(held)
+                # SIGTTOU ignored as well: moved to the background between the look and the change of
+                # settings, the change then goes ahead rather than stopping this process.
+                ttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
                 try:
                     time.sleep(DISK_SETTLE)
-                    with contextlib.suppress(termios.error, OSError):
-                        termios.tcsetattr(fd, termios.TCSAFLUSH, before)
+                    if disk_foreground(fd):
+                        with contextlib.suppress(termios.error, OSError):
+                            termios.tcsetattr(fd, termios.TCSAFLUSH, before)
                 finally:
+                    if ttou is not None:
+                        signal.signal(signal.SIGTTOU, ttou)
                     if not SSH_OWN_PROCESS:
                         for each, handler in handlers.items():
                             if handler is not None:

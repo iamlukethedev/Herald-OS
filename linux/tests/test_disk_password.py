@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import termios
 import time
 from pathlib import Path
 
@@ -601,6 +602,117 @@ def test_the_terminal_is_left_alone_from_the_background():
     finally:
         process.kill()
         os.close(fd)
+
+
+BACKGROUND_SHELL = """
+import os, signal, sys, time
+# A shell on the terminal: the job gets the terminal, is stopped (Ctrl+Z or kill -STOP), and goes on in
+# the background (bg) while the shell keeps the terminal.
+cli_path, folder = sys.argv[1], sys.argv[2]
+job = (
+    "import importlib.machinery, importlib.util, os, sys, time\\n"
+    "loader = importlib.machinery.SourceFileLoader('cli', sys.argv[1])\\n"
+    "cli = importlib.util.module_from_spec(importlib.util.spec_from_loader('cli', loader))\\n"
+    "loader.exec_module(cli)\\n"
+    "with cli.disk_terminal_kept():\\n"
+    "    open(sys.argv[2] + '/ready', 'w').close()\\n"
+    "    deadline = time.monotonic() + 120\\n"
+    "    while not os.path.exists(sys.argv[2] + '/go') and time.monotonic() < deadline:\\n"
+    "        time.sleep(0.02)\\n"
+)
+signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+child = os.fork()
+if child == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+    os.execv(sys.executable, [sys.executable, "-c", job, cli_path, folder])
+os.setpgid(child, child)
+os.tcsetpgrp(0, child)
+deadline = time.monotonic() + 120
+while not os.path.exists(folder + "/ready") and time.monotonic() < deadline:
+    time.sleep(0.02)
+os.kill(child, signal.SIGSTOP)
+os.waitpid(child, os.WUNTRACED)
+os.tcsetpgrp(0, os.getpgrp())
+os.kill(child, signal.SIGCONT)
+open(folder + "/go", "w").close()
+while time.monotonic() < deadline:
+    pid, status = os.waitpid(child, os.WUNTRACED | os.WNOHANG)
+    if pid and os.WIFSTOPPED(status):
+        print("stopped by signal", os.WSTOPSIG(status), flush=True)
+        os.kill(child, signal.SIGKILL)
+        sys.exit(3)
+    if pid:
+        sys.exit(os.waitstatus_to_exitcode(status))
+    time.sleep(0.02)
+sys.exit(4)
+"""
+
+
+def test_a_change_sent_to_the_background_finishes_without_stopping_on_the_terminal(tmp_path):
+    """Stopped while it changes the disk, then continued in the background (bg): on the way out it
+    leaves the terminal's settings, which it may no longer change, instead of stopping for good with
+    "Stopped (tty output)" (SIGTTOU)."""
+    if not shutil.which("setsid"):
+        pytest.skip("needs setsid (util-linux)")
+    fd, child_end = pty.openpty()
+    process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", BACKGROUND_SHELL, str(CLI), str(tmp_path)],
+                               stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
+    os.close(child_end)
+    screen = b""
+    try:
+        while select.select([fd], [], [], 150)[0]:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            screen += data
+        assert process.wait(timeout=150) == 0, screen
+    finally:
+        process.kill()
+        os.close(fd)
+
+
+def test_the_terminal_s_settings_are_left_when_it_is_no_longer_in_the_foreground(monkeypatch):
+    """In the foreground at the start (NOFLSH goes on), in the background by the end: the settings from
+    before are not put back, as that would stop the command."""
+    fd, child_end = pty.openpty()
+    monkeypatch.setattr(cli, "DISK_TTY", os.ttyname(child_end))
+    monkeypatch.setattr(cli, "DISK_SETTLE", 0)
+    answers = iter([True])
+    monkeypatch.setattr(cli, "disk_foreground", lambda descriptor: next(answers, False))
+    calls = []
+    real = cli.termios.tcsetattr
+    monkeypatch.setattr(cli.termios, "tcsetattr", lambda descriptor, when, attributes: calls.append(when) or real(descriptor, when, attributes))
+    try:
+        with cli.disk_terminal_kept():
+            pass
+    finally:
+        os.close(fd)
+        os.close(child_end)
+    assert calls == [termios.TCSANOW]
+
+
+def test_a_terminal_whose_foreground_cannot_be_told_is_left_alone(monkeypatch):
+    """tcgetpgrp fails on a terminal that is not this process's controlling one (or was closed): taken
+    as not in the foreground, so its settings are not touched, and nothing is raised."""
+    fd, child_end = pty.openpty()
+    monkeypatch.setattr(cli, "DISK_TTY", os.ttyname(child_end))
+    calls = []
+    monkeypatch.setattr(cli.termios, "tcsetattr", lambda *args: calls.append(args))
+    ran = []
+    try:
+        with cli.disk_terminal_kept():
+            ran.append(True)
+    finally:
+        os.close(fd)
+        os.close(child_end)
+    assert ran and not calls
+    with pytest.raises(OSError):
+        os.tcgetpgrp(-1)
+    assert cli.disk_foreground(-1) is False
 
 
 def add_key(tmp_path: Path, disk: Path, secret: str) -> None:
