@@ -3361,13 +3361,21 @@ def disk_busy(devices: list[str]) -> set[str]:
     return busy
 
 
+def disk_wait_idle(devices: list[str]) -> set[str]:
+    """Wait, DISK_LOOK_WAIT at most, for any cryptsetup still at work on these devices; those it still
+    works on then. A Ctrl+C noted before the change begins (disk_stop) stops the wait."""
+    deadline = time.monotonic() + DISK_LOOK_WAIT
+    while (busy := disk_busy(devices)) and time.monotonic() < deadline:
+        disk_stop_point()
+        time.sleep(0.2)
+    return busy
+
+
 def disk_probe(devices: list[str], current: str, new: str) -> dict:
     """Which of the two passwords opens each device now, for a change that ended without saying; None
     for one cryptsetup could not tell. It first waits, DISK_LOOK_WAIT at most, for a cryptsetup still at
     work on them to finish, and marks a device one still works on as busy: what opens it may change."""
-    deadline = time.monotonic() + DISK_LOOK_WAIT
-    while (busy := disk_busy(devices)) and time.monotonic() < deadline:
-        time.sleep(0.2)
+    busy = disk_wait_idle(devices)
 
     def opens(device: str, passphrase: str) -> bool | None:
         try:
@@ -3403,6 +3411,12 @@ def disk_root_op(args: list[str]) -> int:
     for device in devices:
         if cryptsetup(["isLuks", device]).returncode != 0:
             die(f"{device} is not an encrypted (LUKS) device. Nothing was changed.", DISK_NOT_ENCRYPTED)
+    if op == "change" and (busy := disk_busy(devices)):
+        # A cryptsetup left by a change that was killed may still write a key slot: the change would read
+        # the slots while they change. It waits for that, as the look does.
+        disk_say(f"Waiting for a cryptsetup still at work on {' and '.join(sorted(busy))} (up to {DISK_LOOK_WAIT} s)…")
+        if busy := disk_wait_idle(devices):
+            die(f"a cryptsetup is still at work on {' and '.join(sorted(busy))}; wait for it to end, then try again. Nothing was changed.", 1)
     old_slots: dict[str, int] = {}
     for device in devices:
         if luks_slot(device, current) is None:

@@ -2076,6 +2076,49 @@ def test_a_root_side_killed_during_its_add_is_looked_at_once_the_add_ends(tmp_pa
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+@pytest.mark.parametrize("seconds, code", [(1.0, 0), (30, 1)], ids=["it ends", "it does not end"])
+def test_a_change_waits_for_a_cryptsetup_left_working_on_the_disk(monkeypatch, tmp_path, capsys, seconds, code):
+    """As the look does: a change waits for a cryptsetup still at work on the device (left by a change that
+    was killed), then goes on; one that does not end in time leaves the disk as it is."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+    monkeypatch.setattr(cli, "DISK_LOOK_WAIT", 5)
+    left = left_add(tmp_path, seconds)
+    try:
+        got = root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW})
+    finally:
+        left.kill()
+        left.wait()
+    out = capsys.readouterr()
+    assert got == code, out
+    assert "Waiting for a cryptsetup still at work on /dev/vda3" in out.out
+    if code:
+        assert "still at work on /dev/vda3; wait for it to end, then try again. Nothing was changed." in out.err
+        assert header["keyslots"] == {0: OLD} and not header.get("added")
+    else:
+        assert list(header["keyslots"].values()) == [NEW]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_ctrl_c_stops_a_change_s_wait_for_a_cryptsetup_at_work(monkeypatch, tmp_path):
+    """The wait comes before the change begins, so a Ctrl+C there is a stop with nothing changed (130),
+    at once rather than when the wait ends."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+    monkeypatch.setitem(cli.DISK_STOPPED, "yes", False)
+    monkeypatch.setattr(cli, "DISK_LOOK_WAIT", 30)
+    left = left_add(tmp_path, 30)
+    timer = threading.Timer(0.5, lambda: cli.disk_stop(signal.SIGINT, None))
+    started = time.monotonic()
+    timer.start()
+    try:
+        assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 130
+    finally:
+        timer.cancel()
+        left.kill()
+        left.wait()
+    assert time.monotonic() - started < 10 and header["keyslots"] == {0: OLD}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
 def test_a_device_cryptsetup_still_works_on_after_the_wait_is_said_to_be_changing(monkeypatch, tmp_path):
     quiet_cryptsetup(monkeypatch, {0: OLD})
     monkeypatch.setattr(cli, "DISK_LOOK_WAIT", 0.3)
