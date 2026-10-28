@@ -401,7 +401,8 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   token's slot (the same secret in both, whatever the token) is the disk password, but that way of
   unlocking needs a secret of its own first: exit 14. Changing it then would remove the token's
   slot too, or leave the old password working through it. A new password that already opens a
-  token's slot, or one that cannot be told: exit 13. The messages name the way of unlocking in plain words (the
+  token's slot, or one that cannot be told: exit 13, as for an add that fails and leaves the new
+  password opening a slot that was there before. The messages name the way of unlocking in plain words (the
   recovery key, the TPM, a security key), not its token type. Exit 2 is for a new password that will
   not do as typed (too short, not ASCII, the two differ, the same as the current one); setup checks
   all of those itself first, so it never meets exit 2.
@@ -411,15 +412,16 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   current password still opens its own slot on that device.
 - **When it fails part-way.** If adding fails on one device, the new password comes back out of the
   others. An add cryptsetup calls failed is checked first, by comparing the key slot numbers from
-  before and after: only a slot that was not there before, that the new password opens on its own
+  before (no add when those cannot be read) and after: only a slot that was not there before, that the new password opens on its own
   and that no token uses counts as added, and the change goes on. A slot the new password opened
   already never does. A device it cannot be taken back out of (cryptsetup fails, the slot is a
   token's, or it still opens) is named, with how to find and remove the slot (exit 8). Exit 6 means
   the change ended without finishing: an old password could not be removed after the new one went
   in, cryptsetup ran out of time (the message names the devices), a check gave no clear answer, or
-  the root side was killed. The last three can come before anything changed as well as part-way;
-  nothing is removed before the new password opens every device, so the current one or the new one
-  (or both) opens each, and after a killed root side the command looks and says which.
+  the root side was killed, once it has begun adding. Before that, the same end with "Nothing was
+  changed": exit 1, or 130 for a root side ended by a signal. Nothing is removed before the new
+  password opens every device, so the current one or the new one (or both) opens each, and after a
+  killed root side the command looks and says which.
 - **A key slot that cannot be told.** On a cryptsetup that names no slot and where no slot opens on
   its own, the change cannot tell which slot is the new one, or which one the old password is in.
   `--new-owner` then leaves the other slots, and a plain change leaves the old password's slot; both
@@ -428,7 +430,8 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   --test-passphrase --key-slot`, `luksKillSlot`, never on a slot a token uses).
 - **Signals.** While it runs, Ctrl+C, Ctrl+Z, a closed terminal and SIGTERM wait: the command waits
   for the root side to finish or put things back, continues it if it stops after a Ctrl+Z, and says
-  how it ended. The root side ignores them, and cryptsetup, which sets its own SIGINT handler and
+  how it ended. The root side starts with Ctrl+C ignored, so one while sudo and Python start does
+  nothing, and ignores all of them during the change. cryptsetup, which sets its own SIGINT handler and
   would be reached through sudo's terminal or the same process group, starts in a session of its
   own for the whole change, so none of them reaches it. Both sides keep them held after the change
   until they exit. Once the root side has said the change is done, a failure of sudo's own after it
