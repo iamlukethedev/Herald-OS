@@ -1657,6 +1657,7 @@ def test_an_unclear_look_is_not_taken_for_does_not_open(monkeypatch):
             raise cli.LuksUnsure("cryptsetup could not tell whether a password opens /dev/vda3 (cryptsetup exited 1)")
         return 0
     monkeypatch.setattr(cli, "luks_slot", slot)
+    monkeypatch.setattr(cli, "disk_busy", lambda devices: set())
     state = cli.disk_probe(["/dev/vda3"], OLD, NEW)
     assert state == {"/dev/vda3": {"current": True, "new": None}}
     assert cli.disk_end_lines(state) == ["/dev/vda3: it could not be checked; try the new disk password first, then the current one"]
@@ -1669,6 +1670,7 @@ def test_the_root_side_s_look_has_a_time_limit_and_ignores_ctrl_z(monkeypatch):
     monkeypatch.setattr(cli, "luks_slot", lambda device, passphrase: seen.append(signal.getsignal(signal.SIGTSTP)) or 0)
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/sbin/{name}")
     monkeypatch.setattr(cli.signal, "alarm", alarms.append)
+    monkeypatch.setattr(cli, "disk_busy", lambda devices: set())
     before = signal.getsignal(signal.SIGTSTP)
     try:
         assert root_side_here(monkeypatch, "probe", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
@@ -1853,27 +1855,40 @@ loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
 cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
 loader.exec_module(cli)
 cli.DISK_LOOK_TIMEOUT = 1
+if sys.argv[2:]:
+    cli.DISK_PROC = cli.Path(sys.argv[2])
 sys.stdin = io.StringIO(json.dumps({"devices": ["/dev/vda3"], "current": "x", "new": "y"}))
 sys.exit(cli.disk_root(["probe"]))
 """
 
 
-def test_the_root_side_s_look_ends_itself_at_its_time_limit(tmp_path):
+@pytest.mark.parametrize("proc", [None, "no-proc"], ids=["this system's /proc", "no /proc (macOS)"])
+def test_the_root_side_s_look_ends_itself_at_its_time_limit(tmp_path, proc):
     """Even with the person's side gone, the root side's look does not run on: it ends at its own limit
-    (SIGALRM), here while its cryptsetup hangs."""
+    (SIGALRM), here while its cryptsetup hangs; also where there is no /proc to look for a busy device in."""
     folder = tmp_path / "bin"
     folder.mkdir()
     (folder / "cryptsetup").write_text("#!/bin/sh\nexec sleep 60\n")
     (folder / "cryptsetup").chmod(0o755)
-    process = subprocess.Popen([sys.executable, "-c", LOOK_LIMIT_DRIVER, str(CLI)], env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"},
+    process = subprocess.Popen([sys.executable, "-c", LOOK_LIMIT_DRIVER, str(CLI), *([str(tmp_path / proc)] if proc else [])],
+                               env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"},
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         process.wait(timeout=30)
     finally:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
-    assert process.returncode == -signal.SIGALRM
+        _, stderr = process.communicate()
+    assert process.returncode == -signal.SIGALRM, stderr
+
+
+def test_nothing_is_found_busy_where_proc_cannot_be_listed(monkeypatch, tmp_path):
+    """Where there is no /proc (macOS), no cryptsetup can be found at work: nothing is busy, and the look
+    goes ahead."""
+    monkeypatch.setattr(cli, "DISK_PROC", tmp_path / "no-proc")
+    assert cli.disk_busy(["/dev/vda3"]) == set()
+    quiet_cryptsetup(monkeypatch, {0: OLD})
+    assert cli.disk_probe(["/dev/vda3"], OLD, NEW) == {"/dev/vda3": {"current": True, "new": False}}
 
 
 def test_the_change_runs_with_noflsh_and_the_settings_come_back_after_a_pause(monkeypatch):
