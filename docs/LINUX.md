@@ -491,8 +491,11 @@ know (without udev's data), as its other disks cannot be found; and when `lsblk`
   password.
 
 Setup never replaces a keyring the account already has. `herald-os keyring --status` prints
-`{"keyring", "folder", "encrypted"}`, where `keyring` is `none`, `open`, `password` or `other`, read
-from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
+`{"keyring", "folder", "encrypted", "unfinished"}`, where `keyring` is `none`, `open`, `password` or
+`other`, read from the files without the daemon, and `unfinished` is true when a setup made the keyring
+and was stopped before it finished it (below). When setup starts with an unfinished keyring that has a
+password, it shows the keyring step and asks for that password, whatever the disk, instead of skipping
+the step. `herald-os keyring setup --no-password` or `--password` (asked
 twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
 rather than gnome-keyring (exit 3). Exit 4 means no keyring service answered on the session bus

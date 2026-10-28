@@ -38,6 +38,8 @@ export function FirstRunSetup() {
   const [keyring, setKeyring] = useState<KeyringState | null>(null)
   // Every filesystem that holds the keyring folder is on LUKS; null: it could not be told.
   const [keyringEncrypted, setKeyringEncrypted] = useState<boolean | null>(null)
+  // A keyring with a password that an interrupted try made and did not finish: its password finishes it.
+  const [keyringUnfinished, setKeyringUnfinished] = useState(false)
   // Setup made the keyring with no password of its own (its disk is encrypted).
   const [keyringOpen, setKeyringOpen] = useState(false)
   // The account password from the account step, for sudo when the disk password changes.
@@ -60,6 +62,7 @@ export function FirstRunSetup() {
         setNewOwner(state.newOwner)
         setKeyring(state.keyring ?? null)
         setKeyringEncrypted(state.keyringEncrypted ?? null)
+        setKeyringUnfinished(state.keyringUnfinished === true)
       })
       .catch(() => undefined)
   }, [])
@@ -85,9 +88,11 @@ export function FirstRunSetup() {
     setDue(false)
   }
 
+  // Asked for whatever the disk: only its own password finishes it.
+  const unfinishedWithPassword = keyring === 'password' && keyringUnfinished
   const steps: Step[] = forSomeoneElse
     ? ['welcome', 'wifi', 'done']
-    : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), ...(keyringEncrypted !== true && keyring === 'none' ? (['keyring'] as const) : []), 'wifi', 'hermes', 'done']
+    : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), ...((keyringEncrypted !== true && keyring === 'none') || unfinishedWithPassword ? (['keyring'] as const) : []), 'wifi', 'hermes', 'done']
   const next = () => setStep(steps[Math.min(steps.length - 1, steps.indexOf(step) + 1)] ?? 'done')
 
   return (
@@ -130,7 +135,7 @@ export function FirstRunSetup() {
           />
         )}
         {step === 'disk' && <DiskStep onDone={next} account={accountPassword} plainParts={diskPlainParts} />}
-        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} />}
+        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} unfinished={unfinishedWithPassword} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />
@@ -444,16 +449,17 @@ const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
  * told): a password of its own, asked by the first app that needs it after each start, or none, which
  * anyone who has the disk can read past.
  */
-function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boolean | null }) {
+function KeyringStep({ onDone, encrypted, unfinished = false }: { onDone: () => void; encrypted: boolean | null; unfinished?: boolean }) {
   const t = useT()
-  const [choice, setChoice] = useState<'password' | 'open' | null>(null)
+  // A keyring left unfinished already has its password: no choice, and one field, for that password.
+  const [choice, setChoice] = useState<'password' | 'open' | null>(unfinished ? 'password' : null)
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
   const [error, setError] = useState<TextKey | null>(null)
   const [busy, setBusy] = useState(false)
-  const mismatch = choice === 'password' && again.length > 0 && password !== again
+  const mismatch = !unfinished && choice === 'password' && again.length > 0 && password !== again
   // Characters (code points), as `herald-os keyring` counts them, not UTF-16 units.
-  const ready = choice === 'open' || (choice === 'password' && [...password].length >= 8 && password === again)
+  const ready = choice === 'open' || (choice === 'password' && [...password].length >= 8 && (unfinished || password === again))
 
   const save = async () => {
     setBusy(true)
@@ -520,20 +526,26 @@ function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boo
         }
       }}
     >
-      <Heading icon={<IconKey size={18} />} title={t('firstRun.keyring.title')} text={t(encrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')} />
-      <div className="grid grid-cols-2 gap-3">
-        {option('password', 'firstRun.keyring.password', 'firstRun.keyring.passwordHint')}
-        {option('open', 'firstRun.keyring.open', 'firstRun.keyring.openHint')}
-      </div>
+      <Heading
+        icon={<IconKey size={18} />}
+        title={t('firstRun.keyring.title')}
+        text={t(unfinished ? 'firstRun.keyring.needsPassword' : encrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')}
+      />
+      {!unfinished && (
+        <div className="grid grid-cols-2 gap-3">
+          {option('password', 'firstRun.keyring.password', 'firstRun.keyring.passwordHint')}
+          {option('open', 'firstRun.keyring.open', 'firstRun.keyring.openHint')}
+        </div>
+      )}
       {choice === 'password' && (
         <>
           {field('firstRun.keyring.field', password, setPassword)}
-          {field('firstRun.keyring.fieldAgain', again, setAgain)}
-          <p className="text-[12px] text-fg-3">{t('firstRun.keyring.sameAsAccount')}</p>
+          {!unfinished && field('firstRun.keyring.fieldAgain', again, setAgain)}
+          {!unfinished && <p className="text-[12px] text-fg-3">{t('firstRun.keyring.sameAsAccount')}</p>}
         </>
       )}
       {problem && <p className="text-[12.5px] text-danger">{t(problem)}</p>}
-      <p className="text-[12px] leading-relaxed text-fg-3">{t('firstRun.keyring.laterHint')}</p>
+      {!unfinished && <p className="text-[12px] leading-relaxed text-fg-3">{t('firstRun.keyring.laterHint')}</p>}
       <div className="flex items-center justify-end gap-2">
         <GlassButton variant="ghost" onClick={onDone} disabled={busy}>
           {t('firstRun.later')}

@@ -179,7 +179,7 @@ COMMANDS: dict[str, str] = {
     "branding": "branding [show] | set [--logo <image>] [--lock <image>] [--name <text>] | reset [all|logo|lock|name]: About's logo and name, and the lock-screen picture",
     "lock": "Lock the session (needs an account password; see `herald-os password`)",
     "password": "Set the login password the lock screen asks for | password --disk [--new-owner]: change the disk password typed at start-up (asks for the current one; --new-owner also removes every other key) | password --disk --status: whether the disk is encrypted, as JSON",
-    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other) and whether the disk that holds it is encrypted, as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
+    "keyring": "keyring --status: the keyring apps keep passwords and sign-ins in (none, open, password or other), whether the disk that holds it is encrypted, and whether a stopped setup left it unfinished, as JSON | keyring setup --no-password: make it with no password of its own (for an encrypted disk) | keyring setup --password: make it with a password, asked once after each start",
     "suspend": "Suspend the machine",
     "power": "Power menu (sleep, restart, shut down, log out)",
     "webapp-open": "Internal: open a web app window: webapp-open <url> <name>",
@@ -4468,7 +4468,10 @@ def keyring_cmd(args: list[str]) -> int:
     when there is none. An existing keyring is never replaced: it holds what apps saved."""
     directory = keyring_dir()
     if args == ["--status"]:
-        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory), "encrypted": keyring_encrypted(directory)}))
+        # "unfinished": a setup made the default keyring and was stopped before it finished it, which
+        # `keyring setup` with the same kind of password finishes.
+        print(json.dumps({"keyring": keyring_state(directory), "folder": str(directory), "encrypted": keyring_encrypted(directory),
+                          "unfinished": keyring_unfinished(directory) is not None}))
         return 0
     if args not in (["setup", "--no-password"], ["setup", "--password"]):
         die(KEYRING_USAGE, 2)

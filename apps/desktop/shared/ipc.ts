@@ -495,6 +495,8 @@ export interface SetupState {
    * command. null when it cannot be told, which setup treats as not encrypted for the keyring.
    */
   keyringEncrypted: boolean | null
+  /** A setup made the keyring and was stopped before it finished it: setup asks for its password to finish it. */
+  keyringUnfinished: boolean
 }
 
 export type KeyringState = 'none' | 'open' | 'password' | 'other'
