@@ -2843,6 +2843,92 @@ def disk_devices() -> list[str]:
     return lsblk_root_luks(lsblk_tree(), disk_root_uuid())
 
 
+# Where the kernel lists ext3/ext4 journals: "<device>-<inode>" for one inside its filesystem, the
+# journal device's own name for an external one.
+DISK_JBD2 = Path("/proc/fs/jbd2")
+
+
+def luks_null_cipher(metadata: dict) -> bool:
+    """Whether a LUKS2 header's data segments use cipher_null, which encrypts nothing (pure; tested)."""
+    segments = [value for value in (metadata.get("segments") or {}).values() if isinstance(value, dict)]
+    return bool(segments) and all(str(value.get("encryption") or "").startswith("cipher_null") for value in segments)
+
+
+def luks_cipher_null(device: str) -> bool | None:
+    """luks_null_cipher for a device, where its header can be read without root (an image, a device the
+    person may read); None where it cannot be told."""
+    try:
+        result = subprocess.run(["cryptsetup", "luksDump", "--dump-json-metadata", device], capture_output=True, text=True,
+                                env={**os.environ, "LC_ALL": "C"}, timeout=30)
+        metadata = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+    return luks_null_cipher(metadata) if isinstance(metadata, dict) else None
+
+
+def disk_root_mount() -> dict | None:
+    """findmnt's SOURCE, FSTYPE and OPTIONS for the root filesystem; None when it cannot say."""
+    for mount in DISK_ROOT_MOUNTS:
+        try:
+            result = subprocess.run(["findmnt", "-J", "-o", "SOURCE,FSTYPE,OPTIONS", "--mountpoint", mount], capture_output=True, text=True, timeout=30)
+            found = json.loads(result.stdout).get("filesystems") if result.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
+            return None
+        if isinstance(found, list) and found and isinstance(found[0], dict):
+            return found[0]
+    return None
+
+
+def disk_plain_parts(mount: dict, tree: list, journals: list[str], resolve=lambda device: device) -> list[str]:
+    """The devices outside LUKS that hold part of the root filesystem besides its own device (pure;
+    tested): an xfs log or realtime device (logdev=, rtdev= in its mount options, which links them with
+    no UUID), or the external journal of an ext3/ext4 one. lsblk does not link a filesystem to its
+    journal, so that is the kernel's list (DISK_JBD2): a root with no journal of its own there has its
+    journal on one of the external ones. A device lsblk does not know is left out: it cannot be told."""
+    on_luks = {resolve(path): value for path, value in lsblk_on_luks(tree).items()}
+    names = {os.path.basename(path) for path in on_luks}
+    fstype, options = str(mount.get("fstype") or ""), str(mount.get("options") or "")
+    parts: list[str] = []
+    if fstype == "xfs":
+        parts = [option.split("=", 1)[1] for option in options.split(",") if option.startswith(("logdev=", "rtdev="))]
+    elif fstype in ("ext3", "ext4"):
+        source = resolve(str(mount.get("source") or "").split("[", 1)[0])
+        own = os.path.basename(source)
+
+        def inside(entry: str) -> str | None:
+            match = re.fullmatch(r"(.+)-\d+", entry)
+            return match.group(1) if match and match.group(1) in names else None
+
+        if not any(inside(entry) == own for entry in journals):
+            parts = [f"/dev/{entry}" for entry in journals if inside(entry) is None]
+    return [part for part in parts if on_luks.get(resolve(part)) is False]
+
+
+def disk_status_encrypted(devices: list[str]) -> bool:
+    """For --status: whether the root filesystem is encrypted throughout. Not when every LUKS device under
+    it uses cipher_null, or when part of it (a journal or log device) is outside LUKS; lsblk alone
+    counts those as encrypted."""
+    real = [device for device in devices if luks_cipher_null(device) is not True]
+    if not real:
+        return False
+    mount = disk_root_mount()
+    if mount is None:
+        return True
+    try:
+        tree = lsblk_tree()
+    except DiskUnknown:
+        return True
+    try:
+        journals = sorted(os.listdir(DISK_JBD2))
+    except OSError:
+        journals = []
+
+    def resolve(device: str) -> str:
+        return os.path.realpath(device) if device.startswith("/dev/") else device
+
+    return not disk_plain_parts(mount, tree, journals, resolve)
+
+
 def disk_unknown_text(error: DiskUnknown) -> str:
     return (f"{error}, so Herald OS cannot tell which encrypted devices hold the root filesystem. Nothing was "
             "changed: guessing could change the password of another disk.")
@@ -3797,7 +3883,8 @@ def disk_password(args: list[str]) -> int:
             return 0
         die(disk_unknown_text(error), DISK_UNKNOWN)
     if "--status" in flags:
-        print(json.dumps({"encrypted": bool(devices), "devices": devices, "newOwner": NEW_OWNER_MARK.exists(), "error": None}))
+        print(json.dumps({"encrypted": disk_status_encrypted(devices) if devices else False, "devices": devices,
+                          "newOwner": NEW_OWNER_MARK.exists(), "error": None}))
         return 0
     if not devices:
         die(DISK_NOT_ENCRYPTED_TEXT, DISK_NOT_ENCRYPTED)

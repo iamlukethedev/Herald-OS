@@ -2062,6 +2062,90 @@ def test_an_unencrypted_disk_says_so(tmp_path):
     assert json.loads(status.stdout) == {"encrypted": False, "devices": [], "newOwner": False, "error": None}
 
 
+def test_a_header_that_uses_cipher_null_encrypts_nothing():
+    assert cli.luks_null_cipher({"segments": {"0": {"type": "crypt", "encryption": "cipher_null-ecb"}}})
+    assert not cli.luks_null_cipher({"segments": {"0": {"type": "crypt", "encryption": "aes-xts-plain64"}}})
+    assert not cli.luks_null_cipher({"segments": {"0": {"encryption": "cipher_null-ecb"}, "1": {"encryption": "aes-xts-plain64"}}})
+    assert not cli.luks_null_cipher({})
+
+
+ROOT_ON_LUKS = [{"name": "/dev/vda", "path": "/dev/vda", "type": "disk", "children": [
+    {"name": "/dev/vda3", "path": "/dev/vda3", "type": "part", "fstype": "crypto_LUKS", "uuid": "luks-a", "children": [
+        {"name": "/dev/mapper/root", "path": "/dev/mapper/root", "type": "crypt", "fstype": "ext4", "uuid": "fs", "mountpoints": ["/"]}]}]},
+    {"name": "/dev/vdb", "path": "/dev/vdb", "type": "disk", "children": [
+        {"name": "/dev/vdb1", "path": "/dev/vdb1", "type": "part", "fstype": "jbd", "uuid": "j", "mountpoints": [None]},
+        {"name": "/dev/vdb2", "path": "/dev/vdb2", "type": "part", "fstype": "LVM2_member", "children": [
+            {"name": "/dev/mapper/vg-journal", "path": "/dev/mapper/vg-journal", "type": "lvm", "fstype": "jbd", "mountpoints": [None]}]}]},
+    {"name": "/dev/vdc", "path": "/dev/vdc", "type": "disk", "children": [
+        {"name": "/dev/vdc1", "path": "/dev/vdc1", "type": "part", "fstype": "crypto_LUKS", "uuid": "luks-c", "children": [
+            {"name": "/dev/mapper/log", "path": "/dev/mapper/log", "type": "crypt", "fstype": "xfs_external_log", "mountpoints": [None]}]}]}]
+BY_NAME = {"/dev/mapper/root": "/dev/dm-0", "/dev/mapper/log": "/dev/dm-1", "/dev/mapper/vg-journal": "/dev/dm-2"}
+
+
+def resolved_tree() -> list:
+    """ROOT_ON_LUKS with each mapping's path as the kernel names it (/dev/dm-N), as realpath gives."""
+    def walk(node):
+        return {**node, "path": BY_NAME.get(node["path"], node["path"]), "children": [walk(child) for child in node.get("children", [])]}
+    return [walk(disk) for disk in ROOT_ON_LUKS]
+
+
+@pytest.mark.parametrize("mount, journals, plain", [
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,logdev=/dev/vdb1,noquota"}, [], ["/dev/vdb1"]),
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,rtdev=/dev/vdb1"}, [], ["/dev/vdb1"]),
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,logdev=/dev/mapper/log"}, [], []),
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,relatime"}, [], []),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["vdb1"], ["/dev/vdb1"]),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-0-8", "vdb1"], []),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-1"], []),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-2"], ["/dev/dm-2"]),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["sdz1"], []),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, [], []),
+    ({"source": "/dev/mapper/root", "fstype": "btrfs", "options": "rw"}, ["vdb1"], []),
+], ids=["xfs log on a plain disk", "xfs realtime on a plain disk", "xfs log on LUKS", "xfs log inside", "ext4 journal on a plain disk",
+        "ext4 journal inside", "ext4 journal on LUKS", "ext4 journal on plain LVM", "ext4 journal lsblk does not know",
+        "ext4 without a journal", "btrfs"])
+def test_the_parts_of_the_root_outside_luks(mount, journals, plain):
+    """The journal or log of the root filesystem on a device outside LUKS: written in the clear."""
+    assert cli.disk_plain_parts(mount, resolved_tree(), journals, lambda device: BY_NAME.get(device, device)) == plain
+
+
+def status_here(monkeypatch, tmp_path, mount: dict, journals: list[str], cipher_null: bool | None = None) -> bool:
+    folder = tmp_path / "jbd2"
+    folder.mkdir(parents=True)
+    for entry in journals:
+        (folder / entry).mkdir()
+    monkeypatch.setattr(cli, "DISK_JBD2", folder)
+    monkeypatch.setattr(cli, "disk_root_mount", lambda: mount)
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: cipher_null)
+    return cli.disk_status_encrypted(["/dev/vda3"])
+
+
+def test_the_status_of_a_root_whose_journal_or_log_is_on_a_plain_disk_is_not_encrypted(monkeypatch, tmp_path):
+    root = {"source": "/dev/dm-0", "fstype": "ext4", "options": "rw"}
+    assert status_here(monkeypatch, tmp_path / "a", root, ["vdb1"]) is False
+    assert status_here(monkeypatch, tmp_path / "b", {**root, "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}, []) is False
+    assert status_here(monkeypatch, tmp_path / "c", root, ["dm-0-8", "vdb1"]) is True
+    assert status_here(monkeypatch, tmp_path / "d", root, [], cipher_null=True) is False
+    assert status_here(monkeypatch, tmp_path / "e", root, [], cipher_null=False) is True
+
+
+@needs_cryptsetup
+def test_status_reads_cipher_null_from_the_header(tmp_path):
+    """--status of a root on LUKS that encrypts nothing (cipher_null): not encrypted. Its header is read
+    as the person, where that works (here an image; a cryptsetup stand-in gives the cipher_null header,
+    as luksFormat with cipher_null needs a loop device)."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
+    assert json.loads(status.stdout)["encrypted"] is True, status
+    header = {"keyslots": {"0": {}}, "segments": {"0": {"type": "crypt", "encryption": "cipher_null-ecb"}}}
+    (tmp_path / "bin" / "cryptsetup").write_text(f"#!/bin/sh\necho '{json.dumps(header)}'\n")
+    (tmp_path / "bin" / "cryptsetup").chmod(0o755)
+    status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
+    assert json.loads(status.stdout) == {"encrypted": False, "devices": [str(disk)], "newOwner": False, "error": None}
+
+
 @pytest.mark.parametrize("lsblk", [
     "echo 'lsblk: unknown column: MOUNTPOINTS' >&2; exit 1",
     "echo 'not json'",
