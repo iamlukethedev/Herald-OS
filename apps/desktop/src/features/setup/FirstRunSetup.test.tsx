@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Language, TextKey } from '../../../shared/i18n.ts'
-import type { SetupResult, SetupState } from '../../../shared/ipc.ts'
+import type { DiskPlainPart, SetupResult, SetupState } from '../../../shared/ipc.ts'
 import { en } from '../../../shared/locales/en.ts'
 import { $prefs } from '../../store/backend.ts'
 import { $connection, $connectionEpoch } from '../../store/gateway.ts'
@@ -797,11 +797,11 @@ describe("the disk step's warning", () => {
 })
 
 describe('a disk that is encrypted only in part', () => {
-  const plainParts = [
+  const plainParts: DiskPlainPart[] = [
     { device: '/dev/vda3', kind: 'cipher_null' },
     { device: '/dev/vdb1', kind: 'journal' }
-  ] as const
-  const partial = { needed: true, signedIn: false, diskEncrypted: true, diskProtection: 'partial', diskPlainParts: plainParts, newOwner: true }
+  ]
+  const partial = { needed: true, signedIn: false, diskEncrypted: true, diskProtection: 'partial' as const, diskPlainParts: plainParts, newOwner: true }
 
   async function afterTheAccountOn(state: object, language: 'en' | 'pt-BR' | 'zh-CN' = 'en'): Promise<HTMLElement> {
     bridge.setup.state.mockResolvedValue(state)
