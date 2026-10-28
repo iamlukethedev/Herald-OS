@@ -529,6 +529,80 @@ def test_ctrl_c_at_the_start_of_the_change_stops_cleanly_or_finishes(tmp_path, s
         assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
 
 
+KEPT_DRIVER = """
+import importlib.machinery, importlib.util, signal, sys, termios, time
+loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
+cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
+loader.exec_module(cli)
+cli.SSH_OWN_PROCESS = True
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+before = termios.tcgetattr(0)
+with cli.disk_terminal_kept():
+    kept = termios.tcgetattr(0)[3] & termios.NOFLSH
+    print("ready", flush=True)
+    time.sleep(0.3)
+    sys.stderr.write("the last line\\n")
+    sys.stderr.flush()
+sys.exit(0 if kept and termios.tcgetattr(0) == before else 5)
+"""
+
+
+def test_the_last_line_is_not_lost_to_a_flood_of_ctrl_c():
+    """Each Ctrl+C makes the tty throw away output the terminal has not taken yet, unless NOFLSH is set:
+    typed as fast as the terminal echoes them, they dropped the last line about one time in four. The
+    settings from before come back afterwards."""
+    if not shutil.which("setsid"):
+        pytest.skip("needs setsid (util-linux)")
+    for attempt in range(12):
+        fd, child_end = pty.openpty()
+        process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", KEPT_DRIVER, str(CLI)],
+                                   stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
+        os.close(child_end)
+        screen, flooding, deadline = b"", False, time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if flooding:
+                with contextlib.suppress(OSError):
+                    os.write(fd, b"\x03")
+            if not select.select([fd], [], [], 0.02 if flooding else 1)[0]:
+                continue
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            screen += data
+            flooding = flooding or b"ready" in screen
+        code = process.wait(timeout=30)
+        os.close(fd)
+        assert b"the last line" in screen, (attempt, screen[-300:])
+        assert code == 0, "NOFLSH was not set, or the settings from before did not come back"
+
+
+def test_the_terminal_is_left_alone_from_the_background():
+    """Outside the terminal's foreground process group a change of its settings would stop the command
+    (SIGTTOU), so there it does not touch them."""
+    if not shutil.which("setsid"):
+        pytest.skip("needs setsid (util-linux)")
+    driver = KEPT_DRIVER.split("cli.SSH_OWN_PROCESS")[0] + (
+        "import os\n"
+        "child = os.fork()\n"
+        "if child == 0:\n"
+        "    os.setpgid(0, 0)\n"
+        "    with cli.disk_terminal_kept():\n"
+        "        pass\n"
+        "    os._exit(0)\n"
+        "sys.exit(os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]))\n")
+    fd, child_end = pty.openpty()
+    process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", driver, str(CLI)], stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
+    os.close(child_end)
+    try:
+        assert process.wait(timeout=20) == 0
+    finally:
+        process.kill()
+        os.close(fd)
+
+
 def add_key(tmp_path: Path, disk: Path, secret: str) -> None:
     old, key = tmp_path / f"{disk.name}.current", tmp_path / f"{disk.name}.added"
     old.write_text(OLD)
@@ -710,14 +784,16 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
     # As root the command asks sudo nothing, so there is no sudo prompt to wait for.
     pending = [answer for answer in answers if not (os.geteuid() == 0 and answer[0].startswith("[sudo]"))]
     screen, deadline = "", time.monotonic() + timeout
-    bursting, sent = False, 0
+    bursting, sent, next_burst = False, 0, 0.0
     while time.monotonic() < deadline:
-        # With burst_after, `burst` is typed every `every` seconds from when that text shows until the end.
-        if bursting:
+        # With burst_after, `burst` is typed every `every` seconds from when that text shows until the end,
+        # on a clock: each one's echo is output too, which must not make the next come sooner.
+        if bursting and time.monotonic() >= next_burst:
             with contextlib.suppress(OSError):
                 os.write(fd, burst)
                 sent += 1
-        ready, _, _ = select.select([fd], [], [], every if bursting else 1)
+            next_burst = time.monotonic() + every
+        ready, _, _ = select.select([fd], [], [], max(0.0, next_burst - time.monotonic()) if bursting else 1)
         if ready:
             try:
                 data = os.read(fd, 4096)
@@ -732,9 +808,18 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
                 answer = pending.pop(0)[1]
                 os.write(fd, answer if isinstance(answer, bytes) else f"{answer}\n".encode())
     code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
+    # Whatever is still on its way after the exit, up to the end of the terminal's output.
+    while select.select([fd], [], [], 0.5)[0]:
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        screen += data.decode(errors="replace")
     os.close(fd)
     if burst_after:
-        assert sent > 3, f"only {sent} bursts were typed"
+        assert sent >= 1, "no burst was typed"
     return code, screen
 
 
@@ -1533,11 +1618,14 @@ def test_a_ctrl_c_just_before_the_change_starts_is_a_stop_with_one_message(monke
         return 0
 
     monkeypatch.setattr(cli, "disk_helper", helper)
+    monkeypatch.setattr(cli, "SSH_OWN_PROCESS", True)
     with pytest.raises(SystemExit) as stop:
         cli.disk_password([])
     assert stop.value.code == 130
     said = capsys.readouterr().err
     assert said.count("stopped. Nothing was changed.") == 1 and "Traceback" not in said
+    # Run as its own process, one more Ctrl+C before it exits does nothing.
+    assert signal.getsignal(signal.SIGINT) == signal.getsignal(signal.SIGQUIT) == signal.SIG_IGN
 
 
 def test_the_end_state_in_words():

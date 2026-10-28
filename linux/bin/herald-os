@@ -78,6 +78,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import termios
 import select
 import threading
 import time
@@ -3063,6 +3064,53 @@ def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str
             f"{ask}. Nothing was changed."), DISK_OTHER_SLOT
 
 
+DISK_SETTLE = 0.25
+
+
+@contextlib.contextmanager
+def disk_terminal_kept():
+    """The terminal with NOFLSH while the change can be stopped: without it each Ctrl+C makes the tty
+    throw away output the terminal has not taken yet, so the last line ("stopped. Nothing was
+    changed.", "Done: …") could vanish under a few quick ones. The settings from before come back on
+    the way out, after a moment for that line to reach the terminal, with TCSAFLUSH so nothing typed
+    meanwhile is left for the shell."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        yield
+        return
+    try:
+        try:
+            # Only from the terminal's foreground: a change of its settings from elsewhere stops this
+            # process (SIGTTOU).
+            if os.tcgetpgrp(fd) != os.getpgrp():
+                raise termios.error
+            before = termios.tcgetattr(fd)
+            kept = termios.tcgetattr(fd)
+            kept[3] |= termios.NOFLSH
+            termios.tcsetattr(fd, termios.TCSANOW, kept)
+        except termios.error:
+            before = None
+        try:
+            yield
+        finally:
+            if before is not None:
+                held = (signal.SIGINT, signal.SIGQUIT)
+                handlers = {each: signal.getsignal(each) for each in held}
+                disk_ignore_held(held)
+                try:
+                    time.sleep(DISK_SETTLE)
+                    with contextlib.suppress(termios.error, OSError):
+                        termios.tcsetattr(fd, termios.TCSAFLUSH, before)
+                finally:
+                    if not SSH_OWN_PROCESS:
+                        for each, handler in handlers.items():
+                            if handler is not None:
+                                signal.signal(each, handler)
+    finally:
+        os.close(fd)
+
+
 def disk_ignore_held(held: tuple) -> None:
     """Set these to SIG_IGN without Python's "Signal N ignored due to race condition", which a switch to
     SIG_IGN leaves for one that came just before: blocked, they go to a handler that does nothing first,
@@ -3647,15 +3695,19 @@ def disk_password(args: list[str]) -> int:
     problem = disk_password_problem(new, again, current)
     if problem:
         die(problem, 2)
-    try:
-        code = disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
-    except KeyboardInterrupt:
-        # Only before disk_helper_change holds Ctrl+C, so before the root side has started.
-        print(file=sys.stderr)
-        die("stopped. Nothing was changed.", 130)
-    if code == 130:
-        # The root side was stopped before its change began (it ignores Ctrl+C from then on).
-        die("stopped. Nothing was changed.", 130)
+    with disk_terminal_kept():
+        try:
+            code = disk_helper("change", {"devices": devices, "current": current, "new": new, "newOwner": "--new-owner" in flags})
+        except KeyboardInterrupt:
+            # Only before disk_helper_change holds Ctrl+C, so before the root side has started. One more
+            # must not cut the message short, or turn it into a traceback.
+            if SSH_OWN_PROCESS:
+                disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
+            print(file=sys.stderr)
+            die("stopped. Nothing was changed.", 130)
+        if code == 130:
+            # The root side was stopped before its change began (it ignores Ctrl+C from then on).
+            die("stopped. Nothing was changed.", 130)
     return code
 
 
