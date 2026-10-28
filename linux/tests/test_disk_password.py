@@ -1644,6 +1644,37 @@ def test_a_ctrl_c_just_before_the_change_starts_is_a_stop_with_one_message(monke
     assert signal.getsignal(signal.SIGINT) == signal.getsignal(signal.SIGQUIT) == signal.SIG_IGN
 
 
+@pytest.mark.parametrize("code", [-2, -15])
+def test_a_check_that_ends_by_a_signal_is_a_stop(monkeypatch, capsys, code):
+    """A root side whose check dies by a signal (as when Ctrl+C lands while it starts) only looked: a
+    stop with nothing changed, said once, and no change asked for."""
+    monkeypatch.setattr(cli, "disk_devices", lambda: ["/dev/vda3"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "disk_ask", lambda prompt: OLD)
+    asked = []
+    monkeypatch.setattr(cli, "disk_helper", lambda op, request: asked.append(op) or code)
+    with pytest.raises(SystemExit) as stop:
+        cli.disk_password([])
+    assert stop.value.code == 130 and asked == ["check"]
+    assert capsys.readouterr().err.count("stopped. Nothing was changed.") == 1
+
+
+def test_a_look_that_runs_out_of_time_is_killed_and_said(monkeypatch, tmp_path, capsys):
+    """The look after an odd end has a time limit; past it the root side is killed rather than waited for,
+    and the command says the state could not be checked."""
+    pid_file = tmp_path / "pid"
+    look = f"import os, sys, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); sys.stdin.read(); time.sleep(30)"
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: [sys.executable, "-c", look])
+    monkeypatch.setattr(cli, "CRYPTSETUP_TIMEOUT", 0.5)
+    started = time.monotonic()
+    assert cli.disk_report_end({"devices": ["/dev/vda3"], "current": OLD, "new": NEW}, -9) == cli.DISK_PARTLY
+    assert time.monotonic() - started < 10
+    assert "that could not be checked" in capsys.readouterr().err
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
