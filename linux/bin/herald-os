@@ -70,6 +70,7 @@ import json
 import os
 import pwd
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -78,7 +79,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import select
 import threading
 import time
 import urllib.parse
