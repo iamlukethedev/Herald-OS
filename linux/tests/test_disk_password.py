@@ -1980,6 +1980,41 @@ def test_the_look_waits_for_a_cryptsetup_left_working_on_the_disk(monkeypatch, t
     assert state == {"/dev/vda3": {"current": True, "new": True}}
 
 
+def kill_root_side_during_add(disk: Path, killed: list) -> None:
+    """SIGKILL the root side as soon as its luksAddKey on `disk` runs: that cryptsetup's parent."""
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline and not killed:
+        for entry in Path("/proc").iterdir():
+            try:
+                argv = (entry / "cmdline").read_bytes().split(b"\0")
+                if entry.name.isdigit() and os.path.basename(argv[0]) == b"cryptsetup" and b"luksAddKey" in argv and os.fsencode(disk) in argv:
+                    parent = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+                    os.kill(parent, signal.SIGKILL)
+                    killed.append(parent)
+                    return
+            except (OSError, IndexError, ValueError):
+                continue
+        time.sleep(0.01)
+
+
+@needs_cryptsetup
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_root_side_killed_during_its_add_is_looked_at_once_the_add_ends(tmp_path):
+    """The root side is killed while its luksAddKey runs, which goes on in a session of its own and writes
+    the slot. The look waits for it, so it says the new password opens the disk too."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    killed: list[int] = []
+    killer = threading.Thread(target=kill_root_side_during_add, args=(disk, killed), daemon=True)
+    killer.start()
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(CHANGE))
+    killer.join(timeout=5)
+    assert killed, "the add ended before it could be caught"
+    assert code == cli.DISK_PARTLY and "ended before it could say how (signal 9)" in screen, screen
+    assert opens(disk, NEW) and opens(disk, OLD)
+    assert "the new disk password and the current one both open it" in screen, screen
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
 def test_a_device_cryptsetup_still_works_on_after_the_wait_is_said_to_be_changing(monkeypatch, tmp_path):
     quiet_cryptsetup(monkeypatch, {0: OLD})
