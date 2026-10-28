@@ -2857,11 +2857,34 @@ CRYPTSETUP_OWN_SESSION = {"on": False}
 CRYPTSETUP_NO_KEY = 2
 
 
+# Whether the change has come to its first luksAddKey; until then it has only looked, so whatever stops
+# it leaves the disk as it was.
+DISK_WRITING = {"yes": False}
+DISK_STOPPED = {"yes": False}
+
+
 class LuksUnsure(Exception):
     """cryptsetup ended without saying whether a passphrase opens a device (interrupted, busy, …)."""
 
 
+def disk_stop(signum: int, frame) -> None:
+    DISK_STOPPED["yes"] = True
+
+
+def disk_stop_point() -> None:
+    """A Ctrl+C noted by disk_stop becomes the stop here, before the change has begun. cryptsetup, in the
+    terminal's session then, has had it too and ended."""
+    if DISK_STOPPED["yes"] and not CRYPTSETUP_OWN_SESSION["on"]:
+        raise KeyboardInterrupt
+
+
 def cryptsetup(args: list[str], key: str | None = None, new: str | None = None) -> subprocess.CompletedProcess:
+    result = cryptsetup_run(args, key, new)
+    disk_stop_point()
+    return result
+
+
+def cryptsetup_run(args: list[str], key: str | None = None, new: str | None = None) -> subprocess.CompletedProcess:
     """cryptsetup, with a passphrase on stdin and a new one through a pipe. --key-file=- reads to the end
     of the input, newline and all, so each goes in without one: the same bytes as typed at start-up.
     External token plugins are kept out, so a TPM or FIDO2 token cannot stand in for the passphrase."""
@@ -3039,22 +3062,43 @@ def disk_not_the_password(device: str, slot: int, kinds: list[str]) -> tuple[str
             f"{ask}. Nothing was changed."), DISK_OTHER_SLOT
 
 
+def disk_ignore_held(held: tuple) -> None:
+    """Set these to SIG_IGN without Python's "Signal N ignored due to race condition", which a switch to
+    SIG_IGN leaves for one that came just before: blocked, they go to a handler that does nothing first,
+    which takes any already pending, then to SIG_IGN, which drops any that came while blocked."""
+    signal.pthread_sigmask(signal.SIG_BLOCK, held)
+    try:
+        for each in held:
+            signal.signal(each, disk_held)
+        disk_held(0, None)  # a call, so that pending handlers run here, still as disk_held
+        for each in held:
+            signal.signal(each, signal.SIG_IGN)
+    finally:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
+
+
 @contextlib.contextmanager
 def disk_signals_held():
     """Ctrl+C, a closed terminal or a stop request wait until the change is done, here and in cryptsetup."""
-    # This process ignores them (SIG_IGN). That alone does not hold cryptsetup: it sets its own SIGINT
-    # handler, so a Ctrl+C that reaches it (through sudo's terminal, or the same process group) stops it,
-    # with exit 1, between writing a key slot and saying so, or in the middle of a check. So cryptsetup
-    # starts in a session of its own while the change runs (CRYPTSETUP_OWN_SESSION): no terminal, no
-    # process group of the terminal's, and nothing sent to those reaches it. That is bounded: each
-    # cryptsetup call has CRYPTSETUP_TIMEOUT (300 s), after which subprocess kills it with SIGKILL, and
-    # SIGKILL still stops this process. The check of the current password, before the change, stays in
-    # the terminal's session, where Ctrl+C stops it with nothing changed. setup ssh does it the other way
-    # round: its rollback keeps Python handlers that do nothing (ssh_ignored), which exec resets to the
-    # default, because its commands may be stopped (each runs in a process group of its own and is ended
-    # when its time is up), and a signal arriving there must not raise in the middle of the rollback.
+    # This process ignores them (SIG_IGN, set by disk_ignore_held). That alone does not hold cryptsetup:
+    # it sets its own SIGINT handler, so a Ctrl+C that reached it (through sudo's terminal, or the same
+    # process group) would stop it, with exit 1, between writing a key slot and saying so, or in the
+    # middle of a check. So cryptsetup starts in a session of its own while the change runs
+    # (CRYPTSETUP_OWN_SESSION): no terminal, no process group of the terminal's, and nothing sent to
+    # those reaches it. SIG_IGN rather than a Python handler matters for the moment between fork and
+    # setsid: subprocess sets a signal with a Python handler back to the default in the child, which a
+    # Ctrl+C there would end, while an ignored one stays ignored. That is bounded: each cryptsetup call
+    # has CRYPTSETUP_TIMEOUT (300 s), after which subprocess kills it with SIGKILL, and SIGKILL still
+    # stops this process. The check of the current password, before the change, stays in the terminal's
+    # session, where Ctrl+C stops it with nothing changed. setup ssh holds its rollback with Python
+    # handlers (ssh_ignored), as its commands may be stopped.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
-    before = {held_signal: signal.signal(held_signal, signal.SIG_IGN) for held_signal in held}
+    before = {held_signal: signal.getsignal(held_signal) for held_signal in held}
+    disk_ignore_held(held)
+    if DISK_STOPPED["yes"]:
+        for held_signal, handler in before.items():
+            signal.signal(held_signal, handler)
+        raise KeyboardInterrupt
     CRYPTSETUP_OWN_SESSION["on"] = True
     try:
         yield
@@ -3069,6 +3113,14 @@ def disk_signals_held():
 
 def disk_root(args: list[str]) -> int:
     """`password --disk-root check|change|probe`, as root: {"devices": [...], "current": ..., "new": ..., "newOwner": bool} on stdin."""
+    # The person's side starts this with SIGINT and SIGQUIT ignored (sudo keeps that), so a Ctrl+C while
+    # sudo and Python start does nothing: no traceback, no "Fatal Python error". The check, and the change
+    # before it begins, take them as a stop from here; the probe, which only looks, keeps them ignored.
+    # Noted, and acted on after each cryptsetup call (disk_stop_point), not raised where they land: a
+    # KeyboardInterrupt in a finalizer would be printed as "Exception ignored" and lost.
+    if args[:1] in (["check"], ["change"]):
+        signal.signal(signal.SIGINT, disk_stop)
+        signal.signal(signal.SIGQUIT, disk_stop)
     try:
         return disk_root_op(args)
     except KeyboardInterrupt:
@@ -3107,7 +3159,9 @@ def disk_root_op(args: list[str]) -> int:
     if not shutil.which("cryptsetup"):
         die("cryptsetup is not installed", 127)
     if op == "probe":
-        print(json.dumps(disk_probe(devices, current, new)))
+        # Held as a change is, cryptsetup in a session of its own: Ctrl+C must not cut the look short.
+        with disk_signals_held():
+            print(json.dumps(disk_probe(devices, current, new)))
         return 0
     for device in devices:
         if cryptsetup(["isLuks", device]).returncode != 0:
@@ -3146,12 +3200,19 @@ def disk_root_op(args: list[str]) -> int:
         try:
             return disk_change(devices, current, new, new_owner, old_slots)
         except LuksUnsure as error:
+            if not DISK_WRITING["yes"]:
+                disk_say(f"herald-os: {error}. Nothing was changed.", file=sys.stderr)
+                return 1
             # A check without an answer is never taken for "does not open": the change stops there.
             disk_say(f"herald-os: {error}, so the change stopped there, maybe part-way on {' and '.join(devices)}. Nothing is "
                      "removed before the new password opens every device, so the current one or the new one (or both) opens "
                      "each: try the new one first at the next start, then run `herald-os password --disk` again.", file=sys.stderr)
             return DISK_PARTLY
         except subprocess.TimeoutExpired as error:
+            if not DISK_WRITING["yes"]:
+                disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and "
+                         "was stopped. Nothing was changed.", file=sys.stderr)
+                return 1
             disk_say(f"herald-os: cryptsetup did not finish in {CRYPTSETUP_TIMEOUT} s ({' '.join(map(str, error.cmd[1:2]))}) and was stopped, "
                      f"so the change may have stopped part-way on {' and '.join(devices)}. Nothing is removed before the new password "
                      "opens every device, so the current one or the new one (or both) opens each: try the new one first at the next "
@@ -3160,6 +3221,7 @@ def disk_root_op(args: list[str]) -> int:
 
 
 def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old_slots: dict[str, int]) -> int:
+    DISK_WRITING["yes"] = False
     added: list[str] = []
     new_slots: dict[str, int] = {}
     # Devices the new password opens already: left by an earlier run that stopped part-way, or a plain
@@ -3229,6 +3291,11 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             slot = luks_which_slot(device, new)
         else:
             before = luks_slot_numbers(device)
+            if before is None:
+                # Without the slot numbers from before, a slot the add wrote could not be told from one
+                # that was there: no add.
+                return take_back(f"the key slots of {device} could not be read before adding the new disk password")
+            DISK_WRITING["yes"] = True
             result = cryptsetup(["luksAddKey", device], current, new)
             if result.returncode == 0:
                 added.append(device)
@@ -3240,7 +3307,9 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                 appeared = disk_appeared_slots(device, new, before)
                 accepted = [each for each, kinds in appeared if not kinds]
                 said = cryptsetup_said(result)
-                if not (result.stderr or result.stdout):
+                if result.returncode < 0:
+                    said = f"cryptsetup was stopped by signal {-result.returncode}"
+                elif not (result.stderr or result.stdout):
                     said += ", without a message, as it does when Ctrl+C reaches it"
                 if accepted:
                     disk_say(f"herald-os: cryptsetup said the new disk password could not be added to {device} ({said}), but it "
@@ -3251,7 +3320,16 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                     if appeared:
                         # A new slot the new password opens, but a token uses it: the take back leaves it and says so.
                         added.append(device)
-                    return take_back(f"the new disk password could not be added to {device}: {said}")
+                        return take_back(f"the new disk password could not be added to {device}: {said}")
+                    there = luks_which_slot(device, new)
+                    if there is None:
+                        return take_back(f"the new disk password could not be added to {device}: {said}")
+                    # It opens a slot that was there before, which is not this change's to remove: the take
+                    # back leaves it, and the new password will not do, as when it was refused at the start.
+                    which = f"key slot {there} of {device}" if there >= 0 else f"a key slot of {device}"
+                    code = take_back(f"the new disk password could not be added to {device} ({said}), and it now opens "
+                                     f"{which}, which was there before: choose another one")
+                    return DISK_NEW_IS_OTHER_KEY if code == 1 else code
         if slot is None or slot == old_slots[device]:
             return take_back(f"the new disk password does not open {device} after adding it")
         new_slots[device] = slot
@@ -3273,10 +3351,7 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
             except (RuntimeError, json.JSONDecodeError) as error:
                 problems.append(str(error))
                 continue
-            for slot in slots:
-                result = cryptsetup(["luksKillSlot", device, str(slot)], new)
-                if result.returncode != 0:
-                    problems.append(f"key slot {slot} of {device} could not be removed: {cryptsetup_said(result)}")
+            problems += luks_kill_slots(device, slots, new)
             for token in tokens:
                 cryptsetup(["token", "remove", "--token-id", str(token), device])
         else:
@@ -3323,10 +3398,43 @@ def disk_root_argv(op: str) -> list[str]:
     return argv if os.geteuid() == 0 else ["sudo", "-n", *argv]
 
 
+def disk_root_start(op: str, **kwargs) -> subprocess.Popen:
+    """Start the root side with SIGINT and SIGQUIT ignored, which it keeps through exec (and sudo keeps
+    for it), so a Ctrl+C while sudo and Python start does not reach it half-started. Ignored here for
+    the moment of the fork, not in a preexec_fn: Python code in the child could still take a Ctrl+C and
+    print what is left of a KeyboardInterrupt."""
+    held = (signal.SIGINT, signal.SIGQUIT)
+    before = {each: signal.getsignal(each) for each in held}
+    disk_ignore_held(held)
+    try:
+        return subprocess.Popen(disk_root_argv(op), stdin=subprocess.PIPE, **kwargs)
+    finally:
+        for each, handler in before.items():
+            if handler is not None:
+                signal.signal(each, handler)
+
+
+def disk_held(signum: int, frame) -> None:
+    """A held signal: nothing. A Python handler rather than SIG_IGN, as a switch to SIG_IGN while one is
+    pending makes Python print "Signal N ignored due to race condition"."""
+
+
+def disk_root_run(op: str, request: dict, timeout: float | None = None, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run for the root side, which starts with Ctrl+C ignored (disk_root_start)."""
+    process = disk_root_start(op, text=True, **kwargs)
+    with process:
+        try:
+            stdout, stderr = process.communicate(json.dumps(request), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+
 def disk_helper(op: str, request: dict) -> int:
     if op == "change":
         return disk_helper_change(request)
-    return subprocess.run(disk_root_argv(op), input=json.dumps(request), text=True).returncode
+    return disk_root_run(op, request).returncode
 
 
 def disk_helper_change(request: dict) -> int:
@@ -3340,7 +3448,8 @@ def disk_helper_change(request: dict) -> int:
     progress = {"seen": b"", "started": False, "told": False, "done": False}
 
     def tell() -> None:
-        if stops and progress["started"] and not progress["told"]:
+        # Not once the root side has said it is done: then nothing is left to wait for.
+        if stops and progress["started"] and not progress["told"] and not progress["done"]:
             progress["told"] = True
             disk_say("herald-os: the disk password is still changing; stopping it now could leave it half-done, "
                      "so this waits until it is finished or put back.", file=sys.stderr)
@@ -3360,13 +3469,13 @@ def disk_helper_change(request: dict) -> int:
             tell()
 
     # Python handlers, not SIG_IGN: sudo gets its own back when it starts, and passes them on to the
-    # root side, which ignores them while it changes the disk.
+    # root side, which holds them while it changes the disk.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.signal(held_signal, wait_on) for held_signal in held}
     try:
         # Said only now that a stop waits: a Ctrl+C before this line stops with nothing changed.
         disk_say("Adding the new disk password and checking it, then removing the old one. Keep the computer on until it is done.")
-        process = subprocess.Popen(disk_root_argv("change"), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        process = disk_root_start("change", stdout=subprocess.PIPE)
         with contextlib.suppress(OSError):
             process.stdin.write(json.dumps(request).encode())
         with contextlib.suppress(OSError):
@@ -3374,9 +3483,13 @@ def disk_helper_change(request: dict) -> int:
         code = disk_wait(process, stops, relay)
     finally:
         # Run as its own process, not the handlers from before: once the root side has ended, what is left
-        # is saying how it ended (and maybe looking), which a late Ctrl+C must not cut short.
-        for held_signal, handler in before.items():
-            signal.signal(held_signal, signal.SIG_IGN if SSH_OWN_PROCESS else handler)
+        # is saying how it ended (and maybe looking), which a late Ctrl+C must not cut short. SIG_IGN, so
+        # that the look starts with them ignored too (disk_signals_held says why that matters).
+        if SSH_OWN_PROCESS:
+            disk_ignore_held(held)
+        else:
+            for held_signal, handler in before.items():
+                signal.signal(held_signal, handler)
     if code != 0 and progress["done"]:
         # The root side said the change was done; sudo, ending after it, may still fail (a Ctrl+C at that
         # moment can leave it with "Broken pipe" and exit 1), which says nothing about the disk.
@@ -3384,6 +3497,13 @@ def disk_helper_change(request: dict) -> int:
         return 0
     if code in DISK_ENDS:
         return code
+    if not progress["started"]:
+        # It ended before it said it was adding the new password, so before it changed anything: stopped
+        # by a signal (or ended some other way) while it started or checked.
+        if code < 0 or code >= 128:
+            return 130
+        disk_say(f"herald-os: the disk password change ended (exit {code}) before it changed anything. Nothing was changed.", file=sys.stderr)
+        return 1
     return disk_report_end(request, code)
 
 
@@ -3460,7 +3580,7 @@ def disk_report_end(request: dict, code: int) -> int:
     disk_say(f"herald-os: the disk password change ended before it could say how ({'signal ' + str(-code) if code < 0 else 'exit ' + str(code)}). "
              "What opens the disk now:", file=sys.stderr)
     try:
-        probe = subprocess.run(disk_root_argv("probe"), input=json.dumps(request), capture_output=True, text=True, timeout=CRYPTSETUP_TIMEOUT * 2)
+        probe = disk_root_run("probe", request, timeout=CRYPTSETUP_TIMEOUT * 2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         state = json.loads(probe.stdout) if probe.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         state = None
@@ -3513,7 +3633,8 @@ def disk_password(args: list[str]) -> int:
             die("changing the disk password needs root through sudo, which did not let you in. Nothing was changed.", DISK_NO_ROOT)
         current = disk_ask("Current disk password: ")
         code = disk_helper("check", {"devices": devices, "current": current})
-        if code == 130:
+        if code == 130 or code < 0:
+            # Stopped, or ended by a signal (as when Ctrl+C lands while it starts): it only looked.
             raise KeyboardInterrupt
         if code != 0:
             return code
