@@ -403,6 +403,7 @@ const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
   tooShort: 'firstRun.account.tooShort',
   keyringExists: 'firstRun.keyring.failed',
   noKeyringService: 'firstRun.keyring.noService',
+  wrongPassword: 'firstRun.keyring.wrongPassword',
   failed: 'firstRun.keyring.failed'
 }
 
@@ -434,6 +435,12 @@ function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boo
       if (result.ok || reason === 'keyringExists') {
         onDone()
       } else {
+        // A keyring an interrupted try started with another password: it is typed again, from empty fields.
+        if (reason === 'wrongPassword') {
+          setPassword('')
+          setAgain('')
+        }
+
         setError(reason && Object.hasOwn(KEYRING_FAILURES, reason) ? KEYRING_FAILURES[reason] : 'firstRun.keyring.failed')
       }
     } catch {
