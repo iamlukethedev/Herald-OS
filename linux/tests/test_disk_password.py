@@ -540,12 +540,15 @@ loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
 cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("cli", loader))
 loader.exec_module(cli)
 cli.SSH_OWN_PROCESS = True
-signal.signal(signal.SIGINT, signal.SIG_IGN)
+presses = []
+signal.signal(signal.SIGINT, lambda signum, frame: presses.append(signum))
 before = termios.tcgetattr(0)
 with cli.disk_terminal_kept():
     kept = termios.tcgetattr(0)[3] & termios.NOFLSH
     print("ready", flush=True)
-    time.sleep(0.3)
+    deadline = time.monotonic() + 120
+    while len(presses) < 5 and time.monotonic() < deadline:
+        time.sleep(0.01)
     sys.stderr.write("the last line\\n")
     sys.stderr.flush()
 sys.exit(0 if kept and termios.tcgetattr(0) == before else 5)
@@ -563,7 +566,7 @@ def test_the_last_line_is_not_lost_to_a_flood_of_ctrl_c():
         process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", KEPT_DRIVER, str(CLI)],
                                    stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
         os.close(child_end)
-        screen, flooding, deadline = b"", False, time.monotonic() + 30
+        screen, flooding, deadline = b"", False, time.monotonic() + 150
         while time.monotonic() < deadline:
             if flooding:
                 with contextlib.suppress(OSError):
@@ -578,7 +581,7 @@ def test_the_last_line_is_not_lost_to_a_flood_of_ctrl_c():
                 break
             screen += data
             flooding = flooding or b"ready" in screen
-        code = process.wait(timeout=30)
+        code = process.wait(timeout=150)
         os.close(fd)
         assert b"the last line" in screen, (attempt, screen[-300:])
         assert code == 0, "NOFLSH was not set, or the settings from before did not come back"
@@ -602,7 +605,7 @@ def test_the_terminal_is_left_alone_from_the_background():
     process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", driver, str(CLI)], stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
     os.close(child_end)
     try:
-        assert process.wait(timeout=20) == 0
+        assert process.wait(timeout=120) == 0
     finally:
         process.kill()
         os.close(fd)
@@ -925,8 +928,9 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
                 answer = pending.pop(0)[1]
                 os.write(fd, answer if isinstance(answer, bytes) else f"{answer}\n".encode())
     code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
-    # Whatever is still on its way after the exit, up to the end of the terminal's output.
-    while select.select([fd], [], [], 0.5)[0]:
+    # Whatever is still on its way after the exit, up to the end of the terminal's output (EOF or EIO
+    # once nothing holds the terminal), however long a loaded machine takes to pass it on.
+    while select.select([fd], [], [], 60)[0]:
         try:
             data = os.read(fd, 4096)
         except OSError:
@@ -1063,16 +1067,19 @@ def test_ctrl_c_during_the_current_password_check_says_so_once(tmp_path):
 def slow_root_side(tmp_path: Path, disk: Path, op: str, stop_root_after: float | None = None) -> dict:
     """fake_tools, with the root side's `op` (check, or change before it begins) taking its time: its
     cryptsetup says SLOW-CHECK on the terminal and waits. With stop_root_after, the sudo stand-in sends
-    SIGINT to the root side alone that long after starting it, as if only it were stopped."""
+    SIGINT to the root side alone once its slow check has begun (and that long after), as if only it
+    were stopped: on that event rather than a fixed time, which a loaded machine could outrun."""
     env = fake_tools(tmp_path / "bin", disk)
-    killer = f'( sleep {stop_root_after}; pkill -INT -f -- "--disk-root {op}" ) & ' if stop_root_after else ""
+    begun = tmp_path / "check-begun"
+    killer = (f'( while [ ! -e {begun} ]; do sleep 0.05; done; sleep {stop_root_after}; pkill -INT -f -- "--disk-root {op}" ) & '
+              if stop_root_after else "")
     (tmp_path / "bin" / "sudo").write_text(
         "#!/usr/bin/env bash\n"
         "if [[ $1 == -v ]]; then printf '%s' \"${3/\\%p/$USER}\" >/dev/tty; IFS= read -rs answer </dev/tty; echo >/dev/tty; [[ $answer == account-pass ]]; exit; fi\n"
         "[[ $1 == -n ]] && shift\n"
         f'case "$*" in *"--disk-root {op}"*) export SLOW=1; {killer};; esac\n'
         "exec \"$@\"\n")
-    (tmp_path / "bin" / "cryptsetup").write_text(f'#!/bin/sh\n[ -n "$SLOW" ] && [ "$1" = open ] && {{ echo SLOW-CHECK >/dev/tty; sleep 3; }}\nexec {CRYPTSETUP} "$@"\n')
+    (tmp_path / "bin" / "cryptsetup").write_text(f'#!/bin/sh\n[ -n "$SLOW" ] && [ "$1" = open ] && {{ touch {begun}; echo SLOW-CHECK >/dev/tty; sleep 5; }}\nexec {CRYPTSETUP} "$@"\n')
     for tool in ("sudo", "cryptsetup"):
         (tmp_path / "bin" / tool).chmod(0o755)
     return env
@@ -1089,7 +1096,7 @@ def test_only_the_root_side_stopped_before_the_change_says_so_once(tmp_path, op)
     """The root side alone gets SIGINT, while it checks the current password (op check) or just before
     its change begins (op change): it exits 130 without a word, and the command says it once."""
     disk = make_image(tmp_path / "disk.img", OLD)
-    env = slow_root_side(tmp_path, disk, op, stop_root_after=1)
+    env = slow_root_side(tmp_path, disk, op, stop_root_after=0.2)
     answers = CHANGE if op == "change" else CHANGE[:2]
     code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(answers))
     assert code == 130, screen
