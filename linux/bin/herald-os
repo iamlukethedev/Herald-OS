@@ -3721,7 +3721,7 @@ def disk_password(args: list[str]) -> int:
 # setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
 # keyring password, which the first app that needs the keyring asks for after each start.
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
-KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_WRONG_PASSWORD, KEYRING_STOPPED = 3, 4, 5, 6, 130
+KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_WRONG_PASSWORD, KEYRING_NEEDS_PASSWORD, KEYRING_STOPPED = 3, 4, 5, 6, 7, 130
 # The label a keyring is made with, until it is the default one and labelled "Login": one that still
 # has it was stopped half-way, and `keyring setup` finishes it.
 KEYRING_MAKING_LABEL = "login"
@@ -4116,7 +4116,7 @@ def keyring_finish(password: str, flag: str) -> None:
                 # Its own code, so setup can ask for the password again instead of moving on.
                 die("that is not the password the keyring was made with. Nothing was changed.", KEYRING_WRONG_PASSWORD)
             if refused:
-                die("the keyring has a password of its own, so `herald-os keyring setup --password` finishes it. Nothing was changed.", KEYRING_EXISTS)
+                die("the keyring has a password of its own, so `herald-os keyring setup --password` finishes it. Nothing was changed.", KEYRING_NEEDS_PASSWORD)
             die(f"the keyring service could not check the keyring's password ({error.message}). Nothing was changed.", 1)
         # Relabelling needs it open: unlocked only if it is locked, with the password just checked.
         try:
@@ -4188,8 +4188,11 @@ def keyring_cmd(args: list[str]) -> int:
     unfinished = keyring_unfinished(directory)
     if unfinished and unfinished != kind:
         other = "--password" if unfinished == "password" else "--no-password"
+        # One with a password, finished without one: a code of its own, so setup asks for that password
+        # instead of taking it as a keyring that is already there (3).
         die(f"an earlier `herald-os keyring setup` made a keyring ({KEYRING_STATES[unfinished]}) and was stopped before it "
-            f"finished; `herald-os keyring setup {other}` finishes it. Nothing was changed.", KEYRING_EXISTS)
+            f"finished; `herald-os keyring setup {other}` finishes it. Nothing was changed.",
+            KEYRING_NEEDS_PASSWORD if unfinished == "password" else KEYRING_EXISTS)
     # Checked before the password is asked, and again under the lock.
     if not unfinished:
         keyring_refuse_existing(directory)
