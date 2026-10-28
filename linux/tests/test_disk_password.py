@@ -1862,6 +1862,36 @@ def test_the_root_side_ends_quietly_with_its_own_code_when_its_reader_is_gone():
     assert result.returncode == 6 and result.stderr == "", result.stderr
 
 
+def test_a_ctrl_c_while_the_root_side_starts_is_counted(monkeypatch, capsys):
+    """This side keeps its handlers while it starts the root side (the shell it starts ignores Ctrl+C for
+    the root side instead), so a Ctrl+C at that moment is one the change says it waits for, not lost."""
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: ["sh", "-c", "cat >/dev/null; echo 'Adding the new disk password to /dev/vda3…'; "
+                                                                        f"sleep 0.3; echo '{cli.DISK_CHANGE_DONE}'"])
+    real = cli.subprocess.Popen
+
+    def popen(argv, **kwargs):
+        assert argv[:len(cli.DISK_ROOT_SHELL)] == cli.DISK_ROOT_SHELL
+        os.kill(os.getpid(), signal.SIGINT)
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", popen)
+    assert cli.disk_helper("change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 0
+    assert capsys.readouterr().err.count("still changing") == 1
+
+
+def test_a_ctrl_c_just_as_the_root_side_holds_its_signals_is_a_stop(monkeypatch):
+    """One that comes at the very moment the change switches to holding Ctrl+C (still pending then) is a
+    stop, as one a moment before is, not dropped."""
+    monkeypatch.setitem(cli.DISK_STOPPED, "yes", False)
+    signal.signal(signal.SIGINT, cli.disk_stop)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    os.kill(os.getpid(), signal.SIGINT)
+    with pytest.raises(KeyboardInterrupt):
+        with cli.disk_signals_held():
+            pytest.fail("the change began after a Ctrl+C")
+    assert signal.getsignal(signal.SIGINT) == cli.disk_stop and not cli.CRYPTSETUP_OWN_SESSION["on"]
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]

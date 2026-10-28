@@ -3138,19 +3138,27 @@ def disk_terminal_kept():
         os.close(fd)
 
 
-def disk_ignore_held(held: tuple) -> None:
+def disk_ignore_held(held: tuple) -> set[int]:
     """Set these to SIG_IGN without Python's "Signal N ignored due to race condition", which a switch to
-    SIG_IGN leaves for one that came just before: blocked, they go to a handler that does nothing first,
-    which takes any already pending, then to SIG_IGN, which drops any that came while blocked."""
+    SIG_IGN leaves for one that came just before: blocked, they go to a handler that notes them first,
+    which takes any already pending, then to SIG_IGN, which drops any that came while blocked. Those that
+    came meanwhile, noted or still pending, are returned, for a caller that counts them."""
+    came: set[int] = set()
+
+    def note(signum: int, frame) -> None:
+        came.add(signum)
+
     signal.pthread_sigmask(signal.SIG_BLOCK, held)
     try:
         for each in held:
-            signal.signal(each, disk_held)
-        disk_held(0, None)  # a call, so that pending handlers run here, still as disk_held
+            signal.signal(each, note)
+        disk_held(0, None)  # a call, so that pending handlers run here, as note
+        came.update(int(each) for each in signal.sigpending() if each in held)
         for each in held:
             signal.signal(each, signal.SIG_IGN)
     finally:
         signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
+    return came
 
 
 @contextlib.contextmanager
@@ -3170,8 +3178,9 @@ def disk_signals_held():
     # handlers (ssh_ignored), as its commands may be stopped.
     held = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)
     before = {held_signal: signal.getsignal(held_signal) for held_signal in held}
-    disk_ignore_held(held)
-    if DISK_STOPPED["yes"]:
+    # A Ctrl+C that comes just as they are switched is a stop, as one a moment before would have been.
+    came = disk_ignore_held(held)
+    if DISK_STOPPED["yes"] or came & {signal.SIGINT, signal.SIGQUIT}:
         for held_signal, handler in before.items():
             signal.signal(held_signal, handler)
         raise KeyboardInterrupt
@@ -3479,20 +3488,16 @@ def disk_root_argv(op: str) -> list[str]:
     return argv if os.geteuid() == 0 else ["sudo", "-n", *argv]
 
 
+# The root side starts through a shell that ignores Ctrl+C and Ctrl+\ before it runs sudo, which keeps
+# them ignored for it, so one while sudo and Python start does not reach it half-started. This side keeps
+# its own handlers meanwhile, so it never misses one: a Ctrl+C before the shell ignores them ends the
+# shell before anything ran, which is a stop (130), and one after is one the change waits for.
+DISK_ROOT_SHELL = ["/bin/sh", "-c", 'trap "" INT QUIT; exec "$@"', "herald-os"]
+
+
 def disk_root_start(op: str, **kwargs) -> subprocess.Popen:
-    """Start the root side with SIGINT and SIGQUIT ignored, which it keeps through exec (and sudo keeps
-    for it), so a Ctrl+C while sudo and Python start does not reach it half-started. Ignored here for
-    the moment of the fork, not in a preexec_fn: Python code in the child could still take a Ctrl+C and
-    print what is left of a KeyboardInterrupt."""
-    held = (signal.SIGINT, signal.SIGQUIT)
-    before = {each: signal.getsignal(each) for each in held}
-    disk_ignore_held(held)
-    try:
-        return subprocess.Popen(disk_root_argv(op), stdin=subprocess.PIPE, **kwargs)
-    finally:
-        for each, handler in before.items():
-            if handler is not None:
-                signal.signal(each, handler)
+    """Start the root side, with SIGINT and SIGQUIT ignored from its start (DISK_ROOT_SHELL)."""
+    return subprocess.Popen([*DISK_ROOT_SHELL, *disk_root_argv(op)], stdin=subprocess.PIPE, **kwargs)
 
 
 def disk_held(signum: int, frame) -> None:
