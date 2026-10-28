@@ -108,8 +108,39 @@ def test_the_other_slots_and_the_tokens_left_without_one():
 
 def test_a_reset_says_what_it_leaves_on_the_disk():
     assert "not a secure erase" in cli.reset_disk_note(False)
-    assert "tell it to them" in cli.reset_disk_note(True)
+    assert "tell it to them" in cli.reset_disk_note(True) and "without encryption" not in cli.reset_disk_note(True)
     assert "could not tell" in cli.reset_disk_note(None) and "not a secure erase" in cli.reset_disk_note(None)
+    partly = cli.reset_disk_note(True, [{"device": "/dev/vdb1", "kind": "journal"}])
+    assert "tell it to them" in partly and "Part of it is written without encryption" in partly
+    assert "the root filesystem's journal is on /dev/vdb1" in partly
+
+
+def test_the_parts_without_encryption_in_words():
+    assert cli.disk_plain_text([{"device": "/dev/vda3", "kind": "cipher_null"}, {"device": "/dev/vdb1", "kind": "log"},
+                                {"device": "/dev/vdb2", "kind": "realtime"}, {"device": "/dev/vdb3", "kind": "journal"}]) == (
+        "/dev/vda3 uses cipher_null, which encrypts nothing; the root filesystem's log is on /dev/vdb1; "
+        "the root filesystem's realtime data is on /dev/vdb2; the root filesystem's journal is on /dev/vdb3")
+
+
+@pytest.mark.parametrize("devices, protection, says", [
+    (["/dev/vda3"], ("partial", [{"device": "/dev/vdb1", "kind": "journal"}]), ["tell it to them", "the root filesystem's journal is on /dev/vdb1"]),
+    (["/dev/vda3"], ("full", []), ["tell it to them"]),
+    ([], None, ["This disk is not encrypted"]),
+], ids=["partly protected", "encrypted", "plain"])
+def test_reset_tells_of_the_disk_as_status_does(monkeypatch, capsys, tmp_path, devices, protection, says):
+    """reset decides as --status does: LUKS asks for the password (so setup asks the next owner for theirs),
+    and the parts written without encryption are named."""
+    helper = tmp_path / "reset-helper"
+    helper.write_text("")
+    monkeypatch.setattr(cli, "RESET_HELPER", helper)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "disk_devices", lambda: devices)
+    monkeypatch.setattr(cli, "disk_protection", lambda found: protection)
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    assert cli.reset([]) == 1
+    said = capsys.readouterr().out
+    assert all(words in said for words in says), said
+    assert ("without encryption" in said) == (protection is not None and protection[0] == "partial")
 
 
 def test_the_cli_refuses_wrong_disk_arguments():
@@ -2122,7 +2153,7 @@ def test_an_unencrypted_disk_says_so(tmp_path):
     assert result.returncode == cli.DISK_NOT_ENCRYPTED
     assert "not encrypted" in result.stderr and "Encrypt my data" in result.stderr
     status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env)
-    assert json.loads(status.stdout) == {"encrypted": False, "devices": [], "newOwner": False, "error": None}
+    assert json.loads(status.stdout) == {"encrypted": False, "devices": [], "protection": None, "plainParts": [], "newOwner": False, "error": None}
 
 
 def test_a_header_that_uses_cipher_null_encrypts_nothing():
@@ -2153,14 +2184,14 @@ def resolved_tree() -> list:
 
 
 @pytest.mark.parametrize("mount, journals, plain", [
-    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,logdev=/dev/vdb1,noquota"}, [], ["/dev/vdb1"]),
-    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,rtdev=/dev/vdb1"}, [], ["/dev/vdb1"]),
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,logdev=/dev/vdb1,noquota"}, [], [("/dev/vdb1", "log")]),
+    ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,rtdev=/dev/vdb1"}, [], [("/dev/vdb1", "realtime")]),
     ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,logdev=/dev/mapper/log"}, [], []),
     ({"source": "/dev/mapper/root", "fstype": "xfs", "options": "rw,relatime"}, [], []),
-    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["vdb1"], ["/dev/vdb1"]),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["vdb1"], [("/dev/vdb1", "journal")]),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-0-8", "vdb1"], []),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-1"], []),
-    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-2"], ["/dev/dm-2"]),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-2"], [("/dev/dm-2", "journal")]),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["sdz1"], []),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, [], []),
     ({"source": "/dev/mapper/root", "fstype": "btrfs", "options": "rw"}, ["vdb1"], []),
@@ -2169,10 +2200,11 @@ def resolved_tree() -> list:
         "ext4 without a journal", "btrfs"])
 def test_the_parts_of_the_root_outside_luks(mount, journals, plain):
     """The journal or log of the root filesystem on a device outside LUKS: written in the clear."""
-    assert cli.disk_plain_parts(mount, resolved_tree(), journals, lambda device: BY_NAME.get(device, device)) == plain
+    assert cli.disk_plain_parts(mount, resolved_tree(), journals, lambda device: BY_NAME.get(device, device)) == [
+        {"device": device, "kind": kind} for device, kind in plain]
 
 
-def status_here(monkeypatch, tmp_path, mount: dict, journals: list[str], cipher_null: bool | None = None) -> bool:
+def status_here(monkeypatch, tmp_path, mount: dict | None, journals: list[str], cipher_null: bool | None = None) -> tuple[str, list[dict]]:
     folder = tmp_path / "jbd2"
     folder.mkdir(parents=True)
     for entry in journals:
@@ -2181,32 +2213,53 @@ def status_here(monkeypatch, tmp_path, mount: dict, journals: list[str], cipher_
     monkeypatch.setattr(cli, "disk_root_mount", lambda: mount)
     monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
     monkeypatch.setattr(cli, "luks_cipher_null", lambda device: cipher_null)
-    return cli.disk_status_encrypted(["/dev/vda3"])
+    return cli.disk_protection(["/dev/vda3"])
 
 
-def test_the_status_of_a_root_whose_journal_or_log_is_on_a_plain_disk_is_not_encrypted(monkeypatch, tmp_path):
+def test_a_root_whose_journal_or_log_is_on_a_plain_disk_is_partly_protected(monkeypatch, tmp_path):
     root = {"source": "/dev/dm-0", "fstype": "ext4", "options": "rw"}
-    assert status_here(monkeypatch, tmp_path / "a", root, ["vdb1"]) is False
-    assert status_here(monkeypatch, tmp_path / "b", {**root, "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}, []) is False
-    assert status_here(monkeypatch, tmp_path / "c", root, ["dm-0-8", "vdb1"]) is True
-    assert status_here(monkeypatch, tmp_path / "d", root, [], cipher_null=True) is False
-    assert status_here(monkeypatch, tmp_path / "e", root, [], cipher_null=False) is True
+    assert status_here(monkeypatch, tmp_path / "a", root, ["vdb1"]) == ("partial", [{"device": "/dev/vdb1", "kind": "journal"}])
+    assert status_here(monkeypatch, tmp_path / "b", {**root, "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}, []) == (
+        "partial", [{"device": "/dev/vdb1", "kind": "log"}])
+    assert status_here(monkeypatch, tmp_path / "c", root, ["dm-0-8", "vdb1"]) == ("full", [])
+    assert status_here(monkeypatch, tmp_path / "d", root, [], cipher_null=True) == ("partial", [{"device": "/dev/vda3", "kind": "cipher_null"}])
+    assert status_here(monkeypatch, tmp_path / "e", root, [], cipher_null=False) == ("full", [])
+
+
+def test_a_root_whose_mount_cannot_be_read_counts_as_fully_protected(monkeypatch, tmp_path):
+    """findmnt failed, so its journal or log cannot be looked at: no warning, rather than a guess; a
+    cipher_null header still shows."""
+    assert status_here(monkeypatch, tmp_path / "a", None, ["vdb1"]) == ("full", [])
+    assert status_here(monkeypatch, tmp_path / "b", None, ["vdb1"], cipher_null=True) == ("partial", [{"device": "/dev/vda3", "kind": "cipher_null"}])
+
+
+def test_a_root_lsblk_cannot_list_counts_as_fully_protected(monkeypatch, tmp_path):
+    status_here(monkeypatch, tmp_path, {"source": "/dev/dm-0", "fstype": "ext4", "options": "rw"}, ["vdb1"])
+
+    def unknown():
+        raise cli.DiskUnknown("lsblk could not list the disks")
+
+    monkeypatch.setattr(cli, "lsblk_tree", unknown)
+    assert cli.disk_protection(["/dev/vda3"]) == ("full", [])
 
 
 @needs_cryptsetup
 def test_status_reads_cipher_null_from_the_header(tmp_path):
-    """--status of a root on LUKS that encrypts nothing (cipher_null): not encrypted. Its header is read
-    as the person, where that works (here an image; a cryptsetup stand-in gives the cipher_null header,
-    as luksFormat with cipher_null needs a loop device)."""
+    """--status of a root on LUKS that encrypts nothing (cipher_null): still encrypted (LUKS asks for its
+    password at start-up, which setup lets a new owner change), but partly protected, with the device
+    named. Its header is read as the person, where that works (here an image; a cryptsetup stand-in gives
+    the cipher_null header, as luksFormat with cipher_null needs a loop device)."""
     disk = make_image(tmp_path / "disk.img", OLD)
     env = fake_tools(tmp_path / "bin", disk)
     status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
-    assert json.loads(status.stdout)["encrypted"] is True, status
+    assert json.loads(status.stdout) == {"encrypted": True, "devices": [str(disk)], "protection": "full", "plainParts": [], "newOwner": False,
+                                         "error": None}, status
     header = {"keyslots": {"0": {}}, "segments": {"0": {"type": "crypt", "encryption": "cipher_null-ecb"}}}
     (tmp_path / "bin" / "cryptsetup").write_text(f"#!/bin/sh\necho '{json.dumps(header)}'\n")
     (tmp_path / "bin" / "cryptsetup").chmod(0o755)
     status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
-    assert json.loads(status.stdout) == {"encrypted": False, "devices": [str(disk)], "newOwner": False, "error": None}
+    assert json.loads(status.stdout) == {"encrypted": True, "devices": [str(disk)], "protection": "partial",
+                                         "plainParts": [{"device": str(disk), "kind": "cipher_null"}], "newOwner": False, "error": None}
 
 
 @pytest.mark.parametrize("lsblk", [

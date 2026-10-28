@@ -2879,18 +2879,19 @@ def disk_root_mount() -> dict | None:
     return None
 
 
-def disk_plain_parts(mount: dict, tree: list, journals: list[str], resolve=lambda device: device) -> list[str]:
-    """The devices outside LUKS that hold part of the root filesystem besides its own device (pure;
-    tested): an xfs log or realtime device (logdev=, rtdev= in its mount options, which links them with
-    no UUID), or the external journal of an ext3/ext4 one. lsblk does not link a filesystem to its
+def disk_plain_parts(mount: dict, tree: list, journals: list[str], resolve=lambda device: device) -> list[dict]:
+    """The devices outside LUKS that hold part of the root filesystem besides its own device, each with
+    what it holds (pure; tested): an xfs log or realtime device (logdev=, rtdev= in its mount options,
+    which links them with no UUID), or the external journal of an ext3/ext4 one. lsblk does not link a filesystem to its
     journal, so that is the kernel's list (DISK_JBD2): a root with no journal of its own there has its
     journal on one of the external ones. A device lsblk does not know is left out: it cannot be told."""
     on_luks = {resolve(path): value for path, value in lsblk_on_luks(tree).items()}
     names = {os.path.basename(path) for path in on_luks}
     fstype, options = str(mount.get("fstype") or ""), str(mount.get("options") or "")
-    parts: list[str] = []
+    parts: list[dict] = []
     if fstype == "xfs":
-        parts = [option.split("=", 1)[1] for option in options.split(",") if option.startswith(("logdev=", "rtdev="))]
+        parts = [{"device": option.split("=", 1)[1], "kind": "log" if option.startswith("logdev=") else "realtime"}
+                 for option in options.split(",") if option.startswith(("logdev=", "rtdev="))]
     elif fstype in ("ext3", "ext4"):
         source = resolve(str(mount.get("source") or "").split("[", 1)[0])
         own = os.path.basename(source)
@@ -2900,24 +2901,23 @@ def disk_plain_parts(mount: dict, tree: list, journals: list[str], resolve=lambd
             return match.group(1) if match and match.group(1) in names else None
 
         if not any(inside(entry) == own for entry in journals):
-            parts = [f"/dev/{entry}" for entry in journals if inside(entry) is None]
-    return [part for part in parts if on_luks.get(resolve(part)) is False]
+            parts = [{"device": f"/dev/{entry}", "kind": "journal"} for entry in journals if inside(entry) is None]
+    return [part for part in parts if on_luks.get(resolve(part["device"])) is False]
 
 
-def disk_status_encrypted(devices: list[str]) -> bool:
-    """For --status: whether the root filesystem is encrypted throughout. Not when every LUKS device under
-    it uses cipher_null, or when part of it (a journal or log device) is outside LUKS; lsblk alone
-    counts those as encrypted."""
-    real = [device for device in devices if luks_cipher_null(device) is not True]
-    if not real:
-        return False
+def disk_protection(devices: list[str]) -> tuple[str, list[dict]]:
+    """For an encrypted root (LUKS asks for a password at start-up): "full", or "partial" with the parts
+    written without encryption, each {"device", "kind"}: a LUKS device that uses cipher_null (read from
+    its header where the person may), or a journal, log or realtime device outside LUKS. What cannot be
+    looked at (an unreadable header, no findmnt, no lsblk) counts as encrypted."""
+    parts = [{"device": device, "kind": "cipher_null"} for device in devices if luks_cipher_null(device) is True]
     mount = disk_root_mount()
-    if mount is None:
-        return True
     try:
-        tree = lsblk_tree()
+        tree = lsblk_tree() if mount is not None else None
     except DiskUnknown:
-        return True
+        tree = None
+    if mount is None or tree is None:
+        return ("partial" if parts else "full"), parts
     try:
         journals = sorted(os.listdir(DISK_JBD2))
     except OSError:
@@ -2926,7 +2926,19 @@ def disk_status_encrypted(devices: list[str]) -> bool:
     def resolve(device: str) -> str:
         return os.path.realpath(device) if device.startswith("/dev/") else device
 
-    return not disk_plain_parts(mount, tree, journals, resolve)
+    parts += disk_plain_parts(mount, tree, journals, resolve)
+    return ("partial" if parts else "full"), parts
+
+
+DISK_PLAIN_WORDS = {"cipher_null": "{device} uses cipher_null, which encrypts nothing",
+                    "journal": "the root filesystem's journal is on {device}",
+                    "log": "the root filesystem's log is on {device}",
+                    "realtime": "the root filesystem's realtime data is on {device}"}
+
+
+def disk_plain_text(parts: list[dict]) -> str:
+    """The parts written without encryption, in words (pure; tested)."""
+    return "; ".join(DISK_PLAIN_WORDS.get(str(part.get("kind")), "{device} is not encrypted").format(device=part.get("device")) for part in parts)
 
 
 def disk_unknown_text(error: DiskUnknown) -> str:
@@ -3885,11 +3897,15 @@ def disk_password(args: list[str]) -> int:
     except DiskUnknown as error:
         if "--status" in flags:
             # "encrypted" is null: unknown, which is neither a disk password to ask for nor a disk to call unencrypted.
-            print(json.dumps({"encrypted": None, "devices": [], "newOwner": NEW_OWNER_MARK.exists(), "error": str(error)}))
+            print(json.dumps({"encrypted": None, "devices": [], "protection": None, "plainParts": [], "newOwner": NEW_OWNER_MARK.exists(),
+                              "error": str(error)}))
             return 0
         die(disk_unknown_text(error), DISK_UNKNOWN)
     if "--status" in flags:
-        print(json.dumps({"encrypted": disk_status_encrypted(devices) if devices else False, "devices": devices,
+        # encrypted: LUKS asks for a password at start-up, which setup then lets a new owner change;
+        # protection says whether everything is encrypted, for a warning only.
+        protection, plain = disk_protection(devices) if devices else (None, [])
+        print(json.dumps({"encrypted": bool(devices), "devices": devices, "protection": protection, "plainParts": plain,
                           "newOwner": NEW_OWNER_MARK.exists(), "error": None}))
         return 0
     if not devices:
@@ -6554,14 +6570,19 @@ def firmware(args: list[str]) -> int:
 RESET_HELPER = Path("/usr/libexec/herald-os/reset-helper")
 
 
-def reset_disk_note(encrypted: bool | None) -> str:
-    """What a reset leaves on the disk, said plainly; None when it cannot be told (pure; tested)."""
+def reset_disk_note(encrypted: bool | None, plain: list[dict] | None = None) -> str:
+    """What a reset leaves on the disk, said plainly; None when it cannot be told, and `plain` the parts
+    of an encrypted one written without encryption (disk_protection) (pure; tested)."""
     if encrypted is None:
         return ("Herald OS could not tell whether the disk is encrypted. If it is not, a reset deletes the files "
                 "but is not a secure erase: someone with the disk and recovery tools may get some of them back.")
     if encrypted:
-        return ("The disk is encrypted, and its password stays the current one until whoever sets it up next "
+        note = ("The disk is encrypted, and its password stays the current one until whoever sets it up next "
                 "chooses their own in setup: tell it to them, as they type it once to start the computer.")
+        if plain:
+            note += (f" Part of it is written without encryption, though ({disk_plain_text(plain)}): a reset deletes "
+                     "what is there, but someone with the disk and recovery tools may get some of it back.")
+        return note
     return ("This disk is not encrypted: a reset deletes the files, but it is not a secure erase. Someone with "
             "the disk and recovery tools may get some of them back. Installing again with \"Encrypt my data\" "
             "ticked protects what is written from then on.")
@@ -6576,10 +6597,13 @@ def reset(args: list[str]) -> int:
     print(f"This erases {user}'s files, apps and settings on this computer, then restarts into setup.")
     print("Herald OS itself stays. Back up anything you want to keep first.")
     try:
-        encrypted: bool | None = bool(disk_devices())
+        devices = disk_devices()
     except DiskUnknown:
-        encrypted = None
-    print(reset_disk_note(encrypted))
+        encrypted, plain = None, []
+    else:
+        # As --status says it, which setup reads: LUKS asks for the password, and what is not encrypted.
+        encrypted, plain = bool(devices), (disk_protection(devices)[1] if devices else [])
+    print(reset_disk_note(encrypted, plain))
     if input("Type ERASE to continue: ").strip() != "ERASE":
         print("Nothing was changed.")
         return 1
