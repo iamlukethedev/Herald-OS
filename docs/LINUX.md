@@ -507,8 +507,12 @@ refused and named: with exit 7 when the keyring has a password and `--no-passwor
 made the keyring, where gnome-keyring would open it with any password. The keyring is never locked for
 this, so programs using it meanwhile are not disturbed: the password is checked by changing it to itself
 (gnome-keyring checks the current one for that, locked or not, and writes the file again with the same
-password), and the keyring is then opened with it only if it is locked. A wrong one is refused with exit
-6 and changes nothing; setup then asks for the keyring's password again. The password
+password), and the keyring is then opened with it only if it is locked. A check that succeeds therefore
+writes `login.keyring` again: the same secrets and the same password, in a file that is not byte for byte
+the same. Ctrl+C during the check stops the command at once, but gnome-keyring may still finish that
+rewrite afterwards, which is just as harmless; running the command again finishes the keyring as usual.
+A wrong one is refused with exit 6 and changes nothing; setup then asks for the keyring's password
+again. The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.
