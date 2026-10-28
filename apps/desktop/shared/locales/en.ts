@@ -656,6 +656,8 @@ export const en = {
   'firstRun.handOver.text': 'The next time it starts, it asks its new owner for a name, a password and their Hermes sign-in.',
   'firstRun.handOver.textEncrypted': 'The next time it starts, it asks for the disk password chosen when it was installed: tell it to its new owner. Setup then asks them for a name, a password, a disk password of their own and their Hermes sign-in.',
   'firstRun.handOver.notEncrypted': 'This disk is not encrypted: anyone who has it can read its files, and a reset deletes them but is not a secure erase.',
+  'firstRun.handOver.encryptionUnknown':
+    'Herald OS could not tell whether this disk is encrypted. If the computer asks for a disk password when it starts, tell the new owner the one chosen when it was installed; if it does not, anyone who has the disk can read its files, and a reset is not a secure erase.',
   'firstRun.handOver.done': 'Done',
   // The disk password unlocks the encrypted disk when the computer starts, before Herald OS does.
   'firstRun.disk.title': 'Your disk password',
@@ -674,6 +676,15 @@ export const en = {
   'firstRun.disk.notAscii': 'Use only letters, digits, spaces and the symbols on the keyboard, without accents or other scripts: there is no input method when the computer starts.',
   'firstRun.disk.wrongCurrent': 'That is not the disk password the computer asked for when it started. Nothing was changed.',
   'firstRun.disk.recoveryKey': 'That is a recovery key, not the disk password. Type the password the computer asked for when it started; the recovery key stays as it is. Nothing was changed.',
+  // TPM (the computer's security chip) and FIDO2 stay as they are.
+  'firstRun.disk.tpmKey': 'That is not the disk password: it belongs to unlocking with the TPM. Type the password the computer asked for when it started; TPM unlocking stays as it is. Nothing was changed.',
+  'firstRun.disk.fido2Key': 'That is not the disk password: it belongs to unlocking with a security key (FIDO2). Type the password the computer asked for when it started; the security key keeps working. Nothing was changed.',
+  'firstRun.disk.otherKey': 'That is not the disk password: it belongs to another way of unlocking the disk, or Herald OS could not tell whether it does. Type the password the computer asked for when it started. Nothing was changed.',
+  'firstRun.disk.newIsOtherKey': 'That new disk password already belongs to another way of unlocking the disk, such as the recovery key. Choose a different one. Nothing was changed.',
+  'firstRun.disk.sameAsCurrent': 'The new disk password is the one you typed when the computer started. Choose a different one.',
+  // herald-os password --disk --new-owner stays as it is.
+  'firstRun.disk.sharedSecret':
+    'Your disk password is right, but the same secret also unlocks the disk another way, such as a recovery key or a second password set to the same thing. Changing it now would remove that way as well, or leave the old password working through it. Give that way of unlocking a secret of its own first (or remove it), then change the disk password with herald-os password --disk --new-owner. Nothing was changed.',
   'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.

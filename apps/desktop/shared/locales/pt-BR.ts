@@ -642,6 +642,8 @@ export const ptBR: Translation = {
   'firstRun.handOver.textEncrypted':
     'Na próxima vez que o computador for ligado, ele vai pedir a senha do disco escolhida na instalação: passe essa senha ao novo dono. Depois, a configuração pede que ele escolha um nome, uma senha e uma senha do disco própria e entre na conta dele no Hermes.',
   'firstRun.handOver.notEncrypted': 'Este disco não é criptografado: quem estiver com ele consegue ler os arquivos, e uma redefinição apaga esses arquivos, mas não faz um apagamento seguro.',
+  'firstRun.handOver.encryptionUnknown':
+    'O Herald OS não conseguiu saber se este disco é criptografado. Se o computador pedir uma senha do disco ao ligar, passe ao novo dono a senha escolhida na instalação; se não pedir, qualquer pessoa com o disco consegue ler os arquivos, e uma redefinição não faz um apagamento seguro.',
   'firstRun.handOver.done': 'Concluir',
   'firstRun.disk.title': 'Sua senha do disco',
   'firstRun.disk.text':
@@ -657,6 +659,14 @@ export const ptBR: Translation = {
   'firstRun.disk.notAscii': 'Use só letras, números, espaços e os símbolos do teclado, sem acentos nem outros alfabetos: não há método de entrada enquanto o computador está ligando.',
   'firstRun.disk.wrongCurrent': 'Essa não é a senha do disco que o computador pediu ao ligar. Nada foi alterado.',
   'firstRun.disk.recoveryKey': 'Essa é uma chave de recuperação, não a senha do disco. Digite a senha que o computador pediu ao ligar; a chave de recuperação continua como está. Nada foi alterado.',
+  'firstRun.disk.tpmKey': 'Essa não é a senha do disco: ela é do desbloqueio pelo TPM. Digite a senha que o computador pediu ao ligar; o desbloqueio pelo TPM continua como está. Nada foi alterado.',
+  'firstRun.disk.fido2Key': 'Essa não é a senha do disco: ela é do desbloqueio com chave de segurança (FIDO2). Digite a senha que o computador pediu ao ligar; a chave de segurança continua funcionando. Nada foi alterado.',
+  'firstRun.disk.otherKey':
+    'Essa não é a senha do disco: ela é de outra forma de desbloquear o disco, ou o Herald OS não conseguiu saber se é. Digite a senha que o computador pediu ao ligar. Nada foi alterado.',
+  'firstRun.disk.newIsOtherKey': 'Essa nova senha do disco já é de outra forma de desbloquear o disco, como a chave de recuperação. Escolha outra. Nada foi alterado.',
+  'firstRun.disk.sameAsCurrent': 'A nova senha do disco é a mesma que você digitou quando o computador ligou. Escolha outra.',
+  'firstRun.disk.sharedSecret':
+    'Sua senha do disco está certa, mas o mesmo segredo também desbloqueia o disco de outra forma, como uma chave de recuperação ou outra senha igual à sua. Trocar a senha agora removeria essa outra forma também, ou deixaria a senha antiga funcionando por ela. Primeiro dê a essa forma de desbloqueio um segredo próprio (ou remova-a) e depois troque a senha do disco com herald-os password --disk --new-owner. Nada foi alterado.',
   'firstRun.disk.notAdmin': 'A senha da sua conta não foi aceita para fazer a troca. Nada foi alterado.',
   'firstRun.disk.notEncrypted': 'O disco deste computador não é criptografado, então não há senha do disco para trocar.',
   'firstRun.disk.partly': 'Sua senha do disco foi adicionada, mas não foi possível remover uma senha antiga. Execute herald-os password --disk --new-owner em um terminal.',

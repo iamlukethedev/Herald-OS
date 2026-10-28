@@ -155,7 +155,7 @@ export function diskReply(screen: string, secrets: DiskSecrets): { reply: string
 }
 
 /** Exit codes of `herald-os password --disk` (linux/bin/herald-os: DISK_WRONG and the rest). */
-const DISK_EXITS: Record<number, DiskPasswordFailure> = { 3: 'wrongCurrent', 4: 'notEncrypted', 5: 'notAdmin', 6: 'partly', 8: 'notTakenBack', 9: 'recoveryKey' }
+const DISK_EXITS: Record<number, DiskPasswordFailure> = { 3: 'wrongCurrent', 4: 'notEncrypted', 5: 'notAdmin', 6: 'partly', 8: 'notTakenBack', 9: 'recoveryKey', 10: 'tpmKey', 11: 'fido2Key', 12: 'otherKey', 13: 'newIsOtherKey', 14: 'sharedSecret' }
 // Adding a key slot and checking each passphrase take seconds apiece (argon2id), more with two disks.
 const DISK_TIMEOUT_MS = 300_000
 
@@ -351,6 +351,11 @@ export function registerSetupIpc(): void {
 
     if (Object.values(secrets).some(value => /[\r\n]/.test(value)) || !secrets.current) {
       return { ok: false, reason: 'wrongCurrent' } satisfies SetupResult
+    }
+
+    // herald-os refuses it too, but with its general exit 2, which setup can only call a failure.
+    if (secrets.password === secrets.current) {
+      return { ok: false, reason: 'sameAsCurrent' } satisfies SetupResult
     }
 
     return changeDiskPassword(secrets)

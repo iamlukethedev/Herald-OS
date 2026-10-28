@@ -145,6 +145,7 @@ export function FirstRunSetup() {
               text={t(forSomeoneElse ? (diskEncrypted === true ? 'firstRun.handOver.textEncrypted' : 'firstRun.handOver.text') : 'firstRun.done.text')}
             />
             {forSomeoneElse && diskEncrypted === false && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
+            {forSomeoneElse && diskEncrypted === null && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.encryptionUnknown')}</p>}
             {!forSomeoneElse && keyringOpen && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.keyring.encrypted')}</p>}
             <Footer onNext={() => void finish()} label={t(forSomeoneElse ? 'firstRun.handOver.done' : 'firstRun.done.start')} />
           </div>
@@ -299,6 +300,12 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
   partly: 'firstRun.disk.partly',
   notTakenBack: 'firstRun.disk.notTakenBack',
   recoveryKey: 'firstRun.disk.recoveryKey',
+  tpmKey: 'firstRun.disk.tpmKey',
+  fido2Key: 'firstRun.disk.fido2Key',
+  otherKey: 'firstRun.disk.otherKey',
+  newIsOtherKey: 'firstRun.disk.newIsOtherKey',
+  sameAsCurrent: 'firstRun.disk.sameAsCurrent',
+  sharedSecret: 'firstRun.disk.sharedSecret',
   timeout: 'firstRun.disk.timeout',
   noTerminal: 'firstRun.disk.noTerminal',
   failed: 'firstRun.disk.failed'
@@ -321,8 +328,15 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
   const [busy, setBusy] = useState(false)
   const mismatch = again.length > 0 && password !== again
   const notAscii = !PRINTABLE_ASCII.test(password)
+  // The same secret opens another way of unlocking: trying again gives the same answer until that way
+  // has a secret of its own, which setup cannot do, so only "Later" goes on.
+  const blocked = error === 'firstRun.disk.sharedSecret'
 
   const save = async () => {
+    if (blocked) {
+      return
+    }
+
     setBusy(true)
     setError(null)
 
@@ -379,7 +393,7 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
         <GlassButton variant="ghost" onClick={onDone} disabled={busy}>
           {t('firstRun.later')}
         </GlassButton>
-        <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={!current || password.length < 8 || password !== again || notAscii || !accountPassword} />
+        <Footer onNext={() => void save()} label={t('firstRun.next')} busy={busy} disabled={blocked || !current || password.length < 8 || password !== again || notAscii || !accountPassword} />
       </div>
     </form>
   )

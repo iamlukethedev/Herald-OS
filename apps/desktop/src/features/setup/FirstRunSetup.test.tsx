@@ -44,7 +44,7 @@ const SIGNED_OUT_AUTH = $hermesAuth.get()
 
 // What may read the same in every language: product names, and the keyboard shortcuts, commands
 // and units that stay as they are (en.ts says which). The longer command goes first.
-const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os keyring setup --password', 'herald-os password', 'API', 'GHz', 'TPM', 'VS Code', 'Signal', 'GitHub CLI']
+const KEPT = ['Herald OS', 'Hermes', 'OpenRouter', 'Super+Space', 'Super+M', 'herald-os password --disk --new-owner', 'herald-os keyring setup --password', 'herald-os password', 'API', 'GHz', 'TPM', 'FIDO2', 'VS Code', 'Signal', 'GitHub CLI']
 
 // Portuguese words spelled as English ones are ("o menu", "for ligado", "use pelo menos", "um terminal",
 // "teclado Bluetooth", "os apps").
@@ -135,6 +135,11 @@ const DISK_FAILURES = [
   ['partly', 'firstRun.disk.partly'],
   ['notTakenBack', 'firstRun.disk.notTakenBack'],
   ['recoveryKey', 'firstRun.disk.recoveryKey'],
+  ['tpmKey', 'firstRun.disk.tpmKey'],
+  ['fido2Key', 'firstRun.disk.fido2Key'],
+  ['otherKey', 'firstRun.disk.otherKey'],
+  ['newIsOtherKey', 'firstRun.disk.newIsOtherKey'],
+  ['sameAsCurrent', 'firstRun.disk.sameAsCurrent'],
   ['timeout', 'firstRun.disk.timeout'],
   ['noTerminal', 'firstRun.disk.noTerminal'],
   ['tooShort', 'firstRun.account.tooShort'],
@@ -704,11 +709,11 @@ describe("first-run setup's keyring", () => {
 
 describe('handing the computer over', () => {
   it.each([
-    [true, 'firstRun.handOver.textEncrypted', false],
-    [false, 'firstRun.handOver.text', true],
-    // Unknown: neither the disk password to pass on, nor a claim that the disk is unencrypted.
-    [null, 'firstRun.handOver.text', false]
-  ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns) => {
+    [true, 'firstRun.handOver.textEncrypted', false, false],
+    [false, 'firstRun.handOver.text', true, false],
+    // Unknown: neither the disk password to pass on nor a claim that the disk is unencrypted, but it says it could not tell.
+    [null, 'firstRun.handOver.text', false, true]
+  ] as const)('on a disk encrypted: %s, says %s and whether a reset is a secure erase', async (diskEncrypted, text, warns, unknown) => {
     bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted, newOwner: false })
     const host = await mount('en')
     await click(button(host, t('firstRun.welcome.forSomeoneElse')))
@@ -716,6 +721,7 @@ describe('handing the computer over', () => {
     expect(heading(host)).toBe(t('firstRun.handOver.title'))
     expect(host.textContent).toContain(t(text))
     expect(host.textContent?.includes(t('firstRun.handOver.notEncrypted'))).toBe(warns)
+    expect(host.textContent?.includes(t('firstRun.handOver.encryptionUnknown'))).toBe(unknown)
   })
 })
 
@@ -735,5 +741,84 @@ describe("the disk step's warning", () => {
     for (const word of words) {
       expect(text, word).toContain(word)
     }
+  })
+})
+
+describe('a refused current disk password', () => {
+  it('says which way of unlocking it belongs to, never the recovery key for the others, in every language', () => {
+    const keys = ['firstRun.disk.recoveryKey', 'firstRun.disk.tpmKey', 'firstRun.disk.fido2Key', 'firstRun.disk.otherKey'] as const
+    const recovery = { en: 'recovery key', 'pt-BR': 'chave de recuperação', 'zh-CN': '恢复密钥' } as const
+    for (const language of ['en', 'pt-BR', 'zh-CN'] as const) {
+      $prefs.set({ ...$prefs.get(), language })
+      const texts = keys.map(key => t(key))
+      expect(new Set(texts).size, language).toBe(4)
+      expect(texts[0], language).toContain(recovery[language])
+      for (const text of texts.slice(1)) {
+        expect(text, language).not.toContain(recovery[language])
+      }
+      expect(texts[1], language).toContain('TPM')
+      expect(texts[2], language).toContain('FIDO2')
+    }
+  })
+})
+
+describe('handing over a computer whose encryption could not be told', () => {
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says so in %s', async language => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: null, newOwner: false })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forSomeoneElse')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.handOver.title'))
+    expect(host.textContent).toContain(t('firstRun.handOver.encryptionUnknown'))
+    expect(host.textContent).not.toContain(t('firstRun.handOver.notEncrypted'))
+    if (language !== 'en') {
+      expect(t('firstRun.handOver.encryptionUnknown')).not.toBe(en['firstRun.handOver.encryptionUnknown'])
+    }
+  })
+})
+
+describe('a disk password whose secret another way of unlocking shares', () => {
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says so in %s, and does not ask for it again', async language => {
+    bridge.setup.state.mockResolvedValue({ needed: true, signedIn: false, diskEncrypted: true, newOwner: true })
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+    const [current, password, again] = host.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    await type(current, 'given at start-up')
+    await type(password, 'my own disk pass')
+    await type(again, 'my own disk pass')
+    bridge.setup.diskPassword.mockClear()
+    bridge.setup.diskPassword.mockResolvedValue({ ok: false, reason: 'sharedSecret' })
+    await click(button(host, t('firstRun.next')))
+    expect(host.querySelector('.text-danger')?.textContent).toBe(t('firstRun.disk.sharedSecret'))
+    // Not the recovery key's or the TPM's "that is not the disk password", and no asking to type it again.
+    expect(t('firstRun.disk.sharedSecret')).not.toBe(t('firstRun.disk.recoveryKey'))
+    expect(t('firstRun.disk.sharedSecret')).not.toBe(t('firstRun.disk.tpmKey'))
+    expect(button(host, t('firstRun.next'))?.disabled).toBe(true)
+    await act(async () => host.querySelector('form')?.requestSubmit())
+    await settle()
+    expect(bridge.setup.diskPassword).toHaveBeenCalledTimes(1)
+    await click(button(host, t('firstRun.later')))
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    bridge.setup.diskPassword.mockReset()
+    bridge.setup.diskPassword.mockResolvedValue({ ok: true })
+  })
+
+  it('names the shared secret, not a wrong password, in every language', () => {
+    for (const language of ['en', 'pt-BR', 'zh-CN'] as const) {
+      $prefs.set({ ...$prefs.get(), language })
+      const text = t('firstRun.disk.sharedSecret')
+      expect(text, language).toContain('herald-os password --disk --new-owner')
+      // A TPM token's secret is random, never a password typed twice: the examples are the recovery key and a password.
+      expect(text, language).not.toContain('TPM')
+      expect(text, language).toContain({ en: 'recovery key', 'pt-BR': 'chave de recuperação', 'zh-CN': '恢复密钥' }[language])
+    }
+    $prefs.set({ ...$prefs.get(), language: 'en' })
+    expect(t('firstRun.disk.sharedSecret')).not.toMatch(/type the password/i)
+    expect(t('firstRun.disk.sharedSecret')).toContain('secret of its own first')
   })
 })
