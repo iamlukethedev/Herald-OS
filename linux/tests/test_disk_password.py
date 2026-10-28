@@ -1892,6 +1892,46 @@ def test_a_ctrl_c_just_as_the_root_side_holds_its_signals_is_a_stop(monkeypatch)
     assert signal.getsignal(signal.SIGINT) == cli.disk_stop and not cli.CRYPTSETUP_OWN_SESSION["on"]
 
 
+def left_add(tmp_path: Path, seconds: float) -> subprocess.Popen:
+    """A luksAddKey a killed root side left running on /dev/vda3: a process named cryptsetup, for a while."""
+    name = tmp_path / "cryptsetup"
+    if not name.exists():
+        name.symlink_to(sys.executable)
+    return subprocess.Popen([str(name), "-c", f"import time; time.sleep({seconds})", "luksAddKey", "/dev/vda3"])
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_the_look_waits_for_a_cryptsetup_left_working_on_the_disk(monkeypatch, tmp_path):
+    """A root side killed during luksAddKey leaves it running in a session of its own: the look waits for
+    it to end before it asks what opens the device, or it could say the new password does not."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD, 1: NEW})
+    real = cli.cryptsetup
+    left = left_add(tmp_path, 1.0)
+    first = []
+    monkeypatch.setattr(cli, "cryptsetup", lambda *args: first.append(left.poll()) or real(*args))
+    try:
+        state = cli.disk_probe(["/dev/vda3"], OLD, NEW)
+    finally:
+        left.kill()
+        left.wait()
+    assert first and first[0] is not None, "it looked while cryptsetup still worked on the device"
+    assert state == {"/dev/vda3": {"current": True, "new": True}}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_device_cryptsetup_still_works_on_after_the_wait_is_said_to_be_changing(monkeypatch, tmp_path):
+    quiet_cryptsetup(monkeypatch, {0: OLD})
+    monkeypatch.setattr(cli, "DISK_LOOK_WAIT", 0.3)
+    left = left_add(tmp_path, 30)
+    try:
+        state = cli.disk_probe(["/dev/vda3", "/dev/vdb1"], OLD, NEW)
+    finally:
+        left.kill()
+        left.wait()
+    assert state["/dev/vda3"]["busy"] and "busy" not in state["/dev/vdb1"]
+    assert cli.disk_end_lines(state)[0].startswith("/dev/vda3: cryptsetup was still changing it, so what opens it may change")
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]

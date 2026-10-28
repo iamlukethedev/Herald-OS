@@ -3218,15 +3218,41 @@ def disk_root(args: list[str]) -> int:
         return 1
 
 
+DISK_LOOK_WAIT = 30
+
+
+def disk_busy(devices: list[str]) -> set[str]:
+    """The devices a cryptsetup is still working on, from /proc. A root side that was killed (SIGKILL)
+    leaves the luksAddKey it started running, in a session of its own, and it may still write its slot."""
+    wanted = {os.fsencode(device): device for device in devices}
+    busy: set[str] = set()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if argv and os.path.basename(argv[0]) == b"cryptsetup":
+            busy.update(wanted[each] for each in argv[1:] if each in wanted)
+    return busy
+
+
 def disk_probe(devices: list[str], current: str, new: str) -> dict:
     """Which of the two passwords opens each device now, for a change that ended without saying; None
-    for one cryptsetup could not tell."""
+    for one cryptsetup could not tell. It first waits, DISK_LOOK_WAIT at most, for a cryptsetup still at
+    work on them to finish, and marks a device one still works on as busy: what opens it may change."""
+    deadline = time.monotonic() + DISK_LOOK_WAIT
+    while (busy := disk_busy(devices)) and time.monotonic() < deadline:
+        time.sleep(0.2)
+
     def opens(device: str, passphrase: str) -> bool | None:
         try:
             return bool(passphrase) and luks_slot(device, passphrase) is not None
         except LuksUnsure:
             return None
-    return {device: {"current": opens(device, current), "new": opens(device, new)} for device in devices}
+    return {device: {"current": opens(device, current), "new": opens(device, new), **({"busy": True} if device in busy else {})}
+            for device in devices}
 
 
 def disk_root_op(args: list[str]) -> int:
@@ -3655,7 +3681,9 @@ def disk_end_lines(state: dict) -> list[str]:
              (False, True): "the new disk password opens it, the current one no longer does",
              (True, False): "the current disk password opens it, the new one does not",
              (False, False): "neither password opens it"}
-    return [f"{device}: " + ("it could not be checked; try the new disk password first, then the current one"
+    return [f"{device}: " + ("cryptsetup was still changing it, so what opens it may change once that ends; try the new "
+                             "disk password first, then the current one" if opens.get("busy")
+                             else "it could not be checked; try the new disk password first, then the current one"
                              if opens.get("current") is None or opens.get("new") is None
                              else words[(bool(opens["current"]), bool(opens["new"]))])
             for device, opens in state.items() if isinstance(opens, dict)]
