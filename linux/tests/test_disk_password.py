@@ -2194,10 +2194,12 @@ def resolved_tree() -> list:
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-1"], []),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["dm-2"], [("/dev/dm-2", "journal")]),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["sdz1"], []),
+    ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, ["vdb2-8", "dm-1-8", "vdb1"], [("/dev/vdb1", "journal")]),
     ({"source": "/dev/mapper/root", "fstype": "ext4", "options": "rw"}, [], []),
     ({"source": "/dev/mapper/root", "fstype": "btrfs", "options": "rw"}, ["vdb1"], []),
 ], ids=["xfs log on a plain disk", "xfs realtime on a plain disk", "xfs log on LUKS", "xfs log inside", "ext4 journal on a plain disk",
         "ext4 journal inside", "ext4 journal on LUKS", "ext4 journal on plain LVM", "ext4 journal lsblk does not know",
+        "ext4 journal beside others' own journals",
         "ext4 without a journal", "btrfs"])
 def test_the_parts_of_the_root_outside_luks(mount, journals, plain):
     """The journal or log of the root filesystem on a device outside LUKS: written in the clear."""

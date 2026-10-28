@@ -2901,7 +2901,9 @@ def disk_plain_parts(mount: dict, tree: list, journals: list[str], resolve=lambd
             return match.group(1) if match and match.group(1) in names else None
 
         if not any(inside(entry) == own for entry in journals):
-            parts = [{"device": f"/dev/{entry}", "kind": "journal"} for entry in journals if inside(entry) is None]
+            # Another filesystem's own journal ("<device>-<inode>") names no block device, so the check
+            # below leaves it out.
+            parts = [{"device": f"/dev/{entry}", "kind": "journal"} for entry in journals]
     return [part for part in parts if on_luks.get(resolve(part["device"])) is False]
 
 
