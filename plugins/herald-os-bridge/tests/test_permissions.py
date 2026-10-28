@@ -160,3 +160,78 @@ def test_a_scope_narrows_a_mutate_rule_key_and_no_scope_keeps_it(plugin, monkeyp
     perm.authorize("system_os", perm.Tier.MUTATE, "restart", "restart sound", scope="sound")
     perm.authorize("system_os", perm.Tier.MUTATE, "restart", "restart Wi-Fi", scope="wifi")
     assert keys == ["herald_os:system_files:mkdir", "herald_os:system_os:restart:wifi", "herald_os:system_os:restart:sound", "herald_os:system_os:restart:wifi"]
+
+
+def _linked_home(tmp_path, monkeypatch):
+    """HOME given as a link path, as /home/<user> is where /home links to /var/home."""
+    real = tmp_path / "var" / "home" / "ana"
+    (real / ".local" / "share" / "keyrings").mkdir(parents=True)
+    (real / ".local" / "share" / "keyrings" / "login.keyring").write_text("[keyring]\n")
+    (real / ".ssh").mkdir()
+    (real / ".ssh" / "id_ed25519").write_text("key")
+    (real / "Documents").mkdir()
+    (real / "Documents" / "notes.txt").write_text("notes")
+    (tmp_path / "home").symlink_to(tmp_path / "var" / "home")
+    monkeypatch.setenv("HOME", str(tmp_path / "home" / "ana"))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    return real
+
+
+def test_a_linked_home_cannot_reach_the_real_keyring_or_ssh_folder(plugin, isolated_home, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    real = _linked_home(tmp_path, monkeypatch)
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "k").symlink_to(real / ".local" / "share" / "keyrings" / "login.keyring")
+    (tmp_path / "elsewhere" / "s").symlink_to(real / ".ssh")
+    policy = perm.parse_policy({})
+    for path in (real / ".local" / "share" / "keyrings" / "login.keyring", real / ".local" / "share" / "keyrings",
+                 tmp_path / "elsewhere" / "k", real / ".ssh" / "id_ed25519", tmp_path / "elsewhere" / "s",
+                 Path.home() / ".local" / "share" / "keyrings" / "login.keyring"):
+        assert perm.protected_root(path, policy) is not None, path
+    assert perm.protected_root(real / "Documents" / "notes.txt", policy) is None
+
+
+def test_a_linked_xdg_data_home_cannot_reach_the_real_keyring_folder(plugin, isolated_home, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    (tmp_path / "real-data" / "keyrings").mkdir(parents=True)
+    (tmp_path / "real-data" / "keyrings" / "login.keyring").write_text("[keyring]\n")
+    (tmp_path / "data").symlink_to(tmp_path / "real-data")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    policy = perm.parse_policy({})
+    for path in (tmp_path / "real-data" / "keyrings" / "login.keyring", tmp_path / "data" / "keyrings" / "login.keyring", tmp_path / "real-data" / "keyrings"):
+        assert perm.protected_root(path, policy) is not None, path
+    assert perm.protected_root(tmp_path / "real-data" / "notes.txt", policy) is None
+
+
+def test_a_linked_home_is_refused_before_any_prompt(plugin, isolated_home, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    real = _linked_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(perm, "_cache", None)
+    asked = []
+    monkeypatch.setattr(perm, "_confirm", lambda *a, **k: asked.append(a) or perm.Decision(True, "approved"))
+    decision = perm.authorize("system_files", perm.Tier.READ, "read", "read keyring", paths=[real / ".local" / "share" / "keyrings" / "login.keyring"])
+    assert not decision.allowed and decision.outcome == "protected"
+    assert asked == []
+
+
+def test_each_root_is_kept_once_whether_or_not_it_is_a_link(plugin, tmp_path, monkeypatch):
+    perm = _perm(plugin)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    protected = perm.parse_policy({}).protected
+    assert len(protected) == len(set(protected))
+    assert tmp_path / ".ssh" in protected
+
+
+def test_a_link_inside_a_protected_folder_is_refused_by_the_path_given(plugin, isolated_home, tmp_path, monkeypatch):
+    # Under a linked home, ~/.ssh/config is a link to a file outside: only the path as given, against the
+    # root as written, shows it is in ~/.ssh.
+    perm = _perm(plugin)
+    real = _linked_home(tmp_path, monkeypatch)
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "cfg").write_text("Host *")
+    (real / ".ssh" / "config").symlink_to(tmp_path / "outside" / "cfg")
+    policy = perm.parse_policy({})
+    assert perm.protected_root(Path.home() / ".ssh" / "config", policy) == Path.home() / ".ssh"
+    assert perm.protected_root(real / ".ssh" / "config", policy) is not None
+    assert perm.protected_root(tmp_path / "outside" / "cfg", policy) is None

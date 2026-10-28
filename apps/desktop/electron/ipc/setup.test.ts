@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -340,6 +340,16 @@ describe('the keyring', () => {
       await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null })
     }
 
+    // Still true, however the command lays its answer out: other keys, another order, white space.
+    for (const stdout of [
+      '{"encrypted": true, "keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}',
+      '  \n{"keyring":"none","folder":"/var/home/hermes/.local/share/keyrings","encrypted":true}\r\n\n',
+      '{"keyring": "none", "folder": "/x", "encrypted": true, "devices": ["/dev/mapper/luks-1"], "note": null}'
+    ]) {
+      host.run = { stdout, stderr: 'a warning on stderr\n', code: 0 }
+      await expect(keyringStatus(), stdout).resolves.toEqual({ keyring: 'none', encrypted: true })
+    }
+
     // A herald-os from before the keyring's disk was looked at: the keyring, and its disk unknown.
     host.run = { stdout: '{"keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}', stderr: '', code: 0 }
     await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null })
@@ -357,8 +367,11 @@ describe('the keyring', () => {
     const reasons: [number, string][] = [
       [3, 'keyringExists'],
       [4, 'noKeyringService'],
+      // No PyGObject: not the keyring service, so not its message.
+      [5, 'failed'],
+      // The command refused the password (its length).
+      [2, 'tooShort'],
       [1, 'failed'],
-      [2, 'failed'],
       [127, 'failed']
     ]
 
@@ -377,6 +390,8 @@ describe('the keyring', () => {
     vi.mocked(run).mockClear()
 
     expect(await handler?.({}, { password: 'short' })).toEqual({ ok: false, reason: 'tooShort' })
+    // Seven characters: one too few.
+    expect(await handler?.({}, { password: 'correct' })).toEqual({ ok: false, reason: 'tooShort' })
     expect(await handler?.({}, { password: 'two\nlines here' })).toEqual({ ok: false, reason: 'tooShort' })
     expect(run).not.toHaveBeenCalled()
     host.run = { stdout: '', stderr: '', code: 0 }
@@ -384,6 +399,34 @@ describe('the keyring', () => {
     expect(await handler?.({}, {})).toEqual({ ok: true })
     expect(run).toHaveBeenCalledTimes(2)
     expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--no-password'], expect.any(Number))
+  })
+
+  it('takes eight characters and refuses seven', () => {
+    expect(keyringPasswordProblem('correct')).toBe('tooShort')
+    expect(keyringPasswordProblem('correct!')).toBeNull()
+    expect(keyringPasswordProblem('çoração!')).toBeNull()
+  })
+
+  it('counts characters as the command does, not UTF-16 units', async () => {
+    // Each of these is 8 UTF-16 units long, and 4 or 7 characters.
+    expect('😀😀😀😀'.length).toBe(8)
+    expect(keyringPasswordProblem('😀😀😀😀')).toBe('tooShort')
+    expect(keyringPasswordProblem('abcdef😀')).toBe('tooShort')
+    expect(keyringPasswordProblem('abcdefg😀')).toBeNull()
+    expect(keyringPasswordProblem('😀😀😀😀😀😀😀😀')).toBeNull()
+    registerSetupIpc()
+    vi.mocked(run).mockClear()
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: '😀😀😀😀' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: 'abcdef😀' })).toEqual({ ok: false, reason: 'tooShort' })
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('runs the command for a password of exactly eight characters', async () => {
+    registerSetupIpc()
+    host.run = { stdout: '', stderr: '', code: 0 }
+    vi.mocked(run).mockClear()
+    expect(await host.handlers.get(IPC.setupKeyring)?.({}, { password: 'correct!' })).toEqual({ ok: true })
+    expect(run).toHaveBeenCalledExactlyOnceWith('herald-os', ['keyring', 'setup', '--password'], expect.any(Number), 'correct!\n')
   })
 
   it('is part of the state setup starts from, next to the disk', async () => {

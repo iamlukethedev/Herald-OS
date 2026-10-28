@@ -11,7 +11,7 @@ pkgdesc='An AI-native desktop built around Hermes Agent: a niri session, or an a
 arch=('x86_64' 'aarch64')
 url='https://github.com/iamlukethedev/Herald-OS'
 license=('MIT')
-depends=('gtk3' 'nss' 'alsa-lib' 'libsecret' 'libnotify' 'python' 'curl' 'wl-clipboard' 'wtype' 'grim' 'slurp')
+depends=('gtk3' 'nss' 'alsa-lib' 'libsecret' 'libnotify' 'python' 'python-gobject' 'curl' 'wl-clipboard' 'wtype' 'grim' 'slurp')
 optdepends=(
   'niri: the full Herald OS session (menu bar, dock, tiling)'
   'greetd: a login screen that starts the session'

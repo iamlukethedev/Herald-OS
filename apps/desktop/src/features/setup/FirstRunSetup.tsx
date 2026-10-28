@@ -419,7 +419,8 @@ function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boo
   const [error, setError] = useState<TextKey | null>(null)
   const [busy, setBusy] = useState(false)
   const mismatch = choice === 'password' && again.length > 0 && password !== again
-  const ready = choice === 'open' || (choice === 'password' && password.length >= 8 && password === again)
+  // Characters (code points), as `herald-os keyring` counts them, not UTF-16 units.
+  const ready = choice === 'open' || (choice === 'password' && [...password].length >= 8 && password === again)
 
   const save = async () => {
     setBusy(true)

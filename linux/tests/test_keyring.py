@@ -8,9 +8,12 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -168,6 +171,25 @@ def test_a_default_name_that_is_not_a_plain_file_name_is_not_followed(tmp_path, 
     assert cli.keyring_state(folder) == "other"
 
 
+@pytest.mark.parametrize("name", [b"lo\0gin", b"\0", b"login\0", b"\0login\n"])
+def test_a_default_name_with_a_nul_byte_is_other(tmp_path, name):
+    folder = keyrings(tmp_path, {"default": name, "login.keyring": PLAIN})
+    assert cli.keyring_state(folder) == "other"
+
+
+def test_status_and_setup_take_a_nul_byte_in_default_without_a_traceback(tmp_path):
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    folder.mkdir(parents=True)
+    (folder / "default").write_bytes(b"lo\0gin")
+    status = run_cli(tmp_path, "--status", env={"PATH": f"{disk_tools(tmp_path, None, None)}:{os.environ['PATH']}"})
+    assert status.returncode == 0 and json.loads(status.stdout)["keyring"] == "other", status.stderr
+    setup = run_cli(tmp_path, "setup", "--no-password", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert setup.returncode == cli.KEYRING_EXISTS and "one Herald OS did not make" in setup.stderr
+    for result in (status, setup):
+        assert "Traceback" not in result.stderr
+    assert (folder / "default").read_bytes() == b"lo\0gin"
+
+
 def test_a_missing_folder_is_no_keyring(tmp_path):
     assert cli.keyring_state(tmp_path / "nowhere") == "none"
 
@@ -187,6 +209,15 @@ def test_the_folder_follows_xdg_data_home(tmp_path, monkeypatch):
     ("contraseña-ñ", None, None),
     ("correct horse", "correct house", "not the same"),
     ("short", None, "at least 8"),
+    # Seven characters are one too few; eight are enough.
+    ("correct", None, "at least 8"),
+    ("correct", "correct", "at least 8"),
+    ("correct!", None, None),
+    ("correct!", "correct!", None),
+    # Characters (code points), as setup counts them too: 8 UTF-16 units each, but 4 and 7 characters.
+    ("😀😀😀😀", None, "at least 8"),
+    ("abcdef😀", None, "at least 8"),
+    ("abcdefg😀", None, None),
     ("two\nlines-here", None, "one line"),
     ("nul\0inside-it", None, "one line"),
 ])
@@ -445,6 +476,12 @@ def test_keyring_usage(tmp_path, args):
     assert result.returncode == 2 and "keyring --status" in result.stderr
 
 
+def test_a_seven_character_password_on_stdin_is_refused_before_the_keyring_service_is_asked(tmp_path):
+    result = run_cli(tmp_path, "setup", "--password", stdin="correct\n", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == 2 and "at least 8" in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
 def test_a_bad_password_on_stdin_changes_nothing(tmp_path):
     result = run_cli(tmp_path, "setup", "--password", stdin="short\n", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
     assert result.returncode == 2 and "at least 8" in result.stderr
@@ -482,12 +519,13 @@ print(alias, locked)
 """
 
 
-def session(tmp_path: Path, script: str, config: Path | None = None) -> subprocess.CompletedProcess:
+def session(tmp_path: Path, script: str, config: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
     """A shell script on a fresh session bus, where D-Bus activation starts gnome-keyring-daemon."""
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700, exist_ok=True)
+    extra = env
     env = {key: value for key, value in os.environ.items() if key not in {"XDG_DATA_HOME", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"}}
-    env.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "PY": GI_PYTHON or "", "CLI": str(CLI), "LOCKED": LOCKED})
+    env.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "PY": GI_PYTHON or "", "CLI": str(CLI), "LOCKED": LOCKED, **(extra or {})})
     argv = ["dbus-run-session", *(["--config-file", str(config)] if config else []), "--", "bash", "-c", script]
     return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
 
@@ -605,11 +643,32 @@ ARCH = ROOT / "packaging" / "arch"
 ARCH_BACKENDS = {"gnome": "xdg-desktop-portal-gnome", "gtk": "xdg-desktop-portal-gtk", "gnome-keyring": "org.freedesktop.secrets"}
 
 
+def is_gnu_install(version: str) -> bool:
+    """`install --version`'s first line is GNU coreutils' own: "install (GNU coreutils) 9.4"."""
+    return re.fullmatch(r"install \(GNU coreutils\) \d[\w.+-]*", version.split("\n", 1)[0].strip()) is not None
+
+
 def gnu_install() -> bool:
     try:
-        return "GNU coreutils" in subprocess.run(["install", "--version"], capture_output=True, text=True).stdout
+        return is_gnu_install(subprocess.run(["install", "--version"], capture_output=True, text=True).stdout)
     except OSError:
         return False
+
+
+@pytest.mark.parametrize("version, gnu", [
+    ("install (GNU coreutils) 9.4\nCopyright (C) 2023 Free Software Foundation, Inc.\n", True),
+    ("install (GNU coreutils) 8.32\n", True),
+    ("install (GNU coreutils) 9.5.12-abcd\n", True),
+    # Other installs that mention GNU coreutils, or look like it, are not it.
+    ("install (uutils coreutils) 0.0.28\n", False),
+    ("usage: install [-bCcpSsUv] [-B suffix] ... (see GNU coreutils for install -D)\n", False),
+    ("BusyBox v1.36.1 multi-call binary.\nGNU coreutils compatible\n", False),
+    ("ginstall (GNU coreutils) 9.4\n", False),
+    ("install (GNU coreutils)\n", False),
+    ("", False),
+])
+def test_only_gnu_install_counts_as_gnu_install(version, gnu):
+    assert is_gnu_install(version) is gnu
 
 
 @pytest.mark.skipif(not gnu_install(), reason="the package script needs GNU install (install -D), as on Arch")
@@ -649,3 +708,486 @@ def test_the_arch_package_pins_the_package_script_it_ships(flavour):
     import hashlib
     sums = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${sha256sums[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout.split()
     assert hashlib.sha256((ARCH / flavour / "herald-os-package.sh").read_bytes()).hexdigest() in sums
+
+
+def test_without_pygobject_setup_says_so_and_does_not_blame_the_keyring_service(tmp_path):
+    # A gi that cannot be imported, ahead of any real one.
+    fake = tmp_path / "nogi" / "gi"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text('raise ImportError("no PyGObject here")\n')
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    result = run_cli(tmp_path, "setup", "--no-password", env={"PYTHONPATH": str(tmp_path / "nogi"), "XDG_RUNTIME_DIR": str(runtime),
+                                                              "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == cli.KEYRING_NO_GOBJECT == 5, result.stderr
+    assert "needs PyGObject" in result.stderr and "python-gobject" in result.stderr and "python3-gobject-base" in result.stderr
+    assert "did not answer" not in result.stderr
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+@pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
+def test_the_arch_package_depends_on_pygobject_for_herald_os_keyring(flavour):
+    listed = subprocess.run(["bash", "-c", 'source "$1"; printf "%s\\n" "${depends[@]}"', "-", str(ARCH / flavour / "PKGBUILD")], capture_output=True, text=True).stdout
+    assert "python-gobject" in listed.split()
+
+
+@pytest.mark.parametrize("errors", ["surrogateescape", "strict"])
+def test_bytes_that_are_not_text_on_stdin_are_refused_before_the_lock_or_the_bus(tmp_path, errors):
+    # surrogateescape is what Python's UTF-8 mode (the C locale) gives stdin; strict, a full UTF-8 locale.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    environment = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+    environment.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "PYTHONIOENCODING": f"utf-8:{errors}",
+                        # Were the bus reached, this would end in exit 4 instead.
+                        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    result = subprocess.run([sys.executable, str(CLI), "keyring", "setup", "--password"], input=b"abcdefgh\xff\n", capture_output=True, env=environment, timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert result.returncode == 2, stderr
+    assert cli.KEYRING_NOT_TEXT in stderr and "Traceback" not in stderr
+    assert list(runtime.iterdir()) == [], "the lock was taken"
+    assert not (tmp_path / ".local" / "share" / "keyrings").exists()
+
+
+class Undecodable(io.StringIO):
+    def read(self, *args):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
+@pytest.mark.parametrize("stdin", [io.StringIO("abcdefgh\udcff\n"), io.StringIO("\udcffabcdefgh"), Undecodable("")])
+def test_a_password_that_is_not_text_gets_one_clean_message(monkeypatch, capsys, stdin):
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("typed", [["abcdefgh\udcff", "abcdefgh\udcff"], ["abcdefgh", "abcdefgh\udcff"]])
+def test_the_terminal_gives_the_same_message_for_bytes_that_are_not_text(monkeypatch, capsys, typed):
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    answers = iter(typed)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(answers))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err
+
+    def undecodable(prompt):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(cli.getpass, "getpass", undecodable)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == 2 and cli.KEYRING_NOT_TEXT in capsys.readouterr().err
+
+
+# Stopped half-way: Ctrl+C, and a rerun finishing the keyring.
+def sealed(name: bytes) -> bytes:
+    """The start of a sealed keyring file as gnome-keyring writes it: magic, versions, cipher, hash, name."""
+    return b"GnomeKeyring\n\r\x00\n" + b"\x00\x00\x00\x00" + len(name).to_bytes(4, "big") + name + b"\x00" * 16
+
+
+@pytest.mark.parametrize("body, label", [
+    (b"[keyring]\ndisplay-name=login\nctime=1\n", "login"),
+    (b"[keyring]\ndisplay-name=Login\n", "Login"),
+    (b"[keyring]\nctime=1\n\n[1]\ndisplay-name=an item\n", None),
+    (sealed(b"login"), "login"),
+    (sealed(b"Login"), "Login"),
+    (sealed("Anmeldung".encode()), "Anmeldung"),
+    (sealed(b"login")[:22], None),
+    (b"GnomeKeyring\n\r\x00\n\x00\x00\x00\x00\x00\x00\x00\x09login", None),
+    (b"GnomeKeyring\n\r\x00\n\x00\x00\x00\x00\xff\xff\xff\xff", None),
+    (b"something else", None),
+])
+def test_a_keyring_file_s_label(tmp_path, body, label):
+    (tmp_path / "x.keyring").write_bytes(body)
+    assert cli.keyring_label(tmp_path / "x.keyring") == label
+
+
+def test_a_missing_keyring_file_has_no_label(tmp_path):
+    assert cli.keyring_label(tmp_path / "none.keyring") is None
+
+
+@pytest.mark.parametrize("files, unfinished", [
+    ({"login.keyring": b"[keyring]\ndisplay-name=login\n"}, "open"),
+    ({"default": b"login\n", "login.keyring": b"[keyring]\ndisplay-name=login\n"}, "open"),
+    ({"login.keyring": sealed(b"login")}, "password"),
+    ({"default": b"login", "login.keyring": sealed(b"login")}, "password"),
+    # Finished ones, gnome-keyring's own (named in the language of the session), and others' are not.
+    ({"default": b"login", "login.keyring": b"[keyring]\ndisplay-name=Login\n"}, None),
+    ({"login.keyring": sealed(b"Login")}, None),
+    ({"login.keyring": sealed("Anmeldung".encode())}, None),
+    ({"default": b"work", "work.keyring": b"[keyring]\ndisplay-name=login\n"}, None),
+    ({"default": b"work", "login.keyring": b"[keyring]\ndisplay-name=login\n"}, None),
+    # The default is another keyring: a login one still labelled "login" beside it must not take its place.
+    ({"default": b"work", "work.keyring": b"[keyring]\ndisplay-name=Work\n", "login.keyring": b"[keyring]\ndisplay-name=login\n"}, None),
+    ({"default": b"lo\0gin", "login.keyring": b"[keyring]\ndisplay-name=login\n"}, None),
+    ({}, None),
+])
+def test_a_keyring_stopped_half_way_is_recognised(tmp_path, files, unfinished):
+    assert cli.keyring_unfinished(keyrings(tmp_path, files)) == unfinished
+
+
+class FakeGLibError(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, lock_prompt: str = "/"):
+    """A stand-in for PyGObject and the keyring service. At `stop_at` it does what Ctrl+C does while that
+    call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting."""
+    import _thread
+    import threading
+    import types
+
+    held = threading.Event()
+    answers = {"ReadAlias": ("/",), "OpenSession": (None, "/org/freedesktop/secrets/session/s1"), "CreateWithMasterPassword": (cli.KEYRING_LOGIN,),
+               "Lock": ([cli.KEYRING_LOGIN], lock_prompt)}
+
+    class Bus:
+        def call_sync(self, name, path, interface, method, args, reply, flags, timeout):
+            calls.append(method)
+            if method == stop_at:
+                _thread.interrupt_main()
+                held.wait(5)
+            if denied and method == "UnlockWithMasterPassword":
+                raise FakeGLibError("GDBus.Error:org.gnome.keyring.Error.Denied: The password was invalid")
+            return types.SimpleNamespace(unpack=lambda: answers.get(method, ()))
+
+    glib = types.SimpleNamespace(Error=FakeGLibError, Variant=lambda kind, value: value, VariantType=lambda reply: reply)
+    gio = types.SimpleNamespace(bus_get_sync=lambda kind: Bus(), BusType=types.SimpleNamespace(SESSION=0), DBusCallFlags=types.SimpleNamespace(NONE=0))
+    repository = types.ModuleType("gi.repository")
+    repository.Gio, repository.GLib = gio, glib
+    gi = types.ModuleType("gi")
+    gi.repository = repository
+    monkeypatch.setitem(sys.modules, "gi", gi)
+    monkeypatch.setitem(sys.modules, "gi.repository", repository)
+    return held
+
+
+MAKING = ["ReadAlias", "OpenSession", "CreateWithMasterPassword", "SetAlias", "Set", "Close"]
+
+
+@pytest.mark.parametrize("stop_at, said", [
+    ("ReadAlias", "stopped. Nothing was changed."),
+    ("OpenSession", "stopped. Nothing was changed."),
+    ("CreateWithMasterPassword", "which it may have done. Run `herald-os keyring setup --no-password` again: it finishes the keyring if it was made"),
+    ("SetAlias", "stopped after the keyring was made, before it was finished as the default one. Run `herald-os keyring setup --no-password` again to finish it."),
+    # Relabelling under way: it may or may not have landed, so the advice covers both.
+    ("Set", "stopped while the keyring was being finished as the default one. Running `herald-os keyring setup --no-password` again finishes it if it was not, or says this account already has a keyring if it was."),
+    # Relabelled: finished, and a rerun would refuse it, so there is nothing to run again.
+    ("Close", "stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again."),
+])
+def test_ctrl_c_while_making_the_keyring_says_how_far_it_got(monkeypatch, capsys, stop_at, said):
+    calls: list = []
+    held = fake_keyring_service(monkeypatch, stop_at, calls)
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            cli.keyring_create("", "--no-password")
+    finally:
+        held.set()
+    err = capsys.readouterr().err
+    assert stopped.value.code == cli.KEYRING_STOPPED == 130
+    assert said in err and "Traceback" not in err
+    assert calls == MAKING[:MAKING.index(stop_at) + 1]
+
+
+def test_making_the_keyring_runs_every_call_in_order(monkeypatch):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls)
+    assert cli.keyring_create("correct horse", "--password") == cli.KEYRING_LOGIN
+    assert calls == MAKING
+
+
+@pytest.mark.parametrize("stop_at, said", [
+    *[(stage, "stopped before the keyring was finished. Run `herald-os keyring setup --password` again to finish it.")
+      for stage in ("OpenSession", "Lock", "UnlockWithMasterPassword", "SetAlias")],
+    ("Set", "stopped while the keyring was being finished as the default one. Running `herald-os keyring setup --password` again finishes it if it was not"),
+    ("Close", "stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again."),
+])
+def test_ctrl_c_while_finishing_says_how_far_it_got(monkeypatch, capsys, stop_at, said):
+    calls: list = []
+    held = fake_keyring_service(monkeypatch, stop_at, calls)
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            cli.keyring_finish("correct horse", "--password")
+    finally:
+        held.set()
+    err = capsys.readouterr().err
+    assert stopped.value.code == 130
+    assert said in err and "Traceback" not in err
+
+
+def test_finishing_with_the_wrong_password_changes_nothing(monkeypatch, capsys):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, denied=True)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish("not it at all", "--password")
+    err = capsys.readouterr().err
+    # Exit 3, which setup takes as a keyring that stays as it is (2 would read as a password too short).
+    assert stopped.value.code == cli.KEYRING_EXISTS and "not the password the keyring was made with" in err and "stays locked" in err
+    # Locked first, so the password is really checked even where the keyring was still open.
+    assert calls == ["OpenSession", "Lock", "UnlockWithMasterPassword"]
+
+
+def test_finishing_without_a_password_a_keyring_that_has_one_names_the_flag_that_finishes_it(monkeypatch, capsys):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, denied=True)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish("", "--no-password")
+    assert stopped.value.code == cli.KEYRING_EXISTS and "`herald-os keyring setup --password` finishes it" in capsys.readouterr().err
+
+
+def test_finishing_stops_when_the_service_wants_to_ask_before_locking(monkeypatch, capsys):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, lock_prompt="/org/freedesktop/secrets/prompt/p1")
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish("correct horse", "--password")
+    assert stopped.value.code == 1 and "cannot be checked here" in capsys.readouterr().err
+    assert calls == ["OpenSession", "Lock"]
+
+
+def test_ctrl_c_while_waiting_for_the_lock_changes_nothing(tmp_path, monkeypatch, capsys):
+    import fcntl
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "keyring_dir", lambda: tmp_path / "keyrings")
+
+    def interrupted(seconds):
+        raise KeyboardInterrupt
+    with open(tmp_path / "herald-os-keyring.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        monkeypatch.setattr(cli.time, "sleep", interrupted)
+        with pytest.raises(SystemExit) as stopped:
+            cli.keyring_cmd(["setup", "--no-password"])
+    assert stopped.value.code == 130 and "stopped. Nothing was changed." in capsys.readouterr().err
+
+
+# The same against a real gnome-keyring-daemon: a keyring made but not finished, as a stopped setup leaves it.
+MAKE_UNFINISHED = """
+import sys
+from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+def call(path, iface, method, args, reply):
+    return bus.call_sync("org.freedesktop.secrets", path, iface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, 10000).unpack()
+session = call("/org/freedesktop/secrets", "org.freedesktop.Secret.Service", "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
+label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", "login")}
+call("/org/freedesktop/secrets", "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface", "CreateWithMasterPassword",
+     GLib.Variant("(a{sv}(oayays))", (label, (session, b"", sys.argv[1].encode(), "text/plain"))), "(o)")
+"""
+
+
+def unfinished_keyring(tmp_path: Path, password: str = "") -> Path:
+    made = session(tmp_path, f'"$PY" -c "$MAKE" {shlex.quote(password)}', env={"MAKE": MAKE_UNFINISHED})
+    assert made.returncode == 0, made.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert not (folder / "default").exists() and cli.keyring_label(folder / "login.keyring") == "login"
+    return folder
+
+
+@real_daemon
+def test_a_rerun_finishes_a_keyring_with_no_password_stopped_half_way(tmp_path):
+    folder = unfinished_keyring(tmp_path)
+    assert cli.keyring_unfinished(folder) == "open"
+    result = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password && printf s3cret | secret-tool store --label t service herald key t && secret-tool lookup service herald key t')
+    assert result.returncode == 0, result.stderr
+    assert "Finished the keyring" in result.stdout and result.stdout.endswith("s3cret")
+    assert (folder / "default").read_text().strip() == "login" and cli.keyring_label(folder / "login.keyring") == "Login"
+    assert cli.keyring_state(folder) == "open"
+    # Finished, it is an existing keyring like any other.
+    again = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password')
+    assert again.returncode == cli.KEYRING_EXISTS, again.stderr
+
+
+@real_daemon
+def test_a_rerun_finishes_a_keyring_with_a_password_only_with_that_password(tmp_path):
+    folder = unfinished_keyring(tmp_path, "correct horse")
+    assert cli.keyring_unfinished(folder) == "password"
+    before = (folder / "login.keyring").read_bytes()
+    wrong_kind = session(tmp_path, '"$PY" "$CLI" keyring setup --no-password')
+    assert wrong_kind.returncode == cli.KEYRING_EXISTS and "`herald-os keyring setup --password` finishes it" in wrong_kind.stderr
+    wrong = session(tmp_path, 'printf "not the one\\n" | "$PY" "$CLI" keyring setup --password')
+    assert wrong.returncode == cli.KEYRING_EXISTS and "not the password the keyring was made with" in wrong.stderr
+    assert (folder / "login.keyring").read_bytes() == before and not (folder / "default").exists()
+    right = session(tmp_path, 'printf "correct horse\\n" | "$PY" "$CLI" keyring setup --password')
+    assert right.returncode == 0 and "Finished the keyring" in right.stdout, right.stderr
+    assert (folder / "default").read_text().strip() == "login" and cli.keyring_label(folder / "login.keyring") == "Login"
+    assert cli.keyring_state(folder) == "password"
+
+
+@real_daemon
+def test_a_rerun_in_the_same_session_finishes_it_too(tmp_path):
+    # The daemon that made it is still running, as after Ctrl+C in a terminal.
+    result = session(tmp_path, f'"$PY" -c "$MAKE" "" && "$PY" "$CLI" keyring setup --no-password', env={"MAKE": MAKE_UNFINISHED})
+    assert result.returncode == 0 and "Finished the keyring" in result.stdout, result.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert (folder / "default").read_text().strip() == "login" and cli.keyring_label(folder / "login.keyring") == "Login"
+
+
+@real_daemon
+def test_ctrl_c_while_the_keyring_service_does_not_answer(tmp_path):
+    # The daemon is frozen, so ReadAlias waits; Ctrl+C must stop it at once, not after the call's 20 s.
+    result = session(tmp_path, 'set -m; secret-tool search --all nothing here >/dev/null 2>&1; '
+                               'pid=$(dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus '
+                               'org.freedesktop.DBus.GetConnectionUnixProcessID string:org.freedesktop.secrets | awk "/uint32/ {print \\$2}"); '
+                               'kill -STOP "$pid"; start=$SECONDS; "$PY" "$CLI" keyring setup --no-password & cli=$!; sleep 1; kill -INT "$cli"; '
+                               'wait "$cli"; echo "rc=$? took=$((SECONDS - start))"; kill -CONT "$pid"')
+    assert "rc=130" in result.stdout, result.stdout + result.stderr
+    assert int(re.search(r"took=(\d+)", result.stdout).group(1)) < 10
+    assert "stopped. Nothing was changed." in result.stderr and "Traceback" not in result.stderr
+    # The daemon makes the folder when it starts; nothing is written into it.
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert not list(folder.glob("*.keyring")) and not (folder / "default").exists()
+
+
+# Unusual layouts that are encrypted all the same, and must still count as true.
+def luks(path: str, inner: dict, uuid: str = "LX", kind: str = "part") -> dict:
+    return disk(path, "crypto_LUKS", uuid=uuid, children=[inner], kind=kind)
+
+
+EXOTIC_TRUE = {
+    "LUKS on RAID over two plain partitions": (
+        [disk("/dev/sda", None, kind="disk", children=[disk("/dev/sda1", "linux_raid_member", children=[
+            luks("/dev/md0", disk("/dev/mapper/luks-md", "ext4", ["/"], uuid="R1", kind="crypt"), kind="raid1")])]),
+         disk("/dev/sdb", None, kind="disk", children=[disk("/dev/sdb1", "linux_raid_member", children=[
+             luks("/dev/md0", disk("/dev/mapper/luks-md", "ext4", ["/"], uuid="R1", kind="crypt"), kind="raid1")])])],
+        [mount("/", "/dev/mapper/luks-md", "R1", "ext4")], PLACE),
+    "LUKS on an LVM volume": (
+        nvme(ESP, disk("/dev/nvme0n1p2", "LVM2_member", children=[luks("/dev/mapper/vg-home", disk("/dev/mapper/luks-home", "xfs", ["/"], uuid="X1", kind="crypt"), kind="lvm")])),
+        [mount("/", "/dev/mapper/luks-home", "X1", "xfs")], PLACE),
+    "LUKS inside LUKS": (
+        nvme(ESP, luks("/dev/nvme0n1p2", disk("/dev/mapper/outer", "crypto_LUKS", uuid="L2", kind="crypt", children=[
+            disk("/dev/mapper/inner", "ext4", ["/"], uuid="I1", kind="crypt")]))),
+        [mount("/", "/dev/mapper/inner", "I1", "ext4")], PLACE),
+    "LUKS on a whole disk, no partitions": (
+        [disk("/dev/sda", "crypto_LUKS", kind="disk", uuid="L9", children=[disk("/dev/mapper/luks-sda", "ext4", ["/"], uuid="E1", kind="crypt")])],
+        [mount("/", "/dev/mapper/luks-sda", "E1", "ext4")], PLACE),
+    "LUKS on a loop device": (
+        nvme(ESP, ROOT_LUKS) + [disk("/dev/loop0", "crypto_LUKS", kind="loop", uuid="L5", children=[disk("/dev/mapper/vault", "ext4", [PLACE], uuid="V1", kind="crypt")])],
+        ROOT_MOUNTS + [mount(PLACE, "/dev/mapper/vault", "V1", "ext4")], PLACE),
+    "the keyring folder is itself a mount on LUKS, under a plain home": (
+        nvme(ESP, ROOT_PLAIN, luks("/dev/nvme0n1p3", disk("/dev/mapper/k", "ext4", [PLACE], uuid="K1", kind="crypt"))),
+        [mount("/", "/dev/nvme0n1p2", "B1", "btrfs"), mount(PLACE, "/dev/mapper/k", "K1", "ext4")], PLACE),
+    "several mounts below the folder, each on LUKS": (
+        nvme(ESP, ROOT_LUKS, HOME_LUKS, luks("/dev/nvme0n1p4", disk("/dev/mapper/luks-4", "ext4", uuid="F4", kind="crypt"), uuid="L4")),
+        ROOT_MOUNTS + [mount(PLACE + "/a", "/dev/mapper/luks-L2", "H1"), mount(PLACE + "/a/b", "/dev/mapper/luks-4", "F4", "ext4")], PLACE),
+    "btrfs over three LUKS disks, mounted as a subvolume": (
+        nvme(ESP, ROOT_LUKS) + [disk(f"/dev/sd{letter}", None, kind="disk", children=[luks(f"/dev/sd{letter}1", disk(f"/dev/mapper/luks-{letter}", "btrfs", uuid="B1", kind="crypt"), uuid=f"L{letter}")])
+                                for letter in "ab"],
+        [mount("/", "/dev/mapper/luks-L1[/root]", "B1", "btrfs"), mount("/home", "/dev/mapper/luks-a[/home]", "B1", "btrfs")], PLACE),
+}
+
+
+@pytest.mark.parametrize("name", EXOTIC_TRUE)
+def test_unusual_encrypted_layouts_still_count_as_encrypted(name):
+    tree, mounts, place = EXOTIC_TRUE[name]
+    assert cli.keyring_mounts_encrypted(place, mounts, tree) is True
+
+
+def test_a_source_named_by_a_link_counts_as_its_device():
+    # findmnt may name a device by a /dev/disk link, which resolves to the mapper device lsblk names.
+    tree, _, place, _ = MACHINES["root encrypted, no separate home"]
+    links = {"/dev/disk/by-uuid/B1": "/dev/dm-0", "/dev/mapper/luks-L1": "/dev/dm-0"}
+    assert cli.keyring_mounts_encrypted(place, [mount("/", "/dev/disk/by-uuid/B1", "B1", "btrfs")], tree, lambda device: links.get(device, device)) is True
+
+
+UNLOCK = """
+import sys
+from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+def call(path, iface, method, args, reply):
+    return bus.call_sync("org.freedesktop.secrets", path, iface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, 10000).unpack()
+session = call("/org/freedesktop/secrets", "org.freedesktop.Secret.Service", "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
+for password in sys.argv[1:]:
+    try:
+        call("/org/freedesktop/secrets", "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface", "UnlockWithMasterPassword",
+             GLib.Variant("(o(oayays))", ("/org/freedesktop/secrets/collection/login", (session, b"", password.encode(), "text/plain"))), "()")
+        print("opens")
+    except GLib.Error:
+        print("refused")
+"""
+
+
+@real_daemon
+def test_a_wrong_password_is_refused_while_the_half_made_keyring_is_still_open(tmp_path):
+    # Right after Ctrl+C, in the session that made it, the keyring is unlocked, and gnome-keyring opens an
+    # unlocked keyring with any password: the rerun must still check it.
+    result = session(tmp_path, '"$PY" -c "$MAKE" "First pw 188!" && '
+                               '{ printf "Second pw 188?\\n" | "$PY" "$CLI" keyring setup --password; echo "wrong=$?"; } && '
+                               '{ printf "First pw 188!\\n" | "$PY" "$CLI" keyring setup --password; echo "right=$?"; }',
+                     env={"MAKE": MAKE_UNFINISHED})
+    assert "wrong=3" in result.stdout and "right=0" in result.stdout, result.stdout + result.stderr
+    assert "not the password the keyring was made with" in result.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert (folder / "default").read_text().strip() == "login" and cli.keyring_label(folder / "login.keyring") == "Login"
+    # At the next login it opens with the password it was made with, and not the other one.
+    later = session(tmp_path, '"$PY" -c "$UNLOCK" "Second pw 188?" "First pw 188!"', env={"UNLOCK": UNLOCK})
+    assert later.stdout.split() == ["refused", "opens"], later.stderr
+
+
+@real_daemon
+def test_a_wrong_password_leaves_the_half_made_keyring_as_it_was(tmp_path):
+    result = session(tmp_path, '"$PY" -c "$MAKE" "First pw 188!" && printf "Second pw 188?\\n" | "$PY" "$CLI" keyring setup --password; echo "rc=$?"',
+                     env={"MAKE": MAKE_UNFINISHED})
+    assert "rc=3" in result.stdout, result.stdout + result.stderr
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    assert not (folder / "default").exists() and cli.keyring_label(folder / "login.keyring") == "login"
+    assert cli.keyring_unfinished(folder) == "password"
+
+
+def test_under_the_lock_a_keyring_no_longer_half_made_is_not_finished(tmp_path, monkeypatch, capsys):
+    # While this run waited for the lock, the person made another keyring, "work", the default one.
+    # Finishing "login" now would take the default away from it.
+    folder = keyrings(tmp_path, {"default": b"work", "work.keyring": b"[keyring]\ndisplay-name=Work\n"})
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "keyring_dir", lambda: folder)
+    looks = iter(["open", None])
+    monkeypatch.setattr(cli, "keyring_unfinished", lambda directory: next(looks))
+    finished = []
+    monkeypatch.setattr(cli, "keyring_finish", lambda password, flag: finished.append(flag))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_cmd(["setup", "--no-password"])
+    assert stopped.value.code == cli.KEYRING_EXISTS and "already has a keyring" in capsys.readouterr().err
+    assert finished == []
+    assert (folder / "default").read_bytes() == b"work"
+
+
+def test_under_the_lock_a_keyring_still_half_made_is_finished(tmp_path, monkeypatch, capsys):
+    folder = keyrings(tmp_path, {"login.keyring": b"[keyring]\ndisplay-name=login\n"})
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "keyring_dir", lambda: folder)
+    finished = []
+    monkeypatch.setattr(cli, "keyring_finish", lambda password, flag: finished.append((password, flag)))
+    assert cli.keyring_cmd(["setup", "--no-password"]) == 0
+    assert finished == [("", "--no-password")] and "Finished the keyring" in capsys.readouterr().out
+
+
+class Interrupted(io.StringIO):
+    def read(self, *args):
+        raise KeyboardInterrupt
+
+
+def test_ctrl_c_while_the_password_is_read_from_a_pipe_changes_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "stdin", Interrupted(""))
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_password_input()
+    assert stopped.value.code == cli.KEYRING_STOPPED and "stopped. Nothing was changed." in capsys.readouterr().err
+
+
+def test_ctrl_c_on_a_pipe_that_sends_nothing_exits_130_without_a_traceback(tmp_path):
+    # `sleep 30 | herald-os keyring setup --password`, stopped with Ctrl+C before anything arrives.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    environment = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+    environment.update({"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(runtime), "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    command = subprocess.Popen([sys.executable, str(CLI), "keyring", "setup", "--password"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=environment)
+    try:
+        time.sleep(1)
+        assert command.poll() is None, "it should be waiting for the password"
+        command.send_signal(signal.SIGINT)
+        _, err = command.communicate(timeout=10)
+    finally:
+        command.kill()
+    err = err.decode("utf-8", "replace")
+    # 130 as an exit code of its own, not death by SIGINT (-2), and no traceback.
+    assert command.returncode == 130, err
+    assert "stopped. Nothing was changed." in err and "Traceback" not in err
+    assert list(runtime.iterdir()) == [] and not (tmp_path / ".local" / "share" / "keyrings").exists()

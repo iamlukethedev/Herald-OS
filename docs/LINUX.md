@@ -481,16 +481,32 @@ Setup never replaces a keyring the account already has. `herald-os keyring --sta
 from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
 twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
-rather than gnome-keyring (exit 3); 4 means no keyring service answered. Making it holds
+rather than gnome-keyring (exit 3). Exit 4 means no keyring service answered on the session bus
+(gnome-keyring is not installed, or cannot start), which setup reports as such. Exit 5 means
+PyGObject, which the command talks to the keyring with, is missing (`python3-gobject-base` on Fedora,
+`python-gobject` on Arch, where the package depends on it); it is kept apart from 4 so that setup does
+not send the person looking for gnome-keyring, and reports it as a plain failure instead. Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
-after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made. The password
+after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
+Ctrl+C exits 130 at once, even while the keyring service is not answering, and says how far it got:
+nothing changed, or the keyring may have been made, or it was made but not yet finished as the default
+one, or it was being finished (a rerun then finishes it or says the account has a keyring), or it was
+already finished and there is nothing to run again. A keyring is made labelled `login` and relabelled `Login` once it is the default one, so one still
+labelled `login` was stopped half-way: running the same `herald-os keyring setup` again finishes it
+(it opens it, with no password or with the one it was made with, which `--password` asks for again; makes
+it the default one, which writes `default`; and relabels it) instead of refusing it. The other flag is
+refused with exit 3 and named. The password `--password` asks for is checked, even in the session that
+made the keyring, where gnome-keyring would open it with any password: the keyring is locked first, then
+opened with that password. A wrong one is refused with exit 3 and changes nothing else; the keyring
+stays locked, as after a restart. The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.
 
 What protects the keyring's contents is narrower than it may look. The bridge's file tools and the
-shell's own file reading refuse the keyring folder, in either place
+shell's own file reading refuse the keyring folder, in either place and also by its real path or
+through a link, so a home or `$XDG_DATA_HOME` given as a link path does not open a way around
 ([SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#protected-paths)), but a shell command the person approves for
 Hermes runs as them and can read it. While they are signed in, an unlocked keyring (one with no
 password always is) gives any secret to any process of theirs that asks over D-Bus. The disk's

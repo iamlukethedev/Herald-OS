@@ -326,6 +326,10 @@ Operations that would read or modify these locations are refused before any appr
 - system folders: `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/etc`, `/private/etc`,
   `/var/db`, `/private/var/db`, and on Linux `/boot`, `/lib`, `/lib64`, `/var/lib`, `/proc`, `/sys`.
 
+Each location counts as written and by its real path, and a path counts as given and resolved,
+so a home folder or `$XDG_DATA_HOME` given as a link path, a link to a protected file, and a link
+inside a protected folder pointing outside it are all refused.
+
 The list is extended (never shortened) in the policy file. The built-in list is
 `BUILTIN_PROTECTED` in `bridge/permissions.py`.
 

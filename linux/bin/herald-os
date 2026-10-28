@@ -79,6 +79,7 @@ import subprocess
 import sys
 import tempfile
 import select
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -3664,8 +3665,13 @@ def disk_password(args: list[str]) -> int:
 # setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
 # keyring password, which the first app that needs the keyring asks for after each start.
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
-KEYRING_EXISTS, KEYRING_NO_SERVICE = 3, 4
+KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_STOPPED = 3, 4, 5, 130
+# The label a keyring is made with, until it is the default one and labelled "Login": one that still
+# has it was stopped half-way, and `keyring setup` finishes it.
+KEYRING_MAKING_LABEL = "login"
+KEYRING_LOGIN = "/org/freedesktop/secrets/collection/login"
 KEYRING_MIN = 8
+KEYRING_NOT_TEXT = "the keyring password has bytes that are not text (UTF-8). Nothing was changed."
 # gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
 KEYRING_SEALED = b"GnomeKeyring\n\r\x00\n"
 KEYRING_PLAIN = b"[keyring]"
@@ -3819,7 +3825,8 @@ def keyring_state(directory: Path) -> str:
             return "other" if any(directory.glob("*.keyring")) else "none"
         except OSError:
             return "other"
-    except OSError:
+    # ValueError: a name with a NUL byte, which no file can have.
+    except (OSError, ValueError):
         return "other"
     if head == KEYRING_SEALED:
         return "password"
@@ -3838,63 +3845,221 @@ def keyring_password_problem(password: str, again: str | None = None) -> str | N
 
 
 def keyring_password_input() -> str:
-    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way)."""
-    if sys.stdin.isatty():
-        try:
-            password = getpass.getpass("Keyring password: ")
-            again = getpass.getpass("Keyring password again: ")
-        except (KeyboardInterrupt, EOFError):
-            print(file=sys.stderr)
-            die("stopped. Nothing was changed.", 130)
-        except UnicodeDecodeError:
-            die("the terminal sent something that is not text. Nothing was changed.", 2)
-    else:
-        password = sys.stdin.read()
-        password = password[:-1] if password.endswith("\n") else password
-        again = None
+    """In a terminal, the keyring password twice; otherwise one line on stdin (setup's way). Bytes that
+    are not text are refused the same way on both, before anything else happens."""
+    try:
+        if sys.stdin.isatty():
+            try:
+                password = getpass.getpass("Keyring password: ")
+                again = getpass.getpass("Keyring password again: ")
+            except (KeyboardInterrupt, EOFError):
+                print(file=sys.stderr)
+                die("stopped. Nothing was changed.", 130)
+        else:
+            # Ctrl+C while a pipe has sent nothing yet, as with `slow | herald-os keyring setup --password`.
+            try:
+                password = sys.stdin.read()
+            except KeyboardInterrupt:
+                print(file=sys.stderr)
+                die("stopped. Nothing was changed.", KEYRING_STOPPED)
+            password = password[:-1] if password.endswith("\n") else password
+            again = None
+        # A stream decoded with surrogateescape (Python's UTF-8 mode, as in the C locale) passes such
+        # bytes on as surrogates, which would only fail when the password is sent to the keyring.
+        for typed in (password, again or ""):
+            typed.encode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        die(KEYRING_NOT_TEXT, 2)
     problem = keyring_password_problem(password, again)
     if problem:
         die(problem, 2)
     return password
 
 
-def keyring_create(password: str) -> str:
-    """The login keyring, made the default one; with no password of its own when password is empty.
-    Returns its D-Bus path."""
+def keyring_dbus():
+    """The session bus and a caller for the keyring service's methods; exit 5 without PyGObject."""
     try:
         from gi.repository import Gio, GLib
     except ImportError:
-        die("herald-os keyring needs PyGObject (python3-gobject-base). Nothing was changed.", KEYRING_NO_SERVICE)
+        # Not the keyring service's fault: exit 4 would send the person looking for gnome-keyring.
+        die("herald-os keyring needs PyGObject to talk to the keyring (python3-gobject-base on Fedora, "
+            "python-gobject on Arch). Nothing was changed.", KEYRING_NO_GOBJECT)
 
-    def call(bus, path: str, interface: str, method: str, args, reply: str):
-        return bus.call_sync(SECRETS, path, interface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, KEYRING_TIMEOUT_MS).unpack()
+    def call(path: str, interface: str, method: str, args, reply: str):
+        # Python sees Ctrl+C only between bytecodes, so a call blocked in C would hold it until the call
+        # timed out, and then turn it into "RuntimeError: Converting the GError failed". The call runs in
+        # a thread of its own instead, and this one waits in steps Ctrl+C can interrupt.
+        answer: dict = {}
+
+        def work() -> None:
+            try:
+                answer["value"] = bus.call_sync(SECRETS, path, interface, method, args, GLib.VariantType(reply), Gio.DBusCallFlags.NONE, KEYRING_TIMEOUT_MS).unpack()
+            except Exception as error:  # noqa: BLE001 - handed to the caller as it is.
+                answer["error"] = error
+
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(0.1)
+        if "error" in answer:
+            raise answer["error"]
+        return answer["value"]
 
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION)
-        default = call(bus, SECRETS_PATH, SECRET_SERVICE, "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
-        # A plain session: the password goes over the session bus to a daemon of the same account.
-        session = call(bus, SECRETS_PATH, SECRET_SERVICE, "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
     except GLib.Error as error:
         die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
-    # The files are not the whole story: another Secret Service (KeePassXC, KWallet) keeps its own, and
-    # gnome-keyring keeps a keyring whose file was deleted while it runs.
-    if default != "/":
-        die(f"the keyring service already has a default keyring ({default}). Nothing was changed.", KEYRING_EXISTS)
+    return call, GLib
+
+
+def keyring_session(call, GLib):
+    """A plain session: the password goes over the session bus to a daemon of the same account."""
+    return call(SECRETS_PATH, SECRET_SERVICE, "OpenSession", GLib.Variant("(sv)", ("plain", GLib.Variant("s", ""))), "(vo)")[1]
+
+
+def keyring_make_default(call, GLib, collection: str, session: str, progress: dict) -> None:
+    """The last steps of making a keyring: the default one, labelled "Login". `progress["stage"]` says how
+    far they got: "labelling" while the label is being set, "finished" once it is (then only the session
+    is left to close)."""
+    call(SECRETS_PATH, SECRET_SERVICE, "SetAlias", GLib.Variant("(so)", ("default", collection)), "()")
+    progress["stage"] = "labelling"
+    call(collection, "org.freedesktop.DBus.Properties", "Set", GLib.Variant("(ssv)", ("org.freedesktop.Secret.Collection", "Label", GLib.Variant("s", "Login"))), "()")
+    progress["stage"] = "finished"
+    call(session, "org.freedesktop.Secret.Session", "Close", None, "()")
+
+
+def keyring_stopped_finishing(progress: dict, flag: str) -> None:
+    """What Ctrl+C says once the keyring is being, or has been, finished as the default one. A keyring
+    labelled "Login" is finished, and a rerun refuses it (exit 3), so "run it again to finish" would be
+    wrong advice there."""
+    if progress["stage"] == "finished":
+        die("stopped, but the keyring was already finished: it is the default one and ready to use. There is nothing to run again.", KEYRING_STOPPED)
+    if progress["stage"] == "labelling":
+        die(f"stopped while the keyring was being finished as the default one. Running `herald-os keyring setup {flag}` again "
+            "finishes it if it was not, or says this account already has a keyring if it was.", KEYRING_STOPPED)
+
+
+def keyring_create(password: str, flag: str) -> str:
+    """The login keyring, made the default one; with no password of its own when password is empty.
+    Returns its D-Bus path. Ctrl+C says how far it got, and what to run to finish (exit 130)."""
+    call, GLib = keyring_dbus()
+    again = f"Run `herald-os keyring setup {flag}` again"
+    progress = {"stage": "before"}
     try:
-        # gnome-keyring names a keyring after its label: "login" gives the usual login keyring, which
-        # some apps (gh, through go-keyring) look for by name before the default alias.
-        label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", "login")}
-        secret = (session, b"", password.encode("utf-8"), "text/plain")
-        collection = call(bus, SECRETS_PATH, KEYRING_INTERNAL, "CreateWithMasterPassword", GLib.Variant("(a{sv}(oayays))", (label, secret)), "(o)")[0]
-    except GLib.Error as error:
-        die(f"the keyring service could not make the keyring ({error.message}). Herald OS makes it with gnome-keyring. Nothing was changed.", 1)
-    try:
-        call(bus, SECRETS_PATH, SECRET_SERVICE, "SetAlias", GLib.Variant("(so)", ("default", collection)), "()")
-        call(bus, collection, "org.freedesktop.DBus.Properties", "Set", GLib.Variant("(ssv)", ("org.freedesktop.Secret.Collection", "Label", GLib.Variant("s", "Login"))), "()")
-        call(bus, session, "org.freedesktop.Secret.Session", "Close", None, "()")
-    except GLib.Error as error:
-        die(f"made the keyring {collection} but could not make it the default one ({error.message}).", 1)
+        try:
+            default = call(SECRETS_PATH, SECRET_SERVICE, "ReadAlias", GLib.Variant("(s)", ("default",)), "(o)")[0]
+            session = keyring_session(call, GLib)
+        except GLib.Error as error:
+            die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
+        # The files are not the whole story: another Secret Service (KeePassXC, KWallet) keeps its own, and
+        # gnome-keyring keeps a keyring whose file was deleted while it runs.
+        if default != "/":
+            die(f"the keyring service already has a default keyring ({default}). Nothing was changed.", KEYRING_EXISTS)
+        try:
+            # gnome-keyring names a keyring after its label: "login" gives the usual login keyring, which
+            # some apps (gh, through go-keyring) look for by name before the default alias. It keeps that
+            # label until it is the default one (keyring_make_default), which marks one stopped half-way.
+            label = {"org.freedesktop.Secret.Collection.Label": GLib.Variant("s", KEYRING_MAKING_LABEL)}
+            secret = (session, b"", password.encode("utf-8"), "text/plain")
+            progress["stage"] = "asked"
+            collection = call(SECRETS_PATH, KEYRING_INTERNAL, "CreateWithMasterPassword", GLib.Variant("(a{sv}(oayays))", (label, secret)), "(o)")[0]
+            progress["stage"] = "made"
+        except GLib.Error as error:
+            die(f"the keyring service could not make the keyring ({error.message}). Herald OS makes it with gnome-keyring. Nothing was changed.", 1)
+        try:
+            keyring_make_default(call, GLib, collection, session, progress)
+        except GLib.Error as error:
+            die(f"made the keyring {collection} but could not make it the default one ({error.message}). {again} to finish it.", 1)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        keyring_stopped_finishing(progress, flag)
+        if progress["stage"] == "made":
+            die(f"stopped after the keyring was made, before it was finished as the default one. {again} to finish it.", KEYRING_STOPPED)
+        if progress["stage"] == "asked":
+            die(f"stopped while the keyring service was making the keyring, which it may have done. {again}: it finishes the keyring if it was made, and makes it if not.", KEYRING_STOPPED)
+        die("stopped. Nothing was changed.", KEYRING_STOPPED)
     return collection
+
+
+def keyring_label(path: Path) -> str | None:
+    """A keyring file's label: the display-name of a plain one, or the name in a sealed one's header
+    (pure; tested). None when it cannot be read."""
+    try:
+        data = path.read_bytes()
+    except (OSError, ValueError):
+        return None
+    if data.startswith(KEYRING_SEALED):
+        # After the magic: major and minor version, cipher and hash, then the name as a big-endian length
+        # and its bytes.
+        start = len(KEYRING_SEALED) + 4
+        if len(data) < start + 4:
+            return None
+        length = int.from_bytes(data[start:start + 4], "big")
+        name = data[start + 4:start + 4 + length]
+        if length == 0xFFFFFFFF or len(name) != length:
+            return None
+        try:
+            return name.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if data.startswith(KEYRING_PLAIN):
+        for line in data.decode("utf-8", "replace").splitlines()[1:]:
+            if line.startswith("["):
+                break
+            if line.startswith("display-name="):
+                return line.split("=", 1)[1]
+    return None
+
+
+def keyring_unfinished(directory: Path) -> str | None:
+    """"open" or "password" when the default keyring is one `keyring setup` made and was stopped before
+    finishing: named login, still labelled "login" rather than "Login". Anything else is None."""
+    try:
+        name = (directory / "default").read_text(encoding="utf-8").strip() or "login"
+    except FileNotFoundError:
+        name = "login"
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if name != "login" or keyring_label(directory / "login.keyring") != KEYRING_MAKING_LABEL:
+        return None
+    state = keyring_state(directory)
+    return state if state in ("open", "password") else None
+
+
+def keyring_finish(password: str, flag: str) -> None:
+    """Finish a keyring an earlier setup made but was stopped on: open it with its password (none, or
+    the one it was made with), make it the default one and label it "Login". Nothing else changes."""
+    call, GLib = keyring_dbus()
+    again = f"Run `herald-os keyring setup {flag}` again"
+    progress = {"stage": "before"}
+    try:
+        try:
+            session = keyring_session(call, GLib)
+        except GLib.Error as error:
+            die(f"the keyring service did not answer ({error.message}). Is gnome-keyring installed? Nothing was changed.", KEYRING_NO_SERVICE)
+        # gnome-keyring opens a keyring that is already unlocked whatever password it is given, as one
+        # stopped half-way still is in the session that made it. Locked first, it opens only with its own.
+        try:
+            prompt = call(SECRETS_PATH, SECRET_SERVICE, "Lock", GLib.Variant("(ao)", ([KEYRING_LOGIN],)), "(aoo)")[1]
+        except GLib.Error as error:
+            die(f"the keyring service could not lock the keyring to check its password ({error.message}). Nothing was changed.", 1)
+        if prompt != "/":
+            die("the keyring service wants to ask before it locks the keyring, so its password cannot be checked here. Nothing was changed.", 1)
+        try:
+            call(SECRETS_PATH, KEYRING_INTERNAL, "UnlockWithMasterPassword", GLib.Variant("(o(oayays))", (KEYRING_LOGIN, (session, b"", password.encode("utf-8"), "text/plain"))), "()")
+        except GLib.Error as error:
+            if "Denied" in error.message:
+                said = "that is not the password the keyring was made with" if password else "the keyring has a password of its own, so `herald-os keyring setup --password` finishes it"
+                die(f"{said}. It stays locked, as after a restart, and nothing else was changed.", KEYRING_EXISTS)
+            die(f"the keyring service could not open the keyring to finish it ({error.message}). Nothing was changed.", 1)
+        try:
+            keyring_make_default(call, GLib, KEYRING_LOGIN, session, progress)
+        except GLib.Error as error:
+            die(f"could not finish the keyring ({error.message}). {again} to try again.", 1)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        keyring_stopped_finishing(progress, flag)
+        die(f"stopped before the keyring was finished. {again} to finish it.", KEYRING_STOPPED)
 
 
 def keyring_unencrypted_note(directory: Path) -> str | None:
@@ -3945,12 +4110,28 @@ def keyring_cmd(args: list[str]) -> int:
         return 0
     if args not in (["setup", "--no-password"], ["setup", "--password"]):
         die(KEYRING_USAGE, 2)
+    flag, kind = args[1], ("password" if args[1] == "--password" else "open")
+    # A keyring an earlier setup made but was stopped on is finished by the same command, not refused.
+    unfinished = keyring_unfinished(directory)
+    if unfinished and unfinished != kind:
+        other = "--password" if unfinished == "password" else "--no-password"
+        die(f"an earlier `herald-os keyring setup` made a keyring ({KEYRING_STATES[unfinished]}) and was stopped before it "
+            f"finished; `herald-os keyring setup {other}` finishes it. Nothing was changed.", KEYRING_EXISTS)
     # Checked before the password is asked, and again under the lock.
-    keyring_refuse_existing(directory)
-    password = keyring_password_input() if args[1] == "--password" else ""
-    with keyring_lock():
+    if not unfinished:
         keyring_refuse_existing(directory)
-        keyring_create(password)
+    password = keyring_password_input() if flag == "--password" else ""
+    try:
+        with keyring_lock():
+            if unfinished and keyring_unfinished(directory) == kind:
+                keyring_finish(password, flag)
+                print("Finished the keyring an earlier `herald-os keyring setup` was stopped on: it is the default one now.")
+                return 0
+            keyring_refuse_existing(directory)
+            keyring_create(password, flag)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        die("stopped. Nothing was changed.", KEYRING_STOPPED)
     if password:
         print("The keyring is ready. After each start, the first app that needs it asks for its password.")
         return 0

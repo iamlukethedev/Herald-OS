@@ -9,7 +9,7 @@ pkgdesc='An AI-native desktop built around Hermes Agent (development build from 
 arch=('x86_64' 'aarch64')
 url='https://github.com/iamlukethedev/Herald-OS'
 license=('MIT')
-depends=('gtk3' 'nss' 'alsa-lib' 'libsecret' 'libnotify' 'python' 'curl' 'wl-clipboard' 'wtype' 'grim' 'slurp')
+depends=('gtk3' 'nss' 'alsa-lib' 'libsecret' 'libnotify' 'python' 'python-gobject' 'curl' 'wl-clipboard' 'wtype' 'grim' 'slurp')
 makedepends=('git' 'nodejs' 'npm' 'python' 'base-devel')
 optdepends=(
   'niri: the full Herald OS session (menu bar, dock, tiling)'
