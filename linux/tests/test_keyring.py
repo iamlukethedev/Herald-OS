@@ -831,7 +831,8 @@ class FakeGLibError(Exception):
         self.message = message
 
 
-def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, fail_at: str | None = None, locked: bool = True):
+def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: bool = False, fail_at: str | None = None, locked: bool = True,
+                         failure: str = "GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong"):
     """A stand-in for PyGObject and the keyring service. At `stop_at` it does what Ctrl+C does while that
     call is under way: KeyboardInterrupt in the main thread, with the call itself still waiting. At
     `fail_at` the call fails with an error that is not a refused password."""
@@ -850,7 +851,7 @@ def fake_keyring_service(monkeypatch, stop_at: str | None, calls: list, denied: 
                 _thread.interrupt_main()
                 held.wait(5)
             if method == fail_at:
-                raise FakeGLibError("GDBus.Error:org.freedesktop.DBus.Error.Failed: Something went wrong")
+                raise FakeGLibError(failure)
             if denied and method == "ChangeWithMasterPassword":
                 raise FakeGLibError("GDBus.Error:org.gnome.keyring.Error.Denied: The password was invalid")
             return types.SimpleNamespace(unpack=lambda: answers.get(method, ()))
@@ -1236,3 +1237,36 @@ def test_the_wrong_password_has_an_exit_code_of_its_own():
     codes = {"exists": cli.KEYRING_EXISTS, "no service": cli.KEYRING_NO_SERVICE, "no PyGObject": cli.KEYRING_NO_GOBJECT,
              "stopped": cli.KEYRING_STOPPED, "usage or a refused password": 2, "other failures": 1}
     assert cli.KEYRING_WRONG_PASSWORD == 6 and cli.KEYRING_WRONG_PASSWORD not in codes.values()
+
+
+@pytest.mark.parametrize("message, name", [
+    ("GDBus.Error:org.gnome.keyring.Error.Denied: The password was invalid", "org.gnome.keyring.Error.Denied"),
+    ("GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Rejected send message", "org.freedesktop.DBus.Error.AccessDenied"),
+    ("GDBus.Error:org.freedesktop.Secret.Error.IsLocked: Cannot set property on a locked object", "org.freedesktop.Secret.Error.IsLocked"),
+    ("Timeout was reached", None),
+    ("Denied", None),
+    ("", None),
+])
+def test_the_d_bus_error_name_is_read_from_gdbus_s_message(message, name):
+    assert cli.dbus_error_name(FakeGLibError(message)) == name
+
+
+@pytest.mark.parametrize("password", ["correct horse", ""])
+@pytest.mark.parametrize("failure", [
+    # A policy refusal from the bus, not a refused keyring password.
+    "GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Rejected send message, 1 matched rules; type=method_call",
+    # "Denied" in the text, or in another name, is not gnome-keyring's refusal either.
+    "GDBus.Error:org.freedesktop.DBus.Error.Failed: Denied by the administrator",
+    "GDBus.Error:org.example.Error.Denied: Something else",
+    "Timeout was reached (Denied)",
+])
+def test_only_gnome_keyring_s_own_refusal_counts_as_a_wrong_password(monkeypatch, capsys, password, failure):
+    calls: list = []
+    fake_keyring_service(monkeypatch, None, calls, fail_at="ChangeWithMasterPassword", failure=failure)
+    with pytest.raises(SystemExit) as stopped:
+        cli.keyring_finish(password, "--password" if password else "--no-password")
+    err = capsys.readouterr().err
+    # A plain failure that names the real error: not exit 6 (setup would ask for the password again) or 3.
+    assert stopped.value.code == 1, err
+    assert f"could not check the keyring's password ({failure}). Nothing was changed." in err
+    assert calls == ["OpenSession", "ChangeWithMasterPassword"]
