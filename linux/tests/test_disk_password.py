@@ -491,10 +491,12 @@ def test_ctrl_c_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, 
         (tmp_path / "bin" / "sudo").write_text(f'#!/bin/sh\n[ "$1" = -v ] && exit 0\nexec {real} "$@"\n')
         answers = answers[1:]
     # From the root side's first "Adding … to" on: the change has begun, and Ctrl+C before it stops with nothing changed.
-    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers, burst_after=f"Adding the new disk password to {first}")
-    # Not "Done" on the screen: each Ctrl+C makes the terminal throw away output still queued on it (no
-    # NOFLSH), which can be that last line. The exit code and the disks say how it ended.
+    # Two adds, their checks and the removals take seconds: Ctrl+C every 0.2 s comes many times over.
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers,
+                            burst_after=f"Adding the new disk password to {first}", min_sent=10)
+    # With NOFLSH on the terminal, the last line stays on the screen however often Ctrl+C comes.
     assert code == 0 and "Traceback" not in screen, screen
+    assert cli.DISK_CHANGE_DONE in screen, screen
     assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
 
 
@@ -517,7 +519,8 @@ def test_ctrl_c_at_the_start_of_the_change_stops_cleanly_or_finishes(tmp_path, s
         answers = answers[1:]
     banner = "Keep the computer on until it is done."
     if burst:
-        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers, burst_after=banner)
+        # A stop ends at least DISK_SETTLE (0.25 s) after the first Ctrl+C, by when the second has come.
+        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers, burst_after=banner, min_sent=2)
     else:
         code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [*answers, (banner, b"\x03")])
     for wrong in ("Traceback", "Fatal Python error", "KeyboardInterrupt", "ended before it could say how"):
@@ -884,10 +887,11 @@ def fake_tools(folder: Path, disk: Path, *more: Path) -> dict:
 
 
 def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]], timeout: float = 600,
-             burst_after: str | None = None, burst: bytes = b"\x03", every: float = 0.2) -> tuple[int, str]:
+             burst_after: str | None = None, burst: bytes = b"\x03", every: float = 0.2, min_sent: int = 1) -> tuple[int, str]:
     """Run argv on a terminal of its own and answer each prompt as it comes: a str as a typed line, bytes
     as they are (b"\\x03" is Ctrl+C). `setsid -c` makes the terminal the command's own (getpass and sudo
-    read /dev/tty), without forking the test process."""
+    read /dev/tty), without forking the test process. With burst_after, at least `min_sent` bursts must
+    have been typed."""
     if not shutil.which("setsid"):
         pytest.skip("needs setsid (util-linux)")
     fd, child_end = pty.openpty()
@@ -931,7 +935,7 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
         screen += data.decode(errors="replace")
     os.close(fd)
     if burst_after:
-        assert sent >= 1, "no burst was typed"
+        assert sent >= min_sent, f"only {sent} bursts were typed, not {min_sent}"
     return code, screen
 
 
