@@ -1416,6 +1416,18 @@ def test_a_failed_add_whose_slot_is_seen_only_after_a_failed_read_is_taken_back(
     assert header["keyslots"] == {0: OLD}
 
 
+def test_a_failed_add_whose_slot_cannot_be_told_is_never_called_there_before(monkeypatch, capsys):
+    """As above, but which slot the new password opens cannot be told (-1): that is not a slot the header
+    from before listed, so it is taken for this add's and taken back, where the take back says it cannot
+    tell the slot (exit 8), never "there before" (exit 13)."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD}, hidden=(NEW,))
+    header["add"] = "interrupted"
+    header["dumps_failing"] = 1
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == cli.DISK_NOT_TAKEN_BACK
+    said = capsys.readouterr().err
+    assert "which was there before" not in said and "which key slot it opens cannot be told" in said
+
+
 def test_a_failed_add_that_wrote_a_slot_the_new_password_does_not_open_is_not_taken(monkeypatch, capsys):
     """A slot appeared, but the new password does not open it on its own (--key-slot): not taken for the
     add, so nothing goes on to remove the old password."""
@@ -1785,6 +1797,42 @@ def test_a_look_that_runs_out_of_time_is_killed_and_said(monkeypatch, tmp_path, 
     assert "that could not be checked" in capsys.readouterr().err
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
+
+
+def test_the_change_runs_with_noflsh_and_the_settings_come_back_after_a_pause(monkeypatch):
+    """`password --disk` runs the change with NOFLSH on the terminal, and puts the settings from before
+    back only a moment (DISK_SETTLE) after it has ended, so the last line can reach the screen first."""
+    fd, child_end = pty.openpty()
+    monkeypatch.setattr(cli, "DISK_TTY", os.ttyname(child_end))
+    monkeypatch.setattr(cli, "disk_foreground", lambda descriptor: True)
+    monkeypatch.setattr(cli, "disk_devices", lambda: ["/dev/vda3"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    answers = iter([OLD, NEW, NEW])
+    monkeypatch.setattr(cli, "disk_ask", lambda prompt: next(answers))
+    seen = {}
+
+    def helper(op, request):
+        if op == "change":
+            seen["noflsh"] = bool(termios.tcgetattr(child_end)[3] & termios.NOFLSH)
+            seen["ended"] = time.monotonic()
+        return 0
+
+    monkeypatch.setattr(cli, "disk_helper", helper)
+    restored = []
+    real = cli.termios.tcsetattr
+    monkeypatch.setattr(cli.termios, "tcsetattr", lambda descriptor, when, attributes: (
+        restored.append(time.monotonic()) if when == termios.TCSAFLUSH else None) or real(descriptor, when, attributes))
+    before = termios.tcgetattr(child_end)
+    try:
+        assert cli.disk_password([]) == 0
+        after = termios.tcgetattr(child_end)
+    finally:
+        os.close(fd)
+        os.close(child_end)
+    assert seen["noflsh"], "the change ran without NOFLSH"
+    assert after == before and len(restored) == 1
+    assert cli.DISK_SETTLE >= 0.2 and restored[0] - seen["ended"] >= cli.DISK_SETTLE * 0.9
 
 
 def test_the_end_state_in_words():
