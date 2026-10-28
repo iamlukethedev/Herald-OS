@@ -3860,7 +3860,8 @@ def disk_look(request: dict) -> dict | str | None:
 def disk_report_end(request: dict, code: int) -> int:
     """The root side ended without saying how (it was killed): look, and say what opens what."""
     disk_say(f"herald-os: the disk password change ended before it could say how ({'signal ' + str(-code) if code < 0 else 'exit ' + str(code)}). "
-             "Looking at what opens the disk now (Ctrl+C stops looking):", file=sys.stderr)
+             f"Looking at what opens the disk now; this may first wait up to {DISK_LOOK_WAIT} s for a cryptsetup still at work on it "
+             "(Ctrl+C stops looking):", file=sys.stderr)
     state = disk_look(request)
     if state == "stopped":
         disk_say("herald-os: stopped looking. Nothing is removed before the new password opens every device, so the current one or "

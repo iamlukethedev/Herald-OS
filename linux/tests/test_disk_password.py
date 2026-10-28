@@ -1875,6 +1875,7 @@ def test_ctrl_c_stops_the_look_and_the_root_side_with_it(monkeypatch, tmp_path, 
         timer.cancel()
     assert time.monotonic() - started < 10
     said = capsys.readouterr().err
+    assert "may first wait up to 30 s for a cryptsetup still at work" in said
     assert "Ctrl+C stops looking" in said and "stopped looking" in said and "the current one or the new one (or both) opens each" in said
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
