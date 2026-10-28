@@ -3373,11 +3373,15 @@ def disk_change(devices: list[str], current: str, new: str, new_owner: bool, old
                     there = luks_which_slot(device, new)
                     if there is None:
                         return take_back(f"the new disk password could not be added to {device}: {said}")
+                    if there < 0 or there not in before:
+                        # A slot the header from before did not list (or one that cannot be told), seen
+                        # where the look for new slots could not read the header: this add's, so taken back.
+                        added.append(device)
+                        return take_back(f"the new disk password could not be added to {device}: {said}")
                     # It opens a slot that was there before, which is not this change's to remove: the take
                     # back leaves it, and the new password will not do, as when it was refused at the start.
-                    which = f"key slot {there} of {device}" if there >= 0 else f"a key slot of {device}"
                     code = take_back(f"the new disk password could not be added to {device} ({said}), and it now opens "
-                                     f"{which}, which was there before: choose another one")
+                                     f"key slot {there} of {device}, which was there before: choose another one")
                     return DISK_NEW_IS_OTHER_KEY if code == 1 else code
         if slot is None or slot == old_slots[device]:
             return take_back(f"the new disk password does not open {device} after adding it")

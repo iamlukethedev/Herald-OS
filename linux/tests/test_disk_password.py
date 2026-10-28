@@ -1080,6 +1080,9 @@ def quiet_cryptsetup(monkeypatch, keyslots: dict[int, str], tokens: dict | None 
                 return ok if header["named_by_slot"] and key not in header["hidden"] and slots.get(slot) == key else no
             return ok if key in slots.values() else no
         if args[0] == "luksDump":
+            if header.get("added") and header.get("dumps_failing", 0) > 0:
+                header["dumps_failing"] -= 1
+                return subprocess.CompletedProcess(args, 1, b"", b"Device /dev/vda3 is busy.")
             return subprocess.CompletedProcess(args, 0, json.dumps({"keyslots": {str(n): {} for n in slots}, "tokens": header["tokens"]}).encode(), b"")
         if args[0] == "luksAddKey":
             header["added"] = True
@@ -1286,6 +1289,19 @@ def test_a_failed_add_never_takes_a_slot_that_was_there_for_the_new_one(monkeypa
     assert "could not be added to /dev/vda3" in said and "going on" not in said
     assert "it now opens key slot 3 of /dev/vda3, which was there before: choose another one" in said
     assert header["keyslots"] == {0: OLD, 3: NEW}
+
+
+def test_a_failed_add_whose_slot_is_seen_only_after_a_failed_read_is_taken_back(monkeypatch, capsys):
+    """The add writes slot 1 and exits 1, and the header cannot be read just after it, so the look for
+    new slots sees none. Slot 1 then opens with the new password, but it was not in the header from
+    before: this add's, taken back, never "there before" (exit 13)."""
+    header, _ = quiet_cryptsetup(monkeypatch, {0: OLD})
+    header["add"] = "interrupted"
+    header["dumps_failing"] = 1
+    assert root_side_here(monkeypatch, "change", {"devices": ["/dev/vda3"], "current": OLD, "new": NEW}) == 1
+    said = capsys.readouterr().err
+    assert "could not be added to /dev/vda3" in said and "which was there before" not in said and "going on" not in said
+    assert header["keyslots"] == {0: OLD}
 
 
 def test_a_failed_add_that_wrote_a_slot_the_new_password_does_not_open_is_not_taken(monkeypatch, capsys):
