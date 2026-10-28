@@ -712,6 +712,7 @@ export const en = {
   'firstRun.keyring.fieldAgain': 'The same keyring password again',
   'firstRun.keyring.sameAsAccount': 'It can be the same as your account password.',
   'firstRun.keyring.mismatch': 'The keyring passwords do not match.',
+  'firstRun.keyring.passwordRefused': 'That password cannot be used for the keyring. Try another one.',
   'firstRun.keyring.laterHint': 'Later: the first time an app saves a password, a window asks you to choose a keyring password.',
   // herald-os keyring setup --password is a command, and stays as it is.
   'firstRun.keyring.noService': 'The keyring service did not answer, so no keyring was made. Run herald-os keyring setup --password in a terminal later.',
@@ -720,6 +721,8 @@ export const en = {
   // An earlier try at setting up the keyring was interrupted after the keyring was made with a password,
   // and the password just typed is not that one.
   'firstRun.keyring.wrongPassword': 'A keyring was already started with a different password and not finished. Type the keyring password you chose then to finish it.',
+  // The same, when "No keyring password" was chosen but the keyring started earlier has a password.
+  'firstRun.keyring.needsPassword': 'A keyring was already started with a password and not finished. Type that keyring password to finish it.',
   // On the last step, when the disk the keyring is kept on is encrypted and setup made it with no password of its own.
   'firstRun.keyring.encrypted': 'Apps keep saved passwords in a keyring with no password of its own: the disk password you type at start-up protects it.',
 

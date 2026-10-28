@@ -401,9 +401,11 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
 
 const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
   tooShort: 'firstRun.account.tooShort',
+  passwordRefused: 'firstRun.keyring.passwordRefused',
   keyringExists: 'firstRun.keyring.failed',
   noKeyringService: 'firstRun.keyring.noService',
   wrongPassword: 'firstRun.keyring.wrongPassword',
+  keyringNeedsPassword: 'firstRun.keyring.needsPassword',
   failed: 'firstRun.keyring.failed'
 }
 
@@ -437,6 +439,13 @@ function KeyringStep({ onDone, encrypted }: { onDone: () => void; encrypted: boo
       } else {
         // A keyring an interrupted try started with another password: it is typed again, from empty fields.
         if (reason === 'wrongPassword') {
+          setPassword('')
+          setAgain('')
+        }
+
+        // Such a keyring with a password of its own, and "No keyring password" chosen: its password is asked.
+        if (reason === 'keyringNeedsPassword') {
+          setChoice('password')
           setPassword('')
           setAgain('')
         }

@@ -3939,11 +3939,14 @@ def disk_password(args: list[str]) -> int:
 # setup makes one with no password of its own, which the disk password protects. Otherwise it offers a
 # keyring password, which the first app that needs the keyring asks for after each start.
 KEYRING_USAGE = "keyring --status | keyring setup --no-password | keyring setup --password"
-KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_WRONG_PASSWORD, KEYRING_STOPPED = 3, 4, 5, 6, 130
+KEYRING_EXISTS, KEYRING_NO_SERVICE, KEYRING_NO_GOBJECT, KEYRING_WRONG_PASSWORD, KEYRING_NEEDS_PASSWORD, KEYRING_STOPPED = 3, 4, 5, 6, 7, 130
 # The label a keyring is made with, until it is the default one and labelled "Login": one that still
 # has it was stopped half-way, and `keyring setup` finishes it.
 KEYRING_MAKING_LABEL = "login"
 KEYRING_LOGIN = "/org/freedesktop/secrets/collection/login"
+# gnome-keyring's error for a refused password. Only this name counts as one: a policy refusal
+# (org.freedesktop.DBus.Error.AccessDenied) also has "Denied" in it, and asking again would not help.
+KEYRING_DENIED = "org.gnome.keyring.Error.Denied"
 KEYRING_MIN = 8
 KEYRING_NOT_TEXT = "the keyring password has bytes that are not text (UTF-8). Nothing was changed."
 # gnome-keyring's file for a keyring with a password starts with this; one without is plain text.
@@ -4150,6 +4153,13 @@ def keyring_password_input() -> str:
     return password
 
 
+def dbus_error_name(error) -> str | None:
+    """The D-Bus error name of a failed call, from GDBus's message, "GDBus.Error:<name>: <text>", the way
+    Gio.DBusError.get_remote_error reads it (pure; tested). None for an error that is not a remote one."""
+    match = re.match(r"GDBus\.Error:([A-Za-z_][\w.-]*):", getattr(error, "message", "") or "")
+    return match.group(1) if match else None
+
+
 def keyring_dbus():
     """The session bus and a caller for the keyring service's methods; exit 5 without PyGObject."""
     try:
@@ -4319,11 +4329,12 @@ def keyring_finish(password: str, flag: str) -> None:
         try:
             call(SECRETS_PATH, KEYRING_INTERNAL, "ChangeWithMasterPassword", GLib.Variant("(o(oayays)(oayays))", (KEYRING_LOGIN, secret, secret)), "()")
         except GLib.Error as error:
-            if "Denied" in error.message and password:
+            refused = dbus_error_name(error) == KEYRING_DENIED
+            if refused and password:
                 # Its own code, so setup can ask for the password again instead of moving on.
                 die("that is not the password the keyring was made with. Nothing was changed.", KEYRING_WRONG_PASSWORD)
-            if "Denied" in error.message:
-                die("the keyring has a password of its own, so `herald-os keyring setup --password` finishes it. Nothing was changed.", KEYRING_EXISTS)
+            if refused:
+                die("the keyring has a password of its own, so `herald-os keyring setup --password` finishes it. Nothing was changed.", KEYRING_NEEDS_PASSWORD)
             die(f"the keyring service could not check the keyring's password ({error.message}). Nothing was changed.", 1)
         # Relabelling needs it open: unlocked only if it is locked, with the password just checked.
         try:
@@ -4395,8 +4406,11 @@ def keyring_cmd(args: list[str]) -> int:
     unfinished = keyring_unfinished(directory)
     if unfinished and unfinished != kind:
         other = "--password" if unfinished == "password" else "--no-password"
+        # One with a password, finished without one: a code of its own, so setup asks for that password
+        # instead of taking it as a keyring that is already there (3).
         die(f"an earlier `herald-os keyring setup` made a keyring ({KEYRING_STATES[unfinished]}) and was stopped before it "
-            f"finished; `herald-os keyring setup {other}` finishes it. Nothing was changed.", KEYRING_EXISTS)
+            f"finished; `herald-os keyring setup {other}` finishes it. Nothing was changed.",
+            KEYRING_NEEDS_PASSWORD if unfinished == "password" else KEYRING_EXISTS)
     # Checked before the password is asked, and again under the lock.
     if not unfinished:
         keyring_refuse_existing(directory)

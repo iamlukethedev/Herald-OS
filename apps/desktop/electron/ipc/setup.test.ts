@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, refusal, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -369,10 +369,12 @@ describe('the keyring', () => {
       [4, 'noKeyringService'],
       // No PyGObject: not the keyring service, so not its message.
       [5, 'failed'],
-      // The command refused the password (its length).
-      [2, 'tooShort'],
+      // The command refused a password of the right length: not "too short".
+      [2, 'passwordRefused'],
       // A half-made keyring's password is another one: setup asks again rather than moving on.
       [6, 'wrongPassword'],
+      // Such a keyring has a password and none was given: setup asks for it rather than moving on.
+      [7, 'keyringNeedsPassword'],
       [1, 'failed'],
       [127, 'failed']
     ]
@@ -401,6 +403,20 @@ describe('the keyring', () => {
     expect(await handler?.({}, {})).toEqual({ ok: true })
     expect(run).toHaveBeenCalledTimes(2)
     expect(run).toHaveBeenLastCalledWith('herald-os', ['keyring', 'setup', '--no-password'], expect.any(Number))
+  })
+
+  it('reads the command\u2019s refusal by the password it was given', async () => {
+    expect(refusal('short7!')).toBe('tooShort')
+    expect(refusal('abcdef😀')).toBe('tooShort')
+    expect(refusal('correct horse')).toBe('passwordRefused')
+    expect(refusal('abcdefg😀')).toBe('passwordRefused')
+    // Without a password, 2 can only be a mistake in how the command was run.
+    expect(refusal('')).toBe('failed')
+
+    for (const [password, reason] of [['short7!', 'tooShort'], ['correct horse', 'passwordRefused'], ['', 'failed']] as const) {
+      host.run = { stdout: '', stderr: 'herald-os: a keyring password is one line. Nothing was changed.\n', code: 2 }
+      await expect(makeKeyring(password), password).resolves.toEqual({ ok: false, reason })
+    }
   })
 
   it('takes eight characters and refuses seven', () => {

@@ -494,7 +494,11 @@ PyGObject, which the command talks to the keyring with, is missing (`python3-gob
 `python-gobject` on Arch, where the package depends on it); it is kept apart from 4 so that setup does
 not send the person looking for gnome-keyring, and reports it as a plain failure instead. Exit 6 means
 the password given is not the one a half-made keyring was made with (below), which setup reports by
-asking for that password again. Making it holds
+asking for that password again. Exit 7 means a half-made keyring has a password and `--no-password` was
+given; setup then asks for that password instead of moving on. These codes are `herald-os keyring`'s
+own: each command has its own, and the same number can mean something else elsewhere. For
+`herald-os password --disk`, exit 6 means the change was only partly done, not a wrong password. Making
+it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
@@ -505,12 +509,17 @@ already finished and there is nothing to run again. A keyring is made labelled `
 labelled `login` was stopped half-way: running the same `herald-os keyring setup` again finishes it
 (it opens it, with no password or with the one it was made with, which `--password` asks for again; makes
 it the default one, which writes `default`; and relabels it) instead of refusing it. The other flag is
-refused with exit 3 and named. The password `--password` asks for is checked, even in the session that
+refused and named: with exit 7 when the keyring has a password and `--no-password` was given, with exit
+3 the other way round. The password `--password` asks for is checked, even in the session that
 made the keyring, where gnome-keyring would open it with any password. The keyring is never locked for
 this, so programs using it meanwhile are not disturbed: the password is checked by changing it to itself
 (gnome-keyring checks the current one for that, locked or not, and writes the file again with the same
-password), and the keyring is then opened with it only if it is locked. A wrong one is refused with exit
-6 and changes nothing; setup then asks for the keyring's password again. The password
+password), and the keyring is then opened with it only if it is locked. A check that succeeds therefore
+writes `login.keyring` again: the same secrets and the same password, in a file that is not byte for byte
+the same. Ctrl+C during the check stops the command at once, but gnome-keyring may still finish that
+rewrite afterwards, which is just as harmless; running the command again finishes the keyring as usual.
+A wrong one is refused with exit 6 and changes nothing; setup then asks for the keyring's password
+again. The password
 goes through gnome-keyring's own master-password interface, as the Secret Service's
 `CreateCollection` always asks in a window. The keyring folder is `$XDG_DATA_HOME/keyrings` when that
 is an absolute path.
