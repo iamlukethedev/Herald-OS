@@ -617,11 +617,16 @@ import os, signal, sys, time
 # the background (bg) while the shell keeps the terminal.
 cli_path, folder = sys.argv[1], sys.argv[2]
 job = (
-    "import importlib.machinery, importlib.util, os, sys, time\\n"
+    "import importlib.machinery, importlib.util, os, sys, termios, time\\n"
     "loader = importlib.machinery.SourceFileLoader('cli', sys.argv[1])\\n"
     "cli = importlib.util.module_from_spec(importlib.util.spec_from_loader('cli', loader))\\n"
     "loader.exec_module(cli)\\n"
+    "deadline = time.monotonic() + 120\\n"
+    "while not os.path.exists(sys.argv[2] + '/given') and time.monotonic() < deadline:\\n"
+    "    time.sleep(0.02)\\n"
     "with cli.disk_terminal_kept():\\n"
+    "    if termios.tcgetattr(0)[3] & termios.NOFLSH:\\n"
+    "        open(sys.argv[2] + '/kept', 'w').close()\\n"
     "    open(sys.argv[2] + '/ready', 'w').close()\\n"
     "    deadline = time.monotonic() + 120\\n"
     "    while not os.path.exists(sys.argv[2] + '/go') and time.monotonic() < deadline:\\n"
@@ -633,8 +638,13 @@ if child == 0:
     os.setpgid(0, 0)
     signal.signal(signal.SIGTTOU, signal.SIG_DFL)
     os.execv(sys.executable, [sys.executable, "-c", job, cli_path, folder])
-os.setpgid(child, child)
+# As a shell does, both set the job's group: the child may have run exec already (EACCES), with its own set.
+try:
+    os.setpgid(child, child)
+except PermissionError:
+    pass
 os.tcsetpgrp(0, child)
+open(folder + "/given", "w").close()
 deadline = time.monotonic() + 120
 while not os.path.exists(folder + "/ready") and time.monotonic() < deadline:
     time.sleep(0.02)
@@ -650,7 +660,8 @@ while time.monotonic() < deadline:
         os.kill(child, signal.SIGKILL)
         sys.exit(3)
     if pid:
-        sys.exit(os.waitstatus_to_exitcode(status))
+        # It must have run in the foreground at first (NOFLSH set), or this tested nothing.
+        sys.exit(os.waitstatus_to_exitcode(status) or (0 if os.path.exists(folder + "/kept") else 5))
     time.sleep(0.02)
 sys.exit(4)
 """
