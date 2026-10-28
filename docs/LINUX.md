@@ -488,7 +488,10 @@ PyGObject, which the command talks to the keyring with, is missing (`python3-gob
 not send the person looking for gnome-keyring, and reports it as a plain failure instead. Exit 6 means
 the password given is not the one a half-made keyring was made with (below), which setup reports by
 asking for that password again. Exit 7 means a half-made keyring has a password and `--no-password` was
-given; setup then asks for that password instead of moving on. Making it holds
+given; setup then asks for that password instead of moving on. These codes are `herald-os keyring`'s
+own: each command has its own, and the same number can mean something else elsewhere. For
+`herald-os password --disk`, exit 6 means the change was only partly done, not a wrong password. Making
+it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
