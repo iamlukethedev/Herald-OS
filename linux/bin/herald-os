@@ -6598,7 +6598,7 @@ def reset_disk_note(encrypted: bool | None, plain: list[dict] | None = None) -> 
                 "chooses their own in setup: tell it to them, as they type it once to start the computer.")
         if plain:
             note += (f" Part of it is written without encryption, though ({disk_plain_text(plain)}): a reset deletes "
-                     "what is there, but someone with the disk and recovery tools may get some of it back.")
+                     "what is there, but someone who has the disk may still get some of it back.")
         return note
     return ("This disk is not encrypted: a reset deletes the files, but it is not a secure erase. Someone with "
             "the disk and recovery tools may get some of them back. Installing again with \"Encrypt my data\" "
