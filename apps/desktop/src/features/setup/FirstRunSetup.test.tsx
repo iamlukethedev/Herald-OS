@@ -796,6 +796,70 @@ describe("the disk step's warning", () => {
   })
 })
 
+describe('a disk that is encrypted only in part', () => {
+  const plainParts = [
+    { device: '/dev/vda3', kind: 'cipher_null' },
+    { device: '/dev/vdb1', kind: 'journal' }
+  ] as const
+  const partial = { needed: true, signedIn: false, diskEncrypted: true, diskProtection: 'partial', diskPlainParts: plainParts, newOwner: true }
+
+  async function afterTheAccountOn(state: object, language: 'en' | 'pt-BR' | 'zh-CN' = 'en'): Promise<HTMLElement> {
+    bridge.setup.state.mockResolvedValue(state)
+    const host = await mount(language)
+    await click(button(host, t('firstRun.welcome.forMe')))
+    await type(host.querySelector('input[autocomplete="name"]'), 'Ana')
+    for (const input of host.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      await type(input, 'correct horse')
+    }
+    await click(button(host, t('firstRun.next')))
+
+    return host
+  }
+
+  it('still asks a new owner for a disk password, and warns, naming the parts written without encryption', async () => {
+    const host = await afterTheAccountOn(partial)
+    expect(heading(host)).toBe(t('firstRun.disk.title'))
+    expect(host.textContent).toContain(t('firstRun.disk.partial'))
+    expect(host.textContent).toContain(t('firstRun.disk.plain.cipherNull', { device: '/dev/vda3' }))
+    expect(host.textContent).toContain(t('firstRun.disk.plain.journal', { device: '/dev/vdb1' }))
+    expect(host.textContent).toContain(t('firstRun.disk.partialFix'))
+  })
+
+  it('warns on no disk that is encrypted throughout', async () => {
+    const host = await afterTheAccountOn({ ...partial, diskProtection: 'full', diskPlainParts: [] })
+    expect(heading(host)).toBe(t('firstRun.disk.title'))
+    expect(host.textContent).not.toContain(t('firstRun.disk.partial'))
+  })
+
+  it('skips the disk password on a plain disk, with nothing about parts', async () => {
+    const host = await afterTheAccountOn({ ...partial, diskEncrypted: false, diskProtection: null, diskPlainParts: [] })
+    expect(heading(host)).toBe(t('firstRun.wifi.title'))
+    expect(host.textContent).not.toContain(t('firstRun.disk.partial'))
+  })
+
+  it('says, when handing it over, to pass the start-up password on, and warns', async () => {
+    bridge.setup.state.mockResolvedValue({ ...partial, newOwner: false })
+    const host = await mount('en')
+    await click(button(host, t('firstRun.welcome.forSomeoneElse')))
+    await click(button(host, t('firstRun.next')))
+    expect(heading(host)).toBe(t('firstRun.handOver.title'))
+    expect(host.textContent).toContain(t('firstRun.handOver.textEncrypted'))
+    expect(host.textContent).not.toContain(t('firstRun.handOver.notEncrypted'))
+    expect(host.textContent).toContain(t('firstRun.disk.partial'))
+  })
+
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('warns in %s', async language => {
+    const host = await afterTheAccountOn(partial, language)
+    expect(heading(host)).toBe(t('firstRun.disk.title'))
+    const text = host.textContent ?? ''
+    expect(text).toContain(t('firstRun.disk.partial'))
+    expect(text).toContain('/dev/vdb1')
+    if (language !== 'en') {
+      expect(t('firstRun.disk.partial')).not.toBe(en['firstRun.disk.partial'])
+    }
+  })
+})
+
 describe('a refused current disk password', () => {
   it('says which way of unlocking it belongs to, never the recovery key for the others, in every language', () => {
     const keys = ['firstRun.disk.recoveryKey', 'firstRun.disk.tpmKey', 'firstRun.disk.fido2Key', 'firstRun.disk.otherKey'] as const

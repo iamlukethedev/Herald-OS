@@ -686,6 +686,12 @@ export const en = {
   'firstRun.disk.sharedSecret':
     'Your disk password is right, but the same secret also unlocks the disk another way, such as a recovery key. Changing it now would remove that way as well, or leave the old password working through it. Give that way of unlocking a secret of its own first (or remove it), then change the disk password with herald-os password --disk --new-owner. Nothing was changed.',
   'firstRun.disk.notAdmin': 'Your account password was not accepted for the change. Nothing was changed.',
+  'firstRun.disk.partial': 'The computer asks for a disk password when it starts, but part of this disk is written without encryption, so anyone who has the disk can read what is there without that password:',
+  'firstRun.disk.plain.cipherNull': '{device} uses cipher_null, which encrypts nothing',
+  'firstRun.disk.plain.journal': 'the filesystem’s journal, on {device}',
+  'firstRun.disk.plain.log': 'the filesystem’s log, on {device}',
+  'firstRun.disk.plain.realtime': 'the filesystem’s realtime data, on {device}',
+  'firstRun.disk.partialFix': 'Installing again with the whole disk encrypted protects all of it.',
   'firstRun.disk.notEncrypted': 'This computer’s disk is not encrypted, so there is no disk password to change.',
   // herald-os password --disk --new-owner is a command, and stays as it is.
   'firstRun.disk.partly': 'Your disk password was added, but an old one could not be removed. Run herald-os password --disk --new-owner in a terminal.',

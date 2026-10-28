@@ -5,7 +5,7 @@ import { HeraldLogo } from '../../components/herald-logo.tsx'
 import { GlassButton, GlassCard, LinkAction } from '../../components/ui/glass.tsx'
 import { Spinner } from '../../components/ui/primitives.tsx'
 import { cn } from '../../lib/cn.ts'
-import type { DiskPasswordFailure, KeyringFailure, KeyringState, PasswordFailure, SetupResult } from '../../../shared/ipc.ts'
+import type { DiskPasswordFailure, DiskPlainPart, KeyringFailure, KeyringState, PasswordFailure, SetupResult } from '../../../shared/ipc.ts'
 import type { TextKey } from '../../../shared/i18n.ts'
 import { $hermesAuth, refreshHermesAuth, requestHermesLogin } from '../../store/hermes-auth.ts'
 import { t, useT } from '../../store/i18n.ts'
@@ -30,6 +30,9 @@ export function FirstRunSetup() {
   const [signedIn, setSignedIn] = useState(false)
   // null: it could not be told, so setup neither asks for a disk password nor says the disk is unencrypted.
   const [diskEncrypted, setDiskEncrypted] = useState<boolean | null>(null)
+  // On an encrypted disk, the parts written without encryption: a warning only, never a reason to skip
+  // the disk password, which the computer still asks for when it starts.
+  const [diskPlainParts, setDiskPlainParts] = useState<DiskPlainPart[]>([])
   const [newOwner, setNewOwner] = useState(false)
   // null: it could not be told, so setup leaves the keyring alone.
   const [keyring, setKeyring] = useState<KeyringState | null>(null)
@@ -53,6 +56,7 @@ export function FirstRunSetup() {
         setDue(state.needed)
         setSignedIn(state.signedIn)
         setDiskEncrypted(state.diskEncrypted)
+        setDiskPlainParts(state.diskEncrypted === true && state.diskProtection === 'partial' ? (state.diskPlainParts ?? []) : [])
         setNewOwner(state.newOwner)
         setKeyring(state.keyring ?? null)
         setKeyringEncrypted(state.keyringEncrypted ?? null)
@@ -125,7 +129,7 @@ export function FirstRunSetup() {
             signedIn={signedIn}
           />
         )}
-        {step === 'disk' && <DiskStep onDone={next} account={accountPassword} />}
+        {step === 'disk' && <DiskStep onDone={next} account={accountPassword} plainParts={diskPlainParts} />}
         {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
@@ -146,6 +150,7 @@ export function FirstRunSetup() {
             />
             {forSomeoneElse && diskEncrypted === false && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.notEncrypted')}</p>}
             {forSomeoneElse && diskEncrypted === null && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.handOver.encryptionUnknown')}</p>}
+            {diskPlainParts.length > 0 && <PartlyEncrypted parts={diskPlainParts} />}
             {!forSomeoneElse && keyringOpen && <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.keyring.encrypted')}</p>}
             <Footer onNext={() => void finish()} label={t(forSomeoneElse ? 'firstRun.handOver.done' : 'firstRun.done.start')} />
           </div>
@@ -318,7 +323,31 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
  * up before them chose it). The account password goes to sudo; it is asked here only when the account
  * step did not set it (an account that signed in at a login screen).
  */
-function DiskStep({ onDone, account }: { onDone: () => void; account: string }) {
+const PLAIN_PART_KEYS = {
+  cipher_null: 'firstRun.disk.plain.cipherNull',
+  journal: 'firstRun.disk.plain.journal',
+  log: 'firstRun.disk.plain.log',
+  realtime: 'firstRun.disk.plain.realtime'
+} as const
+
+/** The warning for an encrypted disk that is partly written without encryption, naming those parts. */
+function PartlyEncrypted({ parts }: { parts: DiskPlainPart[] }) {
+  const t = useT()
+
+  return (
+    <div className="flex flex-col gap-1 text-[12.5px] leading-relaxed text-warn" role="note">
+      <p>{t('firstRun.disk.partial')}</p>
+      <ul className="list-disc pl-5">
+        {parts.map(part => (
+          <li key={`${part.kind}:${part.device}`}>{t(PLAIN_PART_KEYS[part.kind], { device: part.device })}</li>
+        ))}
+      </ul>
+      <p>{t('firstRun.disk.partialFix')}</p>
+    </div>
+  )
+}
+
+function DiskStep({ onDone, account, plainParts }: { onDone: () => void; account: string; plainParts: DiskPlainPart[] }) {
   const t = useT()
   const [current, setCurrent] = useState('')
   const [password, setPassword] = useState('')
@@ -382,6 +411,7 @@ function DiskStep({ onDone, account }: { onDone: () => void; account: string }) 
     >
       <Heading icon={<IconKey size={18} />} title={t('firstRun.disk.title')} text={t('firstRun.disk.text')} />
       <p className="text-[12.5px] leading-relaxed text-fg-3">{t('firstRun.disk.keyboard')}</p>
+      {plainParts.length > 0 && <PartlyEncrypted parts={plainParts} />}
       {field('firstRun.disk.current', current, setCurrent, 'current-password', true)}
       {field('firstRun.disk.password', password, setPassword, 'new-password')}
       {field('firstRun.disk.passwordAgain', again, setAgain, 'new-password')}

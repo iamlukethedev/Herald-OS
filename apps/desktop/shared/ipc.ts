@@ -447,6 +447,15 @@ export interface CatalogGroupView {
   entries: CatalogEntryView[]
 }
 
+export type DiskProtection = 'full' | 'partial'
+
+/** A part of the root filesystem written without encryption, from `herald-os password --disk --status`. */
+export interface DiskPlainPart {
+  device: string
+  /** cipher_null: a LUKS device that encrypts nothing; journal, log, realtime: the filesystem's, on a device outside LUKS. */
+  kind: 'cipher_null' | 'journal' | 'log' | 'realtime'
+}
+
 export interface SetupState {
   /** The Herald OS image has not been set up by its owner yet. */
   needed: boolean
@@ -463,6 +472,14 @@ export interface SetupState {
    * it cannot be told (lsblk failed), which setup treats as neither.
    */
   diskEncrypted: boolean | null
+  /**
+   * On an encrypted disk: "full", or "partial" where part of the root filesystem is written without
+   * encryption (diskPlainParts), which setup warns about. It never skips the disk password step: the
+   * computer still asks for that password when it starts. null when the disk is not encrypted or it
+   * cannot be told; absent from an older herald-os.
+   */
+  diskProtection?: DiskProtection | null
+  diskPlainParts?: DiskPlainPart[]
   /**
    * The computer was set up for someone else, or reset: this account is a new owner's, who chooses
    * a disk password of their own in setup (the previous one stops working).
