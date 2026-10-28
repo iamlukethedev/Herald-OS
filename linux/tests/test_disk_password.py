@@ -951,7 +951,7 @@ def converse(argv: list[str], env: dict, answers: list[tuple[str, str | bytes]],
         screen += data.decode(errors="replace")
     os.close(fd)
     if burst_after:
-        assert sent >= min_sent, f"only {sent} bursts were typed, not {min_sent}"
+        assert sent >= min_sent, (f"only {sent} bursts were typed, not {min_sent}", code, screen[-2000:])
     return code, screen
 
 
@@ -2011,8 +2011,9 @@ def kill_root_side_during_add(disk: Path, killed: list) -> None:
 @needs_cryptsetup
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
 def test_a_root_side_killed_during_its_add_is_looked_at_once_the_add_ends(tmp_path):
-    """The root side is killed while its luksAddKey runs, which goes on in a session of its own and writes
-    the slot. The look waits for it, so it says the new password opens the disk too."""
+    """The root side is killed while its luksAddKey runs, which goes on in a session of its own. The look
+    waits for it, so what it says is what opens the disk once the add has ended: both passwords, or only
+    the current one where the add was killed before it had the current password to read."""
     disk = make_image(tmp_path / "disk.img", OLD)
     env = fake_tools(tmp_path / "bin", disk)
     killed: list[int] = []
@@ -2022,8 +2023,9 @@ def test_a_root_side_killed_during_its_add_is_looked_at_once_the_add_ends(tmp_pa
     killer.join(timeout=5)
     assert killed, "the add ended before it could be caught"
     assert code == cli.DISK_PARTLY and "ended before it could say how (signal 9)" in screen, screen
-    assert opens(disk, NEW) and opens(disk, OLD)
-    assert "the new disk password and the current one both open it" in screen, screen
+    assert opens(disk, OLD) and "still changing" not in screen, screen
+    said = "the new disk password and the current one both open it" if opens(disk, NEW) else "the current disk password opens it, the new one does not"
+    assert said in screen, screen
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
