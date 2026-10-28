@@ -2245,6 +2245,18 @@ def test_a_root_lsblk_cannot_list_counts_as_fully_protected(monkeypatch, tmp_pat
 
 
 @needs_cryptsetup
+def test_status_stays_encrypted_and_full_when_findmnt_fails(tmp_path):
+    """findmnt fails, so the root's journal or log cannot be looked at: still encrypted, as LUKS asks for
+    the password, and no warning rather than a guess."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    (tmp_path / "bin" / "findmnt").write_text("#!/bin/sh\n[ \"$1\" = -J ] && { echo 'findmnt: cannot read' >&2; exit 1; }\n[ \"$5\" = /sysroot ] && echo fs-t\n")
+    status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
+    assert json.loads(status.stdout) == {"encrypted": True, "devices": [str(disk)], "protection": "full", "plainParts": [], "newOwner": False,
+                                         "error": None}, status
+
+
+@needs_cryptsetup
 def test_status_reads_cipher_null_from_the_header(tmp_path):
     """--status of a root on LUKS that encrypts nothing (cipher_null): still encrypted (LUKS asks for its
     password at start-up, which setup lets a new owner change), but partly protected, with the device
