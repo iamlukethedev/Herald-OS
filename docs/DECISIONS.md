@@ -260,7 +260,7 @@ aarch64 work is an unofficial testbed, and Arch Linux ARM is a separate distribu
 is developed in an aarch64 VM on Apple Silicon and Fedora builds aarch64 and x86_64 from the same
 infrastructure. Fedora Asahi Remix is also the main way to run Linux natively on M1 and M2 Macs.
 
-- **One Linux release tarball.** `HeraldOS-<version>-linux-<arch>.tar.gz` holds the built shell and
+- **One Linux release tarball.** `herald-os-<version>-linux-<arch>.tar.gz` holds the built shell and
   everything the session needs: `linux/bin`, the session files, themes, the install catalog and the
   bridge plugin. The Fedora images (ADR-018) and the Arch package (`packaging/arch/`) are both built
   from it, so there is one artifact to test per architecture.
