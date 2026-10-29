@@ -2338,8 +2338,8 @@ def test_password_disk_ignores_ctrl_c_and_ctrl_backslash_on_every_way_out(tmp_pa
     folder.mkdir()
     (folder / "lsblk").write_text(f"#!/bin/sh\n{lsblk}\n")
     (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
-    for tool in ("lsblk", "findmnt"):
-        (folder / tool).chmod(0o755)
+    for stand_in in ("lsblk", "findmnt"):
+        (folder / stand_in).chmod(0o755)
     result = subprocess.run([sys.executable, "-c", EXIT_DRIVER, str(CLI), *args], capture_output=True, text=True, timeout=60,
                             env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
     assert result.returncode == code, result
