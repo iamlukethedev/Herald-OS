@@ -2857,13 +2857,26 @@ def luks_null_cipher(metadata: dict) -> bool:
 def luks_cipher_null(device: str) -> bool | None:
     """luks_null_cipher for a device, where its header can be read without root (an image, a device the
     person may read); None where it cannot be told."""
+    env = {**os.environ, "LC_ALL": "C"}
     try:
-        result = subprocess.run(["cryptsetup", "luksDump", "--dump-json-metadata", device], capture_output=True, text=True,
-                                env={**os.environ, "LC_ALL": "C"}, timeout=30)
+        result = subprocess.run(["cryptsetup", "luksDump", "--dump-json-metadata", device], capture_output=True, text=True, env=env, timeout=30)
         metadata = json.loads(result.stdout) if result.returncode == 0 else None
+        if not isinstance(metadata, dict):
+            # LUKS1 has no JSON header to dump; its text says the cipher.
+            result = subprocess.run(["cryptsetup", "luksDump", device], capture_output=True, text=True, env=env, timeout=30)
+            return luks1_null_cipher(result.stdout) if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         return None
-    return luks_null_cipher(metadata) if isinstance(metadata, dict) else None
+    return luks_null_cipher(metadata)
+
+
+def luks1_null_cipher(dump: str) -> bool | None:
+    """From a LUKS1 header's `cryptsetup luksDump`: whether its cipher is cipher_null; None for anything
+    else, as another version's text says nothing here (pure; tested)."""
+    if not re.search(r"^Version:\s*1\s*$", dump, re.MULTILINE):
+        return None
+    match = re.search(r"^Cipher name:\s*(\S+)", dump, re.MULTILINE)
+    return match.group(1).startswith("cipher_null") if match else None
 
 
 def disk_root_mount() -> dict | None:

@@ -2362,6 +2362,62 @@ def test_a_root_lsblk_cannot_list_counts_as_fully_protected(monkeypatch, tmp_pat
     assert cli.disk_protection(["/dev/vda3"]) == ("full", [])
 
 
+def make_luks1_image(path: Path, passphrase: str, cipher: str = "aes") -> Path:
+    """A LUKS1 image; with another cipher written into its header's 32-byte cipher name (offset 8), which
+    luksDump reads as it is, as luksFormat with cipher_null needs a loop device."""
+    path.write_bytes(b"")
+    os.truncate(path, 16 * 1024 * 1024)
+    subprocess.run([CRYPTSETUP, "luksFormat", "-q", "--type", "luks1", "--pbkdf-force-iterations", "1000", "--key-file=-", str(path)],
+                   input=passphrase.encode(), check=True, env=C_ENV)
+    if cipher != "aes":
+        with open(path, "r+b") as image:
+            image.seek(8)
+            image.write(cipher.encode().ljust(32, b"\0"))
+    return path
+
+
+def test_a_luks1_header_that_uses_cipher_null_encrypts_nothing():
+    assert cli.luks1_null_cipher("LUKS header information\n\nVersion:       \t1\nCipher name:   \tcipher_null\nCipher mode:   \tecb\n") is True
+    assert cli.luks1_null_cipher("Version:       \t1\nCipher name:   \taes\n") is False
+    assert cli.luks1_null_cipher("Version:       \t2\nCipher name:   \tcipher_null\n") is None
+    assert cli.luks1_null_cipher("") is None
+
+
+@needs_cryptsetup
+def test_a_luks1_device_that_uses_cipher_null_is_found(tmp_path):
+    """LUKS1 has no JSON header: its cipher comes from luksDump's text."""
+    assert cli.luks_cipher_null(str(make_luks1_image(tmp_path / "aes.img", OLD))) is False
+    assert cli.luks_cipher_null(str(make_luks1_image(tmp_path / "null.img", OLD, "cipher_null"))) is True
+    assert cli.luks_cipher_null(str(make_image(tmp_path / "luks2.img", OLD))) is False
+
+
+@needs_cryptsetup
+def test_status_of_a_root_on_real_and_cipher_null_luks_names_only_the_cipher_null_one(tmp_path):
+    """A root over two LUKS devices, one LUKS2 that encrypts and one LUKS1 with cipher_null: encrypted (the
+    computer asks for the password), partly protected, and only the cipher_null one named."""
+    real, null = make_image(tmp_path / "real.img", OLD), make_luks1_image(tmp_path / "null.img", OLD, "cipher_null")
+    env = fake_tools(tmp_path / "bin", real, null)
+    status = subprocess.run([sys.executable, str(CLI), "password", "--disk", "--status"], capture_output=True, text=True, env=env, timeout=60)
+    assert json.loads(status.stdout) == {"encrypted": True, "devices": [str(real), str(null)], "protection": "partial",
+                                         "plainParts": [{"device": str(null), "kind": "cipher_null"}], "newOwner": False, "error": None}, status
+
+
+def test_status_of_an_ext4_root_on_luks_with_its_journal_on_a_plain_disk(monkeypatch, tmp_path, capsys):
+    """The root is on LUKS, so the computer asks for its password: encrypted, but partly protected, with
+    the journal on its plain device named."""
+    folder = tmp_path / "jbd2"
+    (folder / "vdb1").mkdir(parents=True)
+    monkeypatch.setattr(cli, "DISK_JBD2", folder)
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    monkeypatch.setattr(cli, "disk_root_uuid", lambda: "fs")
+    monkeypatch.setattr(cli, "disk_root_mount", lambda: {"source": "/dev/dm-0", "fstype": "ext4", "options": "rw,relatime"})
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: None)
+    monkeypatch.setattr(cli, "NEW_OWNER_MARK", tmp_path / "new-owner")
+    assert cli.disk_password(["--status"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"encrypted": True, "devices": ["/dev/vda3"], "protection": "partial",
+                                                   "plainParts": [{"device": "/dev/vdb1", "kind": "journal"}], "newOwner": False, "error": None}
+
+
 @needs_cryptsetup
 def test_status_stays_encrypted_and_full_when_findmnt_fails(tmp_path):
     """findmnt fails, so the root's journal or log cannot be looked at: still encrypted, as LUKS asks for

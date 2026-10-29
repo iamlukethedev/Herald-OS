@@ -452,7 +452,7 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   it cannot tell; setup then neither asks for a disk password nor calls the disk unencrypted.
   `protection` is `"full"`, or `"partial"` where part of the root is written without encryption, with
   each part in `plainParts` (`{"device", "kind"}`, kind `cipher_null`, `journal`, `log` or `realtime`):
-  LUKS with cipher_null (read from the header where the account may read it), or an ext4 journal, xfs
+  LUKS1 or LUKS2 with cipher_null (read from the header where the account may read it), or an ext4 journal, xfs
   log or realtime device outside LUKS. What cannot be looked at counts as encrypted. A partly protected
   disk is still encrypted: setup still asks a new owner for a disk password and the hand-over still
   says to pass the start-up one on, with a warning that names those parts; `reset` says the same.
