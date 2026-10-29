@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { type DiskPasswordFailure, IPC, type KeyringFailure, type KeyringState, type SetupResult, type SetupState } from '../../shared/ipc.ts'
+import { type DiskPasswordFailure, type DiskPlainPart, type DiskProtection, IPC, type KeyringFailure, type KeyringState, type SetupResult, type SetupState } from '../../shared/ipc.ts'
 import { log } from '../log.ts'
 import { run } from '../platform/exec.ts'
 import { loadPty } from './terminal.ts'
@@ -47,6 +47,8 @@ export function setupState(): SetupState {
     name,
     signedIn: fs.existsSync(LOGIN_SCREEN),
     diskEncrypted: null,
+    diskProtection: null,
+    diskPlainParts: [],
     newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET),
     keyring: null,
     keyringEncrypted: null
@@ -121,20 +123,42 @@ export function refusal(password: string): KeyringFailure {
   return passwordLength(password) < 8 ? 'tooShort' : 'passwordRefused'
 }
 
+export interface DiskStatus {
+  /** LUKS asks for a password when the computer starts; null when that cannot be told. */
+  encrypted: boolean | null
+  /** On an encrypted disk, whether all of the root filesystem is encrypted; null otherwise. */
+  protection: DiskProtection | null
+  plainParts: DiskPlainPart[]
+}
+
+const PLAIN_KINDS: readonly DiskPlainPart['kind'][] = ['cipher_null', 'journal', 'log', 'realtime']
+
 /**
- * Whether the root filesystem is encrypted, from `herald-os password --disk --status`; null when that
- * cannot be told (the command failed, or could not list the disks), so setup neither asks for a disk
- * password nor says the disk is unencrypted.
+ * The root filesystem's encryption, from `herald-os password --disk --status`. encrypted is null when
+ * that cannot be told (the command failed, or could not list the disks), so setup neither asks for a
+ * disk password nor says the disk is unencrypted. A partly protected disk is still encrypted: the
+ * computer asks for its password when it starts, so setup still lets a new owner change it.
  */
-export async function diskEncrypted(): Promise<boolean | null> {
+export async function diskStatus(): Promise<DiskStatus> {
+  const unknown: DiskStatus = { encrypted: null, protection: null, plainParts: [] }
   const result = await run('herald-os', ['password', '--disk', '--status'], 15_000)
 
   try {
-    const encrypted = result.code === 0 ? (JSON.parse(result.stdout) as { encrypted?: unknown }).encrypted : null
+    const status = result.code === 0 ? (JSON.parse(result.stdout) as { encrypted?: unknown; protection?: unknown; plainParts?: unknown }) : {}
 
-    return typeof encrypted === 'boolean' ? encrypted : null
+    if (typeof status.encrypted !== 'boolean') {
+      return unknown
+    }
+
+    const plainParts = (Array.isArray(status.plainParts) ? status.plainParts : []).filter(
+      (part): part is DiskPlainPart =>
+        typeof part === 'object' && part !== null && typeof part.device === 'string' && PLAIN_KINDS.includes(part.kind)
+    )
+    const protection = status.encrypted && (status.protection === 'full' || status.protection === 'partial') ? status.protection : null
+
+    return { encrypted: status.encrypted, protection, plainParts: protection === 'partial' ? plainParts : [] }
   } catch {
-    return null
+    return unknown
   }
 }
 
@@ -334,9 +358,16 @@ export function registerSetupIpc(): void {
       return state
     }
 
-    const [encrypted, keyring] = await Promise.all([diskEncrypted(), keyringStatus()])
+    const [disk, keyring] = await Promise.all([diskStatus(), keyringStatus()])
 
-    return { ...state, diskEncrypted: encrypted, keyring: keyring.keyring, keyringEncrypted: keyring.encrypted }
+    return {
+      ...state,
+      diskEncrypted: disk.encrypted,
+      diskProtection: disk.protection,
+      diskPlainParts: disk.plainParts,
+      keyring: keyring.keyring,
+      keyringEncrypted: keyring.encrypted
+    }
   })
   ipcMain.handle(IPC.setupName, (_event, name: string) => {
     const clean = String(name ?? '').replace(/[\r\n:]/g, ' ').trim().slice(0, 64)

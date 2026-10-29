@@ -668,6 +668,12 @@ export const ptBR: Translation = {
   'firstRun.disk.sharedSecret':
     'Sua senha do disco está certa, mas o mesmo segredo também desbloqueia o disco de outra forma, como uma chave de recuperação. Trocar a senha agora removeria essa outra forma também, ou deixaria a senha antiga funcionando por ela. Primeiro dê a essa forma de desbloqueio um segredo próprio (ou remova-a) e depois troque a senha do disco com herald-os password --disk --new-owner. Nada foi alterado.',
   'firstRun.disk.notAdmin': 'A senha da sua conta não foi aceita para fazer a troca. Nada foi alterado.',
+  'firstRun.disk.partial': 'O computador pede uma senha do disco ao ligar, mas parte deste disco é gravada sem criptografia: quem estiver com o disco consegue ler o que está ali sem essa senha:',
+  'firstRun.disk.plain.cipherNull': '{device} usa cipher_null, que não criptografa nada',
+  'firstRun.disk.plain.journal': 'o journal do sistema de arquivos, em {device}',
+  'firstRun.disk.plain.log': 'o log do sistema de arquivos, em {device}',
+  'firstRun.disk.plain.realtime': 'os dados de tempo real do sistema de arquivos, em {device}',
+  'firstRun.disk.partialFix': 'Para proteger tudo, reinstale com o disco inteiro criptografado.',
   'firstRun.disk.notEncrypted': 'O disco deste computador não é criptografado, então não há senha do disco para trocar.',
   'firstRun.disk.partly': 'Sua senha do disco foi adicionada, mas não foi possível remover uma senha antiga. Execute herald-os password --disk --new-owner em um terminal.',
   'firstRun.disk.notTakenBack':

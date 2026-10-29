@@ -15,7 +15,7 @@ vi.mock('../platform/exec.ts', () => ({ run: vi.fn(async () => host.run) }))
 const { IPC } = await import('../../shared/ipc.ts')
 const { log } = await import('../log.ts')
 const { run } = await import('../platform/exec.ts')
-const { changeDiskPassword, changePassword, diskEncrypted, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, refusal, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
+const { changeDiskPassword, changePassword, diskStatus, diskPasswordProblem, diskReply, keyringPasswordProblem, keyringStatus, makeKeyring, refusal, passwdReply, refusalDetail, registerSetupIpc, setupState } = await import('./setup.ts')
 
 /** A terminal running `passwd` that prints `lines` (each its own chunk) once the password is first typed, then exits with `exitCode`. */
 function fakePasswd(lines: string[], exitCode: number | null) {
@@ -301,19 +301,36 @@ describe('the disk password', () => {
   })
 
   it('reads whether the disk is encrypted from the command, and anything it cannot tell as unknown', async () => {
-    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "newOwner": false, "error": null}\n', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBe(true)
+    const unknown = { encrypted: null, protection: null, plainParts: [] }
+    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "protection": "full", "plainParts": [], "newOwner": false, "error": null}\n', stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'full', plainParts: [] })
     expect(run).toHaveBeenCalledWith('herald-os', ['password', '--disk', '--status'], expect.any(Number))
-    host.run = { stdout: '{"encrypted": false, "devices": [], "newOwner": false, "error": null}', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBe(false)
+    host.run = { stdout: '{"encrypted": false, "devices": [], "protection": null, "plainParts": [], "newOwner": false, "error": null}', stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: false, protection: null, plainParts: [] })
+    // An older herald-os without protection: still encrypted, with nothing to warn about.
+    host.run = { stdout: '{"encrypted": true, "devices": ["/dev/vda3"], "newOwner": false, "error": null}', stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: null, plainParts: [] })
     host.run = { stdout: '{"encrypted": null, "devices": [], "newOwner": true, "error": "lsblk could not list the disks"}', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBeNull()
+    await expect(diskStatus()).resolves.toEqual(unknown)
     host.run = { stdout: '', stderr: 'herald-os: not found', code: 127 }
-    await expect(diskEncrypted()).resolves.toBeNull()
+    await expect(diskStatus()).resolves.toEqual(unknown)
     host.run = { stdout: 'not json', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBeNull()
+    await expect(diskStatus()).resolves.toEqual(unknown)
     host.run = { stdout: '{"encrypted": "yes"}', stderr: '', code: 0 }
-    await expect(diskEncrypted()).resolves.toBeNull()
+    await expect(diskStatus()).resolves.toEqual(unknown)
+  })
+
+  it('keeps a partly protected disk encrypted, with the parts written without encryption', async () => {
+    const plainParts = [
+      { device: '/dev/vda3', kind: 'cipher_null' },
+      { device: '/dev/vdb1', kind: 'journal' }
+    ]
+    host.run = {
+      stdout: JSON.stringify({ encrypted: true, devices: ['/dev/vda3'], protection: 'partial', plainParts: [...plainParts, { device: 7, kind: 'log' }, { device: '/dev/x', kind: 'odd' }] }),
+      stderr: '',
+      code: 0
+    }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'partial', plainParts })
   })
 })
 
