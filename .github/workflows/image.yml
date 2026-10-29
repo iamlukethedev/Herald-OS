@@ -293,6 +293,13 @@ jobs:
           sudo podman rmi --ignore "$IMAGE:$CHANNEL-${{ matrix.arch }}" \
             quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b
           df -h .
+      - name: Check the installer starts the LVM D-Bus service
+        # Anaconda's storage goes through lvmdbusd and stops at its first screen without it (#180).
+        # The ISO's installer is built from Fedora's packages of the day, so each build is checked.
+        if: matrix.type == 'anaconda-iso'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq squashfs-tools xorriso
+          sudo bash linux/image/check-installer.sh output/bootiso/install.iso
       - name: Name, compress and split it
         run: |
           version="${GITHUB_REF_NAME#v}"

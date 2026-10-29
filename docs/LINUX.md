@@ -369,6 +369,13 @@ account `%pre` of `unattended.ks` with that name and a throwaway key
 (`linux/vm/account-kickstart.sh` fills it in), forwards port 2222 to the machine's SSH, and fails
 unless the key signs in as the account while root and passwords are refused. It needs a release
 whose image has `herald-os setup ssh`.
+Before any install, `linux/image/check-installer.sh` checks that the ISO's installer can start the
+LVM D-Bus service: the D-Bus activation file, the unit it names (there, not masked, owning the
+name), the program and interpreter the unit starts, the D-Bus policy, the `lvm` command and
+profile lvmdbusd runs, its Python modules and the libblockdev plugin that calls it. Then it starts
+lvmdbusd inside the installer's root on a private bus and has it read the disks. The image workflow
+runs it on every ISO before packaging it, since the installer is built from Fedora's packages of
+the day, and the installer test runs it on the release's ISO first.
 
 On the image, apps install through Flatpak or into `~/.local` (the catalog picks those methods
 there); the system itself changes only by a whole new image.

@@ -64,6 +64,11 @@ jobs:
           mv "$name" herald.iso
           echo "LABEL=$(blkid -o value -s LABEL herald.iso)" >>"$GITHUB_ENV"
           7z l herald.iso | grep -Ei '\.ks|vmlinuz|initrd|grub.cfg' || true
+      - name: The installer starts the LVM D-Bus service
+        # What Anaconda's storage needs before any screen (#180), in a few seconds rather than an install.
+        run: |
+          sudo apt-get install -y -qq squashfs-tools
+          sudo bash linux/image/check-installer.sh herald.iso
       - name: The ISO's kickstart, unattended
         env:
           ACCOUNT: ${{ inputs.account }}
