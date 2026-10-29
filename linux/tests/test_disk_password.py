@@ -2090,7 +2090,14 @@ def left_add(tmp_path: Path, seconds: float) -> subprocess.Popen:
     name = tmp_path / "cryptsetup"
     if not name.exists():
         name.symlink_to(sys.executable)
-    return subprocess.Popen([str(name), "-c", f"import time; time.sleep({seconds})", "luksAddKey", "/dev/vda3"])
+    left = subprocess.Popen([str(name), "-c", f"import time; time.sleep({seconds})", "luksAddKey", "/dev/vda3"])
+    # Until it has run exec, /proc shows it as this process: wait for it to be seen at work, however
+    # long a loaded machine takes, rather than look too soon.
+    deadline = time.monotonic() + 60
+    while not cli.disk_busy(["/dev/vda3"]) and left.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert cli.disk_busy(["/dev/vda3"]), "the stand-in cryptsetup never showed in /proc"
+    return left
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
