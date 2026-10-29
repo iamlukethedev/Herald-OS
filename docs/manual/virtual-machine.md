@@ -3,13 +3,22 @@
 A virtual machine runs Herald OS Linux in a window on the computer you already have, so you can try
 the whole operating system without installing it. Nothing outside the virtual machine changes.
 
-Each release carries ready-made virtual machines: a UTM bundle for an Apple Silicon Mac, a Hyper-V
-disk for Windows and a plain disk for Linux and Intel Macs. The first start sets itself up in a few
-minutes, Hermes Agent included, then asks for your name and a password. The UTM bundle and the
-Hyper-V disk come with releases built after 0.1.0-alpha.4; earlier releases have only the Apple
-Silicon disk that `try.sh` uses ([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
+Releases carry a ready-made virtual machine disk. The first start sets itself up in a few minutes,
+Hermes Agent included, then asks for your name and a password. So far every release has only the
+Apple Silicon disk, the `aarch64.qcow2.zst` that `try.sh` downloads and boots
+([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
+
+The UTM bundle for an Apple Silicon Mac (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V
+`.vhdx.zip` for Windows and the `x86_64.qcow2.zst` for Linux and Intel Macs, are not yet available:
+no release has published them so far
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 
 ## On an Apple Silicon Mac, with UTM
+
+**Not yet available.** No release has published the UTM bundle yet, so these steps are for when one
+does. Until then,
+[From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac) downloads
+the Apple Silicon disk and boots it.
 
 No Homebrew or terminal needed:
 
@@ -25,6 +34,12 @@ shared clipboard and a screen that follows the window's size. How much of that H
 inside UTM is still being tested ([#67](https://github.com/iamlukethedev/Herald-OS/issues/67)).
 
 ## On Windows, with Hyper-V
+
+**Not yet available.** No release has published the Hyper-V disk yet
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), so these steps are for when one
+does; Windows support is tracked in [#92](https://github.com/iamlukethedev/Herald-OS/issues/92).
+Until then, use
+[the installer in another virtual machine](#with-the-installer-virtualbox-and-others).
 
 Hyper-V comes with Windows 11 Pro, Enterprise and Education. Windows 11 Home has no Hyper-V: use
 [the installer in another virtual machine](#with-the-installer-virtualbox-and-others) instead.
@@ -47,9 +62,11 @@ shared clipboard there yet.
 ## On Linux or an Intel Mac
 
 `herald-os-<version>-x86_64.qcow2.zst` (and `aarch64` for ARM machines) is a ready-made disk for
-QEMU, virt-manager, GNOME Boxes or UTM on an Intel Mac. Unpack it with `zstd -d`, then create a
-machine that boots with UEFI from it as an existing disk, with 4 cores, 6 GB of memory and room for
-the disk to grow to 40 GB.
+QEMU, virt-manager, GNOME Boxes or UTM on an Intel Mac. The x86_64 one is not yet available: no
+release has published it so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)); the
+`aarch64` one is in every release. Unpack it with `zstd -d`, then create a machine that boots with
+UEFI from it as an existing disk, with 4 cores, 6 GB of memory and room for the disk to grow to
+40 GB.
 
 ## With the installer: VirtualBox and others
 
@@ -63,30 +80,33 @@ machine's CD drive at the joined ISO.
 
 GitHub takes release files of up to 2 GB, so a bigger one comes in parts:
 
-- The zips (`.utm.zip`, `.vhdx.zip`) as `.001`, `.002` and so on. Open the `.001` with
-  [Keka](https://www.keka.io) on a Mac or [7-Zip](https://www.7-zip.org) on Windows, which read the
-  parts as one archive.
 - The `qcow2.zst` disks and the installer ISO as `.part0`, `.part1`.
+- The zips (`.utm.zip`, `.vhdx.zip`), once a release has them, as `.001`, `.002` and so on. Open
+  the `.001` with [Keka](https://www.keka.io) on a Mac or [7-Zip](https://www.7-zip.org) on
+  Windows, which read the parts as one archive.
 
-Every file has a `.sha256` beside it for the whole file, and a file in parts also has a
-`.sha256sums` with one line per part. From a terminal on a Mac or Linux, check the parts, join them
-and check the result:
+Every file has a `.sha256` beside it for the whole file. From a terminal on a Mac or Linux, join
+the parts and check the result, here the Apple Silicon disk:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
-shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256sums"    # each part; sha256sum -c on Linux
-cat "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9] > "herald-os-$VERSION-x86_64.vhdx.zip"
-shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256"          # the joined file
+VERSION=0.1.0-alpha.4    # replace with the version you downloaded
+cat "herald-os-$VERSION-aarch64.qcow2.zst.part"* > "herald-os-$VERSION-aarch64.qcow2.zst"
+shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256"    # sha256sum -c on Linux
 ```
 
-The `.utm.zip` joins the same way. The `.part0`, `.part1` files, here the Apple Silicon disk, join
-with `.part*` instead:
+Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with one line per part. With it, check
+the parts before joining them, so a bad download shows which part to fetch again:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
 shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256sums"    # sha256sum -c on Linux
-cat "herald-os-$VERSION-aarch64.qcow2.zst.part"* > "herald-os-$VERSION-aarch64.qcow2.zst"
-shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256"
+```
+
+The zips join with `.[0-9][0-9][0-9]` instead (the `.vhdx.zip` here; the `.utm.zip` is the same):
+
+```bash
+shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256sums"    # each part
+cat "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9] > "herald-os-$VERSION-x86_64.vhdx.zip"
+shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256"          # the joined file
 ```
 
 On Windows, in a Command Prompt, join the parts with a `+` between each, then compare the hash
@@ -94,13 +114,14 @@ On Windows, in a Command Prompt, join the parts with a `+` between each, then co
 
 ```bat
 rem replace with the version you downloaded
-set "VERSION=0.1.0-alpha.5"
-copy /b herald-os-%VERSION%-x86_64.vhdx.zip.001 + herald-os-%VERSION%-x86_64.vhdx.zip.002 herald-os-%VERSION%-x86_64.vhdx.zip
-certutil -hashfile herald-os-%VERSION%-x86_64.vhdx.zip SHA256
+set "VERSION=0.1.0-alpha.4"
+copy /b herald-os-%VERSION%-aarch64.qcow2.zst.part0 + herald-os-%VERSION%-aarch64.qcow2.zst.part1 herald-os-%VERSION%-aarch64.qcow2.zst
+certutil -hashfile herald-os-%VERSION%-aarch64.qcow2.zst SHA256
 ```
 
-If there are more parts, add `+ herald-os-%VERSION%-x86_64.vhdx.zip.003` (and so on) in order. To list them, run
-`dir herald-os-%VERSION%-x86_64.vhdx.zip.*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+If there are more parts, add `+ herald-os-%VERSION%-aarch64.qcow2.zst.part2` (and so on) in order. To list them, run
+`dir herald-os-%VERSION%-aarch64.qcow2.zst.part*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+A zip in parts joins the same way, from `.001`, `.002`.
 
 On Windows, 7-Zip's right-click menu also has **CRC SHA > SHA-256** for a file.
 

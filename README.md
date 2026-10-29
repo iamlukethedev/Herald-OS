@@ -39,14 +39,14 @@ Pick the way that matches your machine:
 
 | Your machine | What to install |
 | --- | --- |
-| A Mac, Apple Silicon or Intel | [Herald OS for macOS](#macos) |
+| A Mac, Apple Silicon or Intel | [Herald OS for macOS](#macos) (Intel: not yet available) |
 | A PC you can give to Herald OS | [The Herald OS Linux installer](#herald-os-linux-on-a-pc) |
 | Arch Linux | [The Arch package](#arch-linux) |
 | Omarchy | [The Arch package, then one command](#omarchy) |
 | Another Linux | [The tarball](#another-linux) |
-| An Apple Silicon Mac, to try the whole OS | [The virtual machine in UTM](#on-a-mac-with-utm) |
-| An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) |
-| A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) |
+| An Apple Silicon Mac, to try the whole OS | [The virtual machine from the terminal](#from-the-terminal-on-an-apple-silicon-mac), or [in UTM](#on-a-mac-with-utm) (not yet available) |
+| An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) (not yet available) |
+| A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) (not yet available) |
 
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
 account, or an API key for a provider Hermes supports (OpenRouter, OpenAI, Anthropic, a local model,
@@ -67,7 +67,8 @@ hermes setup
 ```
 
 **2. Install Herald OS.** Download `HeraldOS-<version>-mac-arm64.dmg` (Apple Silicon) or
-`HeraldOS-<version>-mac-x64.dmg` (Intel) from the
+`HeraldOS-<version>-mac-x64.dmg` (Intel, not yet available: see
+[On an Intel Mac](#on-an-intel-mac)) from the
 [releases page](https://github.com/iamlukethedev/Herald-OS/releases), open it and drag Herald OS to
 Applications. Apple menu > About This Mac says which you have: "Chip: Apple M…" is Apple Silicon,
 "Processor: … Intel …" is Intel.
@@ -109,15 +110,19 @@ for each of these the first time a feature needs it:
 
 #### On an Intel Mac
 
+**Not yet available.** No release has published the Intel build yet, so these steps are for when
+one does. Until then, the x86_64 installer ISO below runs the whole OS in a virtual machine.
+
 Download `HeraldOS-<version>-mac-x64.dmg` and follow the steps above. The Intel build is the same
 app built for x86_64, with node-pty's Intel binaries for the Terminal, but it is new and has not
 been tried on an Intel Mac yet: please [open an issue](https://github.com/iamlukethedev/Herald-OS/issues)
 if something does not work.
 
 To try the whole OS instead, open the ready-made x86_64 disk in [UTM](https://mac.getutm.app), as in
-[On Linux or an Intel Mac](#on-linux-or-an-intel-mac), or install the x86_64 installer ISO from
-[Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs it in
-QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
+[On Linux or an Intel Mac](#on-linux-or-an-intel-mac), once a release has it (not yet,
+[#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), or install the x86_64 installer ISO
+from [Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs
+it in QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
 ([installer-test.yml](.github/workflows/installer-test.yml)).
 
 ### Herald OS Linux on a PC
@@ -131,10 +136,13 @@ Herald.
    them. On macOS or Linux:
 
    ```bash
-   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256sums   # each part; sha256sum -c on Linux
    cat herald-os-<version>-x86_64.iso.part* > herald-os-<version>-x86_64.iso
-   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256         # the joined file
+   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256         # sha256sum -c on Linux
    ```
+
+   Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with a line per part:
+   `shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256sums` before joining shows which part to
+   fetch again after a bad download.
 
    On Windows: `copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso`.
 2. Write the ISO to a USB stick of 8 GB or more with
@@ -214,20 +222,33 @@ colour scheme and GTK theme. On a desktop you already use, try it from a second 
 
 ### The whole OS in a virtual machine
 
-Each release carries ready-made virtual machines of Herald OS Linux, so you can try the whole
+Releases carry a ready-made virtual machine disk of Herald OS Linux, so you can try the whole
 operating system without installing it. The first start sets itself up in a few minutes, Hermes
 Agent included, then Herald OS asks for your name and a password. Give the virtual machine 4 cores,
-6 GB of memory and 40 GB of disk space. The UTM bundle and the Hyper-V disk come with releases built
-after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`. The manual's
+6 GB of memory and 40 GB of disk space. So far every release has only the Apple Silicon disk, the
+`aarch64.qcow2.zst` that `try.sh` downloads and boots
+([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)). The UTM
+bundle (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V `.vhdx.zip` and the
+`x86_64.qcow2.zst`, are not yet available: no release has published them so far
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)). The manual's
 [Trying it in a virtual machine](docs/manual/virtual-machine.md) has the same steps, with the
 system key and scaling inside a virtual machine.
 
-GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The zips are split as
-`.001`, `.002` and so on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or
-[Keka](https://www.keka.io) on a Mac, which read the parts as one archive. Every file has a
-`.sha256` beside it for the whole file, and a split one also has a `.sha256sums` with a line per
-part. From a terminal, check the parts, join them and check the result (the `.vhdx.zip` here; the
-`.utm.zip` is the same, and the `qcow2.zst` parts are `.part0`, `.part1`):
+GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The `qcow2.zst` disks are
+split as `.part0`, `.part1`, and every file has a `.sha256` beside it for the whole file. From a
+terminal, join the parts and check the result (the Apple Silicon disk here):
+
+```bash
+cat herald-os-<version>-aarch64.qcow2.zst.part* > herald-os-<version>-aarch64.qcow2.zst
+shasum -a 256 -c herald-os-<version>-aarch64.qcow2.zst.sha256   # sha256sum -c on Linux
+```
+
+Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with a line per part, such as
+`herald-os-<version>-aarch64.qcow2.zst.sha256sums`; `shasum -a 256 -c` on it before joining shows
+which part to fetch again. The zips, once a release has them, are split as `.001`, `.002` and so
+on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or [Keka](https://www.keka.io)
+on a Mac, which read the parts as one archive, or join them from a terminal (the `.vhdx.zip` here;
+the `.utm.zip` is the same):
 
 ```bash
 shasum -a 256 -c herald-os-<version>-x86_64.vhdx.zip.sha256sums   # sha256sum -c on Linux
@@ -247,6 +268,10 @@ for each.
 
 #### On a Mac with UTM
 
+**Not yet available.** No release has published the UTM bundle yet, so these steps are for when one
+does. Until then, [`try.sh`](#from-the-terminal-on-an-apple-silicon-mac) downloads the Apple Silicon
+disk and boots it.
+
 For a Mac with Apple Silicon, without Homebrew or a terminal:
 
 1. Install [UTM](https://mac.getutm.app), a free app that runs virtual machines.
@@ -261,6 +286,12 @@ inside UTM is still being tested ([#67](https://github.com/iamlukethedev/Herald-
 UTM's settings for the machine change its cores and memory.
 
 #### On Windows with Hyper-V
+
+**Not yet available.** No release has published the Hyper-V disk yet
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), so these steps are for when one
+does; Windows support is tracked in [#92](https://github.com/iamlukethedev/Herald-OS/issues/92).
+Until then, the x86_64 installer ISO installs in a virtual machine that boots with UEFI
+([Herald OS Linux on a PC](#herald-os-linux-on-a-pc)).
 
 Hyper-V comes with Windows 11 Pro, Enterprise and Education (not Home):
 
@@ -282,8 +313,10 @@ shared clipboard there yet.
 #### On Linux or an Intel Mac
 
 `herald-os-<version>-x86_64.qcow2.zst` (and `aarch64` for ARM machines) is the same disk for QEMU,
-virt-manager, GNOME Boxes or UTM on an Intel Mac. Unpack it with `zstd -d`, then create a machine
-that boots with UEFI from it as an existing disk.
+virt-manager, GNOME Boxes or UTM on an Intel Mac. The x86_64 one is not yet available: no release
+has published it so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)); the
+`aarch64` one is in every release. Unpack it with `zstd -d`, then create a machine that boots with
+UEFI from it as an existing disk.
 
 #### From the terminal on an Apple Silicon Mac
 
