@@ -423,7 +423,8 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   password opens every device, so the current one or the new one (or both) opens each, and after a
   killed root side the command looks and says which. The look first waits (30 s at most) for a
   cryptsetup the killed root side left working on the disk, and says so for a device one still works
-  on. It takes 120 s at most, ends the root side when it stops, and Ctrl+C stops it. A change waits
+  on. It takes 120 s at most, ends the root side when it stops, and Ctrl+C stops it at once (the root
+  side starts with SIGTERM and SIGHUP at their default, so SIGTERM ends it). A change waits
   the same way, before it begins, for a cryptsetup still at work on the disk, and leaves the disk as
   it is (exit 1) if one does not end.
 - **A key slot that cannot be told.** On a cryptsetup that names no slot and where no slot opens on
@@ -445,7 +446,7 @@ bootc system to Herald OS](#switching-a-bootc-system-to-herald-os)).
   (a Ctrl+C at that moment can leave it with "Broken pipe" and exit 1) is said, and the command exits 0. It says that it waits only once the root side has begun adding the new password (it
   passes the root side's output on and watches for that). Ctrl+C while it starts, at a prompt, during the current
   password's check, or before the change begins stops with nothing changed, said once (exit 130),
-  also when only the root side was stopped.
+  also when only the root side was stopped, and a flood of them counts as that one stop.
 - **The rest.** Printable ASCII only (no input method at start-up). It refuses on a disk that is not
   encrypted (exit 4), and `--status` prints `{"encrypted", "devices", "protection", "plainParts",
   "newOwner", "error"}` without root. `encrypted` says LUKS asks for a password at start-up, null when
