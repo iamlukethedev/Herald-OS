@@ -324,6 +324,16 @@ switching to it, and changing its packages, Flatpaks and branding.
   resolves to an id below 1000), and it logs each skipped GitHub line by key type and reason, never
   the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it runs
   after) and runs `herald-os setup ssh --off --end-sessions`.
+  Both kickstarts end with the same `%pre` for the LVM D-Bus service (lvmdbusd,
+  `com.redhat.lvmdbus1`): Anaconda's storage reads every disk through it, and the installer's
+  libblockdev has no fallback to the `lvm` command, so without it Anaconda stops at its first screen
+  with "Could not activate remote peer 'com.redhat.lvmdbus1': startup job failed" (#180). The
+  `%pre` waits for udev, starts the service and has it read the disks once, retrying from a clean
+  state, and lifts the service's start limit for the installer's boot (a sixth start within ten
+  seconds is otherwise refused, with that same message). When the service still does not answer,
+  it says so on the console and puts the service's journal, `lvm fullreport` and `lsblk` into the
+  journal, which goes into Anaconda's crash report; `/tmp/herald-os-lvm.log` has the same. It never
+  stops the install.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. It also goes out as a UTM bundle

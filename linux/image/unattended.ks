@@ -1,10 +1,12 @@
 # An unattended Herald OS install: boot the installer ISO with inst.ks=<url of this file>.
 # It erases one disk and encrypts it; change the passphrase (or remove --passphrase to be asked).
-# The %pre at the end picks the disk: DISK if set there, else the PC's only internal disk. With
+# The second %pre picks the disk: DISK if set there, else the PC's only internal disk. With
 # several internal disks it stops and erases nothing until DISK is set. Every other disk is left
 # alone: ignoredisk hides them from zerombr, clearpart and autopart.
 # The first %pre names the account and the SSH keys that may sign in to it, and runs before the
 # disk's; left empty, the first start makes the account hermes and SSH stays off.
+# The last %pre is the installer ISO's own (iso.toml): it gets the LVM D-Bus service up before
+# Anaconda reads the disks, and never stops the install.
 text
 lang en_US.UTF-8
 keyboard us
@@ -297,4 +299,63 @@ say "erasing $disk, and only $disk"
   echo "ignoredisk --only-use=$disk"
   echo "clearpart --all --drives=$disk --initlabel --disklabel=gpt"
 } >/tmp/herald-os-disk.ks
+%end
+
+%pre --interpreter=/usr/bin/bash --log=/tmp/herald-os-lvm.log
+# Anaconda reads and changes the disks' LVM through the LVM D-Bus service (lvmdbusd, the name
+# com.redhat.lvmdbus1): the installer's libblockdev has no fallback to the lvm command, so when that
+# service cannot be started Anaconda stops at its first screen with "Could not activate remote
+# peer 'com.redhat.lvmdbus1': startup job failed". This starts it before Anaconda's storage scan,
+# once udev is done with the disks, and has it read them once. It also lifts the service's start
+# limit for this boot, so systemd never refuses to start it again after it stops, which is what
+# that message means once it has been started five times in ten seconds. When it still does not
+# answer, why goes into the journal, which Anaconda's crash report includes. It never stops the
+# install.
+unit=lvm2-lvmdbusd.service
+name=com.redhat.lvmdbus1
+
+say() {
+  echo "herald-os: $*" >&2
+  { echo "herald-os: $*" >>/dev/console; } 2>/dev/null || true
+}
+
+journal() {
+  local line
+  while IFS= read -r line; do
+    echo "herald-os: $line" >&2
+    logger -t herald-os-installer -- "$line" 2>/dev/null || true
+  done
+}
+
+answers() {
+  busctl --system --timeout=60 call "$name" /com/redhat/lvmdbus1/Manager "$name.Manager" Refresh >/dev/null &&
+    systemctl --quiet is-active "$unit"
+}
+
+mkdir -p "/run/systemd/system/$unit.d"
+printf '%s\n' '[Unit]' 'StartLimitIntervalSec=0' >"/run/systemd/system/$unit.d/50-herald-os.conf"
+systemctl daemon-reload || echo "systemctl daemon-reload failed: $unit keeps its start limit" | journal
+udevadm settle --timeout=60 || echo "udev was still busy with the disks after 60 s" | journal
+
+attempt=1
+while (( attempt <= 3 )); do
+  systemctl reset-failed "$unit" 2>/dev/null || true
+  if answers; then
+    echo "the LVM D-Bus service read the disks (attempt $attempt)" | journal
+    exit 0
+  fi
+  sleep 5
+  attempt=$((attempt + 1))
+done
+
+say "the LVM D-Bus service ($unit) does not answer, so the installer may stop before the disk screen."
+say "Ctrl+Alt+F2 opens a shell; journalctl -b -u $unit and /tmp/herald-os-lvm.log say why."
+{
+  systemctl status --no-pager --full "$unit"
+  journalctl -b --no-pager -u "$unit" | tail -n 80
+  lvm fullreport 2>&1 | tail -n 40
+  echo "lvm fullreport exit code: ${PIPESTATUS[0]}"
+  lsblk -o NAME,TYPE,SIZE,RO,RM,TRAN,PTTYPE,FSTYPE
+} 2>&1 | journal
+systemctl reset-failed "$unit" 2>/dev/null || true
 %end
