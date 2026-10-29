@@ -2484,12 +2484,12 @@ def test_status_of_an_ext4_root_on_luks_with_its_journal_on_a_plain_disk(monkeyp
 HOME_MOUNTS = [{"target": "/", "source": "/dev/dm-0", "fstype": "ext4", "uuid": "fs", "options": "rw,relatime"}]
 
 
-def findmnt_listing(tools: Path, mounts: list[dict]) -> None:
+def findmnt_listing(stand_ins: Path, mounts: list[dict]) -> None:
     """A findmnt that lists these mounts, with their options only when asked for OPTIONS, as it does."""
     bare = [{key: value for key, value in mount.items() if key != "options"} for mount in mounts]
-    (tools / "findmnt").write_text(f"#!/bin/sh\ncase \"$*\" in *OPTIONS*) echo '{json.dumps({'filesystems': mounts})}';; "
+    (stand_ins / "findmnt").write_text(f"#!/bin/sh\ncase \"$*\" in *OPTIONS*) echo '{json.dumps({'filesystems': mounts})}';; "
                                    f"*) echo '{json.dumps({'filesystems': bare})}';; esac\n")
-    (tools / "findmnt").chmod(0o755)
+    (stand_ins / "findmnt").chmod(0o755)
 
 
 def test_a_keyring_on_a_filesystem_that_writes_part_of_itself_in_the_clear_is_not_on_an_encrypted_disk():
@@ -2519,10 +2519,10 @@ def test_the_keyring_s_disk_counts_partial_protection_as_not_encrypted(monkeypat
     folder.mkdir()
     for entry in journals:
         (folder / entry).mkdir()
-    tools = tmp_path / "bin"
-    tools.mkdir()
-    findmnt_listing(tools, [{**HOME_MOUNTS[0], "options": options}])
-    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    stand_ins = tmp_path / "bin"
+    stand_ins.mkdir()
+    findmnt_listing(stand_ins, [{**HOME_MOUNTS[0], "options": options}])
+    monkeypatch.setenv("PATH", f"{stand_ins}:{os.environ['PATH']}")
     monkeypatch.setattr(cli, "DISK_JBD2", folder)
     monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
     asked = []
@@ -2532,10 +2532,10 @@ def test_the_keyring_s_disk_counts_partial_protection_as_not_encrypted(monkeypat
 
 
 def test_the_keyring_s_xfs_disk_with_its_log_on_a_plain_disk_is_not_encrypted(monkeypatch, tmp_path):
-    tools = tmp_path / "bin"
-    tools.mkdir()
-    findmnt_listing(tools, [{**HOME_MOUNTS[0], "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}])
-    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    stand_ins = tmp_path / "bin"
+    stand_ins.mkdir()
+    findmnt_listing(stand_ins, [{**HOME_MOUNTS[0], "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}])
+    monkeypatch.setenv("PATH", f"{stand_ins}:{os.environ['PATH']}")
     monkeypatch.setattr(cli, "DISK_JBD2", tmp_path / "none")
     monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
     monkeypatch.setattr(cli, "luks_cipher_null", lambda device: False)
