@@ -235,7 +235,8 @@ bundle (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V `.vhdx.zip` and the
 system key and scaling inside a virtual machine.
 
 GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The `qcow2.zst` disks are
-split as `.part0`, `.part1`, and every file has a `.sha256` beside it for the whole file. From a
+split as `.part0`, `.part1`, and every Linux file (the disks, the installer ISO and the tarballs)
+has a `.sha256` beside it for the whole file; the macOS `.dmg` and `.zip` have none yet. From a
 terminal, join the parts and check the result (the Apple Silicon disk here):
 
 ```bash

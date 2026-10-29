@@ -85,8 +85,8 @@ GitHub takes release files of up to 2 GB, so a bigger one comes in parts:
   the `.001` with [Keka](https://www.keka.io) on a Mac or [7-Zip](https://www.7-zip.org) on
   Windows, which read the parts as one archive.
 
-Every file has a `.sha256` beside it for the whole file. From a terminal on a Mac or Linux, join
-the parts and check the result, here the Apple Silicon disk:
+Every disk and the installer ISO has a `.sha256` beside it for the whole file. From a terminal on
+a Mac or Linux, join the parts and check the result, here the Apple Silicon disk:
 
 ```bash
 VERSION=0.1.0-alpha.4    # replace with the version you downloaded
