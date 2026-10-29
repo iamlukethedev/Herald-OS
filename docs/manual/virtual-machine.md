@@ -80,30 +80,33 @@ machine's CD drive at the joined ISO.
 
 GitHub takes release files of up to 2 GB, so a bigger one comes in parts:
 
-- The zips (`.utm.zip`, `.vhdx.zip`) as `.001`, `.002` and so on. Open the `.001` with
-  [Keka](https://www.keka.io) on a Mac or [7-Zip](https://www.7-zip.org) on Windows, which read the
-  parts as one archive.
 - The `qcow2.zst` disks and the installer ISO as `.part0`, `.part1`.
+- The zips (`.utm.zip`, `.vhdx.zip`), once a release has them, as `.001`, `.002` and so on. Open
+  the `.001` with [Keka](https://www.keka.io) on a Mac or [7-Zip](https://www.7-zip.org) on
+  Windows, which read the parts as one archive.
 
-Every file has a `.sha256` beside it for the whole file, and a file in parts also has a
-`.sha256sums` with one line per part. From a terminal on a Mac or Linux, check the parts, join them
-and check the result:
+Every file has a `.sha256` beside it for the whole file. From a terminal on a Mac or Linux, join
+the parts and check the result, here the Apple Silicon disk:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
-shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256sums"    # each part; sha256sum -c on Linux
-cat "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9] > "herald-os-$VERSION-x86_64.vhdx.zip"
-shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256"          # the joined file
+VERSION=0.1.0-alpha.4    # replace with the version you downloaded
+cat "herald-os-$VERSION-aarch64.qcow2.zst.part"* > "herald-os-$VERSION-aarch64.qcow2.zst"
+shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256"    # sha256sum -c on Linux
 ```
 
-The `.utm.zip` joins the same way. The `.part0`, `.part1` files, here the Apple Silicon disk, join
-with `.part*` instead:
+Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with one line per part. With it, check
+the parts before joining them, so a bad download shows which part to fetch again:
 
 ```bash
-VERSION=0.1.0-alpha.5    # replace with the version you downloaded (alpha.5 is the first release with these files)
 shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256sums"    # sha256sum -c on Linux
-cat "herald-os-$VERSION-aarch64.qcow2.zst.part"* > "herald-os-$VERSION-aarch64.qcow2.zst"
-shasum -a 256 -c "herald-os-$VERSION-aarch64.qcow2.zst.sha256"
+```
+
+The zips join with `.[0-9][0-9][0-9]` instead (the `.vhdx.zip` here; the `.utm.zip` is the same):
+
+```bash
+shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256sums"    # each part
+cat "herald-os-$VERSION-x86_64.vhdx.zip."[0-9][0-9][0-9] > "herald-os-$VERSION-x86_64.vhdx.zip"
+shasum -a 256 -c "herald-os-$VERSION-x86_64.vhdx.zip.sha256"          # the joined file
 ```
 
 On Windows, in a Command Prompt, join the parts with a `+` between each, then compare the hash
@@ -111,13 +114,14 @@ On Windows, in a Command Prompt, join the parts with a `+` between each, then co
 
 ```bat
 rem replace with the version you downloaded
-set "VERSION=0.1.0-alpha.5"
-copy /b herald-os-%VERSION%-x86_64.vhdx.zip.001 + herald-os-%VERSION%-x86_64.vhdx.zip.002 herald-os-%VERSION%-x86_64.vhdx.zip
-certutil -hashfile herald-os-%VERSION%-x86_64.vhdx.zip SHA256
+set "VERSION=0.1.0-alpha.4"
+copy /b herald-os-%VERSION%-aarch64.qcow2.zst.part0 + herald-os-%VERSION%-aarch64.qcow2.zst.part1 herald-os-%VERSION%-aarch64.qcow2.zst
+certutil -hashfile herald-os-%VERSION%-aarch64.qcow2.zst SHA256
 ```
 
-If there are more parts, add `+ herald-os-%VERSION%-x86_64.vhdx.zip.003` (and so on) in order. To list them, run
-`dir herald-os-%VERSION%-x86_64.vhdx.zip.*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+If there are more parts, add `+ herald-os-%VERSION%-aarch64.qcow2.zst.part2` (and so on) in order. To list them, run
+`dir herald-os-%VERSION%-aarch64.qcow2.zst.part*`. Don't use a wildcard with `copy /b`, because it may join the parts out of order.
+A zip in parts joins the same way, from `.001`, `.002`.
 
 On Windows, 7-Zip's right-click menu also has **CRC SHA > SHA-256** for a file.
 

@@ -39,7 +39,7 @@ Pick the way that matches your machine:
 
 | Your machine | What to install |
 | --- | --- |
-| A Mac, Apple Silicon or Intel | [Herald OS for macOS](#macos) |
+| A Mac, Apple Silicon or Intel | [Herald OS for macOS](#macos) (Intel: not yet available) |
 | A PC you can give to Herald OS | [The Herald OS Linux installer](#herald-os-linux-on-a-pc) |
 | Arch Linux | [The Arch package](#arch-linux) |
 | Omarchy | [The Arch package, then one command](#omarchy) |
@@ -67,7 +67,8 @@ hermes setup
 ```
 
 **2. Install Herald OS.** Download `HeraldOS-<version>-mac-arm64.dmg` (Apple Silicon) or
-`HeraldOS-<version>-mac-x64.dmg` (Intel) from the
+`HeraldOS-<version>-mac-x64.dmg` (Intel, not yet available: see
+[On an Intel Mac](#on-an-intel-mac)) from the
 [releases page](https://github.com/iamlukethedev/Herald-OS/releases), open it and drag Herald OS to
 Applications. Apple menu > About This Mac says which you have: "Chip: Apple M…" is Apple Silicon,
 "Processor: … Intel …" is Intel.
@@ -109,6 +110,9 @@ for each of these the first time a feature needs it:
 
 #### On an Intel Mac
 
+**Not yet available.** No release has published the Intel build yet, so these steps are for when
+one does. Until then, the x86_64 installer ISO below runs the whole OS in a virtual machine.
+
 Download `HeraldOS-<version>-mac-x64.dmg` and follow the steps above. The Intel build is the same
 app built for x86_64, with node-pty's Intel binaries for the Terminal, but it is new and has not
 been tried on an Intel Mac yet: please [open an issue](https://github.com/iamlukethedev/Herald-OS/issues)
@@ -132,10 +136,13 @@ Herald.
    them. On macOS or Linux:
 
    ```bash
-   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256sums   # each part; sha256sum -c on Linux
    cat herald-os-<version>-x86_64.iso.part* > herald-os-<version>-x86_64.iso
-   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256         # the joined file
+   shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256         # sha256sum -c on Linux
    ```
+
+   Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with a line per part:
+   `shasum -a 256 -c herald-os-<version>-x86_64.iso.sha256sums` before joining shows which part to
+   fetch again after a bad download.
 
    On Windows: `copy /b herald-os-<version>-x86_64.iso.part0 + herald-os-<version>-x86_64.iso.part1 herald-os-<version>-x86_64.iso`.
 2. Write the ISO to a USB stick of 8 GB or more with
@@ -227,12 +234,21 @@ bundle (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V `.vhdx.zip` and the
 [Trying it in a virtual machine](docs/manual/virtual-machine.md) has the same steps, with the
 system key and scaling inside a virtual machine.
 
-GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The zips are split as
-`.001`, `.002` and so on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or
-[Keka](https://www.keka.io) on a Mac, which read the parts as one archive. Every file has a
-`.sha256` beside it for the whole file, and a split one also has a `.sha256sums` with a line per
-part. From a terminal, check the parts, join them and check the result (the `.vhdx.zip` here; the
-`.utm.zip` is the same, and the `qcow2.zst` parts are `.part0`, `.part1`):
+GitHub takes release files of up to 2 GB, so a bigger one comes in parts. The `qcow2.zst` disks are
+split as `.part0`, `.part1`, and every file has a `.sha256` beside it for the whole file. From a
+terminal, join the parts and check the result (the Apple Silicon disk here):
+
+```bash
+cat herald-os-<version>-aarch64.qcow2.zst.part* > herald-os-<version>-aarch64.qcow2.zst
+shasum -a 256 -c herald-os-<version>-aarch64.qcow2.zst.sha256   # sha256sum -c on Linux
+```
+
+Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with a line per part, such as
+`herald-os-<version>-aarch64.qcow2.zst.sha256sums`; `shasum -a 256 -c` on it before joining shows
+which part to fetch again. The zips, once a release has them, are split as `.001`, `.002` and so
+on: open the `.001` with [7-Zip](https://www.7-zip.org) on Windows or [Keka](https://www.keka.io)
+on a Mac, which read the parts as one archive, or join them from a terminal (the `.vhdx.zip` here;
+the `.utm.zip` is the same):
 
 ```bash
 shasum -a 256 -c herald-os-<version>-x86_64.vhdx.zip.sha256sums   # sha256sum -c on Linux

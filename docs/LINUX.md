@@ -2,7 +2,7 @@
 
 Herald OS as a whole operating system: a Fedora base, greetd signing you in, niri arranging the
 windows, the Herald shell drawing the menu bar, dock and system menus, and Hermes Agent underneath.
-Today it installs on x86_64 PCs from the installer ISO in the v0.1.0-alpha.5 release (tested in a
+Today it installs on x86_64 PCs from the installer ISO in the releases (tested in a
 virtual machine in CI, not yet on real PC hardware), runs as an app inside Omarchy, and on an Apple
 Silicon Mac (aarch64) runs in a virtual machine for trying it and for development; nothing on the
 Mac changes.
@@ -336,13 +336,13 @@ switching to it, and changing its packages, Flatpaks and branding.
 `linux/vm/package-disk.sh` names, compresses and checksums them. Files over the 2 GiB GitHub takes
 for one release file go up in parts: the ISO and the `qcow2.zst` as `.part0`, `.part1` that `cat`
 joins again, the zips as `.001`, `.002` that 7-Zip and Keka open as one archive. The `.sha256` is the
-joined file's, and a split file's `.sha256sums` has one line per part. `try.sh` joins its parts
-itself; by hand:
+joined file's, and a split file's `.sha256sums` has one line per part (releases after
+0.1.0-alpha.4; earlier ones have only the `.sha256`). `try.sh` joins its parts itself; by hand:
 
 ```bash
-sha256sum -c herald-os-<version>-aarch64.qcow2.zst.sha256sums    # each part
 cat herald-os-<version>-aarch64.qcow2.zst.part* > herald-os-<version>-aarch64.qcow2.zst
 sha256sum -c herald-os-<version>-aarch64.qcow2.zst.sha256          # the joined file
+sha256sum -c herald-os-<version>-aarch64.qcow2.zst.sha256sums      # each part, after 0.1.0-alpha.4
 ```
 
 The zips join the same way from `.001`, `.002` (`cat <file>.zip.[0-9][0-9][0-9] > <file>.zip`).

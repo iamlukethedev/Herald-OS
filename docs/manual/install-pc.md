@@ -32,7 +32,7 @@ cat "herald-os-$VERSION-x86_64.iso.part"* > "herald-os-$VERSION-x86_64.iso"
 shasum -a 256 -c "herald-os-$VERSION-x86_64.iso.sha256"    # sha256sum -c on Linux
 ```
 
-Releases built after 0.1.0-alpha.4 also have a `.sha256sums` with a line per part. Download it too
+Releases after 0.1.0-alpha.4 will also have a `.sha256sums` with a line per part. Download it too
 and check the parts before joining them, so a bad download shows which part to fetch again:
 
 ```bash
