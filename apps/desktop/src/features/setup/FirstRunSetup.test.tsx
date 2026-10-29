@@ -635,6 +635,17 @@ describe("first-run setup's keyring", () => {
     expect(bridge.setup.keyring).not.toHaveBeenCalled()
   })
 
+  it('on a plain disk, treats a keyring disk it cannot tell about as one that is not encrypted', async () => {
+    const seen = []
+    for (const keyringEncrypted of [false, null] as const) {
+      const host = await afterTheAccount({ diskEncrypted: false, keyringEncrypted, keyring: 'none' })
+      seen.push({ heading: heading(host), steps: host.querySelectorAll('[aria-hidden] > span').length, keyring: bridge.setup.keyring.mock.calls.length })
+    }
+    expect(seen[0]).toEqual({ heading: t('firstRun.keyring.title'), steps: seen[0]?.steps, keyring: 0 })
+    expect(seen[0]?.steps).toBeGreaterThan(0)
+    expect(seen[1]).toEqual(seen[0])
+  })
+
   it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s that a partly protected disk is not fully protected, not that it is unencrypted', async language => {
     const host = await afterTheAccount(
       { diskEncrypted: true, diskProtection: 'partial', diskPlainParts: [{ device: '/dev/vdb1', kind: 'journal' }], keyringEncrypted: false, keyring: 'none' },
