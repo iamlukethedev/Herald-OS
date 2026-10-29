@@ -218,7 +218,7 @@ because the workflow uploads only the `.dmg` and `.zip`, not the `.blockmap` or 
 After downloading a release:
 
 ```bash
-dmg=~/Downloads/HeraldOS-<version>-mac-arm64.dmg  # or -mac-x64.dmg on an Intel Mac
+dmg=~/Downloads/HeraldOS-<version>-mac-arm64.dmg  # or -mac-x64.dmg on Intel (not yet available)
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature -vv "$dmg"
 
