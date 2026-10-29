@@ -332,6 +332,21 @@ describe('the disk password', () => {
     }
     await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'partial', plainParts })
   })
+
+  it('names no parts on a disk encrypted throughout, whatever the list says', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: true, protection: 'full', plainParts: [{ device: '/dev/vdb1', kind: 'journal' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'full', plainParts: [] })
+  })
+
+  it('gives no protection, and no parts, to a disk that is not encrypted', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: false, protection: 'partial', plainParts: [{ device: '/dev/vdb1', kind: 'journal' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: false, protection: null, plainParts: [] })
+  })
+
+  it('leaves out a part that is not an object', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: true, protection: 'partial', plainParts: [null, 'journal', { device: '/dev/vdb1', kind: 'log' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'partial', plainParts: [{ device: '/dev/vdb1', kind: 'log' }] })
+  })
 })
 
 describe('the keyring', () => {
