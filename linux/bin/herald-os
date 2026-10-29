@@ -7296,8 +7296,8 @@ if __name__ == "__main__":
         # Before `password --disk` asks anything (it finds the devices first), nothing has changed.
         if sys.argv[1:3] != ["password", "--disk"]:
             raise
-        # As at the prompts: SIG_IGN, which outlasts Python's shutdown, before it says so.
-        disk_ignore_held((signal.SIGINT,))
+        # Ctrl+C after this first one does nothing (disk_interrupt_once), and the finally below sets
+        # SIG_IGN before Python's shutdown.
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
     finally:
