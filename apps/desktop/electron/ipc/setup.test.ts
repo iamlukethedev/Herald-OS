@@ -484,6 +484,34 @@ describe('the keyring', () => {
       }
     }
   })
+
+  it('passes the disk\'s protection and the parts written without encryption on as they are', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    const plainParts = [
+      { device: '/dev/vda3', kind: 'cipher_null' },
+      { device: '/dev/vdb1', kind: 'journal' }
+    ]
+
+    try {
+      vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done')
+      vi.mocked(run).mockImplementation(async (_command, args) =>
+        args[0] === 'keyring'
+          ? { stdout: '{"keyring": "none", "encrypted": true}', stderr: '', code: 0 }
+          : { stdout: JSON.stringify({ encrypted: true, devices: ['/dev/vda3'], protection: 'partial', plainParts }), stderr: '', code: 0 }
+      )
+      registerSetupIpc()
+      const state = await host.handlers.get(IPC.setupState)?.({})
+      expect(state).toMatchObject({ needed: true, diskEncrypted: true, diskProtection: 'partial', keyringEncrypted: true })
+      expect((state as { diskPlainParts: unknown }).diskPlainParts).toEqual(plainParts)
+    } finally {
+      vi.mocked(run).mockImplementation(async () => host.run)
+
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
+  })
 })
 
 describe('a new owner', () => {
