@@ -326,8 +326,9 @@ switching to it, and changing its packages, Flatpaks and branding.
   after) and runs `herald-os setup ssh --off --end-sessions`.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
-  release's disk and boots it in one command. It also goes out as a UTM bundle
-  (`aarch64.utm.zip`, made by `linux/vm/make-utm.py`) that opens in UTM with a double-click.
+  release's disk and boots it in one command. The workflow also makes a UTM bundle
+  (`aarch64.utm.zip`, made by `linux/vm/make-utm.py`) that opens in UTM with a double-click, but no
+  release has published it yet ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 - **an x86_64 VM disk** from the same `disk.toml`: as a `qcow2.zst`, and as a Hyper-V VHDX
   (`x86_64.vhdx.zip`) for a generation 2 machine on Windows. The workflow builds it, but no release
   has published it yet ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).

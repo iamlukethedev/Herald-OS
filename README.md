@@ -44,7 +44,7 @@ Pick the way that matches your machine:
 | Arch Linux | [The Arch package](#arch-linux) |
 | Omarchy | [The Arch package, then one command](#omarchy) |
 | Another Linux | [The tarball](#another-linux) |
-| An Apple Silicon Mac, to try the whole OS | [The virtual machine in UTM](#on-a-mac-with-utm) |
+| An Apple Silicon Mac, to try the whole OS | [The virtual machine from the terminal](#from-the-terminal-on-an-apple-silicon-mac), or [in UTM](#on-a-mac-with-utm) (not yet available) |
 | An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) (not yet available) |
 | A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) (not yet available) |
 
@@ -215,13 +215,15 @@ colour scheme and GTK theme. On a desktop you already use, try it from a second 
 
 ### The whole OS in a virtual machine
 
-Each release carries ready-made virtual machines of Herald OS Linux, so you can try the whole
+Releases carry a ready-made virtual machine disk of Herald OS Linux, so you can try the whole
 operating system without installing it. The first start sets itself up in a few minutes, Hermes
 Agent included, then Herald OS asks for your name and a password. Give the virtual machine 4 cores,
-6 GB of memory and 40 GB of disk space. The UTM bundle comes with releases built after
-0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`. The x86_64 disks, the
-Hyper-V `.vhdx.zip` and the `x86_64.qcow2.zst`, are not yet available: no release has published
-them so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)). The manual's
+6 GB of memory and 40 GB of disk space. So far every release has only the Apple Silicon disk, the
+`aarch64.qcow2.zst` that `try.sh` downloads and boots
+([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)). The UTM
+bundle (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V `.vhdx.zip` and the
+`x86_64.qcow2.zst`, are not yet available: no release has published them so far
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)). The manual's
 [Trying it in a virtual machine](docs/manual/virtual-machine.md) has the same steps, with the
 system key and scaling inside a virtual machine.
 
@@ -249,6 +251,10 @@ Then compare the hash with the one in the `.sha256`. With more parts, add a `+` 
 for each.
 
 #### On a Mac with UTM
+
+**Not yet available.** No release has published the UTM bundle yet, so these steps are for when one
+does. Until then, [`try.sh`](#from-the-terminal-on-an-apple-silicon-mac) downloads the Apple Silicon
+disk and boots it.
 
 For a Mac with Apple Silicon, without Homebrew or a terminal:
 

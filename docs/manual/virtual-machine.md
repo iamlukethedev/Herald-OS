@@ -3,16 +3,22 @@
 A virtual machine runs Herald OS Linux in a window on the computer you already have, so you can try
 the whole operating system without installing it. Nothing outside the virtual machine changes.
 
-Each release carries ready-made virtual machines: a UTM bundle for an Apple Silicon Mac, a Hyper-V
-disk for Windows and a plain disk for Linux and Intel Macs. The first start sets itself up in a few
-minutes, Hermes Agent included, then asks for your name and a password. The UTM bundle comes with
-releases built after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk that `try.sh`
-uses ([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
+Releases carry a ready-made virtual machine disk. The first start sets itself up in a few minutes,
+Hermes Agent included, then asks for your name and a password. So far every release has only the
+Apple Silicon disk, the `aarch64.qcow2.zst` that `try.sh` downloads and boots
+([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
 
-The x86_64 disks, the Hyper-V `.vhdx.zip` and the `x86_64.qcow2.zst`, are not yet available: no
-release has published them so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
+The UTM bundle for an Apple Silicon Mac (`aarch64.utm.zip`) and the x86_64 disks, the Hyper-V
+`.vhdx.zip` for Windows and the `x86_64.qcow2.zst` for Linux and Intel Macs, are not yet available:
+no release has published them so far
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 
 ## On an Apple Silicon Mac, with UTM
+
+**Not yet available.** No release has published the UTM bundle yet, so these steps are for when one
+does. Until then,
+[From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac) downloads
+the Apple Silicon disk and boots it.
 
 No Homebrew or terminal needed:
 

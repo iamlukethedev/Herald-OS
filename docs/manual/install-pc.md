@@ -7,7 +7,7 @@ much real hardware, so try it on a computer you can spare and keep backups.
 ## What you need
 
 - A 64-bit Intel or AMD PC. ARM PCs have no installer yet; Apple Silicon Macs use the
-  [virtual machine](virtual-machine.md#on-an-apple-silicon-mac-with-utm). To try it on a Windows PC
+  [virtual machine](virtual-machine.md#from-the-terminal-on-an-apple-silicon-mac). To try it on a Windows PC
   first, there will be a [Hyper-V virtual machine](virtual-machine.md#on-windows-with-hyper-v)
   (not yet available, [#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 - A USB stick of 8 GB or more (it is erased).
