@@ -3662,8 +3662,18 @@ DISK_ROOT_SHELL = ["/bin/sh", "-c", 'trap "" INT QUIT; exec "$@"', "herald-os"]
 
 
 def disk_root_start(op: str, **kwargs) -> subprocess.Popen:
-    """Start the root side, with SIGINT and SIGQUIT ignored from its start (DISK_ROOT_SHELL)."""
-    return subprocess.Popen([*DISK_ROOT_SHELL, *disk_root_argv(op)], stdin=subprocess.PIPE, **kwargs)
+    """Start the root side, with SIGINT and SIGQUIT ignored from its start (DISK_ROOT_SHELL), and SIGTERM
+    and SIGHUP at their default, so that it (and sudo before it) can be ended. This side ignores those
+    once the change is over (to say how it ended, and look), which the root side would keep through
+    exec, and the shell cannot undo: for the fork they are a handler that does nothing instead."""
+    ending = tuple(each for each in (signal.SIGTERM, signal.SIGHUP) if signal.getsignal(each) == signal.SIG_IGN)
+    for each in ending:
+        signal.signal(each, disk_held)
+    try:
+        return subprocess.Popen([*DISK_ROOT_SHELL, *disk_root_argv(op)], stdin=subprocess.PIPE, **kwargs)
+    finally:
+        if ending:
+            disk_ignore_held(ending)
 
 
 def disk_held(signum: int, frame) -> None:
@@ -3830,9 +3840,9 @@ def disk_end_lines(state: dict) -> list[str]:
 
 
 def disk_end_process(process: subprocess.Popen) -> None:
-    """End the root side (through sudo, which passes SIGTERM on to it), continued first should it be
-    stopped; SIGKILL if it does not end."""
-    for each in (signal.SIGCONT, signal.SIGTERM):
+    """End the root side (through sudo, which passes SIGTERM on to it), then continue it, so that one
+    that is stopped takes the SIGTERM at once; SIGKILL if it does not end."""
+    for each in (signal.SIGTERM, signal.SIGCONT):
         with contextlib.suppress(OSError):
             process.send_signal(each)
     try:

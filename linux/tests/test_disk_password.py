@@ -1881,6 +1881,74 @@ def test_ctrl_c_stops_the_look_and_the_root_side_with_it(monkeypatch, tmp_path, 
         os.kill(int(pid_file.read_text()), 0)
 
 
+SLOW_LOOK = """
+import os, signal, sys, time
+folder = sys.argv[1]
+with open(folder + "/look", "w") as out:
+    out.write(" ".join([str(os.getpid())] + ["default" if signal.getsignal(each) == signal.SIG_DFL else "not default" for each in (signal.SIGTERM, signal.SIGHUP)]))
+sys.stdin.read()
+if sys.argv[2] == "stops":
+    os.kill(os.getpid(), signal.SIGSTOP)
+time.sleep(30)
+"""
+
+
+def look_gone(pid: int) -> bool:
+    return not Path(f"/proc/{pid}").exists() if Path("/proc").is_dir() else True
+
+
+@pytest.mark.parametrize("sudo", ["none", "real"])
+@pytest.mark.parametrize("how", ["runs", "stops"], ids=["a slow look", "a stopped look"])
+def test_ctrl_c_ends_the_look_and_its_root_side_at_once(monkeypatch, tmp_path, capsys, how, sudo):
+    """After the change this side ignores SIGTERM and SIGHUP; the look's root side must not keep that, or
+    SIGTERM (which sudo passes on) cannot end it and only SIGKILL does, 5 s later. One that is stopped is
+    continued after SIGTERM, so it ends at once too."""
+    if sudo == "real" and (os.geteuid() == 0 or not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0):
+        pytest.skip("needs sudo without a password, as someone other than root")
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: [*(["sudo", "-n"] if sudo == "real" else []), sys.executable, "-c", SLOW_LOOK, str(tmp_path), how])
+    before = {each: signal.getsignal(each) for each in (signal.SIGTERM, signal.SIGHUP)}
+    for each in before:
+        signal.signal(each, signal.SIG_IGN)
+    timer = threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGINT))
+    try:
+        pressed = time.monotonic() + 1.0
+        timer.start()
+        assert cli.disk_report_end({"devices": ["/dev/vda3"], "current": OLD, "new": NEW}, -9) == cli.DISK_PARTLY
+        ended = time.monotonic()
+    finally:
+        timer.cancel()
+        for each, handler in before.items():
+            signal.signal(each, handler)
+    assert "stopped looking" in capsys.readouterr().err
+    pid, *dispositions = (tmp_path / "look").read_text().split()
+    assert dispositions == ["default", "default"], "the look's root side started with SIGTERM or SIGHUP ignored"
+    assert look_gone(int(pid)), "the look's root side outlived the command"
+    # Ctrl+C is seen within half a second, and SIGTERM ends the look at once; SIGKILL comes only after 5 s.
+    assert ended - pressed < 1.5, f"ending the look took {ended - pressed:.1f} s"
+
+
+@pytest.mark.parametrize("op", ["check", "change", "probe"])
+def test_every_root_side_starts_with_sigterm_and_sighup_at_default(monkeypatch, op):
+    """However this side holds them, each root side it starts can be ended by SIGTERM and SIGHUP, and
+    starts with Ctrl+C and Ctrl+\\ ignored; this side's own handling stays as it was."""
+    show = ("import signal; print(*['default' if signal.getsignal(each) == signal.SIG_DFL else 'ignored' if signal.getsignal(each) == signal.SIG_IGN "
+            "else 'other' for each in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGQUIT)])")
+    monkeypatch.setattr(cli, "disk_root_argv", lambda op: [sys.executable, "-c", show])
+    held = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGQUIT)
+    before = {each: signal.getsignal(each) for each in held}
+    for each in held:
+        signal.signal(each, signal.SIG_IGN)
+    try:
+        process = cli.disk_root_start(op, stdout=subprocess.PIPE, text=True)
+        out, _ = process.communicate("", timeout=30)
+        after = [signal.getsignal(each) for each in held]
+    finally:
+        for each, handler in before.items():
+            signal.signal(each, handler)
+    assert out.split() == ["default", "default", "ignored", "ignored"]
+    assert after == [signal.SIG_IGN] * 4
+
+
 LOOK_LIMIT_DRIVER = """
 import importlib.machinery, importlib.util, io, json, sys
 loader = importlib.machinery.SourceFileLoader("cli", sys.argv[1])
