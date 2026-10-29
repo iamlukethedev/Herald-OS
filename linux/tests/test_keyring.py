@@ -450,7 +450,7 @@ def test_status_is_json_and_needs_no_daemon(tmp_path):
     tools = disk_tools(tmp_path, None, None)
     result = run_cli(tmp_path, "--status", env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent", "PATH": f"{tools}:{os.environ['PATH']}"})
     assert result.returncode == 0
-    assert json.loads(result.stdout) == {"keyring": "none", "folder": str(tmp_path / ".local" / "share" / "keyrings"), "encrypted": None}
+    assert json.loads(result.stdout) == {"keyring": "none", "folder": str(tmp_path / ".local" / "share" / "keyrings"), "encrypted": None, "unfinished": False}
     folder = tmp_path / ".local" / "share" / "keyrings"
     folder.mkdir(parents=True)
     (folder / "login.keyring").write_bytes(SEALED)
@@ -1337,3 +1337,24 @@ def test_d_bus_calls_are_waited_for_in_short_steps(monkeypatch):
     call, glib = cli.keyring_dbus()
     assert call(cli.SECRETS_PATH, cli.SECRET_SERVICE, "ReadAlias", ("default",), "(o)") == ("/",)
     assert len(waits) >= 3 and all(wait is not None and wait <= 0.1 for wait in waits), waits
+
+
+@pytest.mark.parametrize("files, keyring, unfinished", [
+    ({"login.keyring": sealed(b"login")}, "password", True),
+    ({"default": b"login", "login.keyring": sealed(b"login")}, "password", True),
+    ({"login.keyring": b"[keyring]\ndisplay-name=login\n"}, "open", True),
+    # Finished, gnome-keyring's own, another default: not left half-made by a setup.
+    ({"default": b"login", "login.keyring": sealed(b"Login")}, "password", False),
+    ({"login.keyring": sealed("Anmeldung".encode())}, "password", False),
+    ({"default": b"work", "work.keyring": sealed(b"Work"), "login.keyring": sealed(b"login")}, "password", False),
+    ({}, "none", False),
+])
+def test_status_says_whether_a_stopped_setup_left_the_keyring_unfinished(tmp_path, files, keyring, unfinished):
+    folder = tmp_path / ".local" / "share" / "keyrings"
+    folder.mkdir(parents=True)
+    for name, body in files.items():
+        (folder / name).write_bytes(body)
+    result = run_cli(tmp_path, "--status", env={"PATH": f"{disk_tools(tmp_path, None, None)}:{os.environ['PATH']}", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"})
+    assert result.returncode == 0, result.stderr
+    status = json.loads(result.stdout)
+    assert (status["keyring"], status["unfinished"]) == (keyring, unfinished)

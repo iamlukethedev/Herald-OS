@@ -51,7 +51,8 @@ export function setupState(): SetupState {
     diskPlainParts: [],
     newOwner: fs.existsSync(newOwnerFile()) || fs.existsSync(NEW_OWNER_RESET),
     keyring: null,
-    keyringEncrypted: null
+    keyringEncrypted: null,
+    keyringUnfinished: false
   }
 }
 
@@ -62,6 +63,8 @@ export interface KeyringStatus {
   keyring: KeyringState | null
   /** Whether the disk that holds the keyring folder is encrypted; null when that cannot be told. */
   encrypted: boolean | null
+  /** A setup made it and was stopped before finishing it; false when that is not said. */
+  unfinished: boolean
 }
 
 /** The default keyring and the disk it is kept on, from `herald-os keyring --status`. */
@@ -69,11 +72,15 @@ export async function keyringStatus(): Promise<KeyringStatus> {
   const result = await run('herald-os', ['keyring', '--status'], 15_000)
 
   try {
-    const status = result.code === 0 ? (JSON.parse(result.stdout) as { keyring?: unknown; encrypted?: unknown }) : {}
+    const status = result.code === 0 ? (JSON.parse(result.stdout) as { keyring?: unknown; encrypted?: unknown; unfinished?: unknown }) : {}
 
-    return { keyring: KEYRING_STATES.find(state => state === status.keyring) ?? null, encrypted: typeof status.encrypted === 'boolean' ? status.encrypted : null }
+    return {
+      keyring: KEYRING_STATES.find(state => state === status.keyring) ?? null,
+      encrypted: typeof status.encrypted === 'boolean' ? status.encrypted : null,
+      unfinished: status.unfinished === true
+    }
   } catch {
-    return { keyring: null, encrypted: null }
+    return { keyring: null, encrypted: null, unfinished: false }
   }
 }
 
@@ -366,7 +373,8 @@ export function registerSetupIpc(): void {
       diskProtection: disk.protection,
       diskPlainParts: disk.plainParts,
       keyring: keyring.keyring,
-      keyringEncrypted: keyring.encrypted
+      keyringEncrypted: keyring.encrypted,
+      keyringUnfinished: keyring.unfinished
     }
   })
   ipcMain.handle(IPC.setupName, (_event, name: string) => {
