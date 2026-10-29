@@ -534,6 +534,28 @@ def test_ctrl_c_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, 
 
 @needs_cryptsetup
 @NO_SUDO_AS_ROOT_EARLY
+@pytest.mark.parametrize("sudo", ["stand-in", "real"])
+def test_ctrl_backslash_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, sudo):
+    """As with Ctrl+C: Ctrl+\\ (SIGQUIT) typed every 0.2 s through the change neither stops either side
+    nor reaches cryptsetup; the change finishes on both devices, with no core dump ("Quit")."""
+    if sudo == "real" and (not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0):
+        pytest.skip("needs sudo without a password, as someone other than root")
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    env = fake_tools(tmp_path / "bin", first, second)
+    answers = list(CHANGE)
+    if sudo == "real":
+        real = shutil.which("sudo")
+        (tmp_path / "bin" / "sudo").write_text(f'#!/bin/sh\n[ "$1" = -v ] && exit 0\nexec {real} "$@"\n')
+        answers = answers[1:]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers,
+                            burst_after=f"Adding the new disk password to {first}", burst=b"\x1c", min_sent=10)
+    assert code == 0 and "Traceback" not in screen and "Quit" not in screen, screen
+    assert cli.DISK_CHANGE_DONE in screen, screen
+    assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
+
+
+@needs_cryptsetup
+@NO_SUDO_AS_ROOT_EARLY
 @pytest.mark.parametrize("burst", [False, True], ids=["once", "every 0.2 s"])
 @pytest.mark.parametrize("sudo", ["stand-in", "real"])
 def test_ctrl_c_at_the_start_of_the_change_stops_cleanly_or_finishes(tmp_path, sudo, burst):
