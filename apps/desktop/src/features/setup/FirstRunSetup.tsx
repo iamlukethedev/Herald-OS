@@ -318,11 +318,6 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
 
-/**
- * A new owner's disk password, in place of the one they typed at start-up (whoever set the computer
- * up before them chose it). The account password goes to sudo; it is asked here only when the account
- * step did not set it (an account that signed in at a login screen).
- */
 const PLAIN_PART_KEYS = {
   cipher_null: 'firstRun.disk.plain.cipherNull',
   journal: 'firstRun.disk.plain.journal',
@@ -347,6 +342,11 @@ function PartlyEncrypted({ parts }: { parts: DiskPlainPart[] }) {
   )
 }
 
+/**
+ * A new owner's disk password, in place of the one they typed at start-up (whoever set the computer
+ * up before them chose it). The account password goes to sudo; it is asked here only when the account
+ * step did not set it (an account that signed in at a login screen).
+ */
 function DiskStep({ onDone, account, plainParts }: { onDone: () => void; account: string; plainParts: DiskPlainPart[] }) {
   const t = useT()
   const [current, setCurrent] = useState('')
