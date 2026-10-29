@@ -646,12 +646,15 @@ BACKGROUND_SHELL = """
 import os, signal, sys, time
 # A shell on the terminal: the job gets the terminal, is stopped (Ctrl+Z or kill -STOP), and goes on in
 # the background (bg) while the shell keeps the terminal.
-cli_path, folder = sys.argv[1], sys.argv[2]
+cli_path, folder, moved = sys.argv[1], sys.argv[2], sys.argv[3]
 job = (
     "import importlib.machinery, importlib.util, os, sys, termios, time\\n"
     "loader = importlib.machinery.SourceFileLoader('cli', sys.argv[1])\\n"
     "cli = importlib.util.module_from_spec(importlib.util.spec_from_loader('cli', loader))\\n"
     "loader.exec_module(cli)\\n"
+    # Moved to the background just after its last look at the foreground: that look said it was there.
+    "if sys.argv[3] == 'late':\\n"
+    "    cli.disk_foreground = lambda fd: True\\n"
     "deadline = time.monotonic() + 120\\n"
     "while not os.path.exists(sys.argv[2] + '/given') and time.monotonic() < deadline:\\n"
     "    time.sleep(0.02)\\n"
@@ -668,7 +671,7 @@ child = os.fork()
 if child == 0:
     os.setpgid(0, 0)
     signal.signal(signal.SIGTTOU, signal.SIG_DFL)
-    os.execv(sys.executable, [sys.executable, "-c", job, cli_path, folder])
+    os.execv(sys.executable, [sys.executable, "-c", job, cli_path, folder, moved])
 # As a shell does, both set the job's group: the child may have run exec already (EACCES), with its own set.
 try:
     os.setpgid(child, child)
@@ -698,14 +701,16 @@ sys.exit(4)
 """
 
 
-def test_a_change_sent_to_the_background_finishes_without_stopping_on_the_terminal(tmp_path):
+@pytest.mark.parametrize("moved", ["seen", "late"], ids=["seen in the background", "moved just after its look"])
+def test_a_change_sent_to_the_background_finishes_without_stopping_on_the_terminal(tmp_path, moved):
     """Stopped while it changes the disk, then continued in the background (bg): on the way out it
     leaves the terminal's settings, which it may no longer change, instead of stopping for good with
-    "Stopped (tty output)" (SIGTTOU)."""
+    "Stopped (tty output)" (SIGTTOU). Moved there just after it looked, it puts them back with SIGTTOU
+    ignored, which lets that through rather than stopping it."""
     if not shutil.which("setsid"):
         pytest.skip("needs setsid (util-linux)")
     fd, child_end = pty.openpty()
-    process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", BACKGROUND_SHELL, str(CLI), str(tmp_path)],
+    process = subprocess.Popen(["setsid", "-c", sys.executable, "-c", BACKGROUND_SHELL, str(CLI), str(tmp_path), moved],
                                stdin=child_end, stdout=child_end, stderr=child_end, close_fds=True)
     os.close(child_end)
     screen = b""
