@@ -135,7 +135,7 @@ export function FirstRunSetup() {
           />
         )}
         {step === 'disk' && <DiskStep onDone={next} account={accountPassword} plainParts={diskPlainParts} />}
-        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} unfinished={unfinishedWithPassword} />}
+        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} partial={diskPlainParts.length > 0} unfinished={unfinishedWithPassword} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />
@@ -449,7 +449,7 @@ const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
  * told): a password of its own, asked by the first app that needs it after each start, or none, which
  * anyone who has the disk can read past.
  */
-function KeyringStep({ onDone, encrypted, unfinished = false }: { onDone: () => void; encrypted: boolean | null; unfinished?: boolean }) {
+function KeyringStep({ onDone, encrypted, partial = false, unfinished = false }: { onDone: () => void; encrypted: boolean | null; partial?: boolean; unfinished?: boolean }) {
   const t = useT()
   // A keyring left unfinished already has its password: no choice, and one field, for that password.
   const [choice, setChoice] = useState<'password' | 'open' | null>(unfinished ? 'password' : null)
@@ -529,7 +529,7 @@ function KeyringStep({ onDone, encrypted, unfinished = false }: { onDone: () => 
       <Heading
         icon={<IconKey size={18} />}
         title={t('firstRun.keyring.title')}
-        text={t(unfinished ? 'firstRun.keyring.needsPassword' : encrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')}
+        text={t(unfinished ? 'firstRun.keyring.needsPassword' : encrypted === false ? (partial ? 'firstRun.keyring.textPartial' : 'firstRun.keyring.text') : 'firstRun.keyring.textUnknown')}
       />
       {!unfinished && (
         <div className="grid grid-cols-2 gap-3">

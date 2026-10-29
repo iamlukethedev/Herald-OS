@@ -635,6 +635,16 @@ describe("first-run setup's keyring", () => {
     expect(bridge.setup.keyring).not.toHaveBeenCalled()
   })
 
+  it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s that a partly protected disk is not fully protected, not that it is unencrypted', async language => {
+    const host = await afterTheAccount(
+      { diskEncrypted: true, diskProtection: 'partial', diskPlainParts: [{ device: '/dev/vdb1', kind: 'journal' }], keyringEncrypted: false, keyring: 'none' },
+      language
+    )
+    expect(heading(host)).toBe(t('firstRun.keyring.title'))
+    expect(host.textContent).toContain(t('firstRun.keyring.textPartial'))
+    expect(host.textContent).not.toContain(t('firstRun.keyring.text'))
+  })
+
   it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s what each choice means', async language => {
     const host = await afterTheAccount({ diskEncrypted: false, keyringEncrypted: false, keyring: 'none' }, language)
     for (const key of ['firstRun.keyring.password', 'firstRun.keyring.passwordHint', 'firstRun.keyring.open', 'firstRun.keyring.openHint', 'firstRun.keyring.laterHint'] as const) {
