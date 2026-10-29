@@ -78,7 +78,12 @@ def disk_interrupt_once(signum: int, frame) -> None:
     """Ctrl+C for `password --disk` from main on: the first is a KeyboardInterrupt, as usual, and any after
     it nothing, so that a flood of them cannot interrupt the stop the first began (ending it by SIGINT,
     or with a traceback). The change holds them its own way meanwhile."""
-    if not DISK_INTERRUPTED["yes"]:
+    # A flood runs this again inside itself (Python takes the next signal between its lines): those return
+    # at once, or they would pile up to a RecursionError.
+    if DISK_INTERRUPTED["yes"] or DISK_INTERRUPTED.get("looking"):
+        return
+    DISK_INTERRUPTED["looking"] = True
+    try:
         # Not inside a finalizer (a Popen's __del__, say), where Python would print it as "Exception
         # ignored" and drop it: the next Ctrl+C is the stop then.
         caller = frame
@@ -86,8 +91,10 @@ def disk_interrupt_once(signum: int, frame) -> None:
             if caller.f_code.co_name == "__del__":
                 return
             caller = caller.f_back
-        DISK_INTERRUPTED["yes"] = True
-        raise KeyboardInterrupt
+    finally:
+        DISK_INTERRUPTED["looking"] = False
+    DISK_INTERRUPTED["yes"] = True
+    raise KeyboardInterrupt
 
 
 def disk_give_up(message: str, code: int) -> None:

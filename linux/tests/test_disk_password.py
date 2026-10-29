@@ -2503,6 +2503,27 @@ def test_one_ctrl_c_as_an_early_error_ends_the_command_keeps_its_exit_code(tmp_p
     assert "not encrypted" in result.stderr and "stopped." not in result.stderr and "Traceback" not in result.stderr, result.stderr
 
 
+def test_a_ctrl_c_that_comes_while_the_first_is_looked_at_returns_at_once(monkeypatch):
+    """In a flood the handler runs again inside itself; such a call returns at once, without raising or
+    looking further, so they cannot pile up to a RecursionError."""
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "yes", False)
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "looking", True)
+    looked = []
+
+    class Frame:
+        @property
+        def f_code(self):
+            looked.append(True)
+            raise AssertionError("looked again")
+
+    assert cli.disk_interrupt_once(signal.SIGINT, Frame()) is None
+    assert not looked and not cli.DISK_INTERRUPTED["yes"]
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "looking", False)
+    with pytest.raises(KeyboardInterrupt):
+        cli.disk_interrupt_once(signal.SIGINT, None)
+    assert cli.DISK_INTERRUPTED["yes"] and not cli.DISK_INTERRUPTED["looking"]
+
+
 def test_a_first_ctrl_c_inside_a_finalizer_waits_for_the_next(monkeypatch):
     """One that lands inside a __del__ (a Popen's, as the command ends) is not raised there, where Python
     prints "Exception ignored" and drops it; the next one is the stop."""
