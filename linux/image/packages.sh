@@ -35,6 +35,16 @@ fi
 command -v setenforce >/dev/null && { setenforce 0 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------------------------
+# Before the packages, so a lock without a sha stops the build before its longest step. The
+# Containerfile copies upstream/UPSTREAM.lock next to linux/. The development VM's seed writes the
+# same file (linux/vm/make-seed.sh), so --dev leaves it alone.
+if [[ "$MODE" == "--image" ]]; then
+  step "The Hermes revision (upstream/UPSTREAM.lock)"
+  bash "$LINUX/image/hermes-ref.sh" "$LINUX/../upstream/UPSTREAM.lock" /etc/herald-os/ref
+  cat /etc/herald-os/ref
+fi
+
+# ---------------------------------------------------------------------------------------------
 step "Packages"
 mapfile -t PACKAGES < <(list "$LINUX/image/packages.txt")
 if [[ "$MODE" == "--dev" ]]; then

@@ -719,3 +719,104 @@ def test_the_switch_reads_the_key_and_policy_packages_sh_writes():
 def test_verify_rpms_leaves_no_key_database_behind(tmp_path, keys, driver, kmod):
     result = verify(tmp_path, keys, driver, kmod)
     assert list((tmp_path / "tmp").iterdir()) == [], result.stderr
+
+
+# The Hermes revision the image ships (#187): packages.sh --image writes /etc/herald-os/ref
+# from upstream/UPSTREAM.lock through hermes-ref.sh, which firstboot.sh's hermes_step() reads.
+PACKAGES = ROOT / "linux" / "image" / "packages.sh"
+HERMES_REF_SH = ROOT / "linux" / "image" / "hermes-ref.sh"
+LOCK = ROOT / "upstream" / "UPSTREAM.lock"
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def hermes_ref(tmp_path: Path, lock: str | None, *out: Path) -> subprocess.CompletedProcess:
+    path = tmp_path / "UPSTREAM.lock"
+    if lock is not None:
+        path.write_text(lock)
+    return subprocess.run(["bash", str(HERMES_REF_SH), str(path), *map(str, out)], capture_output=True, text=True, check=False)
+
+
+def image_ref_step(tmp_path: Path, lock: str, mode: str = "--image") -> tuple[subprocess.CompletedProcess, Path]:
+    """packages.sh's own revision step, in a copy of the build's /tmp/herald-os with /etc in tmp_path."""
+    block = re.search(r'^if \[\[ "\$MODE" == "--image" \]\]; then\n  step "The Hermes revision.*?^fi\n', PACKAGES.read_text(), re.M | re.S)
+    assert block, "packages.sh has no Hermes revision step"
+    etc_ref = tmp_path / "etc" / "herald-os" / "ref"
+    build = tmp_path / "herald-os"
+    (build / "linux" / "image").mkdir(parents=True)
+    shutil.copy(HERMES_REF_SH, build / "linux" / "image" / "hermes-ref.sh")
+    (build / "upstream").mkdir()
+    (build / "upstream" / "UPSTREAM.lock").write_text(lock)
+    script = (
+        "set -euo pipefail\n"
+        f'MODE={mode} LINUX="{build / "linux"}"\n'
+        'step() { echo "--- $*"; }\n'
+        + block.group(0).replace("/etc/herald-os/ref", str(etc_ref))
+        + "echo after\n"
+    )
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False), etc_ref
+
+
+def test_the_image_build_writes_the_sha_upstream_lock_pins(tmp_path):
+    result, ref = image_ref_step(tmp_path, f"# a comment\nrepo=NousResearch/hermes-agent\nsha={SHA}\n")
+    assert result.returncode == 0, result.stderr
+    assert ref.read_text() == f"HERMES_REF={SHA}\n" and ref.stat().st_mode & 0o777 == 0o644
+    assert f"HERMES_REF={SHA}" in result.stdout and "after" in result.stdout
+
+
+def test_the_image_build_stops_on_a_lock_without_a_sha(tmp_path):
+    result, ref = image_ref_step(tmp_path, "repo=NousResearch/hermes-agent\n")
+    assert result.returncode != 0 and "after" not in result.stdout
+    assert "has no sha= with one full 40-character commit id" in result.stderr and not ref.exists()
+
+
+def test_the_development_vm_leaves_the_ref_to_its_seed(tmp_path):
+    result, ref = image_ref_step(tmp_path, f"sha={SHA}\n", mode="--dev")
+    assert result.returncode == 0, result.stderr
+    assert not ref.exists() and "Hermes revision" not in result.stdout
+
+
+def test_the_revision_step_comes_before_the_packages():
+    packages = PACKAGES.read_text()
+    assert packages.index('step "The Hermes revision') < packages.index('step "Packages"')
+
+
+def test_the_containerfile_puts_upstream_lock_where_packages_sh_reads_it():
+    containerfile = CONTAINERFILE.read_text()
+    copy = "COPY upstream/UPSTREAM.lock /tmp/herald-os/upstream/UPSTREAM.lock\n"
+    assert "COPY linux /tmp/herald-os/linux\n" in containerfile and copy in containerfile
+    assert containerfile.index(copy) < containerfile.index("RUN bash /tmp/herald-os/linux/image/packages.sh --image")
+    ignored = [line.strip() for line in (ROOT / ".containerignore").read_text().splitlines()]
+    assert not {"upstream", "upstream/", "upstream/UPSTREAM.lock", "**/*.lock"} & set(ignored)
+
+
+def test_the_repository_s_lock_gives_its_sha(tmp_path):
+    sha = re.search(r"^sha=([0-9a-f]{40})$", LOCK.read_text(), re.M).group(1)
+    result = subprocess.run(["bash", str(HERMES_REF_SH), str(LOCK)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"HERMES_REF={sha}\n"
+
+
+def test_hermes_ref_makes_the_folder_and_overwrites_an_older_ref(tmp_path):
+    out = tmp_path / "etc" / "herald-os" / "ref"
+    assert hermes_ref(tmp_path, f"sha={'f' * 40}\n", out).returncode == 0
+    result = hermes_ref(tmp_path, f"sha={SHA}  \n", out)
+    assert result.returncode == 0, result.stderr
+    assert out.read_text() == f"HERMES_REF={SHA}\n"
+
+
+@pytest.mark.parametrize("lock,said", [
+    (None, "does not exist"),
+    ("", "found ''"),
+    ("repo=NousResearch/hermes-agent\n", "found ''"),
+    ("sha=\n", "found ''"),
+    ("sha=main\n", "found 'main'"),
+    (f"sha={SHA[:7]}\n", f"found '{SHA[:7]}'"),
+    (f"sha={SHA.upper()}\n", "found '"),
+    (f"sha={SHA}\nsha={SHA}\n", f"found '{SHA}{SHA}'"),
+    (f"# sha={SHA}\n", "found ''"),
+], ids=["no lock", "empty", "no sha line", "empty sha", "a branch", "short sha", "upper case", "two shas", "commented out"])
+def test_hermes_ref_refuses_a_lock_without_one_full_sha(tmp_path, lock, said):
+    out = tmp_path / "ref"
+    result = hermes_ref(tmp_path, lock, out)
+    assert result.returncode == 1 and said in result.stderr and "hermes-ref:" in result.stderr
+    assert not out.exists() and result.stdout == ""

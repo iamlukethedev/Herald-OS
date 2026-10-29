@@ -48,6 +48,10 @@ RETRY_WAIT=600
 # as user=<name>, and the SSH public keys that may sign in to it, one a line.
 INSTALL_CONF=/etc/herald-os/install.conf
 SSH_KEYS=/etc/herald-os/ssh-keys
+# The Hermes revision to check out, HERMES_REF=<sha from upstream/UPSTREAM.lock>: the image's
+# build writes it (packages.sh), and so does the development VM's seed (linux/vm/make-seed.sh), both
+# through linux/image/hermes-ref.sh.
+HERMES_REF_FILE=/etc/herald-os/ref
 mkdir -p "$STATE"
 
 # The session user's name from the install, when it is one. A name that is not a plain account name,
@@ -401,9 +405,11 @@ ssh_keys() {
 # up for Herald OS. Fails while there is still no Hermes.
 hermes_step() {
   step "Hermes Agent for $HERMES_USER"
-  if [[ -f /etc/herald-os/ref ]]; then
-    # shellcheck disable=SC1091
-    source /etc/herald-os/ref
+  if [[ -f "$HERMES_REF_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$HERMES_REF_FILE"
+  else
+    echo "WARNING: $HERMES_REF_FILE is missing, so Hermes comes from its main branch"
   fi
   local ref="${HERMES_REF:-main}" agent="$HOME_DIR/.hermes/hermes-agent" hermes
   if hermes="$(as_user herald-os hermes-command)"; then

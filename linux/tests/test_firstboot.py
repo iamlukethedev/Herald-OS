@@ -43,6 +43,7 @@ class Machine:
         self.home = tmp_path / "home"
         self.state = tmp_path / "state"
         self.unit = tmp_path / "herald-os-hermes.service"
+        self.ref = tmp_path / "etc" / "herald-os" / "ref"
         self.agent = self.home / ".hermes" / "hermes-agent"
         self.calls = tmp_path / "calls"
         for folder in (self.home, self.state, tmp_path / "bridge"):
@@ -102,7 +103,7 @@ class Machine:
             "set -euo pipefail\n"
             f"HERMES_USER=me STATE={quote(str(self.state))} HOME_DIR={quote(str(self.home))}\n"
             f"PENDING={quote(str(self.state / 'hermes-pending'))} HERMES_UNIT={quote(str(self.unit))} BRIDGE={quote(str(self.root / 'bridge'))}\n"
-            "OFFLINE_WAIT=0 RETRY_WAIT=0\n"
+            f"OFFLINE_WAIT=0 RETRY_WAIT=0 HERMES_REF_FILE={quote(str(self.ref))}\n"
             + functions("step", "online", "note", "hermes_step", "hermes_later", "hermes_phase")
             # firstboot.sh runs as root and becomes the session user through sudo.
             + 'as_user() { HOME="$HOME_DIR" "$@"; }\n'
@@ -209,6 +210,41 @@ def test_the_note_is_one_path_for_firstboot_the_service_the_cli_and_the_shell():
     assert "/usr/lib/systemd/system/herald-os-hermes.service" in packages
     assert re.search(r"^  systemctl enable .*herald-os-hermes\.service", packages, re.M)
     assert '"$STATE/hermes-pending"' in (ROOT / "linux" / "image" / "reset-helper").read_text()
+
+
+# The Hermes revision: /etc/herald-os/ref, written by the image's build and the development
+# VM's seed through linux/image/hermes-ref.sh, read by hermes_step().
+HERMES_REF_SH = ROOT / "linux" / "image" / "hermes-ref.sh"
+PINNED = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_an_install_checks_out_the_revision_the_ref_file_names(tmp_path):
+    machine = Machine(tmp_path)
+    lock = tmp_path / "UPSTREAM.lock"
+    lock.write_text(f"repo=NousResearch/hermes-agent\nsha={PINNED}\n")
+    subprocess.run(["bash", str(HERMES_REF_SH), str(lock), str(machine.ref)], check=True)
+    result = machine.run("hermes_step")
+    assert result.returncode == 0, result.stderr
+    log = machine.log()
+    assert f"git fetch --quiet origin {PINNED}" in log and f"git checkout --quiet {PINNED}" in log
+    assert "git checkout --quiet main" not in log and "is missing" not in result.stdout
+
+
+def test_without_the_ref_file_the_install_says_it_takes_main(tmp_path):
+    machine = Machine(tmp_path)
+    result = machine.run("hermes_step")
+    assert result.returncode == 0, result.stderr
+    assert f"WARNING: {machine.ref} is missing, so Hermes comes from its main branch" in result.stdout
+    assert "git fetch --quiet origin main" in machine.log() and "git checkout --quiet main" in machine.log()
+
+
+def test_the_image_the_vm_and_the_first_boot_agree_on_the_ref_file():
+    assert "HERMES_REF_FILE=/etc/herald-os/ref" in FIRSTBOOT.read_text()
+    packages = (ROOT / "linux" / "image" / "packages.sh").read_text()
+    assert 'bash "$LINUX/image/hermes-ref.sh" "$LINUX/../upstream/UPSTREAM.lock" /etc/herald-os/ref' in packages
+    seed = (ROOT / "linux" / "vm" / "make-seed.sh").read_text()
+    assert 'REF_LINE="$(bash "$LINUX_DIR/image/hermes-ref.sh" "$ROOT/upstream/UPSTREAM.lock")"' in seed
+    assert re.search(r"^  - path: /etc/herald-os/ref\n    permissions: '0644'\n    content: \|\n      \$\{REF_LINE\}$", seed, re.M)
 
 
 # The session account and the login screen: an install from the image, and a system switched to

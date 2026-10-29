@@ -12,6 +12,7 @@ FROM ${FEDORA_BOOTC}
 
 ARG SHELL_TARBALL=herald-os-linux.tar.gz
 COPY linux /tmp/herald-os/linux
+COPY upstream/UPSTREAM.lock /tmp/herald-os/upstream/UPSTREAM.lock
 COPY ${SHELL_TARBALL} /tmp/herald-os/shell.tar.gz
 
 RUN bash /tmp/herald-os/linux/image/packages.sh --image /tmp/herald-os/shell.tar.gz \
