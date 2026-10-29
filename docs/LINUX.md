@@ -475,7 +475,9 @@ that holds the keyring folder, not on the root's (ADR-032). `herald-os keyring -
 `"encrypted": true` only when the mount the folder is in (links resolved, so the image's `/home` finds
 `/var/home`) and every mount below it sit on LUKS, per `findmnt` and `lsblk`, a btrfs over several
 disks counting each disk `lsblk` shows with its UUID. A `/home` or anything under the folder on a
-plain partition makes it `false`. It is `null` for NFS, tmpfs or FUSE; for encryption other than
+plain partition makes it `false`, and so does a filesystem on LUKS that `password --disk --status`
+would call partly protected: its LUKS uses cipher_null, or its journal, log or realtime device is
+outside LUKS. It is `null` for NFS, tmpfs or FUSE; for encryption other than
 LUKS, such as plain dm-crypt, which has no header to check; for a btrfs whose UUID `lsblk` does not
 know (without udev's data), as its other disks cannot be found; and when `lsblk` or `findmnt` fails.
 

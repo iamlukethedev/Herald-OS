@@ -2477,6 +2477,67 @@ def test_status_of_an_ext4_root_on_luks_with_its_journal_on_a_plain_disk(monkeyp
                                                    "plainParts": [{"device": "/dev/vdb1", "kind": "journal"}], "newOwner": False, "error": None}
 
 
+HOME_MOUNTS = [{"target": "/", "source": "/dev/dm-0", "fstype": "ext4", "uuid": "fs", "options": "rw,relatime"}]
+
+
+def findmnt_listing(tools: Path, mounts: list[dict]) -> None:
+    """A findmnt that lists these mounts, with their options only when asked for OPTIONS, as it does."""
+    bare = [{key: value for key, value in mount.items() if key != "options"} for mount in mounts]
+    (tools / "findmnt").write_text(f"#!/bin/sh\ncase \"$*\" in *OPTIONS*) echo '{json.dumps({'filesystems': mounts})}';; "
+                                   f"*) echo '{json.dumps({'filesystems': bare})}';; esac\n")
+    (tools / "findmnt").chmod(0o755)
+
+
+def test_a_keyring_on_a_filesystem_that_writes_part_of_itself_in_the_clear_is_not_on_an_encrypted_disk():
+    """keyring_mounts_encrypted with a plain(mount, disks) that says the filesystem is only partly
+    protected: False, as a keyring there needs a password of its own; unchanged without one, or where
+    it could not be told anyway."""
+    tree = resolved_tree()
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree) is True
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree, plain=lambda mount, disks: False) is True
+    seen = []
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree,
+                                        plain=lambda mount, disks: seen.append((mount["target"], sorted(disks))) or True) is False
+    assert seen == [("/", ["/dev/dm-0"])]
+    assert cli.keyring_mounts_encrypted("/tmp/x", [{"target": "/tmp", "source": "tmpfs", "fstype": "tmpfs"}], tree, plain=lambda mount, disks: True) is None
+
+
+@pytest.mark.parametrize("journals, cipher_null, options, encrypted", [
+    (["dm-0-8"], False, "rw", True),
+    (["vdb1"], False, "rw", False),
+    (["dm-0-8"], True, "rw", False),
+    ([], False, "rw,logdev=/dev/vdb1", True),
+], ids=["encrypted throughout", "its journal on a plain disk", "cipher_null", "a log option ext4 does not have"])
+def test_the_keyring_s_disk_counts_partial_protection_as_not_encrypted(monkeypatch, tmp_path, journals, cipher_null, options, encrypted):
+    """keyring_encrypted on this machine, as --status's protection would call it: a home on LUKS whose
+    journal is on a plain disk, or whose LUKS uses cipher_null, does not protect the keyring."""
+    folder = tmp_path / "jbd2"
+    folder.mkdir()
+    for entry in journals:
+        (folder / entry).mkdir()
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    findmnt_listing(tools, [{**HOME_MOUNTS[0], "options": options}])
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "DISK_JBD2", folder)
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    asked = []
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: asked.append(device) or cipher_null)
+    assert cli.keyring_encrypted(Path("/home/ana/.local/share/keyrings")) is encrypted
+    assert "/dev/vda3" in asked
+
+
+def test_the_keyring_s_xfs_disk_with_its_log_on_a_plain_disk_is_not_encrypted(monkeypatch, tmp_path):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    findmnt_listing(tools, [{**HOME_MOUNTS[0], "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}])
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "DISK_JBD2", tmp_path / "none")
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: False)
+    assert cli.keyring_encrypted(Path("/home/ana/.local/share/keyrings")) is False
+
+
 @needs_cryptsetup
 def test_status_stays_encrypted_and_full_when_findmnt_fails(tmp_path):
     """findmnt fails, so the root's journal or log cannot be looked at: still encrypted, as LUKS asks for
