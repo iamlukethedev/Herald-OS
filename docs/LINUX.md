@@ -329,7 +329,8 @@ switching to it, and changing its packages, Flatpaks and branding.
   release's disk and boots it in one command. It also goes out as a UTM bundle
   (`aarch64.utm.zip`, made by `linux/vm/make-utm.py`) that opens in UTM with a double-click.
 - **an x86_64 VM disk** from the same `disk.toml`: as a `qcow2.zst`, and as a Hyper-V VHDX
-  (`x86_64.vhdx.zip`) for a generation 2 machine on Windows.
+  (`x86_64.vhdx.zip`) for a generation 2 machine on Windows. The workflow builds it, but no release
+  has published it yet ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 
 `linux/vm/package-disk.sh` names, compresses and checksums them. Files over the 2 GiB GitHub takes
 for one release file go up in parts: the ISO and the `qcow2.zst` as `.part0`, `.part1` that `cat`

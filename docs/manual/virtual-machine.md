@@ -5,9 +5,12 @@ the whole operating system without installing it. Nothing outside the virtual ma
 
 Each release carries ready-made virtual machines: a UTM bundle for an Apple Silicon Mac, a Hyper-V
 disk for Windows and a plain disk for Linux and Intel Macs. The first start sets itself up in a few
-minutes, Hermes Agent included, then asks for your name and a password. The UTM bundle and the
-Hyper-V disk come with releases built after 0.1.0-alpha.4; earlier releases have only the Apple
-Silicon disk that `try.sh` uses ([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
+minutes, Hermes Agent included, then asks for your name and a password. The UTM bundle comes with
+releases built after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk that `try.sh`
+uses ([From the terminal on an Apple Silicon Mac](#from-the-terminal-on-an-apple-silicon-mac)).
+
+The x86_64 disks, the Hyper-V `.vhdx.zip` and the `x86_64.qcow2.zst`, are not yet available: no
+release has published them so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)).
 
 ## On an Apple Silicon Mac, with UTM
 
@@ -25,6 +28,12 @@ shared clipboard and a screen that follows the window's size. How much of that H
 inside UTM is still being tested ([#67](https://github.com/iamlukethedev/Herald-OS/issues/67)).
 
 ## On Windows, with Hyper-V
+
+**Not yet available.** No release has published the Hyper-V disk yet
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), so these steps are for when one
+does; Windows support is tracked in [#92](https://github.com/iamlukethedev/Herald-OS/issues/92).
+Until then, use
+[the installer in another virtual machine](#with-the-installer-virtualbox-and-others).
 
 Hyper-V comes with Windows 11 Pro, Enterprise and Education. Windows 11 Home has no Hyper-V: use
 [the installer in another virtual machine](#with-the-installer-virtualbox-and-others) instead.
@@ -47,9 +56,11 @@ shared clipboard there yet.
 ## On Linux or an Intel Mac
 
 `herald-os-<version>-x86_64.qcow2.zst` (and `aarch64` for ARM machines) is a ready-made disk for
-QEMU, virt-manager, GNOME Boxes or UTM on an Intel Mac. Unpack it with `zstd -d`, then create a
-machine that boots with UEFI from it as an existing disk, with 4 cores, 6 GB of memory and room for
-the disk to grow to 40 GB.
+QEMU, virt-manager, GNOME Boxes or UTM on an Intel Mac. The x86_64 one is not yet available: no
+release has published it so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)); the
+`aarch64` one is in every release. Unpack it with `zstd -d`, then create a machine that boots with
+UEFI from it as an existing disk, with 4 cores, 6 GB of memory and room for the disk to grow to
+40 GB.
 
 ## With the installer: VirtualBox and others
 

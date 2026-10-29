@@ -45,8 +45,8 @@ Pick the way that matches your machine:
 | Omarchy | [The Arch package, then one command](#omarchy) |
 | Another Linux | [The tarball](#another-linux) |
 | An Apple Silicon Mac, to try the whole OS | [The virtual machine in UTM](#on-a-mac-with-utm) |
-| An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) |
-| A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) |
+| An Intel Mac, to try the whole OS | [The x86_64 virtual machine](#on-linux-or-an-intel-mac) (not yet available) |
+| A Windows 11 PC, to try the whole OS | [The virtual machine in Hyper-V](#on-windows-with-hyper-v) (not yet available) |
 
 Hermes needs a model provider whichever you pick: a [Nous Portal](https://portal.nousresearch.com)
 account, or an API key for a provider Hermes supports (OpenRouter, OpenAI, Anthropic, a local model,
@@ -115,9 +115,10 @@ been tried on an Intel Mac yet: please [open an issue](https://github.com/iamluk
 if something does not work.
 
 To try the whole OS instead, open the ready-made x86_64 disk in [UTM](https://mac.getutm.app), as in
-[On Linux or an Intel Mac](#on-linux-or-an-intel-mac), or install the x86_64 installer ISO from
-[Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs it in
-QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
+[On Linux or an Intel Mac](#on-linux-or-an-intel-mac), once a release has it (not yet,
+[#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), or install the x86_64 installer ISO
+from [Herald OS Linux on a PC](#herald-os-linux-on-a-pc) in a VM that boots with UEFI. CI installs
+it in QEMU with UEFI, 4 cores, 6 GB of memory and a 40 GB disk
 ([installer-test.yml](.github/workflows/installer-test.yml)).
 
 ### Herald OS Linux on a PC
@@ -217,8 +218,10 @@ colour scheme and GTK theme. On a desktop you already use, try it from a second 
 Each release carries ready-made virtual machines of Herald OS Linux, so you can try the whole
 operating system without installing it. The first start sets itself up in a few minutes, Hermes
 Agent included, then Herald OS asks for your name and a password. Give the virtual machine 4 cores,
-6 GB of memory and 40 GB of disk space. The UTM bundle and the Hyper-V disk come with releases built
-after 0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`. The manual's
+6 GB of memory and 40 GB of disk space. The UTM bundle comes with releases built after
+0.1.0-alpha.4; earlier releases have only the Apple Silicon disk for `try.sh`. The x86_64 disks, the
+Hyper-V `.vhdx.zip` and the `x86_64.qcow2.zst`, are not yet available: no release has published
+them so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)). The manual's
 [Trying it in a virtual machine](docs/manual/virtual-machine.md) has the same steps, with the
 system key and scaling inside a virtual machine.
 
@@ -262,6 +265,12 @@ UTM's settings for the machine change its cores and memory.
 
 #### On Windows with Hyper-V
 
+**Not yet available.** No release has published the Hyper-V disk yet
+([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)), so these steps are for when one
+does; Windows support is tracked in [#92](https://github.com/iamlukethedev/Herald-OS/issues/92).
+Until then, the x86_64 installer ISO installs in a virtual machine that boots with UEFI
+([Herald OS Linux on a PC](#herald-os-linux-on-a-pc)).
+
 Hyper-V comes with Windows 11 Pro, Enterprise and Education (not Home):
 
 1. Turn it on: Start, type "Turn Windows features on or off", tick **Hyper-V** and restart.
@@ -282,8 +291,10 @@ shared clipboard there yet.
 #### On Linux or an Intel Mac
 
 `herald-os-<version>-x86_64.qcow2.zst` (and `aarch64` for ARM machines) is the same disk for QEMU,
-virt-manager, GNOME Boxes or UTM on an Intel Mac. Unpack it with `zstd -d`, then create a machine
-that boots with UEFI from it as an existing disk.
+virt-manager, GNOME Boxes or UTM on an Intel Mac. The x86_64 one is not yet available: no release
+has published it so far ([#186](https://github.com/iamlukethedev/Herald-OS/issues/186)); the
+`aarch64` one is in every release. Unpack it with `zstd -d`, then create a machine that boots with
+UEFI from it as an existing disk.
 
 #### From the terminal on an Apple Silicon Mac
 
