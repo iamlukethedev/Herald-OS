@@ -3980,6 +3980,11 @@ def disk_password(args: list[str]) -> int:
         new = disk_ask("New disk password: ")
         again = disk_ask("New disk password again: ")
     except (KeyboardInterrupt, EOFError):
+        # One more Ctrl+C (a flood of them at a prompt) must not end it by SIGINT (-2) before it says so:
+        # disk_interrupt_once is a Python handler, which Python sets back to SIGINT's default as it shuts
+        # down, while SIG_IGN stays.
+        if SSH_OWN_PROCESS:
+            disk_ignore_held((signal.SIGINT,))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
     problem = disk_password_problem(new, again, current)
@@ -7276,11 +7281,14 @@ if __name__ == "__main__":
         # Before `password --disk` asks anything (it finds the devices first), nothing has changed.
         if sys.argv[1:3] != ["password", "--disk"]:
             raise
+        # As at the prompts: SIG_IGN, which outlasts Python's shutdown, before it says so.
+        disk_ignore_held((signal.SIGINT,))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
     finally:
-        # Every way out of `password --disk` passes here. Python sets SIGINT back to its default as it
-        # shuts down, so one more Ctrl+C of a flood would then end it by SIGINT (-2) instead of its own
-        # exit code: both are ignored from here to the end.
+        # Every way out of `password --disk` passes here, its errors and normal ends too. Python sets
+        # SIGINT back to its default as it shuts down, so one more Ctrl+C of a flood would then end it by
+        # SIGINT (-2) instead of its own exit code: ignored from here to the end, and Ctrl+\ with it so
+        # that one then does not end it with a core dump.
         if sys.argv[1:3] == ["password", "--disk"]:
             disk_ignore_held((signal.SIGINT, signal.SIGQUIT))

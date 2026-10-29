@@ -2361,6 +2361,29 @@ def test_a_tight_flood_of_ctrl_c_at_the_current_password_prompt_is_a_stop(tmp_pa
         assert screen.count("stopped. Nothing was changed.") == 1, (attempt, screen[-500:])
 
 
+@pytest.mark.parametrize("prompt", ["Current disk password: ", "New disk password: ", "New disk password again: "])
+def test_a_stop_at_a_disk_prompt_ignores_ctrl_c_before_it_says_so(monkeypatch, capsys, prompt):
+    """Run as its own process, a stop at a prompt sets SIGINT to SIG_IGN before it says so: the handler
+    that takes only the first Ctrl+C is set back to the default as Python shuts down, SIG_IGN is not."""
+    monkeypatch.setattr(cli, "disk_devices", lambda: ["/dev/vda3"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "disk_helper", lambda op, request: 0)
+    monkeypatch.setattr(cli, "SSH_OWN_PROCESS", True)
+
+    def ask(asked):
+        if asked == prompt:
+            raise KeyboardInterrupt
+        return OLD if asked.startswith("Current") else NEW
+
+    monkeypatch.setattr(cli, "disk_ask", ask)
+    signal.signal(signal.SIGINT, cli.disk_interrupt_once)
+    with pytest.raises(SystemExit) as stop:
+        cli.disk_password([])
+    assert stop.value.code == 130 and capsys.readouterr().err.count("stopped. Nothing was changed.") == 1
+    assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
