@@ -7278,3 +7278,9 @@ if __name__ == "__main__":
             raise
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
+    finally:
+        # Every way out of `password --disk` passes here. Python sets SIGINT back to its default as it
+        # shuts down, so one more Ctrl+C of a flood would then end it by SIGINT (-2) instead of its own
+        # exit code: both are ignored from here to the end.
+        if sys.argv[1:3] == ["password", "--disk"]:
+            disk_ignore_held((signal.SIGINT, signal.SIGQUIT))

@@ -2315,6 +2315,52 @@ def test_a_flood_of_ctrl_c_while_it_looks_for_the_disks_is_a_stop(tmp_path):
         assert result.stderr.count("stopped. Nothing was changed.") == 1, (attempt, result.stderr)
 
 
+EXIT_DRIVER = """
+import atexit, os, runpy, signal, sys
+# What SIGINT and SIGQUIT are as Python begins to shut down (atexit comes before it resets handlers).
+atexit.register(lambda: os.write(2, ("at exit: " + " ".join("ignored" if signal.getsignal(each) == signal.SIG_IGN else "not ignored"
+                                                            for each in (signal.SIGINT, signal.SIGQUIT)) + "\\n").encode()))
+cli = sys.argv[1]
+sys.argv = ["herald-os", *sys.argv[2:]]
+runpy.run_path(cli, run_name="__main__")
+"""
+
+
+@pytest.mark.parametrize("lsblk, args, code", [
+    ("kill -INT $PPID\nsleep 5", ["password", "--disk"], 130),
+    ("echo '{\"blockdevices\": []}'", ["password", "--disk"], cli.DISK_NOT_ENCRYPTED),
+    ("echo '{\"blockdevices\": []}'", ["password", "--disk", "--status"], 0),
+], ids=["a stop", "an error", "status"])
+def test_password_disk_ignores_ctrl_c_and_ctrl_backslash_on_every_way_out(tmp_path, lsblk, args, code):
+    """Python sets SIGINT back to its default as it shuts down, where one more Ctrl+C of a flood would
+    end the command by SIGINT (-2) instead of its exit code: every way out ignores both first."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text(f"#!/bin/sh\n{lsblk}\n")
+    (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+    for tool in ("lsblk", "findmnt"):
+        (folder / tool).chmod(0o755)
+    result = subprocess.run([sys.executable, "-c", EXIT_DRIVER, str(CLI), *args], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == code, result
+    assert "at exit: ignored ignored" in result.stderr, result.stderr
+
+
+@needs_cryptsetup
+def test_a_tight_flood_of_ctrl_c_at_the_current_password_prompt_is_a_stop(tmp_path):
+    """Ctrl+C every 5 ms from the current password's prompt on: one stop (130), said once, every time;
+    never an end by SIGINT (-2) from one that lands as the command shuts down."""
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    for attempt in range(10):
+        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(CHANGE[:1]),
+                                burst_after="Current disk password:", every=0.005, min_sent=1)
+        assert code == 130 and "Traceback" not in screen, (attempt, code, screen[-500:])
+        assert screen.count("stopped. Nothing was changed.") == 1, (attempt, screen[-500:])
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
