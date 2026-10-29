@@ -354,7 +354,7 @@ describe('the keyring', () => {
     for (const state of ['none', 'open', 'password', 'other'] as const) {
       for (const encrypted of [true, false, null]) {
         host.run = { stdout: `{"keyring": "${state}", "folder": "/home/hermes/.local/share/keyrings", "encrypted": ${JSON.stringify(encrypted)}}\n`, stderr: '', code: 0 }
-        await expect(keyringStatus()).resolves.toEqual({ keyring: state, encrypted })
+        await expect(keyringStatus()).resolves.toEqual({ keyring: state, encrypted, unfinished: false })
       }
     }
 
@@ -369,7 +369,7 @@ describe('the keyring', () => {
       { stdout: 'null', stderr: '', code: 0 }
     ]) {
       host.run = result
-      await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null })
+      await expect(keyringStatus()).resolves.toEqual({ keyring: null, encrypted: null, unfinished: false })
     }
 
     // Still true, however the command lays its answer out: other keys, another order, white space.
@@ -379,12 +379,20 @@ describe('the keyring', () => {
       '{"keyring": "none", "folder": "/x", "encrypted": true, "devices": ["/dev/mapper/luks-1"], "note": null}'
     ]) {
       host.run = { stdout, stderr: 'a warning on stderr\n', code: 0 }
-      await expect(keyringStatus(), stdout).resolves.toEqual({ keyring: 'none', encrypted: true })
+      await expect(keyringStatus(), stdout).resolves.toEqual({ keyring: 'none', encrypted: true, unfinished: false })
     }
 
     // A herald-os from before the keyring's disk was looked at: the keyring, and its disk unknown.
     host.run = { stdout: '{"keyring": "none", "folder": "/home/hermes/.local/share/keyrings"}', stderr: '', code: 0 }
-    await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null })
+    await expect(keyringStatus()).resolves.toEqual({ keyring: 'none', encrypted: null, unfinished: false })
+
+    // A keyring a stopped setup left unfinished; anything but true is not that.
+    host.run = { stdout: '{"keyring": "password", "folder": "/x", "encrypted": false, "unfinished": true}', stderr: '', code: 0 }
+    await expect(keyringStatus()).resolves.toEqual({ keyring: 'password', encrypted: false, unfinished: true })
+    for (const unfinished of ['"yes"', '1', 'null', 'false']) {
+      host.run = { stdout: `{"keyring": "password", "folder": "/x", "encrypted": false, "unfinished": ${unfinished}}`, stderr: '', code: 0 }
+      await expect(keyringStatus(), unfinished).resolves.toEqual({ keyring: 'password', encrypted: false, unfinished: false })
+    }
   })
 
   it('makes one with no password of its own, or with the password on stdin and never in the arguments', async () => {
@@ -490,7 +498,12 @@ describe('the keyring', () => {
       )
       registerSetupIpc()
       // The root is encrypted, the keyring's disk is not: each answer stays its own.
-      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ needed: true, diskEncrypted: true, keyring: 'none', keyringEncrypted: false })
+      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ needed: true, diskEncrypted: true, keyring: 'none', keyringEncrypted: false, keyringUnfinished: false })
+      // A keyring a stopped setup left unfinished comes through, so setup can ask for its password.
+      vi.mocked(run).mockImplementation(async (_command, args) =>
+        args[0] === 'keyring' ? { stdout: '{"keyring": "password", "encrypted": true, "unfinished": true}', stderr: '', code: 0 } : { stdout: '{"encrypted": true}', stderr: '', code: 0 }
+      )
+      await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ keyring: 'password', keyringEncrypted: true, keyringUnfinished: true })
     } finally {
       vi.mocked(run).mockImplementation(async () => host.run)
 

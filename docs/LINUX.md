@@ -493,8 +493,11 @@ know (without udev's data), as its other disks cannot be found; and when `lsblk`
   password.
 
 Setup never replaces a keyring the account already has. `herald-os keyring --status` prints
-`{"keyring", "folder", "encrypted"}`, where `keyring` is `none`, `open`, `password` or `other`, read
-from the files without the daemon. `herald-os keyring setup --no-password` or `--password` (asked
+`{"keyring", "folder", "encrypted", "unfinished"}`, where `keyring` is `none`, `open`, `password` or
+`other`, read from the files without the daemon, and `unfinished` is true when a setup made the keyring
+and was stopped before it finished it (below). When setup starts with an unfinished keyring that has a
+password, it shows the keyring step and asks for that password, whatever the disk, instead of skipping
+the step. `herald-os keyring setup --no-password` or `--password` (asked
 twice in a terminal, or one line on stdin) makes the default keyring later. Both refuse when there is
 one already, in the files or held by the running Secret Service, which may be KeePassXC or KWallet
 rather than gnome-keyring (exit 3). Exit 4 means no keyring service answered on the session bus
@@ -506,8 +509,9 @@ the password given is not the one a half-made keyring was made with (below), whi
 asking for that password again. Exit 7 means a half-made keyring has a password and `--no-password` was
 given; setup then asks for that password instead of moving on. These codes are `herald-os keyring`'s
 own: each command has its own, and the same number can mean something else elsewhere. For
-`herald-os password --disk`, exit 6 means the change was only partly done, not a wrong password. Making
-it holds
+`herald-os password --disk`, exit 6 means the change was only partly done, not a wrong password, and
+exit 7 (`DISK_UNKNOWN`) means it could not tell which disks to change because `lsblk` is missing or
+cannot list them, so it changed nothing; it does not mean a keyring needs its password. Making it holds
 `herald-os-keyring.lock` in `$XDG_RUNTIME_DIR`, so two setups at once make one keyring, not `login`
 and `login_1`: the second waits, then finds the first one's and exits 3. If the first is still running
 after 25 s, the second gives up with nothing changed and exits 1, which setup reports as not made.
