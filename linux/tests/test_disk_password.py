@@ -1932,6 +1932,10 @@ def test_ctrl_c_ends_the_look_and_its_root_side_at_once(monkeypatch, tmp_path, c
     continued after SIGTERM, so it ends at once too."""
     if sudo == "real" and (os.geteuid() == 0 or not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0):
         pytest.skip("needs sudo without a password, as someone other than root")
+    if sudo == "real" and how == "stops":
+        # sudo, with no terminal of its own, stops itself and its caller's process group when its command
+        # stops, as a shell job does: here that is the test run.
+        pytest.skip("a stopped command under the real sudo stops the test run itself")
     monkeypatch.setattr(cli, "disk_root_argv", lambda op: [*(["sudo", "-n"] if sudo == "real" else []), sys.executable, "-c", SLOW_LOOK, str(tmp_path), how])
     before = {each: signal.getsignal(each) for each in (signal.SIGTERM, signal.SIGHUP)}
     for each in before:
