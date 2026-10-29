@@ -332,6 +332,21 @@ describe('the disk password', () => {
     }
     await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'partial', plainParts })
   })
+
+  it('names no parts on a disk encrypted throughout, whatever the list says', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: true, protection: 'full', plainParts: [{ device: '/dev/vdb1', kind: 'journal' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'full', plainParts: [] })
+  })
+
+  it('gives no protection, and no parts, to a disk that is not encrypted', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: false, protection: 'partial', plainParts: [{ device: '/dev/vdb1', kind: 'journal' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: false, protection: null, plainParts: [] })
+  })
+
+  it('leaves out a part that is not an object', async () => {
+    host.run = { stdout: JSON.stringify({ encrypted: true, protection: 'partial', plainParts: [null, 'journal', { device: '/dev/vdb1', kind: 'log' }] }), stderr: '', code: 0 }
+    await expect(diskStatus()).resolves.toEqual({ encrypted: true, protection: 'partial', plainParts: [{ device: '/dev/vdb1', kind: 'log' }] })
+  })
 })
 
 describe('the keyring', () => {
@@ -489,6 +504,34 @@ describe('the keyring', () => {
         args[0] === 'keyring' ? { stdout: '{"keyring": "password", "encrypted": true, "unfinished": true}', stderr: '', code: 0 } : { stdout: '{"encrypted": true}', stderr: '', code: 0 }
       )
       await expect(host.handlers.get(IPC.setupState)?.({})).resolves.toMatchObject({ keyring: 'password', keyringEncrypted: true, keyringUnfinished: true })
+    } finally {
+      vi.mocked(run).mockImplementation(async () => host.run)
+
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
+  })
+
+  it('passes the disk\'s protection and the parts written without encryption on as they are', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    const plainParts = [
+      { device: '/dev/vda3', kind: 'cipher_null' },
+      { device: '/dev/vdb1', kind: 'journal' }
+    ]
+
+    try {
+      vi.spyOn(fs, 'existsSync').mockImplementation(file => file === '/var/lib/herald-os/firstboot-done')
+      vi.mocked(run).mockImplementation(async (_command, args) =>
+        args[0] === 'keyring'
+          ? { stdout: '{"keyring": "none", "encrypted": true}', stderr: '', code: 0 }
+          : { stdout: JSON.stringify({ encrypted: true, devices: ['/dev/vda3'], protection: 'partial', plainParts }), stderr: '', code: 0 }
+      )
+      registerSetupIpc()
+      const state = await host.handlers.get(IPC.setupState)?.({})
+      expect(state).toMatchObject({ needed: true, diskEncrypted: true, diskProtection: 'partial', keyringEncrypted: true })
+      expect((state as { diskPlainParts: unknown }).diskPlainParts).toEqual(plainParts)
     } finally {
       vi.mocked(run).mockImplementation(async () => host.run)
 

@@ -708,6 +708,7 @@ export const en = {
   'firstRun.keyring.title': 'Saved passwords',
   // VS Code, Signal and GitHub CLI are product names.
   'firstRun.keyring.text': 'Apps such as VS Code, Signal and GitHub CLI keep passwords and sign-ins in a keyring. The disk it is kept on is not encrypted, so choose how the keyring is protected.',
+  'firstRun.keyring.textPartial': 'Apps such as VS Code, Signal and GitHub CLI keep passwords and sign-ins in a keyring. The disk it is kept on is encrypted, but not all of it is protected, so choose how the keyring is protected.',
   'firstRun.keyring.textUnknown':
     'Apps such as VS Code, Signal and GitHub CLI keep passwords and sign-ins in a keyring. Herald OS could not tell whether the disk it is kept on is encrypted, so choose how the keyring is protected.',
   'firstRun.keyring.password': 'A keyring password',

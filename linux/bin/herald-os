@@ -3980,9 +3980,11 @@ def disk_password(args: list[str]) -> int:
         new = disk_ask("New disk password: ")
         again = disk_ask("New disk password again: ")
     except (KeyboardInterrupt, EOFError):
-        # One more Ctrl+C (a flood of them at the sudo prompt) must not end it by SIGINT before it says so.
+        # One more Ctrl+C (a flood of them at a prompt) must not end it by SIGINT (-2) before it says so:
+        # disk_interrupt_once is a Python handler, which Python sets back to SIGINT's default as it shuts
+        # down, while SIG_IGN stays.
         if SSH_OWN_PROCESS:
-            disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
+            disk_ignore_held((signal.SIGINT,))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
     problem = disk_password_problem(new, again, current)
@@ -4076,14 +4078,34 @@ def lsblk_on_luks(tree: list) -> dict[str, bool | None]:
     return found
 
 
-def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambda device: device) -> bool | None:
+def lsblk_luks_above(tree: list) -> dict[str, list[str]]:
+    """Each block device's path, and the LUKS devices above it (pure)."""
+    found: dict[str, list[str]] = {}
+
+    def walk(node: dict, above: list[str]) -> None:
+        path = node.get("path") or node.get("name")
+        if isinstance(path, str) and path:
+            found.setdefault(path, [])
+            found[path] += [each for each in above if each not in found[path]]
+        below = [*above, path] if node.get("fstype") == "crypto_LUKS" and isinstance(path, str) and path else above
+        for child in lsblk_children(node):
+            walk(child, below)
+
+    for node in tree if isinstance(tree, list) else []:
+        if isinstance(node, dict):
+            walk(node, [])
+    return found
+
+
+def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambda device: device, plain=None) -> bool | None:
     """Whether the filesystems that hold the keyring folder `place` all sit on LUKS (pure; tested): the
     mount it is in (or would be in, before it exists), and every mount below it. `mounts` is
-    `findmnt -J -l -v -o TARGET,SOURCE,FSTYPE,UUID`'s list. A btrfs over several disks counts each disk
-    lsblk shows with its UUID. False when one of them is a block device not on LUKS; None when one is
+    `findmnt -J -l -v -o TARGET,SOURCE,FSTYPE,UUID,OPTIONS`'s list. A btrfs over several disks counts
+    each disk lsblk shows with its UUID. False when one of them is a block device not on LUKS; None when one is
     not a block device lsblk knows (tmpfs, NFS, a FUSE folder), is encrypted some other way, is a btrfs
     (or a filesystem nobody names) whose UUID lsblk does not know, or nothing holds `place`, since that
-    cannot be told."""
+    cannot be told. `plain(mount, disks)` says whether a filesystem on LUKS still writes part of itself in
+    the clear (disk_protection's "partial"), which makes it False too."""
     devices = {resolve(path): on_luks for path, on_luks in lsblk_on_luks(tree).items()}
     by_uuid: dict[str, list[str]] = {}
     filesystems: dict[str, tuple[str | None, str | None]] = {}
@@ -4131,7 +4153,10 @@ def keyring_mounts_encrypted(place: str, mounts: list, tree: list, resolve=lambd
             answers.append(None)
             continue
         disks = {source, *by_uuid.get(uuid, [])} if uuid else {source}
-        answers.append(keyring_all(devices.get(disk, False) for disk in disks))
+        answer = keyring_all(devices.get(disk, False) for disk in disks)
+        if answer is True and plain is not None and plain(mount, disks):
+            answer = False
+        answers.append(answer)
     return keyring_all(answers)
 
 
@@ -4139,7 +4164,7 @@ def keyring_encrypted(directory: Path) -> bool | None:
     """keyring_mounts_encrypted for this machine, from lsblk and findmnt; None when either cannot say."""
     try:
         tree = lsblk_tree()
-        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,FSTYPE,UUID"], capture_output=True, text=True, timeout=30)
+        listing = subprocess.run(["findmnt", "-J", "-l", "-v", "-o", "TARGET,SOURCE,FSTYPE,UUID,OPTIONS"], capture_output=True, text=True, timeout=30)
         mounts = json.loads(listing.stdout).get("filesystems") if listing.returncode == 0 else None
     except (DiskUnknown, OSError, subprocess.TimeoutExpired, json.JSONDecodeError, AttributeError):
         return None
@@ -4149,8 +4174,20 @@ def keyring_encrypted(directory: Path) -> bool | None:
     def resolve(device: str) -> str:
         return os.path.realpath(device) if device.startswith("/dev/") else device
 
+    try:
+        journals = sorted(os.listdir(DISK_JBD2))
+    except OSError:
+        journals = []
+    above = {resolve(path): [resolve(each) for each in luks] for path, luks in lsblk_luks_above(tree).items()}
+
+    def plain(mount: dict, disks: set[str]) -> bool:
+        # As --status's protection: a LUKS device that uses cipher_null, or its journal or log outside LUKS.
+        if any(luks_cipher_null(luks) is True for disk in disks for luks in above.get(disk, [])):
+            return True
+        return bool(disk_plain_parts(mount, tree, journals, resolve))
+
     # Links resolved (the image's /home is a link to /var/home); a part that does not exist yet stays as written.
-    return keyring_mounts_encrypted(os.path.realpath(directory), mounts, tree, resolve)
+    return keyring_mounts_encrypted(os.path.realpath(directory), mounts, tree, resolve, plain)
 
 
 def keyring_state(directory: Path) -> str:
@@ -7244,6 +7281,14 @@ if __name__ == "__main__":
         # Before `password --disk` asks anything (it finds the devices first), nothing has changed.
         if sys.argv[1:3] != ["password", "--disk"]:
             raise
-        disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
+        # As at the prompts: SIG_IGN, which outlasts Python's shutdown, before it says so.
+        disk_ignore_held((signal.SIGINT,))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
+    finally:
+        # Every way out of `password --disk` passes here, its errors and normal ends too. Python sets
+        # SIGINT back to its default as it shuts down, so one more Ctrl+C of a flood would then end it by
+        # SIGINT (-2) instead of its own exit code: ignored from here to the end, and Ctrl+\ with it so
+        # that one then does not end it with a core dump.
+        if sys.argv[1:3] == ["password", "--disk"]:
+            disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
