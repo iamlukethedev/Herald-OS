@@ -71,6 +71,18 @@ def disk_stopped_starting(signum: int, frame) -> None:
     os._exit(130)
 
 
+DISK_INTERRUPTED = {"yes": False}
+
+
+def disk_interrupt_once(signum: int, frame) -> None:
+    """Ctrl+C for `password --disk` from main on: the first is a KeyboardInterrupt, as usual, and any after
+    it nothing, so that a flood of them cannot interrupt the stop the first began (ending it by SIGINT,
+    or with a traceback). The change holds them its own way meanwhile."""
+    if not DISK_INTERRUPTED["yes"]:
+        DISK_INTERRUPTED["yes"] = True
+        raise KeyboardInterrupt
+
+
 # A Ctrl+C while Python is still loading this file, before `password --disk` handles one itself, ends
 # it quietly rather than with a KeyboardInterrupt traceback. Not where Ctrl+C was ignored when it
 # started, which it keeps.
@@ -3968,6 +3980,9 @@ def disk_password(args: list[str]) -> int:
         new = disk_ask("New disk password: ")
         again = disk_ask("New disk password again: ")
     except (KeyboardInterrupt, EOFError):
+        # One more Ctrl+C (a flood of them at the sudo prompt) must not end it by SIGINT before it says so.
+        if SSH_OWN_PROCESS:
+            disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)
     problem = disk_password_problem(new, again, current)
@@ -7219,12 +7234,13 @@ def main(argv: list[str]) -> int:
 if __name__ == "__main__":
     SSH_OWN_PROCESS = True
     if signal.getsignal(signal.SIGINT) is disk_stopped_starting:
-        signal.signal(signal.SIGINT, signal.default_int_handler)
+        signal.signal(signal.SIGINT, disk_interrupt_once)
     try:
         sys.exit(main(sys.argv[1:]))
     except KeyboardInterrupt:
         # Before `password --disk` asks anything (it finds the devices first), nothing has changed.
         if sys.argv[1:3] != ["password", "--disk"]:
             raise
+        disk_ignore_held((signal.SIGINT, signal.SIGQUIT))
         print(file=sys.stderr)
         die("stopped. Nothing was changed.", 130)

@@ -2252,6 +2252,36 @@ def test_ctrl_c_while_it_looks_for_the_disks_ends_quietly(tmp_path):
     assert result.stderr.count("stopped. Nothing was changed.") == 1
 
 
+FLOOD = "i=0; while [ $i -lt 400 ]; do kill -INT $PPID 2>/dev/null || exit 0; i=$((i+1)); done"
+
+
+@needs_cryptsetup
+def test_a_flood_of_ctrl_c_at_the_sudo_prompt_is_a_stop(tmp_path):
+    """Many Ctrl+C at once while sudo asks: one stop (130), said once, never an end by SIGINT (-2) from a
+    second one that lands while the first is being said."""
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    (tmp_path / "bin" / "sudo").write_text(f"#!/bin/sh\n[ \"$1\" = -v ] && {{ {FLOOD}; exit 1; }}\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    for attempt in range(5):
+        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [])
+        assert code == 130 and "Traceback" not in screen, (attempt, code, screen)
+        assert screen.count("stopped. Nothing was changed.") == 1, (attempt, screen)
+
+
+def test_a_flood_of_ctrl_c_while_it_looks_for_the_disks_is_a_stop(tmp_path):
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text(f"#!/bin/sh\n{FLOOD}\nsleep 5\n")
+    (folder / "lsblk").chmod(0o755)
+    for attempt in range(5):
+        result = subprocess.run([sys.executable, str(CLI), "password", "--disk"], capture_output=True, text=True, timeout=60,
+                                env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+        assert result.returncode == 130 and "Traceback" not in result.stderr, (attempt, result)
+        assert result.stderr.count("stopped. Nothing was changed.") == 1, (attempt, result.stderr)
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
