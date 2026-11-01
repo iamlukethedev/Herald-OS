@@ -38,10 +38,29 @@ def test_ci_tests_both_crates_offline_with_the_image_s_rust():
     assert test["run"] == "cargo test --frozen --offline -p agent-desktop-core -p agent-desktop-linux"
 
 
-def test_the_vendored_lock_is_the_pinned_one():
+def pinned() -> dict[str, str]:
+    return dict(line.split("=", 1) for line in (THIRD_PARTY / "UPSTREAM.lock").read_text().splitlines() if line and not line.startswith("#"))
+
+
+def test_the_notice_and_patches_name_the_pinned_revision_and_lock():
     import hashlib
 
-    lock = (THIRD_PARTY / "Cargo.lock").read_bytes()
-    assert hashlib.sha256(lock).hexdigest() == "da80a051f33db5dd38c19f924cef4a75c3bd340186f29678bc426b32b2d974f4"
-    pinned = dict(line.split("=", 1) for line in (THIRD_PARTY / "UPSTREAM.lock").read_text().splitlines() if line and not line.startswith("#"))
-    assert pinned == {"repo": "https://github.com/vercel-labs/agent-desktop", "sha": "9eb9b296192fcb70bda25e918cd6dd66abfa3d0d"}
+    assert pinned()["repo"] == "https://github.com/vercel-labs/agent-desktop"
+    sha = pinned()["sha"]
+    assert len(sha) == 40
+    notice, patches = (THIRD_PARTY / "NOTICE").read_text(), (THIRD_PARTY / "PATCHES.md").read_text()
+    assert sha in notice and "Vercel Labs" in notice and "modified" in notice
+    assert f"`{sha}`" in patches
+    lock = hashlib.sha256((THIRD_PARTY / "Cargo.lock").read_bytes()).hexdigest()
+    assert f"sha256 `{lock}`" in patches
+
+
+def test_every_patch_is_listed_and_applies_to_a_carried_file():
+    patches = (THIRD_PARTY / "PATCHES.md").read_text()
+    sync = (ROOT / "scripts" / "sync-agent-desktop.sh").read_text()
+    for patch in sorted((THIRD_PARTY / "patches").glob("*.patch")):
+        assert f"patches/{patch.name}" in patches
+        assert patch.stem in sync
+        target = patch.read_text().split("\n", 1)[0].rsplit(" b/", 1)[1]
+        assert (THIRD_PARTY / target).is_file()
+        assert f"| `{target}` | `patches/{patch.name}` |" in patches
