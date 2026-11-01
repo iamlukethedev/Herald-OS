@@ -2515,7 +2515,8 @@ DESKTOP_SCHEMA = _schema(
     "Destructive (asks every time): close-app, notification-action, dismiss-notification, dismiss-all-notifications, clipboard-clear. "
     "batch runs up to 20 steps (objects with the same fields) after one approval at the highest tier among them. "
     "Every result carries the app's own disposition: retry an action only when disposition.retry is safe. "
-    "Under cage and niri, press (and any keyboard or pointer input) is not supported yet: use click, type and set-value on refs.",
+    "Under cage and niri, press (and any keyboard or pointer input) is not supported yet: use click, type and set-value on refs. "
+    "Before a first use, follow skill_view name=\"herald-os-bridge:desktop\".",
     {
         **_DESKTOP_STEP_PROPERTIES,
         "command": _enum(*desktop.COMMANDS, description="What to do."),

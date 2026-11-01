@@ -456,3 +456,32 @@ def test_the_binary_is_found_where_the_image_and_the_vm_install_it(plugin, tmp_p
     assert module.binary() == image / module.BINARY
     monkeypatch.setenv("HERALD_OS_DESKTOP_BIN", str(tmp_path / "missing"))
     assert module.binary() is None
+
+
+# The skill.
+
+
+def test_the_desktop_skill_ships_and_is_registered_out_of_the_box(plugin):
+    skill = Path(plugin.__file__).parent / "skills" / "agent-desktop" / "SKILL.md"
+    assert skill.read_text().startswith("---\nname: desktop\n")
+    assert "desktop" in plugin.SKILLS
+    registered = {}
+    plugin.register(types.SimpleNamespace(register_tool=lambda **kwargs: None, register_skill=lambda name, path, description="": registered.setdefault(name, (path, description))))
+    assert registered["desktop"] == (skill, plugin.SKILLS["desktop"])
+
+
+def test_the_tool_points_to_the_skill(plugin):
+    tools = _mod(plugin, "tools")
+    assert 'skill_view name="herald-os-bridge:desktop"' in tools.DESKTOP_SCHEMA["description"]
+
+
+def test_the_skill_uses_the_tool_s_own_commands_and_says_what_does_not_work_yet(plugin, desktop):
+    import re
+
+    text = (Path(plugin.__file__).parent / "skills" / "agent-desktop" / "SKILL.md").read_text()
+    named = set(re.findall(r"command=([a-z-]+)", text)) | set(re.findall(r"`([a-z]+(?:-[a-z]+)*)(?: [a-z_]+=[^`]*)?`", text)) & set(desktop.COMMANDS)
+    assert named and named <= set(desktop.COMMANDS)
+    assert "cage" in text and "niri" in text and "Mutter RemoteDesktop" in text
+    assert "Apache License 2.0" in text and "third_party/agent-desktop/PATCHES.md" in text
+    patches = (Path(plugin.__file__).parents[2] / "third_party" / "agent-desktop" / "PATCHES.md").read_text()
+    assert "plugins/herald-os-bridge/skills/agent-desktop/SKILL.md" in patches

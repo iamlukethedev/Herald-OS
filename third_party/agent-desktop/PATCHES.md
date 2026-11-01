@@ -38,6 +38,19 @@ other `tests` folders, upstream's CI and repository files. The command-line crat
 tests (`src/tests`) and its documentation drift tests read some of those files, so Herald OS runs
 `cargo test` for `agent-desktop-core` and `agent-desktop-linux` only.
 
+## Adapted outside this directory
+
+`plugins/herald-os-bridge/skills/agent-desktop/SKILL.md` is Herald OS's `desktop` skill, adapted
+from `skills/agent-desktop/SKILL.md` and `skills/agent-desktop-linux/SKILL.md` at the pinned
+revision. Changes: every CLI invocation became a call of the bridge's `desktop` tool
+(`command=...` with named arguments instead of flags); the approval tiers, the refusal of refs no
+recent snapshot named and the block on running the binary from a shell are described; the
+platform notes are narrowed to Herald OS Linux, whose compositors (cage and niri) lack the Mutter
+RemoteDesktop and X11 paths that keyboard, pointer and window input use, and whose notifications
+are not GNOME Shell's; the PowerShell, macOS, Windows, headed-mode, session, overlay, tracing and
+FFI material, which the tool does not expose, is left out. The skill names its source and license
+at the end. The copies under `skills/` here are unchanged; the core crate embeds them in the binary.
+
 ## Added by Herald OS
 
 - `NOTICE`: credit, the pinned revision and that the code is modified.

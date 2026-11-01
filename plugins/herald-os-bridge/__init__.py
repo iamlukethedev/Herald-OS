@@ -28,6 +28,8 @@ from .bridge import tools as _tools
 from .bridge.host import host_available
 
 _SKILLS_DIR = Path(__file__).parent / "skills"
+# Skills kept in a folder of another name: desktop's is named after the upstream skill it adapts.
+_SKILL_FOLDERS = {"desktop": "agent-desktop"}
 # Skill name -> one-line description for the skills index.
 SKILLS: dict[str, str] = {
     "herald-os": "How Hermes acts as the operating environment on this computer.",
@@ -39,6 +41,7 @@ SKILLS: dict[str, str] = {
     "herald-sheets": "Work in Herald Sheets: formulas from a description, explaining formulas, filling a column from examples, cleaning data, charts, summaries of tables, named ranges, validation and dropdown lists, comments and notes, what stands out, building a workbook, sorting, filtering, saving.",
     "herald-slides": "Make and change presentations in Herald Slides: a deck from a topic, a document or a sheet, layouts, the slide master (a logo, slide numbers, footers, placeholders, backgrounds), themes and custom themes, transitions, gradients, flowcharts with connectors and groups, table borders, speaker notes, pictures, tables, reordering, saving and PDFs.",
     "herald-calc": "Exact math with Herald Calc: arithmetic, percentages, units, currencies, dates and time zones through the calc tool with the working shown, notes with names and totals, what a graph or a sheet's column shows, and the calculation history.",
+    "desktop": "Operate other desktop apps on Herald OS Linux with desktop control: read their accessibility tree, click, fill in fields, choose options, open and quit apps, the clipboard and screenshots, what asks first and what does not work yet under cage and niri.",
 }
 
 
@@ -73,6 +76,6 @@ def register(ctx) -> None:
     if not hasattr(ctx, "register_skill"):
         return
     for name, description in SKILLS.items():
-        skill_md = _SKILLS_DIR / name / "SKILL.md"
+        skill_md = _SKILLS_DIR / _SKILL_FOLDERS.get(name, name) / "SKILL.md"
         if skill_md.exists():
             ctx.register_skill(name, skill_md, description=description)
