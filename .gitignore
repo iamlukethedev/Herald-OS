@@ -3,6 +3,8 @@ node_modules/
 
 # Build output.
 dist/
+# cargo's, for desktop control (third_party/agent-desktop).
+third_party/agent-desktop/target/
 release/
 coverage/
 *.tsbuildinfo
