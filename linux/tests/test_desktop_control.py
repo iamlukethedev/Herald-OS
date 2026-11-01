@@ -38,6 +38,46 @@ def test_ci_tests_both_crates_offline_with_the_image_s_rust():
     assert test["run"] == "cargo test --frozen --offline -p agent-desktop-core -p agent-desktop-linux"
 
 
+SESSION = LINUX / "session" / "herald-os-session"
+OVERRIDE = LINUX / "session" / "90-herald-os-a11y.gschema.override"
+
+
+def test_the_accessibility_bus_and_its_schema_are_installed():
+    assert {"at-spi2-core", "at-spi2-atk", "gsettings-desktop-schemas"} <= set(listed(LINUX / "image" / "packages.txt"))
+
+
+def test_gtk_and_gnome_apps_have_accessibility_on_by_default():
+    import configparser
+
+    parser = configparser.ConfigParser(comment_prefixes=("#",))
+    parser.read_string(OVERRIDE.read_text())
+    assert parser["org.gnome.desktop.interface"]["toolkit-accessibility"] == "true"
+    packages = (LINUX / "image" / "packages.sh").read_text()
+    assert f'install -Dm0644 "$LINUX/session/{OVERRIDE.name}" /usr/share/glib-2.0/schemas/{OVERRIDE.name}' in packages
+    assert packages.index(OVERRIDE.name) < packages.index("glib-compile-schemas /usr/share/glib-2.0/schemas")
+
+
+def session_vars() -> list[str]:
+    import subprocess
+
+    line = next(line for line in SESSION.read_text().splitlines() if line.startswith("SESSION_VARS=("))
+    return subprocess.run(["bash", "-c", f'{line}\nprintf "%s\\n" "${{SESSION_VARS[@]}}"'], capture_output=True, text=True, check=True).stdout.split()
+
+
+def test_qt_apps_expose_their_tree_and_activated_apps_inherit_it():
+    text = SESSION.read_text()
+    for name in ("QT_ACCESSIBILITY", "QT_LINUX_ACCESSIBILITY_ALWAYS_ON"):
+        assert f"export {name}=1\n" in text
+        assert name in session_vars()
+
+
+def test_the_accessibility_bus_starts_before_the_shell_and_after_the_environment_is_published():
+    text = SESSION.read_text()
+    start = text.index("systemctl --user start at-spi-dbus-bus.service")
+    assert text.index("dbus-update-activation-environment --systemd") < start
+    assert start < text.index('"${RUN[@]}" "${flags[@]}"')
+
+
 def pinned() -> dict[str, str]:
     return dict(line.split("=", 1) for line in (THIRD_PARTY / "UPSTREAM.lock").read_text().splitlines() if line and not line.startswith("#"))
 

@@ -1,0 +1,4 @@
+# Desktop control reads apps through the AT-SPI accessibility tree; GTK and GNOME apps expose it
+# only while this is on.
+[org.gnome.desktop.interface]
+toolkit-accessibility=true

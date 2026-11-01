@@ -22,9 +22,14 @@ mkdir -p "$LOG_DIR"
 # environment, not ours: publish the Wayland and toolkit variables there too.
 export MOZ_GTK_TITLEBAR_DECORATION=system
 export GTK_CSD=0
-SESSION_VARS=(WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP ELECTRON_OZONE_PLATFORM_HINT MOZ_ENABLE_WAYLAND MOZ_GTK_TITLEBAR_DECORATION GTK_CSD QT_QPA_PLATFORM GDK_BACKEND)
+# Qt apps expose their accessibility tree to AT-SPI (desktop control) only when asked to.
+export QT_ACCESSIBILITY=1
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+SESSION_VARS=(WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP ELECTRON_OZONE_PLATFORM_HINT MOZ_ENABLE_WAYLAND MOZ_GTK_TITLEBAR_DECORATION GTK_CSD QT_QPA_PLATFORM GDK_BACKEND QT_ACCESSIBILITY QT_LINUX_ACCESSIBILITY_ALWAYS_ON)
 systemctl --user import-environment "${SESSION_VARS[@]}" 2>/dev/null || true
 dbus-update-activation-environment --systemd "${SESSION_VARS[@]}" 2>/dev/null || true
+# The accessibility bus, started with the environment above before the first app looks for it.
+systemctl --user start at-spi-dbus-bus.service 2>/dev/null || true
 systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
 systemctl --user start xdg-desktop-portal.service 2>/dev/null || true
 
