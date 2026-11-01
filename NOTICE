@@ -50,6 +50,14 @@ them. They are compiled into the renderer, and a packaged build carries their
 license in licenses/univer-LICENSE.txt. The @univerjs/icons package is released
 under the MIT License, Copyright (c) 2023-present, DreamNum Co., Ltd.
 
+Desktop control includes the Linux parts of agent-desktop by Vercel Labs
+(https://github.com/vercel-labs/agent-desktop), released under the Apache
+License, Version 2.0, modified as third_party/agent-desktop/PATCHES.md says,
+and the Rust crates it builds with, each under its own license, in
+third_party/agent-desktop/vendor. Its LICENSE and NOTICE are in
+third_party/agent-desktop. The desktop skill in
+plugins/herald-os-bridge/skills/agent-desktop is adapted from its skills.
+
 Herald Docs, and the text in Herald Slides, are edited with TipTap (MIT,
 https://github.com/ueberdosis/tiptap), Copyright (c) 2025, Tiptap GmbH, and
 ProseMirror (MIT, https://prosemirror.net), Copyright (C) 2015-2017 by Marijn

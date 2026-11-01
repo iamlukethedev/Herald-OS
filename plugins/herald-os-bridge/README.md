@@ -8,7 +8,7 @@ Tools, permission tiers, protected paths, the policy file and the audit log are 
 [docs/SYSTEM-BRIDGE.md](../../docs/SYSTEM-BRIDGE.md).
 
 ```
-__init__.py          register(): the `herald_os` toolset, the bundled skills (SKILLS) and the observer hooks
+__init__.py          register(): the `herald_os` toolset, the bundled skills (SKILLS), the observer hooks and desktop control's guard
 plugin.yaml          manifest: name, version, tools, supported platforms
 bridge/
   tools.py           tool schemas and handlers (TOOL_SPECS)
@@ -19,6 +19,7 @@ bridge/
   documents.py       system_documents: invoice hints, suggested names, scan pictures, filing places
   ui.py              client for the shell's control socket (the `os_ui`, `canvas`, `docs`, `sheets`, `slides` and `calc` tools)
   observe.py         observer hooks: live steps from Hermes outside Herald OS for the Pet Room, off unless asked for
+  desktop.py         desktop control: the desktop tool's argv, tiers and element names, and the pre_tool_call guard
   util.py            shared helpers (data folder, HERALD_OS_* settings)
   host/              HostAdapter per OS: darwin.py, linux.py, posix.py, windows.py (stub)
 skills/
@@ -31,6 +32,7 @@ skills/
   herald-sheets/     how to work in spreadsheets with the sheets tool: formulas, cleaning data, charts, summaries, building workbooks
   herald-slides/     how to make presentations with the slides tool: outlines, layouts, the master, themes, transitions, diagrams, speaker notes
   herald-calc/       how to do exact math with the calc tool: sums, units, currencies, dates, notes with totals, graphs, the history
+  agent-desktop/     the desktop skill: operating other apps with the desktop tool (adapted from upstream's, see third_party/agent-desktop)
 tests/               pytest suite: `npm run test:bridge` from the repository root
 ```
 

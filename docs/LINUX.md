@@ -1129,6 +1129,43 @@ file instead of searching for it. A file over 100 MB (11 MB for an older Hermes)
 anything is sent, and the draft stays in the composer. Canvas AI needs a Hermes that reads this
 computer's files, so it says so instead.
 
+## Desktop control
+
+Desktop control lets Hermes operate the other apps on the computer (Firefox, Files, Text Editor,
+settings dialogs) through their accessibility tree, the AT-SPI tree a screen reader reads: the
+bridge's `desktop` tool and the `desktop` skill ([docs/SYSTEM-BRIDGE.md](SYSTEM-BRIDGE.md#desktop-control)
+has the tiers and approvals). It is the Linux parts of agent-desktop by Vercel Labs (Apache-2.0),
+vendored in `third_party/agent-desktop` at the revision `UPSTREAM.lock` pins, with the changes
+`PATCHES.md` lists.
+
+- **Built offline.** The image's first stage builds it with Fedora's Rust from the vendored crates
+  (`cargo build --release --frozen --offline`, empty `CARGO_HOME`): no npm, no download at build
+  time or at run time. It installs `agent-desktop` and `agent-desktop-linux-clipboard-owner` in
+  `/usr/libexec/herald-os/`, off PATH; the NVIDIA image inherits them. The development VM has
+  `rust` and `cargo`, and `herald-os-build` puts the same two binaries in
+  `/usr/local/libexec/herald-os/`. CI runs the core and Linux crates' tests the same way. To move to
+  another upstream revision: `bash scripts/sync-agent-desktop.sh <sha>`.
+- **Accessibility is on by default.** `at-spi2-core` provides the accessibility bus, which the
+  session starts before the shell and any app; a gschema override sets
+  `org.gnome.desktop.interface toolkit-accessibility` to true for GTK and GNOME apps; and the session
+  exports `QT_ACCESSIBILITY=1` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` (also to apps started
+  through D-Bus activation, by `SESSION_VARS`) so Qt apps join. Electron apps need nothing; Chromium
+  and Chrome appear only when started with `--force-renderer-accessibility`.
+- **What works under cage and niri.** Reading the tree (`snapshot`, `find`, `get`, `is`), waiting,
+  listing apps and windows, launching apps, the clipboard (through `wl-clipboard`), and the semantic
+  actions on refs: `click`, `toggle`, `type` and `set-value` into a field (through AT-SPI's
+  editable text, not keystrokes), `select`.
+- **What does not, for now: keyboard and pointer input.** `press`, key-by-key typing, `scroll`
+  (wheel input), pointer gestures (double-click, hover, drag) and moving or resizing windows are
+  unsupported on cage and niri, because upstream sends that input through GNOME Mutter's
+  RemoteDesktop interface or X11, and neither compositor offers them. Those calls fail with
+  `ACTION_NOT_SUPPORTED` or `PLATFORM_NOT_SUPPORTED`, and the skill tells Hermes to reach the same
+  result through refs. A backend that sends keys with `wtype` (already in the image) is a possible
+  follow-up; it is not part of this change.
+- **Also GNOME-only upstream.** Notifications (list, act, dismiss) are read from GNOME Shell and
+  answer `PLATFORM_NOT_SUPPORTED` here. A graceful `close-app` asks an X11 client to quit; a Wayland
+  app may need `force=true`. `screenshot` goes through the screenshot portal, which may ask the person.
+
 ## Known limits
 
 - No calendar (`calendar.today` reports `unavailable`); Evolution Data Server integration is later.
@@ -1144,6 +1181,9 @@ computer's files, so it says so instead.
 - Under the `HERALD_OS_COMPOSITOR=cage` kiosk, a launched app (Firefox, Nautilus) covers the shell
   fullscreen and returns to it when closed; there is no switching between other apps' windows.
 - SELinux is permissive on the VM.
+- Desktop control sends no keyboard or pointer input under cage or niri: `press`, key-by-key
+  typing, wheel scrolling, pointer gestures and window moves need Mutter RemoteDesktop or X11
+  ([Desktop control](#desktop-control)). A `wtype` backend is a possible follow-up.
 - Chromium-based apps outside a sandbox choose their keyring from the desktop's name, and `HeraldOS`
   is not one they know, so they keep their keys in plain text (`basic_text`) unless started with
   `--password-store=gnome-libsecret` (for VS Code, `"password-store": "gnome-libsecret"` in

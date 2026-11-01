@@ -1,7 +1,7 @@
 # Herald OS Linux as a bootable container image (ADR-018): Fedora bootc with the Herald OS session,
-# the CLIs and the prebuilt shell. Updates replace the whole image (bootc upgrade) and the previous
-# one stays in the boot menu. Built by .github/workflows/image.yml; locally, from the repo root, with
-# the shell tarball for the same architecture next to it:
+# the CLIs, desktop control and the prebuilt shell. Updates replace the whole image (bootc upgrade)
+# and the previous one stays in the boot menu. Built by .github/workflows/image.yml; locally, from
+# the repo root, with the shell tarball for the same architecture next to it:
 #
 #   podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz -t herald-os .
 #
