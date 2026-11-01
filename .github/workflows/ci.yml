@@ -56,6 +56,20 @@ jobs:
       - name: pytest
         run: HERALD_OS_PYTHON="$(command -v python)" bash scripts/test-bridge.sh
 
+  desktop-control:
+    name: Desktop control
+    runs-on: ubuntu-latest
+    # The image's builder: Fedora's Rust, and only the vendored crates (third_party/agent-desktop).
+    container: quay.io/fedora/fedora:44
+    steps:
+      - uses: actions/checkout@v7
+      - run: dnf -y install --setopt=install_weak_deps=False rust cargo
+      - name: cargo test, offline
+        working-directory: third_party/agent-desktop
+        env:
+          CARGO_HOME: /tmp/cargo-home
+        run: cargo test --frozen --offline -p agent-desktop-core -p agent-desktop-linux
+
   scripts:
     name: Scripts
     runs-on: ubuntu-latest

@@ -26,6 +26,18 @@ def test_copying_the_checkout_into_the_vm_leaves_cargo_s_build_behind():
         assert "--exclude 'third_party/agent-desktop/target'" in (LINUX / "dev" / script).read_text()
 
 
+def test_ci_tests_both_crates_offline_with_the_image_s_rust():
+    import yaml
+
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]["desktop-control"]
+    assert job["container"] == "quay.io/fedora/fedora:44"
+    runs = [step for step in job["steps"] if "run" in step]
+    assert runs[0]["run"] == "dnf -y install --setopt=install_weak_deps=False rust cargo"
+    test = runs[-1]
+    assert test["working-directory"] == "third_party/agent-desktop"
+    assert test["run"] == "cargo test --frozen --offline -p agent-desktop-core -p agent-desktop-linux"
+
+
 def test_the_vendored_lock_is_the_pinned_one():
     import hashlib
 
