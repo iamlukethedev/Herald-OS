@@ -1,0 +1,42 @@
+diff --git a/src/Cargo.toml b/src/Cargo.toml
+index cb0d4454..82142306 100644
+--- a/src/Cargo.toml
++++ b/src/Cargo.toml
+@@ -15,22 +15,9 @@ thiserror.workspace          = true
+ tracing.workspace            = true
+ tracing-subscriber.workspace = true
+ 
+-[target.'cfg(target_os = "macos")'.dependencies]
+-agent-desktop-macos = { path = "../crates/macos" }
+-libc.workspace = true
+-
+-[target.'cfg(target_os = "windows")'.dependencies]
+-agent-desktop-windows = { path = "../crates/windows" }
+-
+ [target.'cfg(target_os = "linux")'.dependencies]
+ agent-desktop-linux = { path = "../crates/linux" }
+ 
+-[target.'cfg(target_os = "windows")'.dev-dependencies]
+-windows-sys = { version = "0.61", features = [
+-  "Win32_Foundation",
+-  "Win32_Graphics_Gdi",
+-  "Win32_UI_WindowsAndMessaging",
+-] }
+ 
+ [[bin]]
+ name = "agent-desktop"
+@@ -48,14 +35,6 @@ path = "tests/conformance.rs"
+ name = "cli_process"
+ path = "tests/cli_process.rs"
+ 
+-[[test]]
+-name = "windows_private_file_install"
+-path = "tests/windows_private_file_install.rs"
+-
+-[[test]]
+-name = "windows_cursor_overlay_teardown"
+-path = "tests/windows_cursor_overlay_teardown.rs"
+-
+ [[test]]
+ name = "command_host_process"
+ path = "tests/command_host_process.rs"
