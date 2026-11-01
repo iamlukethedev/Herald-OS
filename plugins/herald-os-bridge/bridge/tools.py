@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import audit, documents, ui
+from . import audit, desktop, documents, ui
 from .host import HostNotSupported, host
 from .host.base import FileSearch
 from .permissions import Tier, authorize, load_policy, protected_root
@@ -2469,6 +2469,119 @@ def handle_calc(args: dict[str, Any], **_: Any) -> str:
         return fail(str(exc))
 
 
+# ---------------------------------------------------------------------------------------------
+# desktop: operate desktop apps through the accessibility tree (Herald OS Linux)
+# ---------------------------------------------------------------------------------------------
+
+_DESKTOP_STEP_PROPERTIES: dict[str, Any] = {
+    "command": _enum(*desktop.TIERS, description="What to do (for a batch step)."),
+    "app": _desc(_STR, "The app by name: for snapshot, find, list-windows, list-surfaces, list-notifications, wait --text and screenshot a filter; for launch and close-app the app itself."),
+    "ref": _desc(_STR, "An element ref from the latest snapshot or find, like @s8f3k2p9:e5: for click, type, set-value, select, toggle, scroll, focus, get, is and wait. Refs go stale when the app changes; snapshot again."),
+    "text": _desc(_STR, "For type (the text to insert), clipboard-set (the text to copy), find (text in an element), wait (text to wait for) and list-notifications (a filter)."),
+    "value": _desc(_STR, "For set-value (the new value) and select (the option to choose)."),
+    "key": _desc(_STR, "For press: a key or combo such as return, escape, tab, ctrl+s, shift+tab."),
+    "role": _desc(_STR, "For find: an accessibility role such as button, text field, check box."),
+    "name": _desc(_STR, "For find: the element's accessible name."),
+    "root": _desc(_STR, "For snapshot and find: a ref to start from instead of the window root."),
+    "window_id": _desc(_STR, "For snapshot: a window id from list-windows."),
+    "surface": _enum(*desktop.SURFACES, description="For snapshot: what to read (default the app's window)."),
+    "interactive_only": _desc(_BOOL, "For snapshot: only elements you can act on (default true)."),
+    "compact": _desc(_BOOL, "For snapshot: fold single-child unnamed nodes (default true)."),
+    "skeleton": _desc(_BOOL, "For snapshot: a shallow overview with child counts; drill in with root."),
+    "max_depth": _desc(_INT, "For snapshot: how deep to read (1-50, default 10)."),
+    "first": _desc(_BOOL, "For find: only the first match."),
+    "limit": _desc(_INT, "For find (default 50) and list-notifications: at most this many."),
+    "property": _desc(_STR, "For get: text, value, title, bounds, role or states. For is: visible, enabled, checked, focused, expanded or selected."),
+    "direction": _enum(*desktop.DIRECTIONS, description="For scroll (default down)."),
+    "amount": _desc(_INT, "For scroll: how many units (default 3)."),
+    "ms": _desc(_INT, "For wait: pause this many milliseconds."),
+    "window": _desc(_STR, "For wait: a window title to wait for."),
+    "predicate": _enum(*desktop.PREDICATES, description="For wait with a ref."),
+    "timeout_ms": _desc(_INT, "For wait: how long to wait (default 10000, at most 60000)."),
+    "force": _desc(_BOOL, "For close-app: terminate instead of asking the app to quit (unsaved work is lost)."),
+    "index": _desc(_INT, "For notification-action and dismiss-notification: the notification's number in list-notifications."),
+    "action": _desc(_STR, "For notification-action: the button to press, e.g. Reply or Open."),
+    "expected_app": _desc(_STR, "For notification-action and dismiss-notification: the app the notification is from (this or expected_title is required)."),
+    "expected_title": _desc(_STR, "For notification-action and dismiss-notification: the notification's title."),
+}
+
+DESKTOP_SCHEMA = _schema(
+    "desktop",
+    "Operate desktop apps on Herald OS Linux through their accessibility tree (desktop control). "
+    "The loop: snapshot an app (app=...) to get refs, act on a ref, then snapshot again to check. "
+    "Read: snapshot, find, get, is, wait, list-apps, list-windows, list-displays, list-surfaces, list-notifications, status, permissions, version. "
+    "Act (asks first; 'always' covers one command in one app): click, type, set-value, select, toggle, scroll, focus, press, launch, clipboard-set; "
+    "screenshot (saved to a file Hermes can look at) and clipboard-get ask too. "
+    "Destructive (asks every time): close-app, notification-action, dismiss-notification, dismiss-all-notifications, clipboard-clear. "
+    "batch runs up to 20 steps (objects with the same fields) after one approval at the highest tier among them. "
+    "Every result carries the app's own disposition: retry an action only when disposition.retry is safe. "
+    "Under cage and niri, press (and any keyboard or pointer input) is not supported yet: use click, type and set-value on refs.",
+    {
+        **_DESKTOP_STEP_PROPERTIES,
+        "command": _enum(*desktop.COMMANDS, description="What to do."),
+        "steps": {"type": "array", "items": {"type": "object", "properties": _DESKTOP_STEP_PROPERTIES, "required": ["command"]}, "description": "For batch: the steps, in order."},
+    },
+    required=("command",),
+)
+
+DESKTOP_TIMEOUT = 90.0
+DESKTOP_OUTPUT_LIMIT = 40_000
+
+
+def _desktop_step(binary: Path, step: desktop.Step) -> dict[str, Any]:
+    if step.output is not None:
+        step.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    result = run([str(binary), *step.argv], timeout=DESKTOP_TIMEOUT)
+    reply = desktop.envelope(result.stdout)
+    if reply is None:
+        if result.code == 124:
+            raise RuntimeError(f"desktop {step.command} timed out after {int(DESKTOP_TIMEOUT)}s")
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"desktop control exited {result.code}")
+    if reply.get("ok") is not True:
+        error = reply.get("error") if isinstance(reply.get("error"), dict) else {}
+        details = {key: error[key] for key in ("code", "suggestion", "disposition", "recovery") if key in error}
+        raise PartialFailure(f"{error.get('code', 'ERROR')}: {error.get('message', 'desktop control failed')}", {"command": step.command, **details})
+    data = reply.get("data")
+    if step.command in ("snapshot", "find"):
+        desktop.remember(data, step.app)
+    out: dict[str, Any] = {"command": step.command}
+    if step.output is not None:
+        out["screenshot"] = str(step.output)
+    text = json.dumps(data, ensure_ascii=False)
+    if len(text) > DESKTOP_OUTPUT_LIMIT:
+        out.update(result_text=text[:DESKTOP_OUTPUT_LIMIT], truncated=True, hint="Too large to return whole: use skeleton=true, a smaller max_depth, or root=<ref> to read one part.")
+    else:
+        out["result"] = data
+    return out
+
+
+def handle_desktop(args: dict[str, Any], **_: Any) -> str:
+    if host().platform != "linux":
+        return fail("desktop is only available on Herald OS Linux")
+    try:
+        call = desktop.plan(args if isinstance(args, dict) else {})
+    except ValueError as exc:
+        return fail(str(exc))
+    binary = desktop.binary()
+
+    def execute() -> dict[str, Any]:
+        if binary is None:
+            raise HostNotSupported("Desktop control is not installed: Herald OS Linux ships it in /usr/libexec/herald-os (the development VM's herald-os-build puts it in /usr/local/libexec/herald-os).")
+        if call.action != "batch":
+            return _desktop_step(binary, call.steps[0])
+        done: list[dict[str, Any]] = []
+        for number, step in enumerate(call.steps, 1):
+            try:
+                done.append(_desktop_step(binary, step))
+            except PartialFailure as exc:
+                raise PartialFailure(f"step {number} ({step.command}) failed: {exc}", {"completed": done, "failed_step": number, **exc.payload}) from exc
+            except Exception as exc:  # noqa: BLE001 - the steps before it ran; say which.
+                raise PartialFailure(f"step {number} ({step.command}) failed: {exc}", {"completed": done, "failed_step": number}) from exc
+        return {"command": "batch", "steps": done}
+
+    return _guarded("desktop", call.tier, call.action, call.summary, call.audit, (), execute, scope=call.scope)
+
+
 TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("os_ui", OS_UI_SCHEMA, handle_os_ui, "🪟"),
     ToolSpec("canvas", CANVAS_SCHEMA, handle_canvas, "🎨"),
@@ -2489,6 +2602,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("system_files", SYSTEM_FILES_SCHEMA, handle_system_files, "🗂️"),
     ToolSpec("system_documents", SYSTEM_DOCUMENTS_SCHEMA, handle_system_documents, "📄"),
     ToolSpec("system_os", SYSTEM_OS_SCHEMA, system_os_handler, "🐧"),
+    ToolSpec("desktop", DESKTOP_SCHEMA, handle_desktop, "🖱️"),
 )
 
 __all__ = ["TOOL_SPECS", "ToolSpec", "bridge_enabled", "calc_command", "canvas_command", "canvas_tier", "docs_command", "drop_undo", "find_undo", "handle_calc", "handle_canvas", "handle_docs", "handle_os_ui", "handle_sheets", "handle_slides", "handle_system_documents", "normalise_duration", "office_tier", "plan_operations", "plan_system_os", "plan_targets", "read_one_document", "record_undo", "resolve_when", "sheets_command", "slides_command", "system_os_handler", "tilde", "ui_summary", "ui_tier_for", "json"]
