@@ -4,3 +4,6 @@ npm
 gcc-c++
 make
 rsync
+# Desktop control is built from the vendored crates (linux/dev/build.sh).
+rust
+cargo
