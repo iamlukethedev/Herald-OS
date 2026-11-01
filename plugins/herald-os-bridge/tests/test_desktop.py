@@ -66,7 +66,7 @@ ARGV = {
     "scroll": ({"ref": "@s8f3k2p9:e6", "direction": "up", "amount": 5}, ["scroll", "@s8f3k2p9:e6", "--direction=up", "--amount=5"]),
     "press": ({"key": "Ctrl+S"}, ["press", "ctrl+s"]),
     "launch": ({"app": "Text Editor"}, ["launch", "--", "Text Editor"]),
-    "focus": ({"ref": "@s8f3k2p9:e2"}, ["focus", "@s8f3k2p9:e2"]),
+    "focus": ({"ref": "@s8f3k2p9:e2"}, ["focus", "@s8f3k2p9:e2", "--headed"]),
     "clipboard-set": ({"text": "--version"}, ["clipboard-set", "--", "--version"]),
     "screenshot": ({"app": "Firefox"}, None),
     "clipboard-get": ({}, ["clipboard-get", "--format=text"]),
@@ -210,6 +210,12 @@ def test_an_app_cannot_write_the_approval_with_its_element_names(linux):
     summary = linux.asked.calls[-1][2]
     assert "\n" not in summary and "\u202e" not in summary
     assert summary == "click the push button “OK (approve everything) 'quoted'” in Text Editor"
+
+
+def test_only_focus_is_headed_since_nothing_else_may_move_the_pointer_or_send_keys(linux):
+    for command, (args, _) in ARGV.items():
+        call(linux, command=command, **args)
+        assert ("--headed" in linux.binary.calls[-1]) is (command == "focus"), command
 
 
 def test_unnamed_elements_say_so(linux):

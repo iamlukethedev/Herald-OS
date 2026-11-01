@@ -378,10 +378,13 @@ def plan_step(args: dict[str, Any]) -> Step:
     if command in ("list-displays", "status", "permissions", "version"):
         return step([command], f"{command.replace('-', ' ')}")
 
-    if command in ("click", "toggle", "focus"):
+    if command in ("click", "toggle"):
         target = _known(args, command)
-        verb = {"click": "click", "toggle": "toggle", "focus": "move the keyboard focus to"}[command]
-        return step([command, target.ref], f"{verb} {target.describe()}", scope=scope_key(target.app), app=target.app)
+        return step([command, target.ref], f"{command} {target.describe()}", scope=scope_key(target.app), app=target.app)
+    if command == "focus":
+        target = _known(args, command)
+        # Linux grants AT-SPI's GrabFocus only to a headed call; it moves no pointer and sends no key.
+        return step(["focus", target.ref, "--headed"], f"move the keyboard focus to {target.describe()}", scope=scope_key(target.app), app=target.app)
     if command == "type":
         target = _known(args, command)
         text = _text(args, "text", TEXT_MAX)
