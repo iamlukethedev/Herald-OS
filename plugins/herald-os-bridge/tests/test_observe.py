@@ -379,11 +379,14 @@ class Ctx:
 def test_the_plugin_registers_the_hooks_beside_its_tools(plugin, observe, monkeypatch):
     ctx = Ctx()
     plugin.register(ctx)
+    desktop = sys.modules[plugin.__name__ + ".bridge.desktop"]
     assert [name for name, _ in ctx.hooks] == [
         "pre_tool_call", "post_tool_call", "subagent_start", "subagent_stop",
         "on_session_start", "on_session_end", "pre_approval_request", "post_approval_response",
+        "pre_tool_call",
     ]
-    assert all(callback is observe.HOOKS[name] for name, callback in ctx.hooks)
+    assert all(callback is observe.HOOKS[name] for name, callback in ctx.hooks[:-1])
+    assert ctx.hooks[-1][1] is desktop.guard
     # Hermes hands a callback every field only when it takes **kwargs.
     assert all(any(p.kind is inspect.Parameter.VAR_KEYWORD for p in inspect.signature(callback).parameters.values()) for _, callback in ctx.hooks)
     assert ctx.tools and ctx.skills
@@ -391,13 +394,14 @@ def test_the_plugin_registers_the_hooks_beside_its_tools(plugin, observe, monkey
     older = types.SimpleNamespace(hooks=[], register_tool=lambda **kwargs: None)
     older.register_hook = lambda name, callback: older.hooks.append(name)
     plugin.register(older)
-    assert len(older.hooks) == len(observe.HOOKS)
+    assert len(older.hooks) == len(observe.HOOKS) + 1
     plugin.register(types.SimpleNamespace(register_tool=lambda **kwargs: None))
 
     monkeypatch.setenv("HERALD_OS", "1")
     backend = Ctx()
     plugin.register(backend)
-    assert backend.hooks == [] and backend.tools and backend.skills
+    # The backend's work is all Herald OS's, so no observer hook; the desktop control guard still holds there.
+    assert backend.hooks == [("pre_tool_call", desktop.guard)] and backend.tools and backend.skills
 
 
 # Queueing.

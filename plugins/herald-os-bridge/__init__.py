@@ -8,7 +8,8 @@ recorded by ``bridge.audit``. ``system_os`` (registered from the same ``TOOL_SPE
 Herald OS Linux's ``herald-os`` CLI and answers with a clear failure on other platforms. The tools
 are offered and run only in Herald OS's own sessions (``bridge.scope``). ``bridge.observe`` adds
 observer hooks that tell the Pet Room about Hermes's work outside Herald OS, only while a running
-Herald OS asks for it.
+Herald OS asks for it. ``bridge.desktop`` adds a ``pre_tool_call`` guard that blocks terminal and
+execute_code calls running the desktop control binary directly.
 
 Out-of-tree by design: the plugin uses only public plugin APIs (``register``,
 ``ctx.register_tool``, ``ctx.register_skill``, ``ctx.register_hook``,
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .bridge import desktop as _desktop
 from .bridge import observe as _observe
 from .bridge import scope as _scope
 from .bridge import tools as _tools
@@ -65,6 +67,9 @@ def register(ctx) -> None:
         )
     if hasattr(ctx, "register_hook"):
         _observe.register(ctx)
+        # In every process, the backend Herald OS starts included: a terminal or execute_code call
+        # there must not run desktop control past the desktop tool's approvals. It returns at once.
+        ctx.register_hook("pre_tool_call", _desktop.guard)
     if not hasattr(ctx, "register_skill"):
         return
     for name, description in SKILLS.items():

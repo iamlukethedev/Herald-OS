@@ -2,8 +2,9 @@
 
 The ``desktop`` tool runs the vendored binary (``third_party/agent-desktop``, installed off PATH in
 ``/usr/libexec/herald-os``) with a fixed argv for each command. This module is the pure half:
-it maps the tool's arguments to that argv, gives every command its permission tier, and remembers
-the elements of recent snapshots so an approval names what it acts on.
+it maps the tool's arguments to that argv, gives every command its permission tier, remembers the
+elements of recent snapshots so an approval names what it acts on, and holds the ``pre_tool_call``
+guard that keeps shell tools from running the binary past the tool's approvals.
 
 Tiers: reading the tree, windows, apps and notifications is ``read``; acting in an app (click,
 type, set-value, select, toggle, scroll, press, launch, focus, clipboard-set) is ``mutate``, and an
@@ -490,3 +491,58 @@ def envelope(stdout: str) -> dict[str, Any] | None:
             return None
     return data if isinstance(data, dict) and "ok" in data else None
 
+
+# ---------------------------------------------------------------------------------------------
+# The pre_tool_call guard
+# ---------------------------------------------------------------------------------------------
+
+# The tools that run what the model writes, and the argument that holds it.
+SHELL_TOOLS = {"terminal": "command", "execute_code": "code"}
+_NAME = r"agent-desktop(?:-linux-clipboard-owner)?"
+# Running the binary, not mentioning it: a checkout's third_party/agent-desktop stays workable.
+_RUNS = (
+    re.compile(r"libexec/herald-os/(?:" + _NAME + r"\b|[^\s/'\"]*[*?\[])", re.I),
+    re.compile(r"target/(?:release|debug|ci)/" + _NAME + r"\b", re.I),
+    re.compile(r"(?:^|[;&|`(\n{'\"]|\$\(|\bthen\b|\bdo\b|\belse\b)\s*(?:(?:sudo|doas|env|exec|nohup|command|builtin|which|time|setsid|nice|xargs|stdbuf|timeout|strace|ltrace|gdb|watch|\S+=\S*)\s+(?:-\S+\s+)*)*(?:\S*/)?" + _NAME + r"(?=\s|$|[;&|)`}])", re.I),
+    re.compile(r"""["']""" + _NAME + r"""["']""", re.I),
+    re.compile(r"\bcargo\s+(?:\+\S+\s+)?run\b[^\n]*\b" + _NAME + r"\b|\b" + _NAME + r"\b[^\n]*\bcargo\s+(?:\+\S+\s+)?run\b", re.I),
+)
+GUARD_MESSAGE = (
+    "Desktop control runs only through the desktop tool, which shows the person what it is about to do "
+    "and asks first. This {tool} call runs its program directly, so it was not run. Use the desktop tool instead."
+)
+
+
+def runs_binary(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _RUNS)
+
+
+def _strings(value: Any, depth: int = 0) -> Iterable[str]:
+    if depth > 20:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item, depth + 1)
+
+
+def guard(**kwargs: Any) -> dict[str, str] | None:
+    """``pre_tool_call``: block a terminal or execute_code call that runs the desktop binary.
+
+    Hermes waits on this hook and blocks the tool when it raises or stalls, so it only reads the
+    arguments it is given and never raises."""
+    tool = kwargs.get("tool_name")
+    if not isinstance(tool, str) or tool not in SHELL_TOOLS:
+        return None
+    args = kwargs.get("args")
+    if not isinstance(args, dict):
+        return None
+    try:
+        hit = any(runs_binary(text) for text in _strings(args))
+    except Exception:  # noqa: BLE001 - an unreadable argument blocks rather than slipping through.
+        hit = True
+    return {"action": "block", "message": GUARD_MESSAGE.format(tool=tool)} if hit else None
