@@ -129,9 +129,13 @@ function startMenuRoots(): string[] {
     .map(root => path.win32.join(root, 'Microsoft', 'Windows', 'Start Menu', 'Programs'))
 }
 
+const HARDWARE_TTL_MS = 10_000
+const HARDWARE_RETRY_MS = 5 * 60_000
+const NO_HARDWARE: ReturnType<typeof parseWindowsHardware> = { disks: [], battery: { present: false } }
+
 export class WindowsPlatform extends GenericPlatform {
   private previousCpu: ReturnType<typeof cpuSample> | null = null
-  private hardware: { at: number; pending: Promise<ReturnType<typeof parseWindowsHardware>> } | null = null
+  private hardware: { at: number; ttl: number; pending: Promise<ReturnType<typeof parseWindowsHardware>> } | null = null
   private processes: { expiresAt: number; pending: Promise<ProcessInfo[]> } | null = null
 
   override async systemInfo(): Promise<SystemInfo> {
@@ -139,11 +143,15 @@ export class WindowsPlatform extends GenericPlatform {
   }
 
   override async sampleStats(): Promise<SystemStats> {
-    if (!this.hardware || Date.now() - this.hardware.at >= 10_000) {
-      const pending = queryWindows('hardware').then(parseWindowsHardware)
-      const entry = { at: Date.now(), pending }
+    if (!this.hardware || Date.now() - this.hardware.at >= this.hardware.ttl) {
+      const entry = { at: Date.now(), ttl: HARDWARE_TTL_MS, pending: Promise.resolve(NO_HARDWARE) }
+      // PowerShell can be blocked by policy: the stats then come from Node alone, without disks or a
+      // battery, and the query is tried again only after a longer pause.
+      entry.pending = queryWindows('hardware').then(parseWindowsHardware).catch(() => {
+        entry.ttl = HARDWARE_RETRY_MS
+        return NO_HARDWARE
+      })
       this.hardware = entry
-      void pending.catch(() => { if (this.hardware === entry) this.hardware = null })
     }
     const hardware = await this.hardware.pending
     const current = cpuSample(), previous = this.previousCpu

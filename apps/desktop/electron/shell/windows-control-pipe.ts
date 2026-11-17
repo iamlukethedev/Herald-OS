@@ -10,6 +10,7 @@ const IO_PENDING = 997
 const IO_INCOMPLETE = 996
 const OPERATION_ABORTED = 995
 const PIPE_CONNECTED = 535
+const NO_DATA = 232
 const INVALID_HANDLE = 0xffffffffffffffffn
 type Handle = bigint
 
@@ -21,7 +22,8 @@ function nativeApi() {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Windows x64 is required for this control pipe')
   const root = process.env.SystemRoot
   if (!root || !/^[A-Za-z]:[\\/]/.test(root)) throw new Error('An absolute Windows system directory is required')
-  // Load on Windows only. Koffi stays external to the Electron bundle and its native payload is unpacked.
+  // Load on Windows only. koffi stays external to the Electron bundle; its koffi.node is unpacked by
+  // asarUnpack's **/*.node rule, and the macOS and Linux packages leave koffi out.
   const ffi = require('koffi') as typeof import('koffi')
   const kernel = ffi.load(path.win32.join(root, 'System32', 'kernel32.dll'))
   const security = ffi.load(path.win32.join(root, 'System32', 'advapi32.dll'))
@@ -94,16 +96,18 @@ function nativeApi() {
     if (length < 8 || length > 4096) throw new Error('Invalid pipe DACL size')
     return Buffer.from(ffi.decode(acl[0], 'uint8_t', length))
   }
-  const create = (endpoint: string, user: string, logon: string): Handle => {
-    // OWNER RIGHTS prevents the owner's implicit WRITE_DAC right. Only this logon and SYSTEM
-    // can exchange bytes; clients cannot create another server instance under this name.
-    const sddl = `O:${user}D:P(A;;RC;;;OW)(A;;0x${CLIENT_ACCESS.toString(16)};;;${logon})(A;;0x1f01ff;;;SY)`
+  const create = (endpoint: string, user: string, logon: string, first: boolean): Handle => {
+    // OWNER RIGHTS replaces the owner's implicit WRITE_DAC with READ_CONTROL and the right to add
+    // instances, which further instances need. Only this logon and SYSTEM can exchange bytes, and
+    // the logon's grant has no instance right, so only the owning account can add instances.
+    const sddl = `O:${user}D:P(A;;0x20004;;;OW)(A;;0x${CLIENT_ACCESS.toString(16)};;;${logon})(A;;0x1f01ff;;;SY)`
     const descriptor = [null]
     checked(fromSddl(sddl, 1, descriptor, null))
     let handle: Handle | null = null
     try {
       const expected = aclBytes(descriptor[0]!)
-      handle = createPipe(endpoint, 0x40000000 | 0x00080000 | 3, 8, 1, 65536, 65536, 0,
+      // Overlapped and duplex; the first instance also claims the name (FILE_FLAG_FIRST_PIPE_INSTANCE).
+      handle = createPipe(endpoint, 0x40000000 | (first ? 0x00080000 : 0) | 3, 8, MAX_PIPE_INSTANCES, 65536, 65536, 0,
         { length: ffi.sizeof(attributes), descriptor: descriptor[0], inherit: 0 }) as Handle
       if (!handle || handle === INVALID_HANDLE) { handle = null; throw new PipeError(lastError()) }
       const actual = [null], owner = [null]
@@ -140,13 +144,17 @@ function nativeApi() {
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) abort()
       const count = [0]
-      // Poll only a kernel event with zero wait. No blocking ReadFile/ConnectNamedPipe or libuv
-      // worker is retained. Every simultaneous operation owns separate stable native memory.
+      // Poll only a kernel event with zero wait, so no blocking ReadFile/ConnectNamedPipe or libuv
+      // worker is retained. The pause doubles from 4 ms to 100 ms while nothing completes, so an
+      // idle pipe wakes about ten times a second; each new operation starts fast again.
+      let pause = 4
       while (true) {
+        pipeWaits++
         const status = wait(event, 0)
         if (status === 0) break
         if (status !== 258) { abort(); throw new PipeError(lastError()) }
-        await delay(4)
+        await delay(pause, undefined, signal.aborted ? {} : { signal }).catch(() => undefined)
+        pause = Math.min(pause * 2, 100)
       }
       const completed = result(handle, state, count, 0)
       const completionError = completed ? 0 : lastError()
@@ -178,6 +186,10 @@ function nativeApi() {
 export function windowsControlPipeName(): string {
   return `\\\\.\\pipe\\herald-os-${process.pid}-${crypto.randomBytes(16).toString('hex')}`
 }
+
+/** How often pipe operations have checked their event: lets a test see that an idle pipe is not spinning. */
+let pipeWaits = 0
+export const windowsControlPipeWaits = (): number => pipeWaits
 
 let api: ReturnType<typeof nativeApi> | null = null
 const native = () => api ??= nativeApi()
@@ -218,10 +230,25 @@ class PipeConnection extends Duplex {
   }
 }
 
-/** One bounded connection; the secured first instance persists across clients until stop(). */
+/** The most instances the pipe has at once, listening or serving a client each. */
+export const MAX_PIPE_INSTANCES = 8
+/**
+ * Instances kept listening. A connect is noticed only at the next check, up to 100 ms later, so a
+ * second listener takes a client that arrives meanwhile; a client that still finds the pipe busy
+ * waits for an instance with WaitNamedPipe, as Node's own client does.
+ */
+const LISTENING = 2
+
+/**
+ * The control pipe: the first instance claims the name, and further instances are created with the
+ * same descriptor and the same read-back, so that LISTENING of them listen while others serve, up to
+ * MAX_PIPE_INSTANCES. When idle, LISTENING instances stay.
+ */
 export class WindowsControlPipe {
-  private handle: Handle | null = null
-  private connection: PipeConnection | null = null
+  private readonly instances = new Set<Handle>()
+  private readonly connections = new Set<PipeConnection>()
+  private listening = 0
+  private identity: { user: string; logon: string } | null = null
   private cancellation: AbortController | null = null
   private loop: Promise<void> | null = null
   private endpoint = ''
@@ -229,19 +256,20 @@ export class WindowsControlPipe {
   constructor(private readonly accept: (connection: Duplex) => void, private readonly requestedEndpoint?: string, private readonly failed?: (error: Error) => void) {}
 
   async start(): Promise<string> {
-    // A pipe that is stopping still holds its handle; it must not report itself as serving.
+    // A pipe that is stopping still holds its handles; it must not report itself as serving.
     if (this.loop && this.cancellation?.signal.aborted) throw new Error('The control pipe must finish stopping before restart')
-    if (this.handle && this.securityVerified) return this.endpoint
+    if (this.instances.size && this.securityVerified) return this.endpoint
     if (this.loop) throw new Error('The control pipe must finish stopping before restart')
     const identity = native().identity()
     const prefix = `\\\\.\\pipe\\herald-os-${process.pid}-`
     const endpoint = this.requestedEndpoint ?? windowsControlPipeName()
     if (!endpoint.startsWith(prefix) || !/^[0-9a-f]{32}$/.test(endpoint.slice(prefix.length))) throw new Error('Invalid local Windows control pipe identity')
-    this.handle = native().create(endpoint, identity.user, identity.logon)
+    const first = native().create(endpoint, identity.user, identity.logon, true)
+    this.identity = identity
     this.endpoint = endpoint
     this.securityVerified = true
     this.cancellation = new AbortController()
-    this.loop = this.serve(this.handle, this.cancellation.signal).catch(error => {
+    this.loop = this.run(first, this.cancellation.signal).catch(error => {
       this.failed?.(error instanceof Error ? error : new Error(String(error)))
       throw error
     })
@@ -250,48 +278,85 @@ export class WindowsControlPipe {
     return endpoint
   }
 
-  private async serve(handle: Handle, signal: AbortSignal): Promise<void> {
+  /** Runs every instance until stop() or the first failure, which stops them all. */
+  private async run(first: Handle, signal: AbortSignal): Promise<void> {
+    const loops = new Set<Promise<void>>()
+    let failure: unknown = null
+    const fail = (error: unknown) => {
+      failure ??= error
+      this.securityVerified = false
+      this.cancellation?.abort()
+      for (const connection of this.connections) connection.destroy()
+    }
+    const spawn = (handle: Handle) => {
+      const loop = this.serve(handle, signal, spawn).catch(fail)
+      loops.add(loop)
+      void loop.finally(() => loops.delete(loop))
+    }
+    spawn(first)
+    try { this.topUp(spawn) } catch (error) { fail(error) }
+    // Instances started while waiting join the set, so wait until it is empty.
+    while (loops.size) await Promise.allSettled([...loops])
+    this.securityVerified = false
+    if (failure) throw failure
+  }
+
+  /**
+   * Creates instances until LISTENING listen, within MAX_PIPE_INSTANCES. Each is created with the same
+   * descriptor and checked the same way; a mismatch throws and stops the pipe.
+   */
+  private topUp(spawn: (handle: Handle) => void): void {
+    while (this.listening < LISTENING && this.instances.size < MAX_PIPE_INSTANCES) {
+      spawn(native().create(this.endpoint, this.identity!.user, this.identity!.logon, false))
+    }
+  }
+
+  private async serve(handle: Handle, signal: AbortSignal, spawn: (handle: Handle) => void): Promise<void> {
+    this.instances.add(handle)
+    let connection: PipeConnection | null = null
     try {
-    while (!signal.aborted) {
-      try {
-        await native().operation(handle, 'connect', signal)
+      while (!signal.aborted) {
+        this.listening++
+        try {
+          await native().operation(handle, 'connect', signal)
+        } catch (error) {
+          if (signal.aborted && error instanceof PipeError && error.code === OPERATION_ABORTED) break
+          // A client that connected and left before the connect completed: listen again.
+          if (error instanceof PipeError && error.code === NO_DATA) { native().disconnect(handle); continue }
+          throw error
+        } finally { this.listening-- }
         if (signal.aborted) break
-        const connection = new PipeConnection(handle)
-        this.connection = connection
-        const closed = new Promise<void>(resolve => connection.once('close', resolve))
+        this.topUp(spawn)
+        connection = new PipeConnection(handle)
+        this.connections.add(connection)
+        const closed = new Promise<void>(resolve => connection!.once('close', resolve))
         connection.on('error', () => undefined)
         this.accept(connection)
         await closed
-        this.connection = null
+        this.connections.delete(connection)
+        connection = null
         // A completed write is not proof the peer read it. Reuse only after the peer closes,
         // the protocol deadline destroys the stream, or stop() explicitly cancels it.
         native().disconnect(handle)
-      } catch (error) {
-        if (signal.aborted && error instanceof PipeError && error.code === OPERATION_ABORTED) break
-        this.securityVerified = false
-        this.cancellation?.abort()
-        throw error
+        // When enough other instances are listening already, this one is surplus.
+        if (this.listening >= LISTENING) break
       }
-    }
     } finally {
-      this.securityVerified = false
-      this.cancellation?.abort()
-      const connection = this.connection
       if (connection && !connection.closed) {
-        const closed = new Promise<void>(resolve => connection.once('close', resolve))
+        const closed = new Promise<void>(resolve => connection!.once('close', resolve))
         connection.destroy()
         await closed
       }
-      this.connection = null
+      if (connection) this.connections.delete(connection)
+      this.instances.delete(handle)
       native().disconnect(handle)
       native().close(handle)
-      if (this.handle === handle) this.handle = null
     }
   }
 
   async stop(): Promise<void> {
     this.cancellation?.abort()
-    this.connection?.destroy()
+    for (const connection of this.connections) connection.destroy()
     try { await this.loop } finally {
       this.loop = null
       this.cancellation = null

@@ -297,7 +297,8 @@ export class OsControlServer {
     })
   }
 
-  stop(): void {
+  /** Settles once the Windows pipe's handles are closed, so quitting can wait for it; on Unix at once. */
+  stop(): Promise<void> {
     if (process.platform === 'win32') {
       const pipe = this.pipe
       this.pipe = null
@@ -307,7 +308,7 @@ export class OsControlServer {
         this.pipeClosing = this.pipeClosing.then(() => pipe.stop()).catch(() => undefined)
       }
 
-      return
+      return this.pipeClosing
     }
 
     this.server?.close()
@@ -318,6 +319,8 @@ export class OsControlServer {
     } catch {
       // Already gone.
     }
+
+    return Promise.resolve()
   }
 
   /** Windows has no Unix socket here: a named pipe only this logon session can open, with the same lines and token. */

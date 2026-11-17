@@ -126,6 +126,35 @@ describe('Windows adapter', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  it('falls back to no disks and no battery when the hardware query fails, and retries it only after a pause', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    vi.mocked(run).mockResolvedValue({ code: 1, stdout: '', stderr: 'blocked by policy' })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const platform = new WindowsPlatform()
+
+    await expect(platform.sampleStats()).resolves.toMatchObject({ disks: [], battery: { present: false } })
+    now.mockReturnValue(1_000_000 + 60_000)
+    await expect(platform.sampleStats()).resolves.toMatchObject({ disks: [] })
+    expect(run).toHaveBeenCalledTimes(1)
+
+    now.mockReturnValue(1_000_000 + 5 * 60_000)
+    vi.mocked(run).mockResolvedValue({ code: 0, stdout: '{"disks":[{"DeviceID":"C:","Size":100,"FreeSpace":40}],"batteries":[]}', stderr: '' })
+    await expect(platform.sampleStats()).resolves.toMatchObject({ disks: [{ mount: 'C:\\', total: 100, free: 40 }] })
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a malformed hardware record like a failed query', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    vi.mocked(run).mockResolvedValue({ code: 0, stdout: '{"disks":null,"batteries":[]}', stderr: '' })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(2_000_000)
+    const platform = new WindowsPlatform()
+
+    await expect(platform.sampleStats()).resolves.toMatchObject({ disks: [], battery: { present: false } })
+    now.mockReturnValue(2_000_000 + 60_000)
+    await platform.sampleStats()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps unsupported capabilities unavailable and reveals only literal full paths', async () => {
     const platform = new WindowsPlatform()
     await expect(platform.calendarToday()).resolves.toEqual({ status: 'unavailable', events: [] })
