@@ -26,8 +26,9 @@ await build({
   format: 'esm',
   // Native module and Electron stay external; everything else is inlined. dbus-next is bundled, but
   // its optional peers (x11 for an unused address lookup, usocket for unix-fd passing) are not installed;
-  // leaving them external keeps the lazy `require` calls, which fail harmlessly at run time.
-  external: ['electron', 'node-pty', 'x11', 'usocket'],
+  // leaving them external keeps the lazy `require` calls, which fail harmlessly at run time. koffi
+  // carries a native binary per platform and is required only on Windows, for the control pipe.
+  external: ['electron', 'node-pty', 'koffi', 'x11', 'usocket'],
   banner: {
     js: [
       "import { createRequire as __hermesCreateRequire } from 'node:module';",

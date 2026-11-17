@@ -56,6 +56,7 @@ import { shellMode } from './shell/mode.ts'
 import { createCompositor, detectCompositor } from './wm/compositor.ts'
 import { NotificationDaemon } from './shell/notification-daemon.ts'
 import { desktopControlHandler, OsCommandBridge, OsControlServer, osControlToken } from './shell/os-control.ts'
+import { windowsControlPipeName } from './shell/windows-control-pipe.ts'
 import { PanelShell } from './shell/panels.ts'
 import { registerBrandingIpc } from './shell/branding.ts'
 import { EmojiPanel } from './shell/emoji-panel.ts'
@@ -139,7 +140,11 @@ const appHost = !panels && process.platform === 'linux' ? new DesktopHost(() => 
 const emojiPanel = !panels && process.platform === 'darwin' ? new EmojiPanel(() => mainWindow) : null
 const shellHost: ShellHost | null = panels ?? appHost
 // Where the backend and Hermes processes reach main: the compositor CLI's socket in panels mode, the OS control server's otherwise.
-const osControlPath = panels ? path.join(process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`, 'herald-os', 'control.sock') : path.join(heraldOsDataDir(), 'control.sock')
+const osControlPath = panels
+  ? path.join(process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`, 'herald-os', 'control.sock')
+  : process.platform === 'win32'
+    ? windowsControlPipeName()
+    : path.join(heraldOsDataDir(), 'control.sock')
 // The Room's live activity from Hermes outside Herald and its activity log, both off until the person turns them on.
 const activity = new ActivityHub({ dataDir: heraldOsDataDir(), socket: osControlPath })
 const roomLog = new RoomLog({ dir: path.join(heraldOsDataDir(), 'room-log') })

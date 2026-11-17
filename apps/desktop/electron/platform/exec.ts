@@ -32,7 +32,7 @@ function exitCode(error: { code?: unknown } | null): number {
 /** Small promise wrapper around execFile that never throws on non-zero exit. `input` goes to stdin. */
 export function run(command: string, args: string[], timeoutMs = 8000, input?: string): Promise<ExecResult> {
   return new Promise(resolve => {
-    const child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+    const child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
       resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code: exitCode(error) })
     })
 
@@ -46,7 +46,7 @@ export function run(command: string, args: string[], timeoutMs = 8000, input?: s
 /** Same as `run`, but keeps stdout as raw bytes (for commands that emit images). */
 export function runBuffer(command: string, args: string[], timeoutMs = 8000): Promise<ExecBufferResult> {
   return new Promise(resolve => {
-    execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'buffer' }, (error, stdout, stderr) => {
+    execFile(command, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'buffer', windowsHide: true }, (error, stdout, stderr) => {
       resolve({ stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.alloc(0), stderr: stderr ? stderr.toString('utf8') : '', code: exitCode(error) })
     })
   })
