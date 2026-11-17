@@ -1749,8 +1749,13 @@ the protection that a 0600 socket file in the person's data folder gives on macO
 
 - **A pipe of its own, named before it exists.** `\\.\pipe\herald-os-<pid>-<128 random bits>`. Main
   fixes the name first and hands it to the backend exactly as it hands over the Unix socket's path.
-  `FILE_FLAG_FIRST_PIPE_INSTANCE` with a single instance means no other process can create the name
-  first or serve beside it, and `PIPE_REJECT_REMOTE_CLIENTS` keeps it on this machine.
+  The random name makes it hard to guess, and `FILE_FLAG_FIRST_PIPE_INSTANCE` makes Herald fail closed
+  rather than share it if another process created it first. With a single instance and the handle
+  held, no one can serve beside it while Herald does; `PIPE_REJECT_REMOTE_CLIENTS` keeps it on this
+  machine.
+- **One client at a time, so idle clients are cut off.** The single instance would let a client that
+  connects and sends nothing hold the pipe for good, so a client goes once it has held it for 10 s
+  with no request in flight; a slow command keeps it.
 - **An explicit DACL, read back before use.** Only the interactive logon session and SYSTEM may read
   and write. OWNER RIGHTS leaves the owner nothing but `READ_CONTROL`, so not even Herald's own
   account can widen it, and clients never get `FILE_CREATE_PIPE_INSTANCE`. After creating the pipe,

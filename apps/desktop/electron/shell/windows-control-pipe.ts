@@ -229,6 +229,8 @@ export class WindowsControlPipe {
   constructor(private readonly accept: (connection: Duplex) => void, private readonly requestedEndpoint?: string, private readonly failed?: (error: Error) => void) {}
 
   async start(): Promise<string> {
+    // A pipe that is stopping still holds its handle; it must not report itself as serving.
+    if (this.loop && this.cancellation?.signal.aborted) throw new Error('The control pipe must finish stopping before restart')
     if (this.handle && this.securityVerified) return this.endpoint
     if (this.loop) throw new Error('The control pipe must finish stopping before restart')
     const identity = native().identity()

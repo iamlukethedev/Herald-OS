@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: {}, BrowserWindow: class {}, ipcMain: { on: vi.fn(), handle: vi.fn() }, shell: {} }))
 vi.mock('../log.ts', () => ({ log: vi.fn() }))
@@ -30,7 +30,8 @@ const read = kernel.func('int __stdcall ReadFile(void *handle, _Out_ uint8_t *bu
 const write = kernel.func('int __stdcall WriteFile(void *handle, const uint8_t *buffer, uint32_t length, _Out_ uint32_t *count, void *overlapped)')
 const close = kernel.func('int __stdcall CloseHandle(void *handle)')
 const lastError = kernel.func('uint32_t __stdcall GetLastError()')
-const [endpoint, access] = process.argv.slice(1)
+const [endpoint, access, piece] = process.argv.slice(1)
+const size = Number(piece) || 65536
 const handle = open(endpoint, Number(access), 0, null, 3, 0, null)
 if (!handle || ffi.address(handle) === 0xffffffffffffffffn) {
   console.log('ERROR ' + lastError())
@@ -42,13 +43,15 @@ process.stdin.on('data', chunk => input.push(chunk))
 process.stdin.on('end', () => {
   const bytes = Buffer.concat(input)
   if (bytes.length) {
-    for (let offset = 0; offset < bytes.length; offset += 65536) {
-      const chunk = bytes.subarray(offset, offset + 65536)
+    for (let offset = 0; offset < bytes.length; offset += size) {
+      const chunk = bytes.subarray(offset, offset + size)
       if (!write(handle, chunk, chunk.length, [0], null)) {
         console.log('WRITE_ERROR ' + lastError())
         close(handle)
         return
       }
+      // Small pieces are spaced out so the server reads them as separate fragments.
+      if (piece) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40)
     }
   }
   let reply = Buffer.alloc(0)
@@ -67,13 +70,25 @@ const children: ChildProcessWithoutNullStreams[] = []
 const stops: Array<() => Promise<void> | void> = []
 
 afterEach(async () => {
-  for (const child of children.splice(0)) if (child.exitCode === null) child.kill()
+  await Promise.all(children.splice(0).map(child => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return undefined
+    }
+
+    const closed = new Promise(resolve => child.once('close', resolve))
+    child.kill()
+
+    return closed
+  }))
+
   for (const stop of stops.splice(0)) await stop()
 })
 
-/** A client that connects at once and sends `payload` when released: at once, unless `hold`. */
-function client(endpoint: string, options: { payload?: string; access?: number; hold?: boolean } = {}) {
-  const child = spawn(process.execPath, ['-e', CLIENT, endpoint, String(options.access ?? READ_WRITE)], { windowsHide: true, stdio: 'pipe', timeout: 15_000 })
+afterAll(() => fs.rmSync(scratch, { recursive: true, force: true }))
+
+/** A client that connects at once and sends `payload` when released: at once, unless `hold`; in `piece`-byte writes if given. */
+function client(endpoint: string, options: { payload?: string; access?: number; hold?: boolean; piece?: number } = {}) {
+  const child = spawn(process.execPath, ['-e', CLIENT, endpoint, String(options.access ?? READ_WRITE), String(options.piece ?? '')], { windowsHide: true, stdio: 'pipe', timeout: 15_000 })
   children.push(child)
   let stdout = ''
   let stderr = ''
@@ -114,6 +129,24 @@ function started(accept: (connection: import('node:stream').Duplex) => void, end
   return server
 }
 
+/** Waits until nothing serves `endpoint` any more: its last handle is closed. */
+async function released(endpoint: string): Promise<void> {
+  await vi.waitFor(async () => expect(await client(endpoint).done).toBe('ERROR 2'), { timeout: 5000 })
+}
+
+/** An OsControlServer on a fresh pipe name, stopped and released after the test. */
+function controlServer(handle: (request: Record<string, unknown>) => Promise<Record<string, unknown>>, idleMs?: number) {
+  const endpoint = windowsControlPipeName()
+  const server = new OsControlServer(endpoint, handle, idleMs)
+  stops.push(() => {
+    server.stop()
+
+    return released(endpoint)
+  })
+
+  return { endpoint, server }
+}
+
 describe('the Windows control pipe name', () => {
   it('names this process and 128 random bits, and is fixed before the pipe exists', () => {
     const name = windowsControlPipeName()
@@ -125,13 +158,25 @@ describe('the Windows control pipe name', () => {
 })
 
 describe.skipIf(process.platform !== 'win32')('the Windows control pipe', () => {
-  it('serves the name it was given and carries fragmented UTF-8 both ways', async () => {
+  it('serves the name it was given and carries UTF-8 split inside its characters', async () => {
     const endpoint = windowsControlPipeName()
-    const server = started(connection => connection.pipe(connection), endpoint)
+    const pieces: Buffer[] = []
+    const server = started(connection => {
+      connection.on('data', (piece: Buffer) => {
+        pieces.push(piece)
+
+        if (piece.includes(10)) {
+          connection.write(Buffer.concat(pieces))
+        }
+      })
+    }, endpoint)
+    const text = 'Grüße 世界\n'
 
     expect(await server.start()).toBe(endpoint)
     expect(server.securityVerified).toBe(true)
-    expect(await client(endpoint, { payload: 'Grüße 世界\n' }).done).toBe(`REPLY ${Buffer.from('Grüße 世界\n').toString('hex')}`)
+    // Three-byte writes split ü, ß and both CJK characters across reads.
+    expect(await client(endpoint, { payload: text, piece: 3 }).done).toBe(`REPLY ${Buffer.from(text).toString('hex')}`)
+    expect(pieces.length).toBeGreaterThan(1)
   })
 
   it('refuses a name that is not this process’s herald-os pipe', async () => {
@@ -217,11 +262,9 @@ describe.skipIf(process.platform !== 'win32')('the desktop control socket on Win
 
   it('needs the launch token for ui over the pipe, as over the Unix socket', async () => {
     const { hub } = liveHub()
-    const endpoint = windowsControlPipeName()
     const fake = bridge()
-    const server = new OsControlServer(endpoint, desktopControlHandler({ bridge: fake, activity: hub, relay: vi.fn() }))
+    const { endpoint, server } = controlServer(desktopControlHandler({ bridge: fake, activity: hub, relay: vi.fn() }))
     server.start()
-    stops.push(() => server.stop())
     const ui = { cmd: 'ui', command: 'page.open', args: { name: 'memory' }, source: 'agent' }
 
     await vi.waitFor(async () => expect(await ask(endpoint, { ...ui, token: 'wrong' })).toEqual({ ok: false, error: 'invalid control token' }), { timeout: 5000 })
@@ -234,15 +277,43 @@ describe.skipIf(process.platform !== 'win32')('the desktop control socket on Win
 
   it('answers activity under its own token, and cuts off a line over a mebibyte', async () => {
     const { hub, token } = liveHub()
-    const endpoint = windowsControlPipeName()
-    const server = new OsControlServer(endpoint, desktopControlHandler({ bridge: bridge(), activity: hub, relay: vi.fn() }))
+    const { endpoint, server } = controlServer(desktopControlHandler({ bridge: bridge(), activity: hub, relay: vi.fn() }))
     server.start()
-    stops.push(() => server.stop())
 
     await vi.waitFor(async () => expect(await ask(endpoint, { cmd: 'activity', token, events: [] })).toEqual({ ok: true, accepted: 0 }), { timeout: 5000 })
     expect(await ask(endpoint, { cmd: 'ui', token, command: 'page.open' })).toEqual({ ok: false, error: 'invalid control token' })
 
     expect(await client(endpoint, { payload: 'x'.repeat(CONTROL_LINE_MAX + 1) }).done).toMatch(/^(EOF|WRITE_ERROR \d+)$/)
     await vi.waitFor(async () => expect(await ask(endpoint, { cmd: 'activity', token, events: [] })).toEqual({ ok: true, accepted: 0 }), { timeout: 5000 })
+  })
+
+  it('cuts off a client that holds the pipe without a request, but not one waiting for a slow reply', async () => {
+    const slow = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 900))
+
+      return { ok: true, slow: true }
+    })
+    const { endpoint, server } = controlServer(slow, 300)
+    server.start()
+    await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true, slow: true }), { timeout: 5000 })
+
+    const squatter = client(endpoint, { hold: true })
+    await squatter.connected
+
+    // Once the idle limit passes, the next client gets the single instance.
+    await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true, slow: true }), { timeout: 5000 })
+    squatter.release()
+    expect(await squatter.done).toMatch(/^(EOF|WRITE_ERROR \d+)$/)
+  })
+
+  it('serves again when stopped and started at once', async () => {
+    const { endpoint, server } = controlServer(async () => ({ ok: true }))
+    server.start()
+    await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true }), { timeout: 5000 })
+
+    server.stop()
+    server.start()
+
+    await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true }), { timeout: 5000 })
   })
 })
