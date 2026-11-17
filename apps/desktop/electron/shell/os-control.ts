@@ -3,9 +3,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import type { Duplex } from 'node:stream'
 import { IPC, type OsControlReply, type OsControlRequest, type ShellCommand } from '../../shared/ipc.ts'
 import { log } from '../log.ts'
 import type { ActivityHub } from '../room/activity.ts'
+import { WindowsControlPipe } from './windows-control-pipe.ts'
 
 /*
  * OS control: how anything outside the renderer (the agent's `os_ui` tool through the bridge
@@ -219,7 +221,7 @@ export function desktopControlHandler({ bridge, activity, relay }: DesktopContro
 export const CONTROL_LINE_MAX = 1024 * 1024
 
 /** Read one JSON-lines connection: every complete line is answered with one line. */
-export function serveJsonLines(connection: net.Socket, answer: (line: string) => Promise<Record<string, unknown>>): void {
+export function serveJsonLines(connection: Duplex, answer: (line: string) => Promise<Record<string, unknown>>): void {
   let pending = ''
   let pendingBytes = 0
 
@@ -255,16 +257,27 @@ export function serveJsonLines(connection: net.Socket, answer: (line: string) =>
   connection.on('error', () => undefined)
 }
 
-/** A JSON-lines Unix socket server: one request object per line in, one reply object per line out. */
+/** A JSON-lines server on a Unix socket, or on Windows a protected named pipe: one request object per line in, one reply object per line out. */
 export class OsControlServer {
   private server: net.Server | null = null
+  private pipe: WindowsControlPipe | null = null
+  /** The Windows pipe still closing; a restart waits for it, since the name is free only once it has. */
+  private pipeClosing: Promise<void> = Promise.resolve()
 
   constructor(
     readonly socketPath: string,
-    private readonly handle: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
+    private readonly handle: (request: Record<string, unknown>) => Promise<Record<string, unknown>>,
+    /** How long a Windows client may hold the pipe's single instance without a request in flight. */
+    private readonly pipeIdleMs = 10_000
   ) {}
 
   start(): void {
+    if (process.platform === 'win32') {
+      this.startPipe()
+
+      return
+    }
+
     try {
       fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 })
       fs.unlinkSync(this.socketPath)
@@ -284,7 +297,20 @@ export class OsControlServer {
     })
   }
 
-  stop(): void {
+  /** Settles once the Windows pipe's handles are closed, so quitting can wait for it; on Unix at once. */
+  stop(): Promise<void> {
+    if (process.platform === 'win32') {
+      const pipe = this.pipe
+      this.pipe = null
+
+      // Chained, so a replacement stopped before it started still waits for the pipe before it.
+      if (pipe) {
+        this.pipeClosing = this.pipeClosing.then(() => pipe.stop()).catch(() => undefined)
+      }
+
+      return this.pipeClosing
+    }
+
     this.server?.close()
     this.server = null
 
@@ -293,6 +319,59 @@ export class OsControlServer {
     } catch {
       // Already gone.
     }
+
+    return Promise.resolve()
+  }
+
+  /** Windows has no Unix socket here: a named pipe only this logon session can open, with the same lines and token. */
+  private startPipe(): void {
+    const pipe = new WindowsControlPipe(connection => this.servePipeClient(connection), this.socketPath, error => log('os-control', `pipe error: ${error.message}`))
+    this.pipe = pipe
+    this.pipeClosing.then(() => {
+      if (this.pipe !== pipe) {
+        return null
+      }
+
+      return pipe.start()
+    }).then(
+      endpoint => {
+        if (endpoint) {
+          log('os-control', `listening on ${endpoint}`)
+        }
+      },
+      error => {
+        log('os-control', `cannot serve ${this.socketPath}: ${(error as Error).message}`)
+
+        if (this.pipe === pipe) {
+          this.pipe = null
+        }
+      }
+    )
+  }
+
+  /**
+   * The pipe has one instance, so one client at a time: a client is cut off once it has held it for
+   * `pipeIdleMs` with no request in flight. Bytes without a newline do not count as a request.
+   */
+  private servePipeClient(connection: Duplex): void {
+    let inFlight = 0
+    let idle: NodeJS.Timeout | undefined
+    const arm = () => {
+      clearTimeout(idle)
+      idle = inFlight === 0 && !connection.destroyed ? setTimeout(() => connection.destroy(), this.pipeIdleMs) : undefined
+    }
+
+    connection.once('close', () => clearTimeout(idle))
+    serveJsonLines(connection, line => {
+      inFlight++
+      arm()
+
+      return this.handleLine(line).finally(() => {
+        inFlight--
+        arm()
+      })
+    })
+    arm()
   }
 
   private async handleLine(line: string): Promise<Record<string, unknown>> {

@@ -37,6 +37,33 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  shell-windows:
+    name: Shell (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r apps/desktop/test-requirements.txt
+      - name: Fetch the pinned Hermes Agent snapshot
+        run: npm run sync-upstream
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Windows suites
+        working-directory: apps/desktop
+        run: npx vitest run electron/shell/windows-control-pipe.test.ts electron/platform/win32.test.ts
+      # Many existing tests assume POSIX paths, modes and sockets. Until they are made portable or
+      # skipped on Windows with a reason, the full suite runs here without failing the job.
+      - name: Full suite (not required on Windows yet)
+        continue-on-error: true
+        run: npm test
+
   bridge:
     name: Bridge plugin (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

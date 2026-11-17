@@ -101,6 +101,7 @@
     "echarts": "6.1.0",
     "exceljs": "4.4.0",
     "jszip": "3.10.2",
+    "koffi": "3.3.3",
     "mathjs": "15.2.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm": "3.1.0",
@@ -210,7 +211,9 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "files": [
-        "!**/node_modules/node-pty/build/**"
+        "!**/node_modules/node-pty/build/**",
+        "!**/node_modules/koffi/**",
+        "!**/node_modules/@koromix/koffi-*/**"
       ],
       "extraResources": [
         {
@@ -237,6 +240,10 @@
       "sign": false
     },
     "linux": {
+      "files": [
+        "!**/node_modules/koffi/**",
+        "!**/node_modules/@koromix/koffi-*/**"
+      ],
       "category": "System",
       "icon": "build/icon.png",
       "executableName": "herald-os",
