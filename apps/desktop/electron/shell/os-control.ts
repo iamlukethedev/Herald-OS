@@ -302,8 +302,9 @@ export class OsControlServer {
       const pipe = this.pipe
       this.pipe = null
 
+      // Chained, so a replacement stopped before it started still waits for the pipe before it.
       if (pipe) {
-        this.pipeClosing = pipe.stop().catch(() => undefined)
+        this.pipeClosing = this.pipeClosing.then(() => pipe.stop()).catch(() => undefined)
       }
 
       return
@@ -354,7 +355,7 @@ export class OsControlServer {
     let idle: NodeJS.Timeout | undefined
     const arm = () => {
       clearTimeout(idle)
-      idle = inFlight === 0 ? setTimeout(() => connection.destroy(), this.pipeIdleMs) : undefined
+      idle = inFlight === 0 && !connection.destroyed ? setTimeout(() => connection.destroy(), this.pipeIdleMs) : undefined
     }
 
     connection.once('close', () => clearTimeout(idle))

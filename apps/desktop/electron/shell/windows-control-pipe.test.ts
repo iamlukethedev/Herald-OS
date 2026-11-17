@@ -315,5 +315,13 @@ describe.skipIf(process.platform !== 'win32')('the desktop control socket on Win
     server.start()
 
     await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true }), { timeout: 5000 })
+
+    // A replacement stopped before it started must not let the next one skip the wait.
+    server.stop()
+    server.start()
+    server.stop()
+    server.start()
+
+    await vi.waitFor(async () => expect(await ask(endpoint, {})).toEqual({ ok: true }), { timeout: 5000 })
   })
 })
