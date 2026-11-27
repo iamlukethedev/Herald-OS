@@ -93,6 +93,9 @@ export function FirstRunSetup() {
   const steps: Step[] = forSomeoneElse
     ? ['welcome', 'wifi', 'done']
     : ['welcome', 'account', ...(diskEncrypted === true && newOwner ? (['disk'] as const) : []), ...((keyringEncrypted !== true && keyring === 'none') || unfinishedWithPassword ? (['keyring'] as const) : []), 'wifi', 'hermes', 'done']
+  // "Encrypted, but not all of it": a journal, log or realtime device outside LUKS. cipher_null encrypts
+  // nothing, so with it the keyring's disk is said to be not encrypted.
+  const keyringDiskPartly = diskPlainParts.length > 0 && !diskPlainParts.some(part => part.kind === 'cipher_null')
   const next = () => setStep(steps[Math.min(steps.length - 1, steps.indexOf(step) + 1)] ?? 'done')
 
   return (
@@ -135,7 +138,7 @@ export function FirstRunSetup() {
           />
         )}
         {step === 'disk' && <DiskStep onDone={next} account={accountPassword} plainParts={diskPlainParts} />}
-        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} partial={diskPlainParts.length > 0} unfinished={unfinishedWithPassword} />}
+        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} partial={keyringDiskPartly} unfinished={unfinishedWithPassword} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />

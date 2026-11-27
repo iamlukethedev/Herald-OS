@@ -641,9 +641,23 @@ describe("first-run setup's keyring", () => {
       const host = await afterTheAccount({ diskEncrypted: false, keyringEncrypted, keyring: 'none' })
       seen.push({ heading: heading(host), steps: host.querySelectorAll('[aria-hidden] > span').length, keyring: bridge.setup.keyring.mock.calls.length })
     }
-    expect(seen[0]).toEqual({ heading: t('firstRun.keyring.title'), steps: seen[0]?.steps, keyring: 0 })
-    expect(seen[0]?.steps).toBeGreaterThan(0)
-    expect(seen[1]).toEqual(seen[0])
+    // Welcome, account, keyring, Wi-Fi, Hermes and the end: no disk step on a plain disk.
+    const expected = { heading: t('firstRun.keyring.title'), steps: 6, keyring: 0 }
+    expect(seen[0]).toEqual(expected)
+    expect(seen[1]).toEqual(expected)
+  })
+
+  it('says a keyring disk whose LUKS uses cipher_null is not encrypted, not that part of it is', async () => {
+    const host = await afterTheAccount({
+      diskEncrypted: true,
+      diskProtection: 'partial',
+      diskPlainParts: [{ device: '/dev/vda3', kind: 'cipher_null' }],
+      keyringEncrypted: false,
+      keyring: 'none'
+    })
+    expect(heading(host)).toBe(t('firstRun.keyring.title'))
+    expect(host.textContent).toContain(t('firstRun.keyring.text'))
+    expect(host.textContent).not.toContain(t('firstRun.keyring.textPartial'))
   })
 
   it.each(['en', 'pt-BR', 'zh-CN'] as const)('says in %s that a partly protected disk is not fully protected, not that it is unencrypted', async language => {

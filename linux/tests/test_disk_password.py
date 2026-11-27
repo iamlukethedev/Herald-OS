@@ -2333,7 +2333,7 @@ runpy.run_path(cli, run_name="__main__")
 ], ids=["a stop", "an error", "status"])
 def test_password_disk_ignores_ctrl_c_and_ctrl_backslash_on_every_way_out(tmp_path, lsblk, args, code):
     """Python sets SIGINT back to its default as it shuts down, where one more Ctrl+C of a flood would
-    end the command by SIGINT (-2) instead of its exit code: every way out ignores both first."""
+    end the command by SIGINT (-2) instead of its exit code: its ways out through main ignore both first."""
     folder = tmp_path / "bin"
     folder.mkdir()
     (folder / "lsblk").write_text(f"#!/bin/sh\n{lsblk}\n")
@@ -2382,6 +2382,200 @@ def test_a_stop_at_a_disk_prompt_ignores_ctrl_c_before_it_says_so(monkeypatch, c
         cli.disk_password([])
     assert stop.value.code == 130 and capsys.readouterr().err.count("stopped. Nothing was changed.") == 1
     assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("path", ["wrong sudo password", "new passwords differ"])
+def test_a_flood_of_ctrl_c_while_an_error_is_said_keeps_its_exit_code(tmp_path, path):
+    """Ctrl+C as fast as the terminal takes it, from the moment the error shows: the error's own exit
+    code (5 for sudo, 2 for the new passwords), said once, never a stop (130) or an end by SIGINT (-2)."""
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    if path == "wrong sudo password":
+        answers, error, code = [("[sudo] password for tester:", "not-the-account-pass")], "which did not let you in. Nothing was changed.", cli.DISK_NO_ROOT
+    else:
+        answers, error, code = [*CHANGE[:3], ("New disk password again:", "Another-pass-3")], "the two new disk passwords are not the same", 2
+    for attempt in range(10):
+        got, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(answers), burst_after=error, every=0.001, min_sent=0)
+        assert got == code and "Traceback" not in screen, (attempt, got, screen[-600:])
+        assert screen.count(error) == 1 and "stopped." not in screen, (attempt, screen[-600:])
+
+
+LATE_FLOOD = "( i=0; while [ $i -lt 3000 ]; do kill -INT $PPID 2>/dev/null || exit 0; i=$((i+1)); done ) &"
+
+
+@needs_cryptsetup
+def test_a_flood_of_ctrl_c_as_sudo_refuses_keeps_its_exit_code(tmp_path):
+    """sudo refuses the account password and a flood of Ctrl+C starts at once: one that comes before
+    sudo has ended is a stop (130), said once; after it, the refusal keeps its exit 5, said once. Never
+    both, and never an end by SIGINT (-2)."""
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    (tmp_path / "bin" / "sudo").write_text(f"#!/bin/sh\n[ \"$1\" = -v ] && {{ {LATE_FLOOD} exit 1; }}\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+    refusal = "which did not let you in. Nothing was changed."
+    for attempt in range(10):
+        got, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, [])
+        assert got in (cli.DISK_NO_ROOT, 130) and "Traceback" not in screen, (attempt, got, screen[-600:])
+        said = (screen.count(refusal), screen.count("stopped. Nothing was changed."))
+        assert said == ((1, 0) if got == cli.DISK_NO_ROOT else (0, 1)), (attempt, got, screen[-600:])
+
+
+def test_a_flood_of_ctrl_c_as_it_finds_no_encrypted_disk_keeps_its_exit_code(tmp_path):
+    """An error before anything is asked (no encrypted disk), with a flood of Ctrl+C starting as lsblk
+    answers: still exit 4, said once, not a stop or an end by SIGINT."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text(f"#!/bin/sh\n{LATE_FLOOD}\necho '{{\"blockdevices\": []}}'\n")
+    (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+    for stand_in in ("lsblk", "findmnt"):
+        (folder / stand_in).chmod(0o755)
+    for attempt in range(20):
+        result = subprocess.run([sys.executable, str(CLI), "password", "--disk"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+                                env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+        assert result.returncode in (cli.DISK_NOT_ENCRYPTED, 130) and "Traceback" not in result.stderr, (attempt, result)
+        said = ("not encrypted" in result.stderr, result.stderr.count("stopped. Nothing was changed."))
+        # 130: the first Ctrl+C came while it still looked for the disks, a stop said once.
+        assert said == ((True, 0) if result.returncode == cli.DISK_NOT_ENCRYPTED else (False, 1)), (attempt, result.stderr)
+
+
+CTRL_C_AT_DRIVER = """
+import os, runpy, signal, subprocess, sys
+# One Ctrl+C at an exact moment: as the refusal is said ("said"), or as the last switch to SIG_IGN on
+# the way out begins ("switch").
+moment = sys.argv[2]
+class Terminal:
+    def __init__(self, stream):
+        self.stream = stream
+    def isatty(self):
+        return True
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+class Saying(Terminal):
+    def write(self, text):
+        if moment == "said" and "did not let you in" in text:
+            os.kill(os.getpid(), signal.SIGINT)
+        return self.stream.write(text)
+sys.stdin, sys.stderr = Terminal(sys.stdin), Saying(sys.stderr)
+subprocess.call = lambda *args, **kwargs: 1
+real = signal.pthread_sigmask
+def sigmask(how, mask):
+    if moment == "switch" and how == signal.SIG_BLOCK and not getattr(sigmask, "done", False):
+        sigmask.done = True
+        os.kill(os.getpid(), signal.SIGINT)
+    return real(how, mask)
+signal.pthread_sigmask = sigmask
+cli = sys.argv[1]
+sys.argv = ["herald-os", "password", "--disk"]
+runpy.run_path(cli, run_name="__main__")
+"""
+
+
+@needs_cryptsetup
+@pytest.mark.parametrize("moment", ["said", "switch"], ids=["as the refusal is said", "as the last switch begins"])
+def test_one_ctrl_c_while_a_refusal_ends_the_command_keeps_its_exit_code(tmp_path, moment):
+    """sudo refused, and one Ctrl+C comes as the command says so, or as it switches to SIG_IGN on its way
+    out: the refusal keeps its exit 5, said once, with no stop said after it."""
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    result = subprocess.run([sys.executable, "-c", CTRL_C_AT_DRIVER, str(CLI), moment], capture_output=True, text=True, timeout=60, env=env)
+    assert result.returncode == cli.DISK_NO_ROOT, result
+    assert result.stderr.count("did not let you in") == 1 and "stopped." not in result.stderr and "Traceback" not in result.stderr, result.stderr
+
+
+def test_one_ctrl_c_as_an_early_error_ends_the_command_keeps_its_exit_code(tmp_path):
+    """No encrypted disk, an error before anything is asked, and one Ctrl+C as the last switch to SIG_IGN
+    begins: exit 4, said once, with no stop said after it."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text("#!/bin/sh\necho '{\"blockdevices\": []}'\n")
+    (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+    for stand_in in ("lsblk", "findmnt"):
+        (folder / stand_in).chmod(0o755)
+    result = subprocess.run([sys.executable, "-c", CTRL_C_AT_DRIVER, str(CLI), "switch"], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == cli.DISK_NOT_ENCRYPTED, result
+    assert "not encrypted" in result.stderr and "stopped." not in result.stderr and "Traceback" not in result.stderr, result.stderr
+
+
+def test_a_ctrl_c_that_comes_while_the_first_is_looked_at_returns_at_once(monkeypatch):
+    """In a flood the handler runs again inside itself; such a call returns at once, without raising or
+    looking further, so they cannot pile up to a RecursionError."""
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "yes", False)
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "looking", True)
+    looked = []
+
+    class Frame:
+        @property
+        def f_code(self):
+            looked.append(True)
+            raise AssertionError("looked again")
+
+    assert cli.disk_interrupt_once(signal.SIGINT, Frame()) is None
+    assert not looked and not cli.DISK_INTERRUPTED["yes"]
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "looking", False)
+    with pytest.raises(KeyboardInterrupt):
+        cli.disk_interrupt_once(signal.SIGINT, None)
+    assert cli.DISK_INTERRUPTED["yes"] and not cli.DISK_INTERRUPTED["looking"]
+
+
+def test_a_first_ctrl_c_inside_a_finalizer_waits_for_the_next(monkeypatch):
+    """One that lands inside a __del__ (a Popen's, as the command ends) is not raised there, where Python
+    prints "Exception ignored" and drops it; the next one is the stop."""
+    monkeypatch.setitem(cli.DISK_INTERRUPTED, "yes", False)
+    signal.signal(signal.SIGINT, cli.disk_interrupt_once)
+    unraisable = []
+    monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+
+    class Finalized:
+        def __del__(self):
+            signal.raise_signal(signal.SIGINT)
+            sum(range(10))
+
+    gone = Finalized()
+    del gone
+    assert not unraisable and not cli.DISK_INTERRUPTED["yes"]
+    with pytest.raises(KeyboardInterrupt):
+        signal.raise_signal(signal.SIGINT)
+        sum(range(10))
+    assert cli.DISK_INTERRUPTED["yes"]
+
+
+STOP_IN_THE_SWITCH_DRIVER = """
+import atexit, os, runpy, signal, sys
+# A Ctrl+C that lands inside the last switch to SIG_IGN, as the command ends on an error.
+real, calls = signal.pthread_sigmask, []
+def sigmask(how, mask):
+    calls.append(how)
+    if len(calls) == 1:
+        raise KeyboardInterrupt
+    return real(how, mask)
+signal.pthread_sigmask = sigmask
+atexit.register(lambda: os.write(2, ("at exit: " + ("ignored" if signal.getsignal(signal.SIGINT) == signal.SIG_IGN else "not ignored") + "\\n").encode()))
+cli = sys.argv[1]
+sys.argv = ["herald-os", "password", "--disk"]
+runpy.run_path(cli, run_name="__main__")
+"""
+
+
+def test_a_ctrl_c_inside_the_last_switch_to_ignored_is_a_stop(tmp_path):
+    """Should a Ctrl+C get into the switch to SIG_IGN on the way out (here as the command ends on an
+    error), it is a stop, said once (130), with SIGINT ignored to the end, not an end by SIGINT (-2)."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text("#!/bin/sh\necho '{\"blockdevices\": []}'\n")
+    (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+    for stand_in in ("lsblk", "findmnt"):
+        (folder / stand_in).chmod(0o755)
+    result = subprocess.run([sys.executable, "-c", STOP_IN_THE_SWITCH_DRIVER, str(CLI)], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == 130 and "Traceback" not in result.stderr, result
+    assert result.stderr.count("stopped. Nothing was changed.") == 1 and "at exit: ignored" in result.stderr, result.stderr
 
 
 def test_the_end_state_in_words():
