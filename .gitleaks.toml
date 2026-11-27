@@ -18,9 +18,29 @@ regexes = [
   '''^c95b321b61e88c1809c4f759ddcae044f796ecb0$''',
 ]
 
-# Rust crates vendored for desktop control, unedited (third_party/agent-desktop/PATCHES.md): cargo's
-# per-file SHA-256 checksums and kernel and Win32 constants read as keys by the generic rule.
+# Rust crates vendored for desktop control, unedited (third_party/agent-desktop/PATCHES.md). The generic
+# rule reads two kinds of text in them as keys; neither is a credential, and each entry below matches
+# only that text, in those files.
+#
+# 1. cargo's per-file SHA-256 checksums: a 64-hex value in each crate's .cargo-checksum.json.
 [[allowlists]]
-description = "Checksums and constants in the vendored crates of third_party/agent-desktop"
+description = "cargo SHA-256 checksums in the vendored crates"
 targetRules = ["generic-api-key"]
-paths = ['''^third_party/agent-desktop/vendor/''']
+condition = "AND"
+paths = ['''^third_party/agent-desktop/vendor/[^/]+/\.cargo-checksum\.json$''']
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+
+# 2. Names of kernel and Win32 types that contain "key" (the type of a constant such as
+#    NL80211_KEY_MAX or DOT11_KEY_DIRECTION_BOTH): linux-raw-sys's netlink bindings and windows-sys's
+#    Wi-Fi and Certificates modules.
+[[allowlists]]
+description = "Key-named kernel and Win32 types in the vendored linux-raw-sys and windows-sys"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''^third_party/agent-desktop/vendor/linux-raw-sys[^/]*/src/[^/]+/netlink\.rs$''',
+  '''^third_party/agent-desktop/vendor/windows-sys[^/]*/src/Windows/Win32/(NetworkManagement/WiFi|Security/Cryptography/Certificates)/mod\.rs$''',
+]
+regexTarget = "secret"
+regexes = ['''^(nl80211_key_attributes|DOT11_KEY_DIRECTION|X509PrivateKeyProtection)$''']
