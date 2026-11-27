@@ -17,3 +17,10 @@ regexes = [
   '''^0c5d0f470484ae2fc40a9b6597f3008993e8909b$''',
   '''^c95b321b61e88c1809c4f759ddcae044f796ecb0$''',
 ]
+
+# Rust crates vendored for desktop control, unedited (third_party/agent-desktop/PATCHES.md): cargo's
+# per-file SHA-256 checksums and kernel and Win32 constants read as keys by the generic rule.
+[[allowlists]]
+description = "Checksums and constants in the vendored crates of third_party/agent-desktop"
+targetRules = ["generic-api-key"]
+paths = ['''^third_party/agent-desktop/vendor/''']
