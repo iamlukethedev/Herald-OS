@@ -452,7 +452,7 @@ def test_anaconda_reads_it_as_one_disk(tmp_path):
     assert handler.clearpart.drives == ["vdb"]
     assert handler.zerombr.zerombr
     assert handler.autopart.autopart and handler.autopart.encrypted
-    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash"]
+    assert [script.interp for script in handler.scripts] == ["/usr/bin/bash", "/usr/bin/bash", "/usr/bin/bash"]
 
 
 # The account %pre: the account's name and the SSH keys that may sign in to it, checked (and GitHub's
@@ -697,7 +697,7 @@ def test_taking_out_the_fingerprints_is_caught(tmp_path):
 
 def test_the_account_is_checked_before_the_disk():
     sections = re.findall(r"^%pre [^\n]*--log=(\S+)", KICKSTART, re.M)
-    assert sections == ["/tmp/herald-os-account.log", "/tmp/herald-os-disk.log"]
+    assert sections == ["/tmp/herald-os-account.log", "/tmp/herald-os-disk.log", "/tmp/herald-os-lvm.log"]
 
 
 @pytest.mark.parametrize("name", ["root", "bin", "daemon", "nobody", "sshd", "greetd", "wheel", "users", "video", "systemd-network", "systemd-oom", "admin"])

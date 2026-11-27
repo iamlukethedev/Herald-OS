@@ -181,7 +181,9 @@ itself, so the host's kernel must support btrfs: without it, the build stops wit
 `unknown filesystem type 'btrfs'`. For the installer, mount `linux/image/iso.toml` as
 `/config.toml` and use `--type anaconda-iso`, which writes `output/bootiso/install.iso`; CI makes the
 ISO for x86_64 only. The builder is pinned to the digest the workflow uses, its last multi-arch
-build.
+build. `sudo bash linux/image/check-installer.sh output/bootiso/install.iso` (it needs
+`unsquashfs`, and `xorriso` or `7z`) checks that its installer can start the LVM D-Bus service
+Anaconda's storage needs, as CI does for every ISO.
 
 To name and compress them as a release does (it needs `qemu-img`, `zip` and `zstd`):
 

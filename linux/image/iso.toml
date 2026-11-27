@@ -15,11 +15,73 @@
 #
 # xconfig: Anaconda sets multi-user.target unless told otherwise, since greetd provides no
 # service(graphical-login), and the login screen and the session need graphical.target.
+#
+# The %pre gets the LVM D-Bus service up before Anaconda reads the disks (#180); unattended.ks has
+# the same one. A literal string ('''), so the script's text reaches the ISO exactly as written.
 [customizations.installer.kickstart]
-contents = """
+contents = '''
 autopart --type=btrfs --encrypted
 xconfig --startxonboot
-"""
+
+%pre --interpreter=/usr/bin/bash --log=/tmp/herald-os-lvm.log
+# Anaconda reads and changes the disks' LVM through the LVM D-Bus service (lvmdbusd, the name
+# com.redhat.lvmdbus1): the installer's libblockdev has no fallback to the lvm command, so when that
+# service cannot be started Anaconda stops at its first screen with "Could not activate remote
+# peer 'com.redhat.lvmdbus1': startup job failed". This starts it before Anaconda's storage scan,
+# once udev is done with the disks, and has it read them once. It also lifts the service's start
+# limit for this boot, so systemd never refuses to start it again after it stops, which is what
+# that message means once it has been started five times in ten seconds. When it still does not
+# answer, why goes into the journal, which Anaconda's crash report includes. It never stops the
+# install.
+unit=lvm2-lvmdbusd.service
+name=com.redhat.lvmdbus1
+
+say() {
+  echo "herald-os: $*" >&2
+  { echo "herald-os: $*" >>/dev/console; } 2>/dev/null || true
+}
+
+journal() {
+  local line
+  while IFS= read -r line; do
+    echo "herald-os: $line" >&2
+    logger -t herald-os-installer -- "$line" 2>/dev/null || true
+  done
+}
+
+answers() {
+  busctl --system --timeout=60 call "$name" /com/redhat/lvmdbus1/Manager "$name.Manager" Refresh >/dev/null &&
+    systemctl --quiet is-active "$unit"
+}
+
+mkdir -p "/run/systemd/system/$unit.d"
+printf '%s\n' '[Unit]' 'StartLimitIntervalSec=0' >"/run/systemd/system/$unit.d/50-herald-os.conf"
+systemctl daemon-reload || echo "systemctl daemon-reload failed: $unit keeps its start limit" | journal
+udevadm settle --timeout=60 || echo "udev was still busy with the disks after 60 s" | journal
+
+attempt=1
+while (( attempt <= 3 )); do
+  systemctl reset-failed "$unit" 2>/dev/null || true
+  if answers; then
+    echo "the LVM D-Bus service read the disks (attempt $attempt)" | journal
+    exit 0
+  fi
+  sleep 5
+  attempt=$((attempt + 1))
+done
+
+say "the LVM D-Bus service ($unit) does not answer, so the installer may stop before the disk screen."
+say "Ctrl+Alt+F2 opens a shell; journalctl -b -u $unit and /tmp/herald-os-lvm.log say why."
+{
+  systemctl status --no-pager --full "$unit"
+  journalctl -b --no-pager -u "$unit" | tail -n 80
+  lvm fullreport 2>&1 | tail -n 40
+  echo "lvm fullreport exit code: ${PIPESTATUS[0]}"
+  lsblk -o NAME,TYPE,SIZE,RO,RM,TRAN,PTTYPE,FSTYPE
+} 2>&1 | journal
+systemctl reset-failed "$unit" 2>/dev/null || true
+%end
+'''
 
 [customizations.installer.modules]
 enable = ["org.fedoraproject.Anaconda.Modules.Localization", "org.fedoraproject.Anaconda.Modules.Timezone"]

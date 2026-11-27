@@ -324,6 +324,16 @@ switching to it, and changing its packages, Flatpaks and branding.
   resolves to an id below 1000), and it logs each skipped GitHub line by key type and reason, never
   the key. `reset-helper apply` deletes both files (only `firstboot.sh` reads them, and it runs
   after) and runs `herald-os setup ssh --off --end-sessions`.
+  Both kickstarts end with the same `%pre` for the LVM D-Bus service (lvmdbusd,
+  `com.redhat.lvmdbus1`): Anaconda's storage reads every disk through it, and the installer's
+  libblockdev has no fallback to the `lvm` command, so without it Anaconda stops at its first screen
+  with "Could not activate remote peer 'com.redhat.lvmdbus1': startup job failed" (#180). The
+  `%pre` waits for udev, starts the service and has it read the disks once, retrying from a clean
+  state, and lifts the service's start limit for the installer's boot (a sixth start within ten
+  seconds is otherwise refused, with that same message). When the service still does not answer,
+  it says so on the console and puts the service's journal, `lvm fullreport` and `lsblk` into the
+  journal, which goes into Anaconda's crash report; `/tmp/herald-os-lvm.log` has the same. It never
+  stops the install.
 - **an aarch64 VM disk** (`qcow2`, `linux/image/disk.toml`): `bash linux/vm/run-qemu.sh --image <disk>`
   or `bash linux/vm/run-vf.sh --image <disk>` boot it, and `bash linux/vm/try.sh` fetches the latest
   release's disk and boots it in one command. The workflow also makes a UTM bundle
@@ -361,6 +371,13 @@ account `%pre` of `unattended.ks` with that name and a throwaway key
 (`linux/vm/account-kickstart.sh` fills it in), forwards port 2222 to the machine's SSH, and fails
 unless the key signs in as the account while root and passwords are refused. It needs a release
 whose image has `herald-os setup ssh`.
+Before any install, `linux/image/check-installer.sh` checks that the ISO's installer can start the
+LVM D-Bus service: the D-Bus activation file, the unit it names (there, not masked, owning the
+name), the program and interpreter the unit starts, the D-Bus policy, the `lvm` command and
+profile lvmdbusd runs, its Python modules and the libblockdev plugin that calls it. Then it starts
+lvmdbusd inside the installer's root on a private bus and has it read the disks. The image workflow
+runs it on every ISO before packaging it, since the installer is built from Fedora's packages of
+the day, and the installer test runs it on the release's ISO first.
 
 On the image, apps install through Flatpak or into `~/.local` (the catalog picks those methods
 there); the system itself changes only by a whole new image.
