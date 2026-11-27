@@ -534,6 +534,28 @@ def test_ctrl_c_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, 
 
 @needs_cryptsetup
 @NO_SUDO_AS_ROOT_EARLY
+@pytest.mark.parametrize("sudo", ["stand-in", "real"])
+def test_ctrl_backslash_typed_all_through_the_change_never_reaches_cryptsetup(tmp_path, sudo):
+    """As with Ctrl+C: Ctrl+\\ (SIGQUIT) typed every 0.2 s through the change neither stops either side
+    nor reaches cryptsetup; the change finishes on both devices, with no core dump ("Quit")."""
+    if sudo == "real" and (not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0):
+        pytest.skip("needs sudo without a password, as someone other than root")
+    first, second = make_image(tmp_path / "a.img", OLD), make_image(tmp_path / "b.img", OLD)
+    env = fake_tools(tmp_path / "bin", first, second)
+    answers = list(CHANGE)
+    if sudo == "real":
+        real = shutil.which("sudo")
+        (tmp_path / "bin" / "sudo").write_text(f'#!/bin/sh\n[ "$1" = -v ] && exit 0\nexec {real} "$@"\n')
+        answers = answers[1:]
+    code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, answers,
+                            burst_after=f"Adding the new disk password to {first}", burst=b"\x1c", min_sent=10)
+    assert code == 0 and "Traceback" not in screen and "Quit" not in screen, screen
+    assert cli.DISK_CHANGE_DONE in screen, screen
+    assert all(opens(disk, NEW) and not opens(disk, OLD) for disk in (first, second))
+
+
+@needs_cryptsetup
+@NO_SUDO_AS_ROOT_EARLY
 @pytest.mark.parametrize("burst", [False, True], ids=["once", "every 0.2 s"])
 @pytest.mark.parametrize("sudo", ["stand-in", "real"])
 def test_ctrl_c_at_the_start_of_the_change_stops_cleanly_or_finishes(tmp_path, sudo, burst):
@@ -1910,6 +1932,10 @@ def test_ctrl_c_ends_the_look_and_its_root_side_at_once(monkeypatch, tmp_path, c
     continued after SIGTERM, so it ends at once too."""
     if sudo == "real" and (os.geteuid() == 0 or not shutil.which("sudo") or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0):
         pytest.skip("needs sudo without a password, as someone other than root")
+    if sudo == "real" and how == "stops":
+        # sudo that runs its command without a pseudo-terminal of its own (no use_pty) stops itself and
+        # its caller's process group when that command stops, as a shell job does: here, the test run.
+        pytest.skip("a stopped command under the real sudo stops the test run itself")
     monkeypatch.setattr(cli, "disk_root_argv", lambda op: [*(["sudo", "-n"] if sudo == "real" else []), sys.executable, "-c", SLOW_LOOK, str(tmp_path), how])
     before = {each: signal.getsignal(each) for each in (signal.SIGTERM, signal.SIGHUP)}
     for each in before:
@@ -2289,6 +2315,75 @@ def test_a_flood_of_ctrl_c_while_it_looks_for_the_disks_is_a_stop(tmp_path):
         assert result.stderr.count("stopped. Nothing was changed.") == 1, (attempt, result.stderr)
 
 
+EXIT_DRIVER = """
+import atexit, os, runpy, signal, sys
+# What SIGINT and SIGQUIT are as Python begins to shut down (atexit comes before it resets handlers).
+atexit.register(lambda: os.write(2, ("at exit: " + " ".join("ignored" if signal.getsignal(each) == signal.SIG_IGN else "not ignored"
+                                                            for each in (signal.SIGINT, signal.SIGQUIT)) + "\\n").encode()))
+cli = sys.argv[1]
+sys.argv = ["herald-os", *sys.argv[2:]]
+runpy.run_path(cli, run_name="__main__")
+"""
+
+
+@pytest.mark.parametrize("lsblk, args, code", [
+    ("kill -INT $PPID\nsleep 5", ["password", "--disk"], 130),
+    ("echo '{\"blockdevices\": []}'", ["password", "--disk"], cli.DISK_NOT_ENCRYPTED),
+    ("echo '{\"blockdevices\": []}'", ["password", "--disk", "--status"], 0),
+], ids=["a stop", "an error", "status"])
+def test_password_disk_ignores_ctrl_c_and_ctrl_backslash_on_every_way_out(tmp_path, lsblk, args, code):
+    """Python sets SIGINT back to its default as it shuts down, where one more Ctrl+C of a flood would
+    end the command by SIGINT (-2) instead of its exit code: every way out ignores both first."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    (folder / "lsblk").write_text(f"#!/bin/sh\n{lsblk}\n")
+    (folder / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+    for stand_in in ("lsblk", "findmnt"):
+        (folder / stand_in).chmod(0o755)
+    result = subprocess.run([sys.executable, "-c", EXIT_DRIVER, str(CLI), *args], capture_output=True, text=True, timeout=60,
+                            env={**C_ENV, "PATH": f"{folder}:{C_ENV['PATH']}"})
+    assert result.returncode == code, result
+    assert "at exit: ignored ignored" in result.stderr, result.stderr
+
+
+@needs_cryptsetup
+def test_a_tight_flood_of_ctrl_c_at_the_current_password_prompt_is_a_stop(tmp_path):
+    """Ctrl+C every 5 ms from the current password's prompt on: one stop (130), said once, every time;
+    never an end by SIGINT (-2) from one that lands as the command shuts down."""
+    if os.geteuid() == 0:
+        pytest.skip("as root it asks sudo nothing")
+    disk = make_image(tmp_path / "disk.img", OLD)
+    env = fake_tools(tmp_path / "bin", disk)
+    for attempt in range(10):
+        code, screen = converse([sys.executable, str(CLI), "password", "--disk"], env, list(CHANGE[:1]),
+                                burst_after="Current disk password:", every=0.005, min_sent=1)
+        assert code == 130 and "Traceback" not in screen, (attempt, code, screen[-500:])
+        assert screen.count("stopped. Nothing was changed.") == 1, (attempt, screen[-500:])
+
+
+@pytest.mark.parametrize("prompt", ["Current disk password: ", "New disk password: ", "New disk password again: "])
+def test_a_stop_at_a_disk_prompt_ignores_ctrl_c_before_it_says_so(monkeypatch, capsys, prompt):
+    """Run as its own process, a stop at a prompt sets SIGINT to SIG_IGN before it says so: the handler
+    that takes only the first Ctrl+C is set back to the default as Python shuts down, SIG_IGN is not."""
+    monkeypatch.setattr(cli, "disk_devices", lambda: ["/dev/vda3"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "disk_helper", lambda op, request: 0)
+    monkeypatch.setattr(cli, "SSH_OWN_PROCESS", True)
+
+    def ask(asked):
+        if asked == prompt:
+            raise KeyboardInterrupt
+        return OLD if asked.startswith("Current") else NEW
+
+    monkeypatch.setattr(cli, "disk_ask", ask)
+    signal.signal(signal.SIGINT, cli.disk_interrupt_once)
+    with pytest.raises(SystemExit) as stop:
+        cli.disk_password([])
+    assert stop.value.code == 130 and capsys.readouterr().err.count("stopped. Nothing was changed.") == 1
+    assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+
+
 def test_the_end_state_in_words():
     assert cli.disk_end_lines({"/dev/a": {"current": False, "new": True}, "/dev/b": {"current": False, "new": False}, "bad": None}) == [
         "/dev/a: the new disk password opens it, the current one no longer does", "/dev/b: neither password opens it"]
@@ -2453,6 +2548,67 @@ def test_status_of_an_ext4_root_on_luks_with_its_journal_on_a_plain_disk(monkeyp
     assert cli.disk_password(["--status"]) == 0
     assert json.loads(capsys.readouterr().out) == {"encrypted": True, "devices": ["/dev/vda3"], "protection": "partial",
                                                    "plainParts": [{"device": "/dev/vdb1", "kind": "journal"}], "newOwner": False, "error": None}
+
+
+HOME_MOUNTS = [{"target": "/", "source": "/dev/dm-0", "fstype": "ext4", "uuid": "fs", "options": "rw,relatime"}]
+
+
+def findmnt_listing(stand_ins: Path, mounts: list[dict]) -> None:
+    """A findmnt that lists these mounts, with their options only when asked for OPTIONS, as it does."""
+    bare = [{key: value for key, value in mount.items() if key != "options"} for mount in mounts]
+    (stand_ins / "findmnt").write_text(f"#!/bin/sh\ncase \"$*\" in *OPTIONS*) echo '{json.dumps({'filesystems': mounts})}';; "
+                                   f"*) echo '{json.dumps({'filesystems': bare})}';; esac\n")
+    (stand_ins / "findmnt").chmod(0o755)
+
+
+def test_a_keyring_on_a_filesystem_that_writes_part_of_itself_in_the_clear_is_not_on_an_encrypted_disk():
+    """keyring_mounts_encrypted with a plain(mount, disks) that says the filesystem is only partly
+    protected: False, as a keyring there needs a password of its own; unchanged without one, or where
+    it could not be told anyway."""
+    tree = resolved_tree()
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree) is True
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree, plain=lambda mount, disks: False) is True
+    seen = []
+    assert cli.keyring_mounts_encrypted("/home/ana/.local/share/keyrings", HOME_MOUNTS, tree,
+                                        plain=lambda mount, disks: seen.append((mount["target"], sorted(disks))) or True) is False
+    assert seen == [("/", ["/dev/dm-0"])]
+    assert cli.keyring_mounts_encrypted("/tmp/x", [{"target": "/tmp", "source": "tmpfs", "fstype": "tmpfs"}], tree, plain=lambda mount, disks: True) is None
+
+
+@pytest.mark.parametrize("journals, cipher_null, options, encrypted", [
+    (["dm-0-8"], False, "rw", True),
+    (["vdb1"], False, "rw", False),
+    (["dm-0-8"], True, "rw", False),
+    ([], False, "rw,logdev=/dev/vdb1", True),
+], ids=["encrypted throughout", "its journal on a plain disk", "cipher_null", "a log option ext4 does not have"])
+def test_the_keyring_s_disk_counts_partial_protection_as_not_encrypted(monkeypatch, tmp_path, journals, cipher_null, options, encrypted):
+    """keyring_encrypted on this machine, as --status's protection would call it: a home on LUKS whose
+    journal is on a plain disk, or whose LUKS uses cipher_null, does not protect the keyring."""
+    folder = tmp_path / "jbd2"
+    folder.mkdir()
+    for entry in journals:
+        (folder / entry).mkdir()
+    stand_ins = tmp_path / "bin"
+    stand_ins.mkdir()
+    findmnt_listing(stand_ins, [{**HOME_MOUNTS[0], "options": options}])
+    monkeypatch.setenv("PATH", f"{stand_ins}:{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "DISK_JBD2", folder)
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    asked = []
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: asked.append(device) or cipher_null)
+    assert cli.keyring_encrypted(Path("/home/ana/.local/share/keyrings")) is encrypted
+    assert "/dev/vda3" in asked
+
+
+def test_the_keyring_s_xfs_disk_with_its_log_on_a_plain_disk_is_not_encrypted(monkeypatch, tmp_path):
+    stand_ins = tmp_path / "bin"
+    stand_ins.mkdir()
+    findmnt_listing(stand_ins, [{**HOME_MOUNTS[0], "fstype": "xfs", "options": "rw,logdev=/dev/vdb1"}])
+    monkeypatch.setenv("PATH", f"{stand_ins}:{os.environ['PATH']}")
+    monkeypatch.setattr(cli, "DISK_JBD2", tmp_path / "none")
+    monkeypatch.setattr(cli, "lsblk_tree", resolved_tree)
+    monkeypatch.setattr(cli, "luks_cipher_null", lambda device: False)
+    assert cli.keyring_encrypted(Path("/home/ana/.local/share/keyrings")) is False
 
 
 @needs_cryptsetup

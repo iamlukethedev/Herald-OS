@@ -659,6 +659,7 @@ export const zhCN: Translation = {
   'firstRun.disk.failed': '磁盘密码未更改，旧密码仍然有效。请在终端中运行 herald-os password --disk --new-owner 查看原因。',
   'firstRun.keyring.title': '已保存的密码',
   'firstRun.keyring.text': 'VS Code、Signal 和 GitHub CLI 等应用会把密码和登录信息保存在密钥环中。存放它的磁盘没有加密，请选择如何保护密钥环。',
+  'firstRun.keyring.textPartial': 'VS Code、Signal 和 GitHub CLI 等应用会把密码和登录信息保存在密钥环中。存放它的磁盘虽已加密，但并未得到完整保护，请选择如何保护密钥环。',
   'firstRun.keyring.textUnknown': 'VS Code、Signal 和 GitHub CLI 等应用会把密码和登录信息保存在密钥环中。Herald OS 无法判断存放它的磁盘是否已加密，请选择如何保护密钥环。',
   'firstRun.keyring.password': '设置密钥环密码',
   'firstRun.keyring.passwordHint': '已保存的密码会用它加密。每次开机后，第一个需要密码的应用会要求你输入它。如果忘记了，这些密码就会丢失，你需要重新登录这些应用。',

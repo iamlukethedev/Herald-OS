@@ -135,7 +135,7 @@ export function FirstRunSetup() {
           />
         )}
         {step === 'disk' && <DiskStep onDone={next} account={accountPassword} plainParts={diskPlainParts} />}
-        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} unfinished={unfinishedWithPassword} />}
+        {step === 'keyring' && <KeyringStep onDone={next} encrypted={keyringEncrypted} partial={diskPlainParts.length > 0} unfinished={unfinishedWithPassword} />}
         {step === 'wifi' && (
           <div className="flex flex-col gap-4">
             <Heading icon={<IconWifi size={18} />} title={t('firstRun.wifi.title')} text={t('firstRun.wifi.text')} />
@@ -323,11 +323,6 @@ const DISK_FAILURES: Record<DiskPasswordFailure, TextKey> = {
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
 
-/**
- * A new owner's disk password, in place of the one they typed at start-up (whoever set the computer
- * up before them chose it). The account password goes to sudo; it is asked here only when the account
- * step did not set it (an account that signed in at a login screen).
- */
 const PLAIN_PART_KEYS = {
   cipher_null: 'firstRun.disk.plain.cipherNull',
   journal: 'firstRun.disk.plain.journal',
@@ -352,6 +347,11 @@ function PartlyEncrypted({ parts }: { parts: DiskPlainPart[] }) {
   )
 }
 
+/**
+ * A new owner's disk password, in place of the one they typed at start-up (whoever set the computer
+ * up before them chose it). The account password goes to sudo; it is asked here only when the account
+ * step did not set it (an account that signed in at a login screen).
+ */
 function DiskStep({ onDone, account, plainParts }: { onDone: () => void; account: string; plainParts: DiskPlainPart[] }) {
   const t = useT()
   const [current, setCurrent] = useState('')
@@ -449,7 +449,7 @@ const KEYRING_FAILURES: Record<KeyringFailure, TextKey> = {
  * told): a password of its own, asked by the first app that needs it after each start, or none, which
  * anyone who has the disk can read past.
  */
-function KeyringStep({ onDone, encrypted, unfinished = false }: { onDone: () => void; encrypted: boolean | null; unfinished?: boolean }) {
+function KeyringStep({ onDone, encrypted, partial = false, unfinished = false }: { onDone: () => void; encrypted: boolean | null; partial?: boolean; unfinished?: boolean }) {
   const t = useT()
   // A keyring left unfinished already has its password: no choice, and one field, for that password.
   const [choice, setChoice] = useState<'password' | 'open' | null>(unfinished ? 'password' : null)
@@ -529,7 +529,7 @@ function KeyringStep({ onDone, encrypted, unfinished = false }: { onDone: () => 
       <Heading
         icon={<IconKey size={18} />}
         title={t('firstRun.keyring.title')}
-        text={t(unfinished ? 'firstRun.keyring.needsPassword' : encrypted === false ? 'firstRun.keyring.text' : 'firstRun.keyring.textUnknown')}
+        text={t(unfinished ? 'firstRun.keyring.needsPassword' : encrypted === false ? (partial ? 'firstRun.keyring.textPartial' : 'firstRun.keyring.text') : 'firstRun.keyring.textUnknown')}
       />
       {!unfinished && (
         <div className="grid grid-cols-2 gap-3">

@@ -683,6 +683,7 @@ export const ptBR: Translation = {
   'firstRun.disk.failed': 'A senha do disco não foi trocada, e a antiga continua funcionando. Execute herald-os password --disk --new-owner em um terminal para ver o motivo.',
   'firstRun.keyring.title': 'Senhas salvas',
   'firstRun.keyring.text': 'Apps como VS Code, Signal e GitHub CLI guardam senhas e logins em um chaveiro. O disco onde ele fica não é criptografado, então escolha como o chaveiro vai ser protegido.',
+  'firstRun.keyring.textPartial': 'Apps como VS Code, Signal e GitHub CLI guardam senhas e logins em um chaveiro. O disco onde ele fica é criptografado, mas não está totalmente protegido, então escolha como o chaveiro vai ser protegido.',
   'firstRun.keyring.textUnknown':
     'Apps como VS Code, Signal e GitHub CLI guardam senhas e logins em um chaveiro. O Herald OS não conseguiu saber se o disco onde ele fica é criptografado, então escolha como o chaveiro vai ser protegido.',
   'firstRun.keyring.password': 'Uma senha para o chaveiro',
