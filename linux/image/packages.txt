@@ -60,6 +60,9 @@ upower
 nss
 atk
 at-spi2-atk
+# The accessibility bus desktop control reads apps through, and the schema its switch lives in.
+at-spi2-core
+gsettings-desktop-schemas
 cups-libs
 gtk3
 libdrm

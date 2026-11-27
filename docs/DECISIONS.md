@@ -1737,3 +1737,33 @@ cannot unlock a keyring at login, and the keyring's protection has to come from 
   keyring whose password is the account's, but that ties the two passwords together and needs
   `herald-os password` to change both. Nor does Herald OS tell Chromium-based apps which keyring to
   use (`--password-store`); see the known limits in `docs/LINUX.md`.
+
+## ADR-033: Desktop control vendors agent-desktop's Linux parts and builds them offline
+
+**Status: Accepted.**
+
+Hermes needs to operate the person's other apps, not only Herald's own windows. agent-desktop by
+Vercel Labs (Apache-2.0) does that through the platforms' accessibility trees, and its Linux adapter
+reads AT-SPI, which every toolkit on Herald OS Linux can expose.
+
+- **Vendored, pinned, Linux only.** `third_party/agent-desktop` carries the core and Linux crates,
+  the command-line crate and the skills at one upstream revision (`UPSTREAM.lock`), with the
+  workspace manifest, the command-line manifest and `Cargo.lock` trimmed to Linux. Every change is a
+  patch in `patches/` and a line in `PATCHES.md`; `LICENSE` is upstream's and `NOTICE` credits it.
+  `scripts/sync-agent-desktop.sh <sha>` redoes all of it for another revision.
+- **No network to build it.** `vendor/` holds every crate the lock names, so the image builds it with
+  `cargo build --release --frozen --offline` and an empty `CARGO_HOME`. Upstream also ships it
+  through npm, which Herald OS does not use: nothing is fetched at build or run time. The vendored
+  tree is about 109 MB in one commit of its own, separate from the source, so it can be rebuilt and
+  compared.
+- **Off PATH, behind the bridge.** The binaries live in `/usr/libexec/herald-os`. Hermes reaches them
+  through the bridge's `desktop` tool, which tiers every command, keys "always" by command and app,
+  names the target element in the approval, and refuses refs no recent snapshot returned. A
+  `pre_tool_call` guard blocks terminal and execute_code calls that run the binary, since a shell
+  command cannot be tiered.
+- **Accessibility on by default.** The session starts the AT-SPI bus and turns the GTK and Qt
+  switches on, so apps expose their trees without the person doing anything.
+- **Not yet: keyboard and pointer input under cage and niri.** Upstream sends keys and pointer
+  events through Mutter RemoteDesktop or X11, which Herald's compositors lack, so `press`, key-by-key
+  typing, gestures and window moves fail there; refs cover most tasks. A `wtype` backend is the
+  likely follow-up.

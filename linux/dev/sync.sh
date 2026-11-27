@@ -17,6 +17,7 @@ mkdir -p "$REPO"
 rsync -a --delete \
   --exclude node_modules --exclude dist --exclude release --exclude .git \
   --exclude 'upstream/hermes-agent' --exclude 'linux/vm/build' --exclude '.DS_Store' \
+  --exclude 'third_party/agent-desktop/target' \
   "$SRC/" "$REPO/"
 
 bash "$HERE/build.sh"

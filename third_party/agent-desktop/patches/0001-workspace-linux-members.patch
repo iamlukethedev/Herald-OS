@@ -1,0 +1,22 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 2b544cda..f3e75494 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [workspace]
+-members         = ["crates/core", "crates/macos", "crates/windows", "crates/linux", "crates/ffi", "src"]
+-default-members = ["crates/core", "crates/macos", "crates/windows", "crates/linux", "src"]
++members         = ["crates/core", "crates/linux", "src"]
++default-members = ["crates/core", "crates/linux", "src"]
+ resolver = "2"
+ 
+ [workspace.package]
+@@ -52,8 +52,6 @@ panic         = "abort"
+ [profile.release.package.agent-desktop-core]
+ opt-level = 3
+ 
+-[profile.release.package.agent-desktop-macos]
+-opt-level = 3
+ 
+ [profile.ci]
+ inherits      = "release"

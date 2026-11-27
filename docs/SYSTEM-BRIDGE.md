@@ -27,6 +27,7 @@ unrestricted machine access.
 | `sheets` | read / act / mutate / destructive | Herald Sheets, the spreadsheet: what is open, opening and starting workbooks, reading ranges (values, formulas and what the cells show), finding, writing values and formulas, filling, formatting, sorting, filtering, freezing, adding, renaming and removing sheets, replacing, cleaning data (duplicates, spaces, numbers and dates kept as text, splitting, case, filling down, highlighting duplicates, sorting by several columns, with previews), charts (recommending, inserting, describing, changing, moving, removing), summaries of tables in live formulas, named ranges, validation and dropdown lists, comments and notes, several edits as one step, saving (`.xlsx`, `.csv`), PDFs and undo. Each action is a `sheets.*` command; removing a sheet, a chart, a name, validation rules, a comment or a note asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-sheets` skill |
 | `slides` | read / act / mutate / destructive | Herald Slides, the presentation editor: what is open, opening and starting decks (a whole deck in one call), reading, finding, adding, changing, duplicating, moving, hiding and removing slides, speaker notes, text boxes, shapes, pictures, tables, the slide master and its layouts (backgrounds, placeholders, a logo and other drawings, whether layouts and slides show them), header and footer (date, slide number, footer text), themes for the deck or chosen slides and custom themes, transitions, groups, rotating, connectors between shapes, cell borders, gradient fills, find and replace, slides from a Herald Docs document and tables or slides from a Herald Sheets range (the same rules as the editor's own), several edits as one step, saving (`.pptx`), PDFs and undo. Each action is a `slides.*` command; removing a slide, removing an element from the master or a layout, resetting the master or deleting a custom theme asks, and saving over a file or changing a file that is not open asks every time. Used by the `herald-slides` skill |
 | `calc` | read | Herald Calc's exact engine, for any arithmetic, percentage, unit, currency, date or time-zone math: `eval` works out a sentence or expression with its steps (several lines are read as a note, with names and totals), `convert` converts an amount, `plot` says what a graph of functions of x shows (zeros, local maxima and minima, asymptotes, the range of y) or what a sheet's column holds (count, smallest, largest, sum, mean) without opening a window, and `history` finds the person's past calculations. Each action is a `calc.*` command that only computes or reads; currency answers use the European Central Bank's reference rates and name their day. Showing a graph or opening Herald Calc is `os_ui` (`calc.plot`, `calc.open`). Used by the `herald-calc` skill |
+| `desktop` | read / mutate / destructive | Herald OS Linux only: desktop control, operating other apps through their accessibility tree (AT-SPI). Reading the tree, windows and apps runs at once; clicking, typing, setting values, choosing, toggling, scrolling, focusing, pressing keys, launching apps, setting the clipboard, a screenshot and reading the clipboard ask first, per command and app; quitting an app, notification actions and clearing the clipboard ask every time. Used by the `desktop` skill ([below](#desktop-control)) |
 | `system_os` | act / mutate | Herald OS Linux only: install apps and anything in the install catalog (`catalog_list`, `catalog_install`, `catalog_remove`), widget plugins (`plugin_list`, `plugin_add`, `plugin_update`, `plugin_disable`, `plugin_remove`; turning one on is left to the user), reminders, themes, screenshots, lock, suspend, update, restarting Wi-Fi, Bluetooth, sound or the touchpad (`restart`) |
 
 "Start my development environment" is a skill: it composes `system_open` with Hermes's existing
@@ -171,6 +172,51 @@ with its answer, `herald-os calc convert 5 km miles` converts (and
 `herald-os calc history mortgage` finds past calculations, and `herald-os calc open` opens Herald
 Calc. Quote a sum that holds `*` or brackets, which the shell would read itself.
 
+## Desktop control
+
+"Fill in the form in Firefox", "tick Spell check in Text Editor" and "quit the music player" are the
+`desktop` tool, with the `desktop` skill. It runs the vendored desktop control binary
+(`third_party/agent-desktop`, built offline into the image as `/usr/libexec/herald-os/agent-desktop`
+with its clipboard helper beside it; `/usr/local/libexec/herald-os` on the development VM;
+`HERALD_OS_DESKTOP_BIN` names another build) with a fixed argv per command, never a shell string,
+and never with `--headed` except for `focus`, where Linux needs it for the focus permission alone.
+It is Linux only; elsewhere it answers that it is unavailable.
+
+- **Tiers.** `snapshot`, `find`, `get`, `is`, `wait`, `list-apps`, `list-windows`,
+  `list-displays`, `list-surfaces`, `list-notifications`, `status`, `permissions` and `version` are
+  `read`. `click`, `type`, `set-value`, `select`, `toggle`, `scroll`, `press`, `launch`, `focus` and
+  `clipboard-set` are `mutate`, and so are `screenshot` and `clipboard-get`, which change nothing but
+  show Hermes what is on screen or copied. Their "always" is keyed by command and app
+  (`herald_os:desktop:click:firefox`), so allowing clicks in Firefox allows neither typing there nor
+  clicks in another app. `close-app`, `notification-action`, `dismiss-notification`,
+  `dismiss-all-notifications` and `clipboard-clear` are `destructive`.
+- **The approval names its target.** The tool keeps the elements of the last eight snapshots and
+  finds (role, name, app), and an approval reads "click the button “Save” in Text Editor" or
+  "type “Dear Sam,” into the text “Document” in Text Editor". A mutate on a ref no recent snapshot
+  returned is refused before anyone is asked. Names come from apps, so they are cut to one line of
+  60 characters without control or format characters or double quotes; a password field shows only
+  how many characters would be typed.
+- **Batches.** `batch` takes up to 20 steps with the same fields, plans and checks all of them
+  first, asks once at the highest tier among them with every step listed, then runs them in order
+  and stops at the first that fails (`completed`, `failed_step`). A batch's "always" holds for the
+  same commands in the same apps.
+- **Results.** The binary's `data` comes back as `result` (cut at 40,000 characters, with a hint to
+  read less), its errors as `code`, `suggestion` and `disposition`; Hermes retries only what says
+  `retry: safe`. Screenshots are saved in `$HERMES_HOME/herald-os/desktop/screenshots` (0700) and
+  returned by path. The audit log keeps typed and copied text by its length; the summary keeps the
+  80-character preview the approval showed.
+- **No way around it.** A `pre_tool_call` guard, registered in every process that loads the plugin
+  (the backend Herald OS starts included), blocks a `terminal` or `execute_code` call that runs the
+  binary: its installed path or a glob over that folder, a checkout's build under `target/`, the
+  name in command position or as a quoted program, or `cargo run` in its workspace. A shell command
+  cannot be tiered or named in an approval, so it is blocked with a pointer to the tool rather than
+  sent to the approval card. Mentioning the name is fine, so working on `third_party/agent-desktop`
+  (building, testing, `git`, `grep`) is unaffected. It is a guard against Hermes running the binary
+  past its approvals, not a sandbox: the binary runs as the person, and a shell command built to hide
+  what it runs can still reach it, as it can reach anything else the person can.
+- **What works where.** See [docs/LINUX.md](LINUX.md#desktop-control): on Herald OS's cage and niri
+  sessions keyboard and pointer input is not supported yet.
+
 ## Where the tools run
 
 Only in sessions Herald OS starts. Hermes turns a plugin's toolset on for every platform that has not
@@ -261,7 +307,7 @@ there ([the Pet Room](manual/room.md#hermes-outside-herald)).
 | --- | --- | --- |
 | `read` | Runs immediately, audited | info, processes, disk usage, search, a calculation |
 | `act` | Runs immediately, audited, surfaced as a notification | open Safari, open a repo in VS Code |
-| `mutate` | Requires confirmation; `session` and `always` are honoured, per action (`system_os` restart: per device, so allowing Wi-Fi does not allow cutting the sound) | mkdir, move, rename, restart Wi-Fi |
+| `mutate` | Requires confirmation; `session` and `always` are honoured, per action (`system_os` restart: per device, so allowing Wi-Fi does not allow cutting the sound; `desktop`: per command and app) | mkdir, move, rename, restart Wi-Fi, click a button in an app |
 | `destructive` | Always requires confirmation; per-call rule key so `always` cannot persist | kill process, trash files, save over a document |
 
 Confirmation goes through upstream's `tools.approval.request_tool_approval`, which the shell

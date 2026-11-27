@@ -1,0 +1,14 @@
+Herald OS desktop control: third_party/agent-desktop
+
+This directory holds a modified copy of agent-desktop by Vercel Labs
+(https://github.com/vercel-labs/agent-desktop), revision
+9eb9b296192fcb70bda25e918cd6dd66abfa3d0d, licensed under the Apache License,
+Version 2.0. The license text is in LICENSE next to this file, unchanged.
+
+The code has been modified: only the Linux parts are carried, and the
+workspace manifest, the command-line crate's manifest and Cargo.lock are
+trimmed to them. PATCHES.md lists every changed file and why; patches/ holds
+the changes as diffs against the pinned revision.
+
+vendor/ holds the Rust crates the build depends on, as `cargo vendor` writes
+them from Cargo.lock. Each crate keeps its own license files.

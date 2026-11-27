@@ -29,6 +29,15 @@ fi
 echo "==> building shell"
 npm run build --workspace apps/desktop
 
+# Desktop control, from the vendored crates (no network), where the bridge's desktop tool looks for it.
+if [[ -f third_party/agent-desktop/Cargo.lock ]] && command -v cargo >/dev/null && command -v sudo >/dev/null; then
+  echo "==> building desktop control"
+  (cd third_party/agent-desktop && cargo build --release --frozen --offline)
+  sudo install -d -m 0755 /usr/local/libexec/herald-os
+  sudo install -m 0755 third_party/agent-desktop/target/release/agent-desktop \
+    third_party/agent-desktop/target/release/agent-desktop-linux-clipboard-owner /usr/local/libexec/herald-os/
+fi
+
 # Electron downloads its binary on first use, not at npm install: fetch it now so the first login
 # does not wait on a download and the sandbox helper below exists.
 (cd "$REPO/apps/desktop" && node -e "require('electron')")

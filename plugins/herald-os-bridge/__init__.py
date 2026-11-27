@@ -8,7 +8,8 @@ recorded by ``bridge.audit``. ``system_os`` (registered from the same ``TOOL_SPE
 Herald OS Linux's ``herald-os`` CLI and answers with a clear failure on other platforms. The tools
 are offered and run only in Herald OS's own sessions (``bridge.scope``). ``bridge.observe`` adds
 observer hooks that tell the Pet Room about Hermes's work outside Herald OS, only while a running
-Herald OS asks for it.
+Herald OS asks for it. ``bridge.desktop`` adds a ``pre_tool_call`` guard that blocks terminal and
+execute_code calls running the desktop control binary directly.
 
 Out-of-tree by design: the plugin uses only public plugin APIs (``register``,
 ``ctx.register_tool``, ``ctx.register_skill``, ``ctx.register_hook``,
@@ -20,12 +21,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .bridge import desktop as _desktop
 from .bridge import observe as _observe
 from .bridge import scope as _scope
 from .bridge import tools as _tools
 from .bridge.host import host_available
 
 _SKILLS_DIR = Path(__file__).parent / "skills"
+# Skills kept in a folder of another name: desktop's is named after the upstream skill it adapts.
+_SKILL_FOLDERS = {"desktop": "agent-desktop"}
 # Skill name -> one-line description for the skills index.
 SKILLS: dict[str, str] = {
     "herald-os": "How Hermes acts as the operating environment on this computer.",
@@ -37,6 +41,7 @@ SKILLS: dict[str, str] = {
     "herald-sheets": "Work in Herald Sheets: formulas from a description, explaining formulas, filling a column from examples, cleaning data, charts, summaries of tables, named ranges, validation and dropdown lists, comments and notes, what stands out, building a workbook, sorting, filtering, saving.",
     "herald-slides": "Make and change presentations in Herald Slides: a deck from a topic, a document or a sheet, layouts, the slide master (a logo, slide numbers, footers, placeholders, backgrounds), themes and custom themes, transitions, gradients, flowcharts with connectors and groups, table borders, speaker notes, pictures, tables, reordering, saving and PDFs.",
     "herald-calc": "Exact math with Herald Calc: arithmetic, percentages, units, currencies, dates and time zones through the calc tool with the working shown, notes with names and totals, what a graph or a sheet's column shows, and the calculation history.",
+    "desktop": "Operate other desktop apps on Herald OS Linux with desktop control: read their accessibility tree, click, fill in fields, choose options, open and quit apps, the clipboard and screenshots, what asks first and what does not work yet under cage and niri.",
 }
 
 
@@ -65,9 +70,12 @@ def register(ctx) -> None:
         )
     if hasattr(ctx, "register_hook"):
         _observe.register(ctx)
+        # In every process, the backend Herald OS starts included: a terminal or execute_code call
+        # there must not run desktop control past the desktop tool's approvals. It returns at once.
+        ctx.register_hook("pre_tool_call", _desktop.guard)
     if not hasattr(ctx, "register_skill"):
         return
     for name, description in SKILLS.items():
-        skill_md = _SKILLS_DIR / name / "SKILL.md"
+        skill_md = _SKILLS_DIR / _SKILL_FOLDERS.get(name, name) / "SKILL.md"
         if skill_md.exists():
             ctx.register_skill(name, skill_md, description=description)

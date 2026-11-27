@@ -1,0 +1,4 @@
+# Pinned agent-desktop revision behind Herald OS's desktop control (Linux parts only).
+# Bump: bash scripts/sync-agent-desktop.sh <sha>, then review the diff and PATCHES.md.
+repo=https://github.com/vercel-labs/agent-desktop
+sha=9eb9b296192fcb70bda25e918cd6dd66abfa3d0d

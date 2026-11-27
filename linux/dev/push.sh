@@ -49,6 +49,7 @@ echo "==> syncing repo -> hermes@$HOST:~/Herald-OS"
 rsync -az --delete \
   --exclude node_modules --exclude dist --exclude release --exclude .git \
   --exclude 'upstream/hermes-agent' --exclude 'linux/vm/build' --exclude '.DS_Store' \
+  --exclude 'third_party/agent-desktop/target' \
   -e "ssh -i $KEY -p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
   "$ROOT/" hermes@"$HOST":Herald-OS/
 

@@ -69,6 +69,9 @@ install -m 0644 "$LINUX/session/herald-os-update-check.service" "$LINUX/session/
 # activation reaches the same daemon through that socket).
 install -Dm0644 "$LINUX/session/gnome-keyring-daemon.conf" /usr/lib/systemd/user/gnome-keyring-daemon.service.d/herald-os.conf
 systemctl --global enable gnome-keyring-daemon.socket
+# Accessibility on for GTK and GNOME apps (desktop control reads them through AT-SPI).
+install -Dm0644 "$LINUX/session/90-herald-os-a11y.gschema.override" /usr/share/glib-2.0/schemas/90-herald-os-a11y.gschema.override
+glib-compile-schemas /usr/share/glib-2.0/schemas
 # Which portal backend answers each interface in the Herald OS session.
 install -Dm0644 "$LINUX/session/heraldos-portals.conf" /usr/share/xdg-desktop-portal/heraldos-portals.conf
 install -d /etc/greetd

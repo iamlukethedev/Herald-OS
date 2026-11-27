@@ -3,6 +3,7 @@
 import importlib.machinery
 import json
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -105,10 +106,48 @@ def froms(path: Path) -> list[tuple[str, str]]:
 
 
 def test_the_default_image_never_refers_to_the_akmods_images():
-    # One stage, so no builder's handling of unused stages can make the default build pull them.
-    assert froms(CONTAINERFILE) == [("${FEDORA_BOOTC}", "")]
+    # Desktop control's builder and the image itself, so no builder's handling of unused stages can
+    # make the default build pull them.
+    assert froms(CONTAINERFILE) == [("${FEDORA}", "desktop-control"), ("${FEDORA_BOOTC}", "")]
     assert "ARG FEDORA_BOOTC=quay.io/fedora/fedora-bootc:44" in CONTAINERFILE.read_text()
     assert "akmods" not in CONTAINERFILE.read_text().split("ARG FEDORA_BOOTC", 1)[1]
+
+
+def test_desktop_control_is_built_offline_from_the_vendored_crates():
+    text = CONTAINERFILE.read_text()
+    builder = text.split("AS desktop-control", 1)[1].split("\nFROM ", 1)[0]
+    assert "ARG FEDORA=quay.io/fedora/fedora:44" in text
+    assert "dnf -y install --setopt=install_weak_deps=False rust cargo" in builder
+    assert "COPY third_party/agent-desktop /src" in builder
+    assert "RUN cargo build --release --frozen --offline" in builder
+    config = (ROOT / "third_party" / "agent-desktop" / ".cargo" / "config.toml").read_text()
+    assert 'replace-with = "vendored-sources"' in config and 'directory = "vendor"' in config
+
+
+def test_desktop_control_binaries_go_off_path_next_to_each_other():
+    text = CONTAINERFILE.read_text()
+    copy = re.search(r"^COPY --from=desktop-control (.*?)/usr/libexec/herald-os/$", text, re.M | re.S)
+    assert copy is not None
+    assert "--chown=root:root" in copy.group(1) and "--chmod=0755" in copy.group(1)
+    for name in ("agent-desktop", "agent-desktop-linux-clipboard-owner"):
+        assert f"/src/target/release/{name} " in copy.group(1)
+    # After the package step, which empties /tmp/herald-os, and before the lint.
+    assert text.index("packages.sh --image") < copy.start() < text.index("bootc container lint")
+
+
+def test_no_vendored_file_is_left_out_of_the_build_context():
+    patterns = [line.strip() for line in (ROOT / ".containerignore").read_text().splitlines() if line.strip() and not line.startswith(("#", "!"))]
+    names = [p.removeprefix("**/") for p in patterns if p.startswith("**/")]
+    anchored = [p for p in patterns if not p.startswith("**/")]
+    third_party = ROOT / "third_party" / "agent-desktop"
+    for folder, dirs, files in os.walk(third_party):
+        if Path(folder) == third_party:
+            dirs[:] = [d for d in dirs if d != "target"]
+        for entry in (*dirs, *files):
+            path = Path(folder) / entry
+            relative = path.relative_to(ROOT).as_posix()
+            assert not any(path.match(name) for name in names), relative
+            assert not any(relative == p or relative.startswith(p + "/") for p in anchored), relative
 
 
 def test_the_nvidia_image_starts_from_the_default_one_and_the_akmods_images_it_is_given():
