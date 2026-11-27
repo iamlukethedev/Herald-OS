@@ -112,8 +112,8 @@ still taken from `source: "herald_os"`, never from this env var, in line with up
 
 Machine facts and actions used by the shell (installed apps, system stats, open/reveal) go through
 `apps/desktop/electron/platform/HostPlatform`; agent-facing capabilities go through the plugin's
-`HostAdapter`. Both have `darwin` and `linux` implementations and a typed stub for `win32`, so the
-Windows future has a place to land without touching call sites.
+`HostAdapter`. Both have `darwin` and `linux` implementations. `HostPlatform` also has a `win32` one
+(ADR-033); `HostAdapter` keeps a typed stub for `win32` until the bridge plugin's Windows support lands.
 
 ## ADR-012: Herald OS Linux Stage 1 is a session, not a distribution
 
@@ -1737,3 +1737,42 @@ cannot unlock a keyring at login, and the keyring's protection has to come from 
   keyring whose password is the account's, but that ties the two passwords together and needs
   `herald-os password` to change both. Nor does Herald OS tell Chromium-based apps which keyring to
   use (`--password-store`); see the known limits in `docs/LINUX.md`.
+
+## ADR-033: On Windows the control socket is a named pipe only this logon session can open
+
+**Status: Proposed.** From #92.
+
+Windows serves local IPC as named pipes, not Unix sockets, and a pipe made with default security is
+readable by every account on the machine, while anyone who can create another instance of its name
+can stand in for the server. The control socket carries the launch token, so on Windows it needs
+the protection that a 0600 socket file in the person's data folder gives on macOS and Linux.
+
+- **A pipe of its own, named before it exists.** `\\.\pipe\herald-os-<pid>-<128 random bits>`. Main
+  fixes the name first and hands it to the backend exactly as it hands over the Unix socket's path.
+  The random name makes it hard to guess, and `FILE_FLAG_FIRST_PIPE_INSTANCE` makes Herald fail closed
+  rather than share it if another process created it first. `PIPE_REJECT_REMOTE_CLIENTS` keeps it on
+  this machine.
+- **Several clients at once.** The backend, the bridge and Hermes processes sending `activity` talk
+  at the same time, as they do over the Unix socket. Main keeps two instances listening and creates
+  more with the same descriptor and the same read-back as clients take them, up to eight. A connect is
+  noticed at the next check, so the second listener takes a client arriving meanwhile, and a client
+  that still finds every instance busy waits with `WaitNamedPipe`, as Node's own client does. A client
+  that holds an instance for 10 s with no request in flight is cut off, as a safety net; a slow
+  command keeps it.
+- **An explicit DACL, read back before use.** Only the interactive logon session and SYSTEM may read
+  and write. OWNER RIGHTS leaves the owner `READ_CONTROL` and `FILE_CREATE_PIPE_INSTANCE` and no
+  `WRITE_DAC`, so not even Herald's own account can widen it. Further instances need that instance
+  right, so processes of the same account could add instances of their own, as on Unix they could
+  replace the socket file; the logon session's grant does not include it. After creating each
+  instance, main reads its owner and DACL back and stops serving when either differs from what it
+  asked for.
+- **The same lines and the same token.** Requests, replies, the per-launch token and `activity` under
+  its own token are what the Unix socket uses; nothing about authentication is Windows-specific.
+- **koffi for the Win32 calls.** Node's `net` cannot give a pipe a security descriptor. koffi (MIT,
+  N-API, a prebuilt binary per platform) is pinned to 3.3.3 and loaded only on Windows; the macOS and
+  Linux packages leave it out.
+- **Cheap when idle.** Overlapped I/O is checked with a zero wait, so no thread blocks; the pause
+  between checks doubles from 4 ms to 100 ms while nothing completes, so each of the two idle
+  listeners wakes about ten times a second, and each new operation starts fast again.
+- **Not here.** x64 only. No completion port or native wait callback yet. The bridge plugin's pipe
+  client and its Windows `HostAdapter` come in a later pull request.
