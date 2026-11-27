@@ -10,8 +10,9 @@ installer and disks, signing and switching another bootc system to it; the
 
 | File | What it does |
 | --- | --- |
-| [`linux/image/Containerfile`](../linux/image/Containerfile) | The recipe. Starts from `quay.io/fedora/fedora-bootc:44`, copies `linux/` and the shell tarball into `/tmp/herald-os`, runs `packages.sh --image` on them, clears the dnf caches, `/tmp/herald-os`, `/var/cache` and `/var/log`, labels the image (`containers.bootc=1` and the OCI title, description, source and licence) and ends with `bootc container lint`. |
+| [`linux/image/Containerfile`](../linux/image/Containerfile) | The recipe. Starts from `quay.io/fedora/fedora-bootc:44`, copies `linux/`, `upstream/UPSTREAM.lock` and the shell tarball into `/tmp/herald-os`, runs `packages.sh --image` on them, clears the dnf caches, `/tmp/herald-os`, `/var/cache` and `/var/log`, labels the image (`containers.bootc=1` and the OCI title, description, source and licence) and ends with `bootc container lint`. |
 | [`linux/image/packages.sh`](../linux/image/packages.sh) | The system half, run as root at build time ([below](#what-packagessh---image-does)). The development VM runs the same script with `--dev`, so the VM and the image are set up by the same steps. |
+| [`linux/image/hermes-ref.sh`](../linux/image/hermes-ref.sh) | Turns the sha in `upstream/UPSTREAM.lock` into the line `/etc/herald-os/ref` holds, `HERMES_REF=<sha>`, and refuses a lock without one full commit id. `packages.sh --image` and the development VM's seed (`linux/vm/make-seed.sh`) both write the file through it. |
 | [`linux/image/packages.txt`](../linux/image/packages.txt) | The Fedora packages the session, the shell and the CLIs need. |
 | [`linux/omakase/packages.txt`](../linux/omakase/packages.txt) | The curated Fedora apps every install gets (LibreOffice, VLC, developer tools, fonts). |
 | [`linux/omakase/flatpaks.txt`](../linux/omakase/flatpaks.txt), [`webapps.txt`](../linux/omakase/webapps.txt) | The Flathub apps and web apps. Not in the image: they are installed for the session user on the first boot and the first login ([Flatpaks](#flatpaks)). |
@@ -34,32 +35,36 @@ for working on the shell, and the image for trying the system as it ships.
 
 ### What `packages.sh --image` does
 
-Six of the eight steps print a `--- <step>` line in the build log; the image's name (4) and the
-signature policy (6) print none. The script ends with `==> system half done (--image)`. The NVIDIA
+Seven of the nine steps print a `--- <step>` line in the build log; the image's name (5) and the
+signature policy (7) print none. The script ends with `==> system half done (--image)`. The NVIDIA
 image's layer, `nvidia.sh`, prints four `--- <step>` lines of its own and ends with
 `==> NVIDIA layer done (<driver version>)`.
 
 1. **SELinux permissive** (ADR-012).
-2. **Packages.** `dnf -y install --setopt=install_weak_deps=False` with everything in
+2. **The Hermes revision.** `/etc/herald-os/ref` gets `HERMES_REF=<sha>` from
+   `upstream/UPSTREAM.lock` (through `hermes-ref.sh`), so the first boot checks out the revision the
+   release was built and tested with, the same one the development VM's seed names. A lock without
+   a full sha stops the build here, before the packages.
+3. **Packages.** `dnf -y install --setopt=install_weak_deps=False` with everything in
    `linux/image/packages.txt`, then `linux/omakase/packages.txt` with `--skip-unavailable`. A line
    is one package; `#` starts a comment.
-3. **The session and CLIs.** `linux/session/herald-os-{compositor,session,niri-nested}` and
+4. **The session and CLIs.** `linux/session/herald-os-{compositor,session,niri-nested}` and
    `linux/bin/herald-os*` go to `/usr/bin`; `themes`, `omakase`, `catalog`, `niri`, `migrations`,
    `plymouth` and `session` from `linux/` go to `/usr/share/herald-os`. Also the Wayland session
    entry, the update-check user units and greetd's config (`/etc/greetd/config.toml`).
-4. **The image's name.** `IMAGE_ID=herald-os` goes in `/usr/lib/os-release`. Every other
+5. **The image's name.** `IMAGE_ID=herald-os` goes in `/usr/lib/os-release`. Every other
    os-release line stays Fedora's.
-5. **The shell.** The tarball is unpacked to `/usr/share/herald-os/app` (the build stops if it has
+6. **The shell.** The tarball is unpacked to `/usr/share/herald-os/app` (the build stops if it has
    no `resources/app.asar`), `chrome-sandbox` is made setuid root, the bridge plugin is linked at
    `/usr/share/herald-os/bridge` and the icon goes to
    `/usr/share/icons/hicolor/512x512/apps/herald-os.png`. The first-boot, Hermes, reset and login
    units go to `/usr/lib/systemd/system`, `firstboot.sh` and `reset-helper` to
    `/usr/libexec/herald-os`, and `kargs.toml` to `/usr/lib/bootc/kargs.d`.
-6. **The signature policy**, only when `linux/image/cosign.pub` exists
+7. **The signature policy**, only when `linux/image/cosign.pub` exists
    ([Signing](#signing)).
-7. **The boot splash.** The Plymouth theme is installed and made the default, and the initramfs of
+8. **The boot splash.** The Plymouth theme is installed and made the default, and the initramfs of
    the newest kernel in `/usr/lib/modules` is rebuilt with `dracut --no-hostonly`.
-8. **Services.** Flathub is written as a remote in `/etc/flatpak/remotes.d` (downloaded from
+9. **Services.** Flathub is written as a remote in `/etc/flatpak/remotes.d` (downloaded from
    `dl.flathub.org` during the build); NetworkManager, Bluetooth, greetd, a text console on
    `tty2`, the `plocate` timer, firewalld and the Herald OS units are enabled; the default target is
    `graphical.target`, the default firewall zone is `herald-os`, and `sshd` is disabled.
@@ -131,8 +136,8 @@ disks), which keeps the context to `linux/`, the tarball and a few small files.
 sudo podman build -f linux/image/Containerfile --build-arg SHELL_TARBALL=herald-os-linux.tar.gz -t herald-os .
 ```
 
-This is the command at the top of the Containerfile, with `sudo` as in CI. It runs seven steps,
-and step 5 is `packages.sh` with its `--- <step>` lines. The NVIDIA image is a second build on top
+This is the command at the top of the Containerfile, with `sudo` as in CI. It runs eight steps,
+and step 6 is `packages.sh` with its `--- <step>` lines. The NVIDIA image is a second build on top
 of this one, with `linux/image/Containerfile.nvidia`. The end of a successful build looks like
 this:
 

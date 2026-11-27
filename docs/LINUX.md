@@ -275,7 +275,10 @@ VM's provisioner also runs, so the VM and the image cannot drift apart:
   NVIDIA driver is only in the NVIDIA image ([The NVIDIA image](#the-nvidia-image)).
 - **`linux/image/firstboot.sh`, on the first boot:** the session user, its niri config, theme and
   update timer, and Hermes Agent (`herald-os-firstboot.service`, before the login screen), then the
-  omakase Flatpaks (`herald-os-firstboot-apps.service`, while the session is up). Hermes Agent comes
+  omakase Flatpaks (`herald-os-firstboot-apps.service`, while the session is up). Hermes is
+  checked out at the revision in `/etc/herald-os/ref`, which the image's build writes from
+  `upstream/UPSTREAM.lock` (the development VM's seed writes the same line), so every install of a
+  release starts from the Hermes it was tested with; `hermes update` moves on from there. It comes
   from GitHub, so a first boot without a network (Wi-Fi is joined later, in setup) leaves it to
   `herald-os-hermes.service`: it waits for the network, installs Hermes with its voice extras, runs
   `herald-os setup` and tries again ten minutes after a failed install. Meanwhile the shell's boot

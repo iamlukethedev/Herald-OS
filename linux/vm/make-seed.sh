@@ -26,8 +26,9 @@ fi
 PUBKEY="$(cat "$KEY.pub")"
 
 # Upstream Hermes Agent revision the provisioner checks out (kept in lockstep with the Mac build).
-HERMES_REF="$(sed -n 's/^sha=//p' "$ROOT/upstream/UPSTREAM.lock" | tr -d '[:space:]')"
-[[ -n "$HERMES_REF" ]] || { echo "upstream/UPSTREAM.lock has no sha=" >&2; exit 1; }
+# The image's build writes the same line through the same script (linux/image/packages.sh).
+REF_LINE="$(bash "$LINUX_DIR/image/hermes-ref.sh" "$ROOT/upstream/UPSTREAM.lock")"
+HERMES_REF="${REF_LINE#HERMES_REF=}"
 
 # The whole linux/ directory travels inside user-data so the first boot does not depend on a
 # shared folder or network access to this repo.
@@ -69,7 +70,7 @@ write_files:
   - path: /etc/herald-os/ref
     permissions: '0644'
     content: |
-      HERMES_REF=${HERMES_REF}
+      ${REF_LINE}
   - path: /usr/local/share/herald-os-linux.tar.gz
     permissions: '0644'
     encoding: b64
