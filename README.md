@@ -172,7 +172,9 @@ makepkg -si
 herald-os setup        # once per user: Hermes Agent and Herald's system tools
 ```
 
-The package downloads the release build for your architecture (x86_64 or aarch64). Then choose
+The package downloads the newest published release build for your architecture (x86_64 or
+aarch64), so it can be a little behind `main`; `packaging/arch/herald-os-git` builds `main` from
+source instead (slower, with Node.js and npm). Then choose
 Herald OS on your login screen for the full session (it needs `niri`; the package's optional
 dependencies list what each panel uses), or run `herald-os-app` to use Herald OS as an app inside
 your current desktop. The session applies Herald's theme to GTK apps, foot and GNOME's colour

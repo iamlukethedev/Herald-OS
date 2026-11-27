@@ -45,7 +45,7 @@ conflicts=('herald-os' 'herald-os-bin')
 options=('!strip' '!debug')
 install=herald-os.install
 source=("herald-os::git+${HERALD_OS_GIT_URL:-$url.git}" 'herald-os-package.sh')
-sha256sums=('SKIP' 'd07e4dcc4a6f96f2e69923952a4042ea7a858574c4b0f79d5b0221b725120e56')
+sha256sums=('SKIP' 'b3baa0c8d079fa81025fb7b0d7c4668b67d67888f3ffd72f1ca5a0b557ef54d2')
 
 pkgver() {
   cd herald-os

@@ -23,7 +23,7 @@ cd Herald-OS/packaging/arch/herald-os-bin && makepkg -si
 herald-os setup        # once per account: Hermes Agent and Herald's system tools
 ```
 
-The package downloads the release build for x86_64 or aarch64. It is not on the AUR yet
+The package downloads the newest published release build for x86_64 or aarch64. It is not on the AUR yet
 ([#54](https://github.com/iamlukethedev/Herald-OS/issues/54)). Its optional dependencies list what each
 panel and feature uses.
 
