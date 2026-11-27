@@ -1000,7 +1000,7 @@ Neither is on the AUR yet; build them from the repository:
 
 ```bash
 cd packaging/arch/herald-os-bin
-makepkg -si            # downloads the release tarball for this architecture
+makepkg -si            # downloads the newest published release tarball for this architecture
 herald-os setup        # once per user: Hermes Agent and the bridge plugin
 ```
 

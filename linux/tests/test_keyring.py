@@ -673,12 +673,16 @@ def test_only_gnu_install_counts_as_gnu_install(version, gnu):
 
 @pytest.mark.skipif(not gnu_install(), reason="the package script needs GNU install (install -D), as on Arch")
 @pytest.mark.parametrize("flavour", ["herald-os-bin", "herald-os-git"])
-def test_the_arch_package_installs_the_portal_file(tmp_path, flavour):
+@pytest.mark.parametrize("has_portals", [True, False], ids=["build-with-portal-file", "alpha4-tarball-without-it"])
+def test_the_arch_package_installs_the_portal_file(tmp_path, flavour, has_portals):
     # An unpacked build as the tarball has it: the CLIs, session and data under resources.
     app = tmp_path / "app"
     linux = app / "resources" / "herald-os-linux"
     for folder in ("bin", "session", "niri", "omakase", "migrations", "plymouth"):
         shutil.copytree(LINUX / folder, linux / folder, ignore=shutil.ignore_patterns("__pycache__"))
+    if not has_portals:
+        # The 0.1.0 alpha 4 tarball, which herald-os-bin packages until the next release, predates the file.
+        (linux / "session" / PORTALS.name).unlink()
     for name in ("app.asar", "LICENSE", "NOTICE", "icons/herald-os.png"):
         (app / "resources" / name).parent.mkdir(parents=True, exist_ok=True)
         (app / "resources" / name).write_text("")
@@ -691,7 +695,10 @@ def test_the_arch_package_installs_the_portal_file(tmp_path, flavour):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     installed = pkgdir / "usr" / "share" / "xdg-desktop-portal" / "heraldos-portals.conf"
-    assert installed.read_bytes() == PORTALS.read_bytes()
+    if has_portals:
+        assert installed.read_bytes() == PORTALS.read_bytes()
+    else:
+        assert not installed.exists()
     assert (pkgdir / "usr" / "share" / "wayland-sessions" / "herald-os.desktop").is_file()
 
 

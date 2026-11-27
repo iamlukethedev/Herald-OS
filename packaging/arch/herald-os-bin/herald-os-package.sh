@@ -41,7 +41,10 @@ _herald_os_package() {
 
   install -Dm644 "$pkgdir$res/herald-os-linux/session/herald-os.desktop" "$pkgdir/usr/share/wayland-sessions/herald-os.desktop"
   # Read only where XDG_CURRENT_DESKTOP is HeraldOS (the session above); Hyprland and Omarchy keep theirs.
-  install -Dm644 "$pkgdir$res/herald-os-linux/session/heraldos-portals.conf" "$pkgdir/usr/share/xdg-desktop-portal/heraldos-portals.conf"
+  # Builds from 0.1.0 alpha 5 on carry it; the alpha 4 tarball predates it, so it is installed only when present.
+  if [[ -f "$pkgdir$res/herald-os-linux/session/heraldos-portals.conf" ]]; then
+    install -Dm644 "$pkgdir$res/herald-os-linux/session/heraldos-portals.conf" "$pkgdir/usr/share/xdg-desktop-portal/heraldos-portals.conf"
+  fi
   install -Dm644 -t "$pkgdir/usr/lib/systemd/user" "$pkgdir$res/herald-os-linux/session/herald-os-update-check.service" "$pkgdir$res/herald-os-linux/session/herald-os-update-check.timer"
   install -Dm644 "$pkgdir$res/icons/herald-os.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/herald-os.png"
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/herald-os.desktop" <<'DESKTOP'
